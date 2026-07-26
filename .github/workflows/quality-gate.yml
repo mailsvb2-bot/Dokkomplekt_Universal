@@ -24,8 +24,8 @@ jobs:
           components: rustfmt, clippy
       - name: Cargo lock must be committed
         run: test -f Cargo.lock
-      - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Install current CVSS-4-compatible cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Mandatory Rust compile gate
         shell: bash
         run: |
@@ -46,8 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
-      - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Install current CVSS-4-compatible cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Audit locked Rust dependencies
         shell: bash
         run: |
@@ -140,8 +140,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
-      - name: Install MSRV-compatible cargo-audit on packaging runner
-        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Install current CVSS-4-compatible cargo-audit on packaging runner
+        run: cargo install cargo-audit --locked --version 0.22.2
       - name: Repeat mandatory Rust gate on packaging runner
         shell: bash
         run: bash scripts/prepackage_rust_gate.sh

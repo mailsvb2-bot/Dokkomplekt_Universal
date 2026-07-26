@@ -42,7 +42,7 @@ run_logged cargo-check cargo check --workspace --all-targets --locked --quiet
 run_logged cargo-clippy cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
 run_logged cargo-test cargo test --workspace --locked --quiet
 if ! cargo audit --version >/dev/null 2>&1; then
-  echo "ERROR: cargo-audit 0.21.2+ is required before packaging." >&2
+  echo "ERROR: cargo-audit 0.22.2+ is required before packaging." >&2
   exit 1
 fi
 run_logged commercial-rust-crates python scripts/check_commercial_rust_crates.py

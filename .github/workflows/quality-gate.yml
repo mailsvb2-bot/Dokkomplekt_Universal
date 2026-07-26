@@ -18,6 +18,8 @@ jobs:
     name: REQUIRED Rust compile gate (non-bypassable)
     runs-on: ubuntu-latest
     timeout-minutes: 55
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
@@ -29,6 +31,17 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Cargo lock must be committed
         run: test -f Cargo.lock
+      - name: Restore Rust registry and build cache
+        id: rust-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-quality-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src-tauri/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            rust-quality-${{ runner.os }}-${{ runner.arch }}-
       - name: Cache cargo-audit binary
         id: cargo-audit-cache
         uses: actions/cache@v4
@@ -40,6 +53,15 @@ jobs:
         run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - name: Mandatory Rust compile gate
         run: bash scripts/prepackage_rust_gate.sh
+      - name: Save Rust registry and build cache
+        if: always() && steps.rust-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-build-cache.outputs.cache-primary-key }}
       - name: Upload Rust gate diagnostics
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,0 +1,50 @@
+name: One-time Commercial Clippy Repair
+
+on:
+  push:
+    branches:
+      - fix/ci-quality-gate
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: commercial-clippy-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ci-quality-gate
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt
+      - name: Apply the Clippy-prescribed char pattern
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/dokkomplekt-license-server/src/config.rs')
+          text = path.read_text(encoding='utf-8')
+          old = ".split(|character| matches!(character, '/' | '?' | '#'))"
+          new = ".split(['/', '?', '#'])"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one manual char comparison, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          cargo fmt --manifest-path crates/dokkomplekt-license-server/Cargo.toml
+      - name: Commit the Clippy repair
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/dokkomplekt-license-server/src/config.rs
+          git commit -m "fix: use native char pattern in database URL parser"
+          git push origin HEAD:fix/ci-quality-gate

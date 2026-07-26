@@ -2,9 +2,10 @@
 """Compile and test Rust crates intentionally excluded from the desktop workspace.
 
 The license HTTP server and Python binding have different deployment targets from
-Tauri, so they remain outside the desktop workspace.  This gate builds them in a
-throw-away workspace, preserving the source tree while still making their
-compilation, tests, Clippy and dependency audit mandatory for a release.
+Tauri, so they remain outside the desktop workspace. This gate builds them in a
+throw-away source workspace while reusing only Cargo's root build target, preserving
+the source tree while still making compilation, tests, Clippy and dependency audit
+mandatory for a release.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ OUT_DIR = ROOT / ".cargo-gate"
 EVIDENCE = OUT_DIR / "COMMERCIAL_CRATES_EVIDENCE.json"
 LOCK_EVIDENCE = OUT_DIR / "COMMERCIAL_CRATES_Cargo.lock"
 AUDIT_EVIDENCE = OUT_DIR / "COMMERCIAL_CRATES_RUSTSEC_AUDIT.json"
+SHARED_TARGET_DIR = ROOT / "target"
 CRATES = (
     "dokkomplekt-license-core",
     "dokkomplekt-license-server",
@@ -38,11 +40,13 @@ def sha256(path: Path) -> str:
 
 def run(command: list[str], cwd: Path, *, stdout_path: Path | None = None) -> None:
     print("+", " ".join(command), flush=True)
+    env = os.environ.copy()
+    env["CARGO_TARGET_DIR"] = str(SHARED_TARGET_DIR)
     if stdout_path is None:
-        subprocess.run(command, cwd=cwd, check=True)
+        subprocess.run(command, cwd=cwd, env=env, check=True)
         return
     with stdout_path.open("wb") as stream:
-        subprocess.run(command, cwd=cwd, stdout=stream, check=True)
+        subprocess.run(command, cwd=cwd, env=env, stdout=stream, check=True)
 
 
 def write_workspace_manifest(destination: Path) -> None:
@@ -70,6 +74,7 @@ def main() -> int:
 
     source_before = source_fingerprint()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    SHARED_TARGET_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="dokkomplekt-commercial-rust-") as raw_temp:
         temp = Path(raw_temp)
         (temp / "crates").mkdir()

@@ -59,11 +59,11 @@ class V1808ZeroTouchHardeningContracts(unittest.TestCase):
         self.assertIn(".resolve_to_addrs(&validated.host, &validated.addresses)", self.main)
         self.assertIn("let client = pinned_update_client(&url)?;", self.main)
 
-    def test_ci_runs_a_msrv_compatible_rustsec_audit(self) -> None:
+    def test_ci_runs_a_current_cvss4_compatible_rustsec_audit(self) -> None:
         quality = source(".github/workflows/quality-gate.yml")
         installers = source(".github/workflows/build-installers.yml")
         for workflow in (quality, installers):
-            self.assertIn("cargo install cargo-audit --locked --version 0.21.2", workflow)
+            self.assertIn("cargo install cargo-audit --locked --version 0.22.2", workflow)
             self.assertIn("cargo audit --deny warnings", workflow)
         self.assertIn("rust-dependency-audit", quality)
 

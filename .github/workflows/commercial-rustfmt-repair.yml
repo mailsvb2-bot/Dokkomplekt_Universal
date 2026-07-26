@@ -1,0 +1,45 @@
+name: One-time Commercial Rustfmt Repair
+
+on:
+  push:
+    branches:
+      - fix/ci-quality-gate
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: commercial-rustfmt-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rustfmt:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ci-quality-gate
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt
+      - name: Format separately deployed commercial crates
+        run: |
+          cargo fmt --manifest-path crates/dokkomplekt-license-core/Cargo.toml
+          cargo fmt --manifest-path crates/dokkomplekt-license-server/Cargo.toml
+          cargo fmt --manifest-path crates/dokkomplekt-license-python/Cargo.toml
+      - name: Commit canonical formatting
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Commercial Rust sources are already formatted."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/dokkomplekt-license-core crates/dokkomplekt-license-server crates/dokkomplekt-license-python
+          git commit -m "style: format commercial Rust crates"
+          git push origin HEAD:fix/ci-quality-gate

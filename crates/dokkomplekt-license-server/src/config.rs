@@ -173,7 +173,7 @@ fn database_endpoint_from_url(value: &str) -> anyhow::Result<DatabaseEndpoint> {
         .map(|(_, remainder)| remainder)
         .ok_or_else(|| anyhow::anyhow!("DATABASE_URL has no PostgreSQL scheme"))?;
     let authority = without_scheme
-        .split(|character| matches!(character, '/' | '?' | '#'))
+        .split(['/', '?', '#'])
         .next()
         .unwrap_or_default();
     if authority.is_empty() {

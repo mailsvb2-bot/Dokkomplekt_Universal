@@ -20,7 +20,7 @@ cargo check --workspace --all-targets --locked || exit /b 1
 cargo clippy --workspace --all-targets --locked -- -D warnings || exit /b 1
 cargo test --workspace --locked || exit /b 1
 cargo audit --version >nul 2>nul || (
-  echo ERROR: cargo-audit 0.21.2+ is required before packaging.
+  echo ERROR: cargo-audit 0.22.2+ with CVSS 4 support is required before packaging.
   exit /b 1
 )
 python scripts\check_commercial_rust_crates.py || exit /b 1

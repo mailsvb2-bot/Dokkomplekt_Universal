@@ -27,7 +27,17 @@ jobs:
       - name: Install MSRV-compatible cargo-audit
         run: cargo install cargo-audit --locked --version 0.21.2
       - name: Mandatory Rust compile gate
-        run: bash scripts/prepackage_rust_gate.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/prepackage_rust_gate.sh 2>&1 | tee rust-compile-gate.log
+      - name: Upload Rust compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-compile-gate-diagnostics
+          path: rust-compile-gate.log
+          if-no-files-found: error
 
   rust-dependency-audit:
     name: RustSec dependency audit
@@ -39,7 +49,17 @@ jobs:
       - name: Install MSRV-compatible cargo-audit
         run: cargo install cargo-audit --locked --version 0.21.2
       - name: Audit locked Rust dependencies
-        run: cargo audit --deny warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit --deny warnings 2>&1 | tee rustsec-audit.log
+      - name: Upload RustSec diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustsec-audit-diagnostics
+          path: rustsec-audit.log
+          if-no-files-found: error
 
   python-contracts:
     name: Python regression contour

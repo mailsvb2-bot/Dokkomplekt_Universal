@@ -1,0 +1,41 @@
+name: CI Fix License Clippy Once
+
+on:
+  push:
+    branches: [fix/ci-quality-gate-20260726]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ci-quality-gate-20260726
+      - name: Replace manual character comparison with a native pattern
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/dokkomplekt-license-server/src/config.rs')
+          text = path.read_text(encoding='utf-8')
+          old = ".split(|character| matches!(character, '/' | '?' | '#'))"
+          new = ".split(['/', '?', '#'])"
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one manual character comparison')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          cargo fmt --manifest-path crates/dokkomplekt-license-server/Cargo.toml --all
+          rm -f .github/workflows/ci-fix-license-clippy-once.yml
+      - name: Commit focused Clippy repair and remove this workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/dokkomplekt-license-server/src/config.rs .github/workflows/ci-fix-license-clippy-once.yml
+          git commit -m "fix(license-server): use native character pattern"
+          git push origin HEAD:fix/ci-quality-gate-20260726

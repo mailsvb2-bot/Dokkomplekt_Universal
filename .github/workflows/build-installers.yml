@@ -39,7 +39,7 @@ jobs:
       - run: python scripts/static_quality_gate.py --source-only
       - run: python scripts/check_reference_data_freshness.py
       - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2
+        run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - run: cargo audit --deny warnings
       - run: bash scripts/prepackage_rust_gate.sh
       - run: python scripts/assert_release_ready.py
@@ -76,7 +76,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements-dev.txt
       - name: Install MSRV-compatible cargo-audit on packaging runner
-        run: cargo install cargo-audit --locked --version 0.21.2
+        run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - name: Repeat mandatory Rust gate on packaging runner
         shell: bash
         run: bash scripts/prepackage_rust_gate.sh
@@ -157,8 +157,8 @@ jobs:
             release-runtime/**
             .cargo-gate/**
             .release-gate/**
+          include-hidden-files: true
           if-no-files-found: error
-
 
   windows-hardware-e2e:
     name: REQUIRED Windows Word / printer / watcher / reboot evidence
@@ -196,6 +196,7 @@ jobs:
           path: |
             .release-gate/WINDOWS_HARDWARE_E2E_PASSED.json
             .release-gate/WINDOWS_REBOOT_E2E_PASSED.json
+          include-hidden-files: true
           if-no-files-found: error
 
   linux-bundles:
@@ -219,7 +220,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
-      - run: cargo install cargo-audit --locked --version 0.21.2
+      - run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - run: bash scripts/prepackage_rust_gate.sh
       - run: python scripts/assert_release_ready.py
       - run: npm ci

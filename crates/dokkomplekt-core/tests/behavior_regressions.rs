@@ -191,7 +191,7 @@ fn diaries_require_discharge_date_but_skip_treatment_prompt() {
 fn diary_texts_keep_doctor_and_head_signatures() {
     let out = render_diary_text_with_signatures("02.06.26 Состояние стабильное");
     assert!(out.contains("Лечащий врач"));
-    assert!(out.contains("Зав. отделением"));
+    assert!(out.contains("Заведующий отделением"));
 }
 
 #[test]

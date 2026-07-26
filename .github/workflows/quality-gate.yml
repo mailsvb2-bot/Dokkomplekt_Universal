@@ -28,6 +28,13 @@ jobs:
         run: cargo install cargo-audit --locked --version 0.21.2 --quiet
       - name: Mandatory Rust compile gate
         run: bash scripts/prepackage_rust_gate.sh
+      - name: Upload Rust gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-compile-gate-diagnostics
+          path: .cargo-gate/**
+          if-no-files-found: warn
 
   rust-dependency-audit:
     name: RustSec dependency audit
@@ -83,6 +90,15 @@ jobs:
             fi
             exit "$status"
           fi
+      - name: Upload RustSec diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustsec-audit-diagnostics
+          path: |
+            cargo-audit.json
+            cargo-audit.stderr
+          if-no-files-found: warn
 
   python-contracts:
     name: Python regression contour

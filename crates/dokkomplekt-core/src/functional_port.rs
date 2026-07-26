@@ -297,8 +297,11 @@ pub fn append_diary_signatures(body: &str) -> String {
     if !lower.contains("лечащий врач") {
         out.push_str("\n\nЛечащий врач __________________");
     }
-    if !lower.contains("зав. отдел") && !lower.contains("зав отдел") {
-        out.push_str("\nЗав. отделением _______________");
+    if !lower.contains("заведующий отдел")
+        && !lower.contains("зав. отдел")
+        && !lower.contains("зав отдел")
+    {
+        out.push_str("\nЗаведующий отделением _______________");
     }
     out
 }
@@ -782,7 +785,7 @@ mod tests {
     fn diaries_have_signatures() {
         let text = append_diary_signatures("Состояние стабильное.");
         assert!(text.contains("Лечащий врач"));
-        assert!(text.contains("Зав. отделением"));
+        assert!(text.contains("Заведующий отделением"));
     }
 
     #[test]

@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm ci
-      - run: cargo install cargo-audit --locked --version 0.21.2
+      - run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
       - run: python scripts/probe_offline_runtime.py --target windows-x86_64
       - name: Verify image-only PDF table OCR with the staged runtime
@@ -59,4 +59,5 @@ jobs:
             target/release/bundle/nsis/**
             .cargo-gate/**
             .release-gate/**
+          include-hidden-files: true
           if-no-files-found: error

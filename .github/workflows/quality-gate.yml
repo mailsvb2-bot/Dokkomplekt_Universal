@@ -25,7 +25,7 @@ jobs:
       - name: Cargo lock must be committed
         run: test -f Cargo.lock
       - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2 --quiet
+        run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - name: Mandatory Rust compile gate
         run: bash scripts/prepackage_rust_gate.sh
       - name: Upload Rust gate diagnostics
@@ -34,6 +34,7 @@ jobs:
         with:
           name: rust-compile-gate-diagnostics
           path: .cargo-gate/**
+          include-hidden-files: true
           if-no-files-found: warn
 
   rust-dependency-audit:
@@ -44,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
       - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2 --quiet
+        run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - name: Audit locked Rust dependencies
         shell: bash
         run: |
@@ -180,7 +181,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
       - name: Install MSRV-compatible cargo-audit on packaging runner
-        run: cargo install cargo-audit --locked --version 0.21.2 --quiet
+        run: cargo install cargo-audit --locked --version 0.22.2 --quiet
       - name: Repeat mandatory Rust gate on packaging runner
         shell: bash
         run: bash scripts/prepackage_rust_gate.sh

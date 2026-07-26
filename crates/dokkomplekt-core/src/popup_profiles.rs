@@ -512,9 +512,7 @@ fn should_ask_fresh_each_run(field_id: &str, role_id: &str) -> bool {
         "accounting.invoice_number" | "accounting.invoice_date" => {
             role.contains("invoice") || role.contains("счёт") || role.contains("счет")
         }
-        "hr.order_number" | "hr.order_date" => {
-            role.contains("order") || role.contains("приказ")
-        }
+        "hr.order_number" | "hr.order_date" => role.contains("order") || role.contains("приказ"),
         "medical.rvk_act_number" => role.contains("rvk") || role.contains("рвк"),
         "medical.commission_number" | "medical.commission_date" => {
             role.contains("commission") || role.contains("комисс") || role.contains("совмест")
@@ -624,12 +622,8 @@ mod tests {
             &DomainKind::Legal,
             "acceptance_act",
         );
-        let date = popup_config_for_field(
-            "document.date",
-            true,
-            &DomainKind::Legal,
-            "acceptance_act",
-        );
+        let date =
+            popup_config_for_field("document.date", true, &DomainKind::Legal, "acceptance_act");
         assert_eq!(number.ask_mode, PromptAskMode::Always);
         assert_eq!(date.ask_mode, PromptAskMode::Always);
         assert_eq!(date.default_value.as_deref(), Some("@today"));
@@ -643,12 +637,8 @@ mod tests {
             &DomainKind::Legal,
             "acceptance_act",
         );
-        let date = popup_config_for_field(
-            "contract.date",
-            false,
-            &DomainKind::Legal,
-            "acceptance_act",
-        );
+        let date =
+            popup_config_for_field("contract.date", false, &DomainKind::Legal, "acceptance_act");
         assert_eq!(number.ask_mode, PromptAskMode::Confirm);
         assert_eq!(date.ask_mode, PromptAskMode::Confirm);
     }

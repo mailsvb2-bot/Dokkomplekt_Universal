@@ -24,10 +24,8 @@ pub fn escape_xml(value: &str) -> String {
 }
 pub fn render_diary_text_with_signatures(body: &str) -> String {
     let mut out = body.trim().to_string();
-    if !has_signature_line(
-        &out,
-        &["лечащий врач", "врач-психиатр", "врач психиатр"],
-    ) {
+    if !has_signature_line(&out, &["лечащий врач", "врач-психиатр", "врач психиатр"])
+    {
         out.push_str("\n\nЛечащий врач __________________ /____________/");
     }
     if !has_signature_line(

@@ -181,7 +181,6 @@ pub fn unmet_blocks(
     unmet
 }
 
-
 fn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {
     rendered_text.lines().any(|line| {
         let normalized = line

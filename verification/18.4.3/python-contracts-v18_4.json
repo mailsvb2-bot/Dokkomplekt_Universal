@@ -1,0 +1,31 @@
+{
+  "schema": "dokkomplekt.python-contract-shards.v1",
+  "result": "passed",
+  "python": "3.13.5",
+  "source_sha256": "67255688e6f7e26750965aba684c56540d471433d2d36bc8487892b6216a6477",
+  "source_unchanged_during_run": true,
+  "module_count": 2,
+  "passed_test_count": 22,
+  "skipped_test_count": 0,
+  "duration_seconds": 2.729,
+  "modules": [
+    {
+      "module": "tests/test_v18_4_0_reliability_contracts.py",
+      "result": "passed",
+      "passed": 14,
+      "skipped": 0,
+      "duration_seconds": 1.367,
+      "returncode": 0,
+      "output_tail": "..............                                                           [100%]\n14 passed in 0.07s\n"
+    },
+    {
+      "module": "tests/test_v18_4_3_repair_contracts.py",
+      "result": "passed",
+      "passed": 8,
+      "skipped": 0,
+      "duration_seconds": 1.362,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.03s\n"
+    }
+  ]
+}

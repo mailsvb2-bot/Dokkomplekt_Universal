@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+exclude = [
+  "crates/dokkomplekt-license-server",
+  "crates/dokkomplekt-license-python"
+]
+members = [
+  "crates/dokkomplekt-core",
+  "crates/dokkomplekt-docx",
+  "crates/dokkomplekt-storage",
+  "crates/dokkomplekt-license-core",
+  "src-tauri",
+  "crates/dokkomplekt-morph",
+  "crates/dokkomplekt-refdata"
+]
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"
+rust-version = "1.97.1"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+anyhow = "1"
+axum = "0.7"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"
+postgres = { version = "0.19", features = ["with-time-0_3", "with-uuid-1"] }
+pyo3 = { version = "0.24.2", features = ["extension-module"] }
+rand_core = "0.6"
+sha2 = "0.10"
+semver = "1"
+time = { version = ">=0.3.47, <0.4", features = ["formatting", "macros", "parsing", "serde", "serde-well-known"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Use the ring provider explicitly: it is Rust 1.85-compatible and avoids the
+# much heavier aws-lc C toolchain while retaining rustls certificate validation.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+aes = "0.8"
+cipher = "0.4"
+hmac = "0.12"
+getrandom = "0.2"
+notify = "8.2"
+# zip 2.x permits deflate64 releases that use newer/unstable Rust APIs.
+deflate64 = "=0.1.10"
+

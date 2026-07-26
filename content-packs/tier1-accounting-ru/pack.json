@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "pack_id": "tier1.accounting.ru",
+  "version": "0.3.0",
+  "locale": "ru-RU",
+  "domain": "accounting",
+  "status": "starter",
+  "publisher": {
+    "name": "Dokkomplekt content-pack SDK",
+    "reviewed_by": []
+  },
+  "template_slots": [
+    {
+      "document_id": "accounting.invoice",
+      "label": "Счёт",
+      "required_fields": [
+        "accounting.invoice_date",
+        "accounting.invoice_number",
+        "amount.currency",
+        "amount.total",
+        "amount.vat",
+        "counterparty.name",
+        "org.inn",
+        "org.kpp",
+        "org.name"
+      ],
+      "template_path": "templates/invoice.docx",
+      "sha256": "1ef3ea72094fa5550a5f9616e7eb32df059a34958d0f37673eaef89d511ba19e",
+      "referenced_fields": [
+        "accounting.invoice_date",
+        "accounting.invoice_number",
+        "amount.currency",
+        "amount.total",
+        "amount.vat",
+        "counterparty.name",
+        "org.inn",
+        "org.kpp",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "accounting.service_act",
+      "label": "Акт оказанных услуг",
+      "required_fields": [
+        "amount.currency",
+        "amount.total",
+        "amount.vat",
+        "contract.date",
+        "contract.number",
+        "contract.subject",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "org.name"
+      ],
+      "template_path": "templates/service_act.docx",
+      "sha256": "3a681f549aad7c928e226dda3931b7a7a5d76c3adad005ec4c4e515223cc442e",
+      "referenced_fields": [
+        "amount.currency",
+        "amount.total",
+        "amount.vat",
+        "contract.date",
+        "contract.number",
+        "contract.subject",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "accounting.reconciliation",
+      "label": "Акт сверки",
+      "required_fields": [
+        "amount.currency",
+        "amount.total",
+        "counterparty.name",
+        "document.date",
+        "org.name"
+      ],
+      "template_path": "templates/reconciliation.docx",
+      "sha256": "aa0dc7690e260f1c348818001db98bc07630c181cdd607082eb8fae818aca0d5",
+      "referenced_fields": [
+        "amount.currency",
+        "amount.total",
+        "counterparty.name",
+        "document.date",
+        "org.name"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_id": "accounting.service_closure",
+      "event": "Закрытие оказанных услуг",
+      "documents": [
+        "accounting.invoice",
+        "accounting.service_act"
+      ]
+    },
+    {
+      "workflow_id": "accounting.reconciliation",
+      "event": "Сверка расчётов",
+      "documents": [
+        "accounting.reconciliation"
+      ]
+    }
+  ],
+  "review_note": "Пакет содержит работающие draft-only starter-шаблоны с каноническими полями. Перед пилотом каждая форма должна быть заменена или утверждена уполномоченным специалистом организации.",
+  "usage_mode": "draft_only",
+  "requires_organization_review": true
+}

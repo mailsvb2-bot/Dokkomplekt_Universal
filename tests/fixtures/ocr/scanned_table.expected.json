@@ -1,0 +1,16 @@
+{
+  "schema": "dokkomplekt.scanned-table-golden.v1",
+  "pdf": "scanned_table_image_only.pdf",
+  "pdf_sha256": "5a3103b95e2d308529151a7f2c509847f8dc95658f3b7696e2db3c27adf087fe",
+  "tsv": "scanned_table.tesseract.tsv",
+  "tsv_sha256": "f7a065dd9d5a6db5ab89e55fb2735dd6e7f95dd1912cd3f47872c78da655f0af",
+  "page_count": 1,
+  "image_only": true,
+  "minimum_table_rows": 4,
+  "required_tokens": [
+    "02.07.2026",
+    "500100732259",
+    "Сидорова",
+    "6671000014"
+  ]
+}

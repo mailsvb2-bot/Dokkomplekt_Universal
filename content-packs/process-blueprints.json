@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "usage_mode": "workflow_blueprints_only",
+  "notice": "Blueprints do not contain or certify organization forms. The user supplies and approves their own templates.",
+  "processes": [
+    {
+      "process_id": "hr.employee_onboarding",
+      "domain": "hr",
+      "locale": "ru-RU",
+      "title": "Приём сотрудника",
+      "description": "Определить нового сотрудника и создать только подтверждённый организацией комплект оформления.",
+      "template_slots": ["Трудовой договор", "Приказ о приёме", "Согласие на обработку данных", "Уведомления и локальные формы"],
+      "high_risk_fields": ["employee.name", "employee.birth_date", "employee.position", "employment.start_date", "org.name"],
+      "validators": ["identity_conflict_gate", "date_order_gate", "template_revision_gate", "signatory_authority_gate"]
+    },
+    {
+      "process_id": "hr.employee_termination",
+      "domain": "hr",
+      "locale": "ru-RU",
+      "title": "Увольнение",
+      "description": "Сформировать организационный комплект увольнения без документов других кадровых процессов.",
+      "template_slots": ["Заявление или основание", "Приказ об увольнении", "Расчётные и ознакомительные формы"],
+      "high_risk_fields": ["employee.name", "employment.end_date", "hr.termination_basis", "org.name"],
+      "validators": ["identity_conflict_gate", "date_order_gate", "working_day_calendar_gate", "template_revision_gate"]
+    },
+    {
+      "process_id": "hr.leave",
+      "domain": "hr",
+      "locale": "ru-RU",
+      "title": "Отпуск",
+      "description": "Создать только формы выбранного вида отпуска и проверить период.",
+      "template_slots": ["Заявление", "Приказ", "Уведомление"],
+      "high_risk_fields": ["employee.name", "period.start_date", "period.end_date", "hr.leave_type"],
+      "validators": ["date_order_gate", "working_day_calendar_gate", "template_revision_gate"]
+    },
+    {
+      "process_id": "hr.business_trip",
+      "domain": "hr",
+      "locale": "ru-RU",
+      "title": "Командировка",
+      "description": "Собрать командировочный пакет по одному сотруднику и одному периоду.",
+      "template_slots": ["Служебное задание", "Приказ", "Уведомление", "Отчёт"],
+      "high_risk_fields": ["employee.name", "period.start_date", "period.end_date", "travel.destination"],
+      "validators": ["identity_conflict_gate", "date_order_gate", "template_revision_gate"]
+    },
+    {
+      "process_id": "legal.contract_work",
+      "domain": "legal",
+      "locale": "ru-RU",
+      "title": "Договорная работа",
+      "description": "Создать договор и связанные формы только для одной пары сторон и одного предмета.",
+      "template_slots": ["Договор", "Приложения", "Протокол разногласий", "Акт или спецификация"],
+      "high_risk_fields": ["org.inn", "counterparty.inn", "contract.number", "contract.date", "contract.subject", "amount.total"],
+      "validators": ["party_conflict_gate", "inn_checksum_gate", "amount_consistency_gate", "signatory_authority_gate"]
+    },
+    {
+      "process_id": "legal.claim_work",
+      "domain": "legal",
+      "locale": "ru-RU",
+      "title": "Претензионная работа",
+      "description": "Сформировать претензионный комплект по одному обязательству и доказательствам.",
+      "template_slots": ["Претензия", "Расчёт", "Опись приложений", "Сопроводительное письмо"],
+      "high_risk_fields": ["counterparty.inn", "contract.number", "claim.date", "amount.total", "claim.basis"],
+      "validators": ["party_conflict_gate", "amount_consistency_gate", "limitation_date_review", "template_revision_gate"]
+    },
+    {
+      "process_id": "legal.court_package",
+      "domain": "legal",
+      "locale": "ru-RU",
+      "title": "Судебный комплект",
+      "description": "Разделить дела и сформировать документы только по одному суду, сторонам и номеру дела.",
+      "template_slots": ["Иск или отзыв", "Ходатайства", "Расчёт", "Опись приложений"],
+      "high_risk_fields": ["court.name", "court.case_number", "legal.party_a", "legal.party_b", "amount.total"],
+      "validators": ["case_segmentation_gate", "party_conflict_gate", "amount_consistency_gate", "template_revision_gate"]
+    },
+    {
+      "process_id": "accounting.closing_documents",
+      "domain": "accounting",
+      "locale": "ru-RU",
+      "title": "Закрывающие документы",
+      "description": "Создать счёт, акт или иные формы только для одной сделки и одного контрагента.",
+      "template_slots": ["Счёт", "Акт", "УПД или накладная", "Акт сверки"],
+      "high_risk_fields": ["org.inn", "counterparty.inn", "contract.number", "amount.total", "amount.vat"],
+      "validators": ["party_conflict_gate", "inn_checksum_gate", "amount_consistency_gate", "duplicate_number_gate"]
+    },
+    {
+      "process_id": "medical.hospitalization",
+      "domain": "medical",
+      "locale": "ru-RU",
+      "title": "Госпитализация",
+      "description": "Создать подтверждённый медорганизацией комплект по одному пациенту и одному случаю.",
+      "template_slots": ["Осмотр", "Согласия", "Назначения", "Дневники"],
+      "high_risk_fields": ["subject.name", "subject.birth_date", "medical.case_number", "medical.admission_date", "medical.diagnosis"],
+      "validators": ["patient_identity_gate", "case_segmentation_gate", "date_order_gate", "medical_template_approval_gate"]
+    },
+    {
+      "process_id": "medical.discharge",
+      "domain": "medical",
+      "locale": "ru-RU",
+      "title": "Выписка",
+      "description": "Сформировать выписной комплект по одному пациенту без переноса смыслов из обучающих шаблонов.",
+      "template_slots": ["Выписной эпикриз", "Дневники", "Справки", "Рекомендации"],
+      "high_risk_fields": ["subject.name", "medical.case_number", "medical.admission_date", "medical.discharge_date", "medical.diagnosis", "medical.treatment"],
+      "validators": ["patient_identity_gate", "case_segmentation_gate", "date_order_gate", "grounded_value_gate"]
+    },
+    {
+      "process_id": "education.enrollment",
+      "domain": "education",
+      "locale": "ru-RU",
+      "title": "Зачисление и обучение",
+      "description": "Собрать комплект по одному обучающемуся и одной образовательной программе.",
+      "template_slots": ["Заявление", "Договор", "Приказ", "Согласия"],
+      "high_risk_fields": ["student.name", "student.birth_date", "education.program", "education.start_date"],
+      "validators": ["identity_conflict_gate", "date_order_gate", "template_revision_gate"]
+    },
+    {
+      "process_id": "custom.user_defined",
+      "domain": "custom",
+      "locale": "multilingual",
+      "title": "Свой процесс",
+      "description": "Создать собственный процесс, поля, валидаторы и комплект без привязки ядра к одной профессии.",
+      "template_slots": [],
+      "high_risk_fields": [],
+      "validators": ["case_segmentation_gate", "grounded_value_gate", "template_revision_gate"]
+    }
+  ]
+}

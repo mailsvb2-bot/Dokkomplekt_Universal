@@ -1,0 +1,21 @@
+[package]
+name = "dokkomplekt-license-core"
+version = "18.4.3"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "dokkomplekt_license_core"
+path = "src/lib.rs"
+
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+rand_core.workspace = true

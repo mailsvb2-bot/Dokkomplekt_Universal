@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "target": "windows-x86_64",
+  "files": [
+    {
+      "tool": "tesseract",
+      "source": "C:/release-input/tesseract/tesseract.exe",
+      "target": "tesseract/tesseract.exe",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": true
+    },
+    {
+      "tool": "tesseract",
+      "source": "C:/release-input/tesseract/tessdata/rus.traineddata",
+      "target": "tesseract/tessdata/rus.traineddata",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": false
+    },
+    {
+      "tool": "tesseract",
+      "source": "C:/release-input/tesseract/tessdata/eng.traineddata",
+      "target": "tesseract/tessdata/eng.traineddata",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": false
+    },
+    {
+      "tool": "poppler",
+      "source": "C:/release-input/poppler/bin/pdftotext.exe",
+      "target": "poppler/bin/pdftotext.exe",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": true
+    },
+    {
+      "tool": "poppler",
+      "source": "C:/release-input/poppler/bin/pdftoppm.exe",
+      "target": "poppler/bin/pdftoppm.exe",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": true
+    },
+    {
+      "tool": "libreoffice",
+      "source": "C:/release-input/libreoffice/program/soffice.exe",
+      "target": "libreoffice/program/soffice.exe",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": true
+    },
+    {
+      "tool": "sumatrapdf",
+      "source": "C:/release-input/sumatrapdf/SumatraPDF.exe",
+      "target": "sumatrapdf/SumatraPDF.exe",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": true
+    },
+    {
+      "tool": "llama_cpp",
+      "source": "C:/release-input/llama.cpp/llama-server.exe",
+      "target": "llama_cpp/llama-server.exe",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": true
+    },
+    {
+      "tool": "semantic_model",
+      "source": "C:/release-input/models/dokkomplekt-instruct.gguf",
+      "target": "semantic_model/dokkomplekt-instruct.gguf",
+      "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+      "executable": false
+    },
+    {
+      "tool": "7zip",
+      "source": "C:/release-input/7zip/7z.exe",
+      "target": "7zip/7z.exe",
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "executable": true
+    }
+  ]
+}

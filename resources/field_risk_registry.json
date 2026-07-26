@@ -1,0 +1,78 @@
+{
+  "schema": "dokkomplekt.field-risk-registry.v1",
+  "version": "18.4.0",
+  "rationale": [
+    "Единый источник истины о классе риска поля.",
+    "Читается И Rust-рантаймом (automation_quality.rs), И Python-калибровкой",
+    "(scripts/measure_domain.py). До 18.4.0 это были две независимые реализации,",
+    "которые расходились: subject.address был High в рантайме, но не измерялся",
+    "калибровкой вовсе.",
+    "",
+    "СЕМАНТИКА СОПОСТАВЛЕНИЯ (обязана быть побитово одинаковой в обоих языках):",
+    "  1. field_id приводится к нижнему регистру;",
+    "  2. segments = split('.')                     -> ['org', 'bank_account'];",
+    "  3. words    = segments, каждый split('_')    -> ['org', 'bank', 'account'];",
+    "  4. правило срабатывает, если его токен присутствует",
+    "     в words (целым словом) ИЛИ в segments (целым сегментом).",
+    "",
+    "Подстрочного сравнения нет НИГДЕ. Именно оно давало до 18.4.0:",
+    "  hr.winner_bonus    -> Critical (подстрока 'inn')",
+    "  org.beginning_date -> Critical (подстрока 'inn')",
+    "  legal.mandate_ref  -> High     (подстрока 'date')",
+    "  task.update_flag   -> High     (подстрока 'date')",
+    "",
+    "Классы риска НЕ ослаблены относительно 18.3.2. Достижимость порогов",
+    "обеспечивается корроборацией (reliability.rs), а не понижением требований."
+  ],
+  "order": ["critical", "high", "medium", "low"],
+  "rules": {
+    "critical": {
+      "tokens": [
+        "inn", "ogrn", "ogrnip", "snils", "passport", "vin",
+        "cadastre", "cadastral", "diagnosis", "icd10",
+        "bank_account", "correspondent_account",
+        "birth_date", "date_of_birth",
+        "admission_date", "discharge_date"
+      ],
+      "prefixes": ["medical", "patient"],
+      "exact": [
+        "amount.total",
+        "total_amount",
+        "case.number",
+        "case_number",
+        "document.number"
+      ]
+    },
+    "high": {
+      "tokens": [
+        "date", "address", "amount", "price", "quantity",
+        "tax", "vat", "signature", "representative", "salary"
+      ],
+      "prefixes": ["legal", "hr", "accounting", "person"],
+      "exact": ["subject.name"]
+    },
+    "medium": {
+      "tokens": ["phone", "email", "position", "organization", "department", "title"],
+      "prefixes": ["org"],
+      "exact": []
+    },
+    "low": {
+      "tokens": [],
+      "prefixes": [],
+      "exact": []
+    }
+  },
+  "minimum_confidence": {
+    "low": 0.80,
+    "medium": 0.90,
+    "high": 0.98,
+    "critical": 0.995
+  },
+  "note_on_minimum_confidence": [
+    "Эти пороги сохранены из 18.3.2 намеренно и БОЛЬШЕ НЕ ЯВЛЯЮТСЯ основным",
+    "воротами автоматизации. Начиная с 18.4.0 решение принимает kit_budget.rs",
+    "по бюджету ошибки на КОМПЛЕКТ, опираясь на измеренную надёжность",
+    "(reliability.rs), а не на объявленную константу уверенности.",
+    "Пороги остаются как дополнительный потолок для несегментированных путей."
+  ]
+}

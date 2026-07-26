@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "renderer": "libreoffice+pdftoppm-120dpi",
+  "fixtures": {
+    "comments_relationships.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "0840ca00c4800020000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "complex_realistic_template.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "e000c180d18000000000000000000000000000000000000000004000f000e400"
+        }
+      ]
+    },
+    "content_controls_fields_tracked.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "1820c8a0c0001020000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "formula_conditions.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "6aa0e2a0d240d040d00000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "images_headers_footers.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "c400dc607a70c188d180000040800000000000000000000000000000c800c800"
+        }
+      ]
+    },
+    "long_pagination.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "0da09b6093529b129b129b129b129b129b129b529b529b529b529b5293528610"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "d26893689b529b529b529b529b529b529b529b529b529b529b529b529b524484"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "d26893689b529b529b529b529b529b529b529b529b529b529b529b529b50c8c0"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "d268934a9b529b529b529b529b529b529b529b529b529b529b529b5293524484"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "d26893689b529b529b529b529b529b529b529b529b529b529b529b529b524080"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "936893689b529b529b529b529b529b529b529b529b529b529b529b5293524484"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "d2689b689b529b529b529b529b529b529b529b529b529b529b529b529b524484"
+        },
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "d268936a9b529352c71400000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    "merged_tables_sections.docx": {
+      "pages": [
+        {
+          "width": 1020,
+          "height": 1320,
+          "dhash16": "fa40d810c8b8d8980000480000000000000000000000000000000000c000c000"
+        },
+        {
+          "width": 1320,
+          "height": 1020,
+          "dhash16": "c000e744a95440000000000000000000000000000000000000000000c000c000"
+        }
+      ]
+    }
+  }
+}

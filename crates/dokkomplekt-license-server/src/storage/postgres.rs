@@ -1,0 +1,567 @@
+use super::{
+    ActivationIssueOutcome, AuditEventRecord, LicenseIssueOutcome, LicenseRecord, LicenseStore,
+    PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, StoreError,
+};
+use crate::state::{ActivationRecord, OrderRecord, OrderStatus};
+use postgres::error::SqlState;
+use postgres::{Client, GenericClient, NoTls, Row};
+use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct PostgresStore {
+    pool: Arc<PostgresPool>,
+}
+
+struct PostgresPool {
+    clients: Vec<Mutex<Client>>,
+    next: AtomicUsize,
+}
+
+impl PostgresStore {
+    pub fn connect(database_url: &str) -> anyhow::Result<Self> {
+        crate::config::validate_database_transport(
+            database_url,
+            crate::config::strict_runtime_required(),
+        )?;
+        let pool_size = configured_pool_size();
+        let mut clients = Vec::with_capacity(pool_size);
+        let mut bootstrap_client = Client::connect(database_url, NoTls)?;
+        apply_migrations(&mut bootstrap_client)?;
+        clients.push(Mutex::new(bootstrap_client));
+        for _ in 1..pool_size {
+            clients.push(Mutex::new(Client::connect(database_url, NoTls)?));
+        }
+        Ok(Self {
+            pool: Arc::new(PostgresPool {
+                clients,
+                next: AtomicUsize::new(0),
+            }),
+        })
+    }
+
+    pub fn pool_size(&self) -> usize {
+        self.pool.clients.len()
+    }
+
+    pub fn check_ready(&self) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        let value: i32 = client.query_one("SELECT 1", &[]).map_err(pg_err)?.get(0);
+        if value == 1 {
+            Ok(())
+        } else {
+            Err(StoreError::Invalid("postgres_readiness_failed".to_string()))
+        }
+    }
+
+    pub fn issue_license_for_paid_order(
+        &self,
+        record: LicenseRecord,
+    ) -> Result<LicenseIssueOutcome, StoreError> {
+        let mut client = self.client()?;
+        let mut tx = client.transaction().map_err(pg_err)?;
+        let row = tx.query_opt(
+            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            &[&record.order_id],
+        ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
+        let order = order_from_row(row)?;
+        if !matches!(order.status, OrderStatus::Paid | OrderStatus::LicenseIssued) {
+            return Err(StoreError::Conflict);
+        }
+        if let Some(row) = tx.query_opt(
+            "SELECT id, order_id, license_id, document_json, issued_at, revoked_at FROM license_documents WHERE order_id = $1 AND revoked_at IS NULL ORDER BY issued_at DESC LIMIT 1",
+            &[&record.order_id],
+        ).map_err(pg_err)? {
+            let existing = license_from_row(row);
+            if super::license_documents_equivalent(
+                &existing.document_json,
+                &record.document_json,
+            ) {
+                insert_audit_event(
+                    &mut tx,
+                    &audit_event(record.order_id, "license_issue_reused", &existing.license_id, OffsetDateTime::now_utc()),
+                )?;
+                tx.commit().map_err(pg_err)?;
+                return Ok(LicenseIssueOutcome { record: existing, reused: true });
+            }
+        }
+        tx.execute(
+            "INSERT INTO license_documents (id, order_id, license_id, document_json, issued_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&record.id, &record.order_id, &record.license_id, &record.document_json, &record.issued_at, &record.revoked_at],
+        ).map_err(pg_err)?;
+        let issued = order_status_to_str(&OrderStatus::LicenseIssued);
+        tx.execute(
+            "UPDATE license_orders SET status = $2 WHERE id = $1",
+            &[&record.order_id, &issued],
+        )
+        .map_err(pg_err)?;
+        insert_audit_event(
+            &mut tx,
+            &audit_event(
+                record.order_id,
+                "license_issued",
+                &record.license_id,
+                record.issued_at,
+            ),
+        )?;
+        tx.commit().map_err(pg_err)?;
+        Ok(LicenseIssueOutcome {
+            record,
+            reused: false,
+        })
+    }
+
+    fn client(&self) -> Result<MutexGuard<'_, Client>, StoreError> {
+        let index = self.pool.next.fetch_add(1, Ordering::Relaxed) % self.pool.clients.len();
+        self.pool.clients[index]
+            .lock()
+            .map_err(|_| StoreError::Poisoned)
+    }
+}
+
+impl LicenseStore for PostgresStore {
+    fn create_order(&self, record: OrderRecord) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        let amount = amount_to_i64(record.amount_rub)?;
+        let status = order_status_to_str(&record.status);
+        let machine_hash = record.machine_hash.as_deref();
+        client.execute(
+            "INSERT INTO license_orders (id, plan, amount_rub, status, machine_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&record.id, &record.plan, &amount, &status, &machine_hash, &record.created_at],
+        ).map_err(pg_err)?;
+        Ok(())
+    }
+
+    fn get_order(&self, order_id: Uuid) -> Result<Option<OrderRecord>, StoreError> {
+        let mut client = self.client()?;
+        client.query_opt(
+            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1",
+            &[&order_id],
+        ).map_err(pg_err)?.map(order_from_row).transpose()
+    }
+
+    fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        let status = order_status_to_str(&status);
+        let changed = client
+            .execute(
+                "UPDATE license_orders SET status = $2 WHERE id = $1",
+                &[&order_id, &status],
+            )
+            .map_err(pg_err)?;
+        if changed == 0 {
+            Err(StoreError::NotFound)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn create_activation(&self, record: ActivationRecord) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        client.execute(
+            "INSERT INTO license_machines (id, order_id, machine_hash, created_at) VALUES ($1, $2, $3, $4)",
+            &[&record.id, &record.order_id, &record.machine_hash, &record.created_at],
+        ).map_err(pg_err)?;
+        Ok(())
+    }
+
+    fn create_activation_for_order(
+        &self,
+        record: ActivationRecord,
+        max_machines: u32,
+    ) -> Result<ActivationIssueOutcome, StoreError> {
+        let mut client = self.client()?;
+        let mut tx = client.transaction().map_err(pg_err)?;
+        let row = tx.query_opt(
+            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            &[&record.order_id],
+        ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
+        let order = order_from_row(row)?;
+        if !matches!(order.status, OrderStatus::Paid | OrderStatus::LicenseIssued) {
+            return Err(StoreError::Conflict);
+        }
+        if let Some(row) = tx
+            .query_opt(
+                "SELECT id, order_id, machine_hash, created_at FROM license_machines WHERE order_id = $1 AND machine_hash = $2",
+                &[&record.order_id, &record.machine_hash],
+            )
+            .map_err(pg_err)?
+        {
+            let activation = activation_from_row(row);
+            insert_audit_event(
+                &mut tx,
+                &audit_event(
+                    record.order_id,
+                    "machine_activation_reused",
+                    &record.machine_hash,
+                    OffsetDateTime::now_utc(),
+                ),
+            )?;
+            tx.commit().map_err(pg_err)?;
+            return Ok(ActivationIssueOutcome {
+                order,
+                activation,
+                reused: true,
+            });
+        }
+        let active_count: i64 = tx
+            .query_one(
+                "SELECT COUNT(*) FROM license_machines WHERE order_id = $1",
+                &[&record.order_id],
+            )
+            .map_err(pg_err)?
+            .get(0);
+        if active_count < 0 || active_count as u32 >= max_machines {
+            return Err(StoreError::Conflict);
+        }
+        tx.execute(
+            "INSERT INTO license_machines (id, order_id, machine_hash, created_at) VALUES ($1, $2, $3, $4)",
+            &[&record.id, &record.order_id, &record.machine_hash, &record.created_at],
+        ).map_err(pg_err)?;
+        insert_audit_event(
+            &mut tx,
+            &audit_event(
+                record.order_id,
+                "machine_activated",
+                &record.machine_hash,
+                record.created_at,
+            ),
+        )?;
+        tx.commit().map_err(pg_err)?;
+        Ok(ActivationIssueOutcome {
+            order,
+            activation: record,
+            reused: false,
+        })
+    }
+
+    fn activations_for_order(&self, order_id: Uuid) -> Result<Vec<ActivationRecord>, StoreError> {
+        let mut client = self.client()?;
+        let exists = client
+            .query_opt("SELECT 1 FROM license_orders WHERE id = $1", &[&order_id])
+            .map_err(pg_err)?
+            .is_some();
+        if !exists {
+            return Err(StoreError::NotFound);
+        }
+        client
+            .query(
+                "SELECT id, order_id, machine_hash, created_at FROM license_machines WHERE order_id = $1 ORDER BY created_at ASC, machine_hash ASC",
+                &[&order_id],
+            )
+            .map_err(pg_err)
+            .map(|rows| rows.into_iter().map(activation_from_row).collect())
+    }
+
+    fn record_payment_event(&self, record: PaymentEventRecord) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        insert_payment_event(&mut *client, &record)
+    }
+
+    fn record_payment_event_for_order(
+        &self,
+        record: PaymentEventRecord,
+    ) -> Result<PaymentEventWriteOutcome, StoreError> {
+        let mut client = self.client()?;
+        let mut tx = client.transaction().map_err(pg_err)?;
+        let provider = payment_provider_to_str(&record.provider);
+        if tx
+            .query_opt(
+                "SELECT id FROM billing_events WHERE provider = $1 AND provider_event_id = $2",
+                &[&provider, &record.provider_event_id],
+            )
+            .map_err(pg_err)?
+            .is_some()
+        {
+            insert_audit_event(
+                &mut tx,
+                &audit_event(
+                    record.order_id,
+                    "payment_duplicate",
+                    &record.provider_event_id,
+                    record.received_at,
+                ),
+            )?;
+            tx.commit().map_err(pg_err)?;
+            return Ok(PaymentEventWriteOutcome::Duplicate);
+        }
+        let row = tx.query_opt(
+            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            &[&record.order_id],
+        ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
+        let order = order_from_row(row)?;
+        if order.amount_rub != record.amount_rub {
+            return Err(StoreError::Invalid("amount_mismatch".to_string()));
+        }
+        if matches!(record.status, PaymentEventStatus::Succeeded) {
+            let paid = order_status_to_str(&OrderStatus::Paid);
+            tx.execute(
+                "UPDATE license_orders SET status = $2 WHERE id = $1",
+                &[&record.order_id, &paid],
+            )
+            .map_err(pg_err)?;
+        }
+        insert_payment_event(&mut tx, &record)?;
+        insert_audit_event(
+            &mut tx,
+            &audit_event(
+                record.order_id,
+                "payment_recorded",
+                &record.provider_event_id,
+                record.received_at,
+            ),
+        )?;
+        tx.commit().map_err(pg_err)?;
+        Ok(PaymentEventWriteOutcome::Recorded)
+    }
+
+    fn store_license(&self, record: LicenseRecord) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        client.execute(
+            "INSERT INTO license_documents (id, order_id, license_id, document_json, issued_at, revoked_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            &[&record.id, &record.order_id, &record.license_id, &record.document_json, &record.issued_at, &record.revoked_at],
+        ).map_err(pg_err)?;
+        Ok(())
+    }
+
+    fn audit(&self, record: AuditEventRecord) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        insert_audit_event(&mut *client, &record)
+    }
+}
+
+fn apply_migrations(client: &mut Client) -> anyhow::Result<()> {
+    client.query_one("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_ID])?;
+    let result = apply_migrations_locked(client);
+    let unlock_result = client.query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_ID]);
+    result?;
+    unlock_result?;
+    Ok(())
+}
+
+fn apply_migrations_locked(client: &mut Client) -> anyhow::Result<()> {
+    client.batch_execute(MIGRATION_LEDGER_SCHEMA)?;
+    client.batch_execute(MIGRATION_LEDGER_CHECKSUM_COLUMN)?;
+    let checksum = schema_checksum();
+    let existing = client.query_opt(
+        "SELECT checksum FROM schema_migrations WHERE version = $1",
+        &[&SCHEMA_VERSION],
+    )?;
+    if let Some(row) = existing {
+        let stored_checksum: Option<String> = row.get(0);
+        match stored_checksum.as_deref() {
+            Some(value) if value == checksum => return Ok(()),
+            Some(value) => anyhow::bail!(
+                "migration checksum mismatch for {SCHEMA_VERSION}: stored {value}, expected {checksum}"
+            ),
+            None => {
+                client.execute(
+                    "UPDATE schema_migrations SET checksum = $2 WHERE version = $1",
+                    &[&SCHEMA_VERSION, &checksum],
+                )?;
+                return Ok(());
+            }
+        }
+    }
+    client.batch_execute(SCHEMA_V1)?;
+    client.execute(
+        "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES ($1, $2, NOW())",
+        &[&SCHEMA_VERSION, &checksum],
+    )?;
+    Ok(())
+}
+
+fn schema_checksum() -> String {
+    let digest = Sha256::digest(SCHEMA_V1.as_bytes());
+    hex::encode(digest)
+}
+
+fn configured_pool_size() -> usize {
+    configured_pool_size_from(std::env::var(POSTGRES_POOL_SIZE_ENV).ok().as_deref())
+}
+
+fn configured_pool_size_from(value: Option<&str>) -> usize {
+    value
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_POSTGRES_POOL_SIZE)
+        .clamp(MIN_POSTGRES_POOL_SIZE, MAX_POSTGRES_POOL_SIZE)
+}
+
+fn insert_payment_event(
+    client: &mut impl GenericClient,
+    record: &PaymentEventRecord,
+) -> Result<(), StoreError> {
+    let provider = payment_provider_to_str(&record.provider);
+    let status = payment_status_to_str(&record.status);
+    let amount = amount_to_i64(record.amount_rub)?;
+    let provider_ref = record.provider_payment_id.as_deref();
+    client.execute(
+        "INSERT INTO billing_events (id, order_id, provider, provider_event_id, provider_reference_id, status, amount_rub, received_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        &[&record.id, &record.order_id, &provider, &record.provider_event_id, &provider_ref, &status, &amount, &record.received_at],
+    ).map_err(pg_err)?;
+    Ok(())
+}
+
+fn insert_audit_event(
+    client: &mut impl GenericClient,
+    record: &AuditEventRecord,
+) -> Result<(), StoreError> {
+    client.execute(
+        "INSERT INTO license_audit_events (id, entity_id, event_type, happened_at, details_json) VALUES ($1, $2, $3, $4, $5)",
+        &[&record.id, &record.entity_id, &record.event_type, &record.happened_at, &record.details_json],
+    ).map_err(pg_err)?;
+    Ok(())
+}
+
+fn audit_event(
+    entity_id: Uuid,
+    event_type: &str,
+    detail_value: &str,
+    happened_at: OffsetDateTime,
+) -> AuditEventRecord {
+    AuditEventRecord {
+        id: Uuid::new_v4(),
+        entity_id,
+        event_type: event_type.to_string(),
+        happened_at,
+        details_json: serde_json::json!({"value": detail_value}).to_string(),
+    }
+}
+
+fn order_from_row(row: Row) -> Result<OrderRecord, StoreError> {
+    let amount: i64 = row.get("amount_rub");
+    let status: String = row.get("status");
+    Ok(OrderRecord {
+        id: row.get("id"),
+        plan: row.get("plan"),
+        amount_rub: amount_from_i64(amount)?,
+        status: order_status_from_str(&status)?,
+        machine_hash: row.get("machine_hash"),
+        created_at: row.get("created_at"),
+    })
+}
+
+fn activation_from_row(row: Row) -> ActivationRecord {
+    ActivationRecord {
+        id: row.get("id"),
+        order_id: row.get("order_id"),
+        machine_hash: row.get("machine_hash"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn license_from_row(row: Row) -> LicenseRecord {
+    LicenseRecord {
+        id: row.get("id"),
+        order_id: row.get("order_id"),
+        license_id: row.get("license_id"),
+        document_json: row.get("document_json"),
+        issued_at: row.get("issued_at"),
+        revoked_at: row.get("revoked_at"),
+    }
+}
+
+fn amount_to_i64(amount: u64) -> Result<i64, StoreError> {
+    i64::try_from(amount).map_err(|_| StoreError::Invalid("amount_overflow".to_string()))
+}
+
+fn amount_from_i64(amount: i64) -> Result<u64, StoreError> {
+    u64::try_from(amount).map_err(|_| StoreError::Invalid("amount_negative".to_string()))
+}
+
+fn order_status_to_str(status: &OrderStatus) -> &'static str {
+    match status {
+        OrderStatus::Draft => "draft",
+        OrderStatus::WaitingPayment => "waiting_payment",
+        OrderStatus::Paid => "paid",
+        OrderStatus::LicenseIssued => "license_issued",
+        OrderStatus::Cancelled => "cancelled",
+    }
+}
+
+fn order_status_from_str(value: &str) -> Result<OrderStatus, StoreError> {
+    match value {
+        "draft" => Ok(OrderStatus::Draft),
+        "waiting_payment" => Ok(OrderStatus::WaitingPayment),
+        "paid" => Ok(OrderStatus::Paid),
+        "license_issued" => Ok(OrderStatus::LicenseIssued),
+        "cancelled" => Ok(OrderStatus::Cancelled),
+        other => Err(StoreError::Invalid(format!("unknown_order_status:{other}"))),
+    }
+}
+
+fn payment_provider_to_str(provider: &super::PaymentProvider) -> &'static str {
+    match provider {
+        super::PaymentProvider::Manual => "manual",
+        super::PaymentProvider::YooKassa => "yookassa",
+        super::PaymentProvider::Sbp => "sbp",
+        super::PaymentProvider::BankInvoice => "bank_invoice",
+    }
+}
+
+fn payment_status_to_str(status: &PaymentEventStatus) -> &'static str {
+    match status {
+        PaymentEventStatus::Pending => "pending",
+        PaymentEventStatus::Succeeded => "succeeded",
+        PaymentEventStatus::Cancelled => "cancelled",
+        PaymentEventStatus::Rejected => "rejected",
+    }
+}
+
+fn pg_err(error: postgres::Error) -> StoreError {
+    if let Some(db_error) = error.as_db_error() {
+        if db_error.code() == &SqlState::UNIQUE_VIOLATION {
+            return StoreError::Conflict;
+        }
+        if db_error.code() == &SqlState::FOREIGN_KEY_VIOLATION {
+            return StoreError::NotFound;
+        }
+    }
+    StoreError::Invalid(error.to_string())
+}
+
+const POSTGRES_POOL_SIZE_ENV: &str = "DKK_LICENSE_POSTGRES_POOL_SIZE";
+const DEFAULT_POSTGRES_POOL_SIZE: usize = 4;
+const MIN_POSTGRES_POOL_SIZE: usize = 1;
+const MAX_POSTGRES_POOL_SIZE: usize = 16;
+const SCHEMA_VERSION: &str = "0001_license_schema";
+const MIGRATION_LOCK_ID: i64 = 4_207_301_001;
+const MIGRATION_LEDGER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL);";
+const MIGRATION_LEDGER_CHECKSUM_COLUMN: &str =
+    "ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT;";
+const SCHEMA_V1: &str = include_str!("../../migrations/0001_license_schema.sql");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_pool_size_uses_default_and_clamps_bounds() {
+        assert_eq!(configured_pool_size_from(None), DEFAULT_POSTGRES_POOL_SIZE);
+        assert_eq!(
+            configured_pool_size_from(Some("")),
+            DEFAULT_POSTGRES_POOL_SIZE
+        );
+        assert_eq!(
+            configured_pool_size_from(Some("invalid")),
+            DEFAULT_POSTGRES_POOL_SIZE
+        );
+        assert_eq!(configured_pool_size_from(Some("0")), MIN_POSTGRES_POOL_SIZE);
+        assert_eq!(configured_pool_size_from(Some("1")), MIN_POSTGRES_POOL_SIZE);
+        assert_eq!(configured_pool_size_from(Some("4")), 4);
+        assert_eq!(
+            configured_pool_size_from(Some("64")),
+            MAX_POSTGRES_POOL_SIZE
+        );
+    }
+
+    #[test]
+    fn migration_checksum_is_hex_sha256() {
+        let checksum = schema_checksum();
+        assert_eq!(checksum.len(), 64);
+        assert!(checksum.chars().all(|value| value.is_ascii_hexdigit()));
+    }
+}

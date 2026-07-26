@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SemanticCase",
+  "type": "object",
+  "required": ["values"],
+  "properties": {
+    "values": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["field_id", "value", "source", "confidence"],
+        "properties": {
+          "field_id": { "type": "string" },
+          "value": { "type": "string" },
+          "source": { "enum": ["SafeDefault", "Scanner", "SessionSelection", "UserConfirmed"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  }
+}

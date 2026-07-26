@@ -1,0 +1,76 @@
+{
+  "schema": "dokkomplekt.python-contract-shards.v1",
+  "result": "passed",
+  "python": "3.13.5",
+  "source_sha256": "67255688e6f7e26750965aba684c56540d471433d2d36bc8487892b6216a6477",
+  "source_unchanged_during_run": true,
+  "module_count": 7,
+  "passed_test_count": 68,
+  "skipped_test_count": 0,
+  "duration_seconds": 10.05,
+  "modules": [
+    {
+      "module": "tests/test_v18_0_2_regression_contracts.py",
+      "result": "passed",
+      "passed": 11,
+      "skipped": 0,
+      "duration_seconds": 1.536,
+      "returncode": 0,
+      "output_tail": "...........                                                              [100%]\n11 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_3_regression_contracts.py",
+      "result": "passed",
+      "passed": 8,
+      "skipped": 0,
+      "duration_seconds": 1.474,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_4_professional_popup_contracts.py",
+      "result": "passed",
+      "passed": 12,
+      "skipped": 0,
+      "duration_seconds": 1.437,
+      "returncode": 0,
+      "output_tail": "............                                                             [100%]\n12 passed in 0.09s\n"
+    },
+    {
+      "module": "tests/test_v18_0_5_guided_word_scanner_contracts.py",
+      "result": "passed",
+      "passed": 7,
+      "skipped": 0,
+      "duration_seconds": 1.533,
+      "returncode": 0,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_0_6_scanner_watcher_print_contracts.py",
+      "result": "passed",
+      "passed": 10,
+      "skipped": 0,
+      "duration_seconds": 1.429,
+      "returncode": 0,
+      "output_tail": "..........                                                               [100%]\n10 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_0_7_security_update_popup_license_contracts.py",
+      "result": "passed",
+      "passed": 13,
+      "skipped": 0,
+      "duration_seconds": 1.338,
+      "returncode": 0,
+      "output_tail": ".............                                                            [100%]\n13 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_0_8_zero_touch_hardening_contracts.py",
+      "result": "passed",
+      "passed": 7,
+      "skipped": 0,
+      "duration_seconds": 1.303,
+      "returncode": 0,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "auto_min_confidence": 0.8829625,
+  "corpus_sha256": "a172af1d0e83c616d87350a79afd8c7f9aa9f14277ff430c781a280efc953092",
+  "domain": "hr",
+  "generated_at": "2026-07-25T06:16:31.322704+00:00",
+  "holdout": {
+    "auto_bucket_error_rate": 0.004750593824228029,
+    "auto_bucket_errors": 2,
+    "auto_bucket_observations": 421,
+    "entry_count": 193,
+    "high_risk_observations": 557
+  },
+  "max_auto_error_rate": 0.01,
+  "policy": {
+    "holdout_percent": 20,
+    "min_auto_samples": 50,
+    "min_holdout_auto_samples": 10,
+    "min_review_samples": 20,
+    "source_of_truth": "specialist_final_accepted"
+  },
+  "review_min_confidence": 0.7294782,
+  "schema": "dokkomplekt.calibrated-thresholds.v1",
+  "training": {
+    "auto_bucket_error_rate": 0.00997067448680352,
+    "auto_bucket_errors": 17,
+    "auto_bucket_observations": 1705,
+    "entry_count": 807,
+    "high_risk_observations": 2305,
+    "review_bucket_error_rate": 0.04978165938864629,
+    "review_bucket_errors": 114,
+    "review_bucket_observations": 2290
+  }
+}

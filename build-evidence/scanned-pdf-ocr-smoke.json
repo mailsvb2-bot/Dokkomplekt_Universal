@@ -1,0 +1,19 @@
+{
+  "schema": "dokkomplekt.scanned-table-smoke.v1",
+  "result": "passed",
+  "fixture_sha256": "5a3103b95e2d308529151a7f2c509847f8dc95658f3b7696e2db3c27adf087fe",
+  "table_row_count": 4,
+  "recognized_row_count": 7,
+  "required_tokens": [
+    "02.07.2026",
+    "500100732259",
+    "Сидорова",
+    "6671000014"
+  ],
+  "tools": {
+    "pdftoppm": "/usr/bin/pdftoppm",
+    "pdftotext": "/usr/bin/pdftotext",
+    "tesseract": "/usr/bin/tesseract",
+    "tessdata": null
+  }
+}

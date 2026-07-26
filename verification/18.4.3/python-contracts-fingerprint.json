@@ -1,0 +1,22 @@
+{
+  "schema": "dokkomplekt.python-contract-shards.v1",
+  "result": "passed",
+  "python": "3.13.5",
+  "source_sha256": "67255688e6f7e26750965aba684c56540d471433d2d36bc8487892b6216a6477",
+  "source_unchanged_during_run": true,
+  "module_count": 1,
+  "passed_test_count": 3,
+  "skipped_test_count": 0,
+  "duration_seconds": 1.613,
+  "modules": [
+    {
+      "module": "tests/test_source_fingerprint.py",
+      "result": "passed",
+      "passed": 3,
+      "skipped": 0,
+      "duration_seconds": 1.613,
+      "returncode": 0,
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.14s\n"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+name: Windows Hardware E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-hardware-e2e
+  cancel-in-progress: false
+
+jobs:
+  word-printer-watcher-installer:
+    name: Word / printer / watcher / signed NSIS
+    runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware-e2e]
+    timeout-minutes: 120
+    env:
+      DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
+      DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
+      DOKKOMPLEKT_TEST_DUPLEX: ${{ vars.DOKKOMPLEKT_TEST_DUPLEX }}
+      DOKKOMPLEKT_TEST_TRAY: ${{ vars.DOKKOMPLEKT_TEST_TRAY }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
+      DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: cargo install cargo-audit --locked --version 0.21.2
+      - run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
+      - run: python scripts/probe_offline_runtime.py --target windows-x86_64
+      - name: Verify image-only PDF table OCR with the staged runtime
+        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64
+      - run: npx tauri build --no-bundle
+      - name: Sign and verify application binary
+        shell: pwsh
+        run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
+      - run: npx tauri bundle --bundles nsis
+      - name: Sign and verify NSIS installer
+        shell: pwsh
+        run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
+      - name: Execute opt-in hardware E2E
+        shell: pwsh
+        run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dokkomplekt-Windows-Hardware-E2E-Signed
+          path: |
+            target/release/bundle/nsis/**
+            .cargo-gate/**
+            .release-gate/**
+          if-no-files-found: error

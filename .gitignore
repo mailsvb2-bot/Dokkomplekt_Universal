@@ -1,0 +1,14 @@
+/target/
+/node_modules/
+/dist/
+/src-tauri/target/
+/.cargo-gate/
+/test-results/
+/playwright-report/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+.DS_Store
+.env
+*.local

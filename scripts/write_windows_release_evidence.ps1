@@ -1,0 +1,64 @@
+param(
+    [Parameter(Mandatory = $true)] [string] $InstallerRoot,
+    [Parameter(Mandatory = $true)] [string] $RuntimeRoot,
+    [Parameter(Mandatory = $true)] [string] $ApplicationPath,
+    [Parameter(Mandatory = $true)] [string] $RuntimeTrustedPublicKey,
+    [string] $OutputPath = '.release-gate/WINDOWS_SIGNED_BUILD_PASSED.json'
+)
+$ErrorActionPreference = 'Stop'
+if (-not (Test-Path '.cargo-gate/CARGO_GATE_ATTESTATION.json' -PathType Leaf) -or
+    -not (Test-Path '.cargo-gate/CARGO_GATE_ATTESTATION.sig' -PathType Leaf)) {
+    throw 'Signed Rust gate attestation is missing.'
+}
+python scripts/assert_release_ready.py
+$installers = @(Get-ChildItem -LiteralPath $InstallerRoot -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.msi') })
+if ($installers.Count -eq 0) { throw 'No Windows installer artifact found.' }
+$installerEvidence = foreach ($file in $installers) {
+    $signature = Get-AuthenticodeSignature $file.FullName
+    if ($signature.Status -ne 'Valid') { throw "Invalid signature: $($file.FullName)" }
+    [ordered]@{
+        name = $file.Name
+        sha256 = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        size_bytes = $file.Length
+        signer_thumbprint = $signature.SignerCertificate.Thumbprint
+        signer_subject = $signature.SignerCertificate.Subject
+    }
+}
+$runtime = Get-ChildItem -LiteralPath $RuntimeRoot -File -Filter '*.zip' | Select-Object -First 1
+if ($null -eq $runtime) { throw 'Offline runtime ZIP not found.' }
+$runtimePayload = "$($runtime.FullName).signing.json"
+$runtimeSignature = "$runtimePayload.sig"
+$runtimePublicKey = "$runtimePayload.public.pem"
+python scripts/verify_offline_runtime_bundle.py $runtime.FullName --payload $runtimePayload --signature $runtimeSignature --public-key $runtimePublicKey --trusted-public-key $RuntimeTrustedPublicKey --require-signature
+$app = Get-Item -LiteralPath $ApplicationPath -ErrorAction Stop
+$appSignature = Get-AuthenticodeSignature $app.FullName
+if ($appSignature.Status -ne 'Valid') { throw "Application binary is not validly signed: $($app.FullName)" }
+$sourceFingerprint = (python scripts/source_fingerprint.py).Trim()
+$evidence = [ordered]@{
+    schema = 'dokkomplekt.windows-signed-build.v1'
+    generated_at_utc = [DateTime]::UtcNow.ToString('o')
+    version = (Get-Content VERSION -Raw).Trim()
+    source_sha256 = $sourceFingerprint
+    rust_gate_attestation_sha256 = (Get-FileHash '.cargo-gate/CARGO_GATE_ATTESTATION.json' -Algorithm SHA256).Hash.ToLowerInvariant()
+    rust_gate_signature_sha256 = (Get-FileHash '.cargo-gate/CARGO_GATE_ATTESTATION.sig' -Algorithm SHA256).Hash.ToLowerInvariant()
+    application = [ordered]@{
+        name = $app.Name
+        sha256 = (Get-FileHash $app.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        size_bytes = $app.Length
+        signer_thumbprint = $appSignature.SignerCertificate.Thumbprint
+        signer_subject = $appSignature.SignerCertificate.Subject
+    }
+    installers = @($installerEvidence)
+    offline_runtime = [ordered]@{
+        name = $runtime.Name
+        sha256 = (Get-FileHash $runtime.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        signature_sha256 = (Get-FileHash $runtimeSignature -Algorithm SHA256).Hash.ToLowerInvariant()
+        public_key_sha256 = (Get-FileHash $runtimePublicKey -Algorithm SHA256).Hash.ToLowerInvariant()
+        trusted_public_key_sha256 = (Get-FileHash $RuntimeTrustedPublicKey -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    hardware_e2e = 'not_executed_in_signed_build_job'
+}
+$parent = Split-Path -Parent $OutputPath
+if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+$evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
+Write-Host "WINDOWS SIGNED BUILD EVIDENCE: $OutputPath"

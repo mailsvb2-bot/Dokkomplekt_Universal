@@ -1,0 +1,85 @@
+{
+  "schema": "dokkomplekt.python-contract-shards.v1",
+  "result": "passed",
+  "python": "3.13.5",
+  "source_sha256": "67255688e6f7e26750965aba684c56540d471433d2d36bc8487892b6216a6477",
+  "source_unchanged_during_run": true,
+  "module_count": 8,
+  "passed_test_count": 34,
+  "skipped_test_count": 0,
+  "duration_seconds": 14.49,
+  "modules": [
+    {
+      "module": "tests/test_v18_3_0_hardening_contracts.py",
+      "result": "passed",
+      "passed": 13,
+      "skipped": 0,
+      "duration_seconds": 5.108,
+      "returncode": 0,
+      "output_tail": ".............                                                            [100%]\n13 passed in 3.75s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_license_database_transport.py",
+      "result": "passed",
+      "passed": 3,
+      "skipped": 0,
+      "duration_seconds": 1.37,
+      "returncode": 0,
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_ocr_layout_contracts.py",
+      "result": "passed",
+      "passed": 4,
+      "skipped": 0,
+      "duration_seconds": 1.346,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_scanned_pdf_fixture.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.309,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_1_semantic_magic_contract.py",
+      "result": "passed",
+      "passed": 5,
+      "skipped": 0,
+      "duration_seconds": 1.382,
+      "returncode": 0,
+      "output_tail": ".....                                                                    [100%]\n5 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_2_central_queue_exactly_once.py",
+      "result": "passed",
+      "passed": 1,
+      "skipped": 0,
+      "duration_seconds": 1.325,
+      "returncode": 0,
+      "output_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_3_2_delivery_contract.py",
+      "result": "passed",
+      "passed": 4,
+      "skipped": 0,
+      "duration_seconds": 1.359,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.05s\n"
+    },
+    {
+      "module": "tests/test_v18_3_2_windows_regression_wall_contract.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.291,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+    }
+  ]
+}

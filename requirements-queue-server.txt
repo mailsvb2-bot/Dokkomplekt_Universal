@@ -1,0 +1,3 @@
+# Only required on a central queue server that uses PostgreSQL.
+# SQLite mode uses the Python standard library and needs no packages.
+psycopg[binary]>=3.2,<4

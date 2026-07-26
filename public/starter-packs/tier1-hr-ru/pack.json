@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "pack_id": "tier1.hr.ru",
+  "version": "0.3.0",
+  "locale": "ru-RU",
+  "domain": "hr",
+  "status": "starter",
+  "publisher": {
+    "name": "Dokkomplekt content-pack SDK",
+    "reviewed_by": []
+  },
+  "template_slots": [
+    {
+      "document_id": "hr.employment_contract",
+      "label": "Трудовой договор",
+      "required_fields": [
+        "document.date",
+        "employee.contract_number",
+        "employee.department",
+        "employee.hire_date",
+        "employee.name",
+        "employee.position",
+        "employee.salary",
+        "org.name"
+      ],
+      "template_path": "templates/employment_contract.docx",
+      "sha256": "c88071f4eec9dc5ea2d8da00d6ecedc5c597ae220808960afd8da600d1ded00d",
+      "referenced_fields": [
+        "document.date",
+        "employee.contract_number",
+        "employee.department",
+        "employee.hire_date",
+        "employee.name",
+        "employee.position",
+        "employee.salary",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "hr.employment_order",
+      "label": "Приказ о приёме",
+      "required_fields": [
+        "employee.contract_number",
+        "employee.department",
+        "employee.hire_date",
+        "employee.name",
+        "employee.position",
+        "employee.tab_number",
+        "hr.order_date",
+        "hr.order_number"
+      ],
+      "template_path": "templates/employment_order.docx",
+      "sha256": "18cf5b1d556d1e85677e900ed3d2f0c376eed138331f13541c05032bbb9e1628",
+      "referenced_fields": [
+        "employee.contract_number",
+        "employee.department",
+        "employee.hire_date",
+        "employee.name",
+        "employee.position",
+        "employee.tab_number",
+        "hr.order_date",
+        "hr.order_number"
+      ]
+    },
+    {
+      "document_id": "hr.personal_data_consent",
+      "label": "Согласие на обработку данных",
+      "required_fields": [
+        "document.date",
+        "employee.name",
+        "org.inn",
+        "org.legal_address",
+        "org.name"
+      ],
+      "template_path": "templates/personal_data_consent.docx",
+      "sha256": "db9d055ae23dc84ea6b4969fdf3bfc5c978fe6882fe7e06225c6212f9c25b9a5",
+      "referenced_fields": [
+        "document.date",
+        "employee.name",
+        "org.inn",
+        "org.legal_address",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "hr.familiarization_sheet",
+      "label": "Лист ознакомления",
+      "required_fields": [
+        "document.date",
+        "employee.name",
+        "employee.position",
+        "org.name"
+      ],
+      "template_path": "templates/familiarization_sheet.docx",
+      "sha256": "9cfb1737c9928c0d7b217c3f2b4b0f63a1279650137c048a27fc884764ffd8a2",
+      "referenced_fields": [
+        "document.date",
+        "employee.name",
+        "employee.position",
+        "org.name"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_id": "hr.new_employee",
+      "event": "Новый сотрудник",
+      "documents": [
+        "hr.employment_contract",
+        "hr.employment_order",
+        "hr.personal_data_consent",
+        "hr.familiarization_sheet"
+      ]
+    }
+  ],
+  "review_note": "Пакет содержит работающие draft-only starter-шаблоны с каноническими полями. Перед пилотом каждая форма должна быть заменена или утверждена уполномоченным специалистом организации.",
+  "usage_mode": "draft_only",
+  "requires_organization_review": true
+}

@@ -1,0 +1,40 @@
+{
+  "schema": "dokkomplekt.python-contract-shards.v1",
+  "result": "passed",
+  "python": "3.13.5",
+  "source_sha256": "67255688e6f7e26750965aba684c56540d471433d2d36bc8487892b6216a6477",
+  "source_unchanged_during_run": true,
+  "module_count": 3,
+  "passed_test_count": 22,
+  "skipped_test_count": 0,
+  "duration_seconds": 7.926,
+  "modules": [
+    {
+      "module": "tests/test_v18_2_0_component_delivery_contracts.py",
+      "result": "passed",
+      "passed": 6,
+      "skipped": 0,
+      "duration_seconds": 2.488,
+      "returncode": 0,
+      "output_tail": "......                                                                   [100%]\n6 passed in 1.15s\n"
+    },
+    {
+      "module": "tests/test_v18_2_1_resume_queue_modularization_contracts.py",
+      "result": "passed",
+      "passed": 6,
+      "skipped": 0,
+      "duration_seconds": 1.354,
+      "returncode": 0,
+      "output_tail": "......                                                                   [100%]\n6 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_2_2_adversarial_hardening_contracts.py",
+      "result": "passed",
+      "passed": 10,
+      "skipped": 0,
+      "duration_seconds": 4.084,
+      "returncode": 0,
+      "output_tail": "..........                                                               [100%]\n10 passed in 2.75s\n"
+    }
+  ]
+}

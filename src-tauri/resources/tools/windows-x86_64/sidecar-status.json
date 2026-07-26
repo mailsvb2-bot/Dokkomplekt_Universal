@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "target": "windows-x86_64",
+  "generated_by": "source-checkpoint-placeholder",
+  "network_used": false,
+  "supply_chain_locked": false,
+  "ready": false,
+  "files": [],
+  "missing_required_tools": [
+    "tesseract",
+    "tessdata/rus",
+    "tessdata/eng",
+    "poppler/pdftotext",
+    "poppler/pdftoppm",
+    "libreoffice/soffice",
+    "7zip",
+    "msgconvert",
+    "sumatrapdf",
+    "llama_cpp/llama-server",
+    "approved_gguf_model"
+  ],
+  "message": "Source checkpoint only. Production installer preparation must replace this file through scripts/prepare_sidecars.py using an approved supply-chain runtime lock. Release gates intentionally fail while files is empty."
+}

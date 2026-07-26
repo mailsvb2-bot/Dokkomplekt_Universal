@@ -1,0 +1,8 @@
+role,view_cases,edit_values,approve_high_risk,edit_templates,publish_templates,print,export,audit,manage_policies
+specialist,yes,yes,no,no,no,yes,no,no,no
+reviewer,yes,yes,yes,no,no,yes,no,yes,no
+template_editor,no,no,no,yes,no,no,no,no,no
+template_owner,no,no,no,yes,yes,no,no,yes,no
+print_operator,limited,no,no,no,no,yes,no,no,no
+auditor,masked,no,no,no,no,no,no,yes,no
+administrator,metadata,no,no,no,no,no,no,yes,yes

@@ -1,0 +1,33 @@
+{
+  "auto_min_confidence": 0.90141886,
+  "corpus_sha256": "a172af1d0e83c616d87350a79afd8c7f9aa9f14277ff430c781a280efc953092",
+  "domain": "medical",
+  "generated_at": "2026-07-25T06:16:33.557735+00:00",
+  "holdout": {
+    "auto_bucket_error_rate": 0.005025125628140704,
+    "auto_bucket_errors": 2,
+    "auto_bucket_observations": 398,
+    "entry_count": 181,
+    "high_risk_observations": 664
+  },
+  "max_auto_error_rate": 0.01,
+  "policy": {
+    "holdout_percent": 20,
+    "min_auto_samples": 50,
+    "min_holdout_auto_samples": 10,
+    "min_review_samples": 20,
+    "source_of_truth": "specialist_final_accepted"
+  },
+  "review_min_confidence": 0.80302143,
+  "schema": "dokkomplekt.calibrated-thresholds.v1",
+  "training": {
+    "auto_bucket_error_rate": 0.009771986970684038,
+    "auto_bucket_errors": 18,
+    "auto_bucket_observations": 1842,
+    "entry_count": 819,
+    "high_risk_observations": 2970,
+    "review_bucket_error_rate": 0.04980007270083606,
+    "review_bucket_errors": 137,
+    "review_bucket_observations": 2751
+  }
+}

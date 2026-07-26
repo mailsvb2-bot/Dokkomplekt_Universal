@@ -1,0 +1,38 @@
+{
+  "verification_date": "2026-07-23",
+  "version": "18.3.2",
+  "checkpoint_kind": "verified-source-checkpoint",
+  "signed_production_release": false,
+  "results": {
+    "rustfmt": "passed",
+    "cargo_check_workspace_all_targets_locked_offline": "passed",
+    "rust_tests": {
+      "passed": 370,
+      "failed": 0
+    },
+    "clippy_workspace_all_targets_deny_warnings": "passed",
+    "rustsec": {
+      "reported_vulnerabilities": 0,
+      "accepted_exact_transitive_tauri_advisories": 17
+    },
+    "python_pytest": {
+      "passed": 190,
+      "failed": 0
+    },
+    "typescript_typecheck": "passed",
+    "vitest": {
+      "passed": 36,
+      "failed": 0
+    },
+    "vite_build": "passed",
+    "playwright_e2e": {
+      "passed": 2,
+      "failed": 0
+    },
+    "npm_production_audit_vulnerabilities": 0
+  },
+  "lockfiles": {
+    "Cargo.lock_sha256": "8239e1a8e4add434a91923e93e1691ee3028792941ecd37d94ec42a847675c67",
+    "package-lock.json_sha256": "07d4bafc03dd855eac5da61c04f2d1f2be231a3a91931f4818c9f100eb8b1f84"
+  }
+}

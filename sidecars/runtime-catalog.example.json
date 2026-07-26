@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "target": "windows-x86_64",
+  "artifacts": [
+    {
+      "tool": "tesseract",
+      "source": "C:/release-input/tesseract/tesseract.exe",
+      "target": "tesseract/tesseract.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "Apache-2.0",
+      "license_file": "C:/release-input/licenses/tesseract-LICENSE.txt"
+    },
+    {
+      "tool": "tesseract",
+      "source": "C:/release-input/tesseract/tessdata/rus.traineddata",
+      "target": "tesseract/tessdata/rus.traineddata",
+      "executable": false,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "Apache-2.0",
+      "license_file": "C:/release-input/licenses/tessdata-LICENSE.txt"
+    },
+    {
+      "tool": "tesseract",
+      "source": "C:/release-input/tesseract/tessdata/eng.traineddata",
+      "target": "tesseract/tessdata/eng.traineddata",
+      "executable": false,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "Apache-2.0",
+      "license_file": "C:/release-input/licenses/tessdata-LICENSE.txt"
+    },
+    {
+      "tool": "poppler",
+      "source": "C:/release-input/poppler/bin/pdftotext.exe",
+      "target": "poppler/bin/pdftotext.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "REPLACE_WITH_REVIEWED_LICENSE",
+      "license_file": "C:/release-input/licenses/poppler-LICENSE.txt"
+    },
+    {
+      "tool": "poppler",
+      "source": "C:/release-input/poppler/bin/pdftoppm.exe",
+      "target": "poppler/bin/pdftoppm.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "REPLACE_WITH_REVIEWED_LICENSE",
+      "license_file": "C:/release-input/licenses/poppler-LICENSE.txt"
+    },
+    {
+      "tool": "libreoffice",
+      "source": "C:/release-input/libreoffice/program/soffice.exe",
+      "target": "libreoffice/program/soffice.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "MPL-2.0",
+      "license_file": "C:/release-input/licenses/libreoffice-LICENSE.txt"
+    },
+    {
+      "tool": "sumatrapdf",
+      "source": "C:/release-input/sumatrapdf/SumatraPDF.exe",
+      "target": "sumatrapdf/SumatraPDF.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "GPL-3.0-only",
+      "license_file": "C:/release-input/licenses/sumatrapdf-LICENSE.txt"
+    },
+    {
+      "tool": "7zip",
+      "source": "C:/release-input/7zip/7z.exe",
+      "target": "7zip/7z.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_VERSION",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "LGPL-2.1-or-later",
+      "license_file": "C:/release-input/licenses/7zip-LICENSE.txt"
+    },
+    {
+      "tool": "llama_cpp",
+      "source": "C:/release-input/llama.cpp/llama-server.exe",
+      "target": "llama_cpp/llama-server.exe",
+      "executable": true,
+      "version": "REPLACE_WITH_REVIEWED_COMMIT_OR_RELEASE",
+      "source_url": "REPLACE_WITH_OFFICIAL_SOURCE_URL",
+      "license": "MIT",
+      "license_file": "C:/release-input/licenses/llama.cpp-LICENSE.txt"
+    },
+    {
+      "tool": "semantic_model",
+      "source": "C:/release-input/models/dokkomplekt-instruct.gguf",
+      "target": "semantic_model/dokkomplekt-instruct.gguf",
+      "executable": false,
+      "version": "REPLACE_WITH_MODEL_REVISION",
+      "source_url": "REPLACE_WITH_MODEL_CARD_OR_INTERNAL_APPROVAL_URI",
+      "license": "REPLACE_WITH_MODEL_LICENSE",
+      "license_file": "C:/release-input/licenses/model-LICENSE.txt"
+    }
+  ]
+}

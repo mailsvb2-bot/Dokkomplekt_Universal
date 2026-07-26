@@ -1,0 +1,17 @@
+[package]
+name = "dokkomplekt-docx"
+version = "18.4.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dokkomplekt-core = { path = "../dokkomplekt-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zip = "2"
+quick-xml = "0.41.0"
+
+sha2.workspace = true
+hex.workspace = true

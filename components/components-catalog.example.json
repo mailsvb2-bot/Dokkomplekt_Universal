@@ -1,0 +1,23 @@
+{
+  "payload": {
+    "schema": 1,
+    "app_min_version": "18.3.0",
+    "published_at": "2026-07-20T00:00:00Z",
+    "allowed_hosts": ["downloads.example.com"],
+    "components": [
+      {
+        "id": "ocr",
+        "label": "Распознавание сканов (OCR)",
+        "description": "Tesseract rus+eng и Poppler.",
+        "unlocks": ["tesseract", "pdftotext", "pdftoppm"],
+        "target": "windows-x86_64",
+        "size_bytes": 44040192,
+        "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+        "files_manifest_sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
+        "url": "https://downloads.example.com/dokkomplekt/18.3.0/ocr-windows-x86_64.zip"
+      }
+    ]
+  },
+  "signature_alg": "ed25519",
+  "signature": "REPLACE_WITH_BASE64_ED25519_SIGNATURE"
+}

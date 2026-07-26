@@ -1,0 +1,66 @@
+# Russian federal production-calendar exceptions for a five-day work week.
+# Format: YYYY<TAB>complete means all official transfers for the year are known.
+# A listed but non-complete year is intentionally rejected by working-day math.
+# date<TAB>holiday|working
+
+2025	complete
+# New Year holidays and Christmas
+2025-01-01	holiday
+2025-01-02	holiday
+2025-01-03	holiday
+2025-01-04	holiday
+2025-01-05	holiday
+2025-01-06	holiday
+2025-01-07	holiday
+2025-01-08	holiday
+# Federal holidays and transferred days off
+2025-02-23	holiday
+2025-03-08	holiday
+2025-05-01	holiday
+2025-05-02	holiday
+2025-05-08	holiday
+2025-05-09	holiday
+2025-06-12	holiday
+2025-06-13	holiday
+2025-11-01	working
+2025-11-03	holiday
+2025-11-04	holiday
+2025-12-31	holiday
+
+2026	complete
+# New Year holidays and Christmas
+2026-01-01	holiday
+2026-01-02	holiday
+2026-01-03	holiday
+2026-01-04	holiday
+2026-01-05	holiday
+2026-01-06	holiday
+2026-01-07	holiday
+2026-01-08	holiday
+# Other federal holidays and statutory substitute days
+2026-02-23	holiday
+2026-03-08	holiday
+2026-03-09	holiday
+2026-05-01	holiday
+2026-05-09	holiday
+2026-05-11	holiday
+2026-06-12	holiday
+2026-11-04	holiday
+
+# 2027 is listed for explicit coverage awareness, but is not marked complete:
+# the renderer must fail closed until the official transfer schedule is bundled.
+2027	provisional
+2027-01-01	holiday
+2027-01-02	holiday
+2027-01-03	holiday
+2027-01-04	holiday
+2027-01-05	holiday
+2027-01-06	holiday
+2027-01-07	holiday
+2027-01-08	holiday
+2027-02-23	holiday
+2027-03-08	holiday
+2027-05-01	holiday
+2027-05-09	holiday
+2027-06-12	holiday
+2027-11-04	holiday

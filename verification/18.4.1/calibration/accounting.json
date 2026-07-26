@@ -1,0 +1,33 @@
+{
+  "auto_min_confidence": 0.86828303,
+  "corpus_sha256": "a172af1d0e83c616d87350a79afd8c7f9aa9f14277ff430c781a280efc953092",
+  "domain": "accounting",
+  "generated_at": "2026-07-25T06:16:30.263540+00:00",
+  "holdout": {
+    "auto_bucket_error_rate": 0.005089058524173028,
+    "auto_bucket_errors": 4,
+    "auto_bucket_observations": 786,
+    "entry_count": 201,
+    "high_risk_observations": 979
+  },
+  "max_auto_error_rate": 0.01,
+  "policy": {
+    "holdout_percent": 20,
+    "min_auto_samples": 50,
+    "min_holdout_auto_samples": 10,
+    "min_review_samples": 20,
+    "source_of_truth": "specialist_final_accepted"
+  },
+  "review_min_confidence": 0.73650557,
+  "schema": "dokkomplekt.calibrated-thresholds.v1",
+  "training": {
+    "auto_bucket_error_rate": 0.009929532351057015,
+    "auto_bucket_errors": 31,
+    "auto_bucket_observations": 3122,
+    "entry_count": 799,
+    "high_risk_observations": 3881,
+    "review_bucket_error_rate": 0.049974106680476436,
+    "review_bucket_errors": 193,
+    "review_bucket_observations": 3862
+  }
+}

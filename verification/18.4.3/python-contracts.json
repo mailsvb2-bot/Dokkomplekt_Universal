@@ -1,0 +1,310 @@
+{
+  "schema": "dokkomplekt.python-contract-shards.v1",
+  "result": "passed",
+  "python": "3.13.5",
+  "source_sha256": "67255688e6f7e26750965aba684c56540d471433d2d36bc8487892b6216a6477",
+  "source_unchanged_during_run": true,
+  "module_count": 33,
+  "passed_test_count": 212,
+  "skipped_test_count": 0,
+  "duration_seconds": 59.385,
+  "modules": [
+    {
+      "module": "tests/test_ed25519_compat.py",
+      "result": "passed",
+      "passed": 5,
+      "skipped": 0,
+      "duration_seconds": 1.325,
+      "returncode": 0,
+      "output_tail": ".....                                                                    [100%]\n5 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_semantic_corpus_tools.py",
+      "result": "passed",
+      "passed": 4,
+      "skipped": 0,
+      "duration_seconds": 3.656,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 2.20s\n"
+    },
+    {
+      "module": "tests/test_source_fingerprint.py",
+      "result": "passed",
+      "passed": 3,
+      "skipped": 0,
+      "duration_seconds": 1.526,
+      "returncode": 0,
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.13s\n"
+    },
+    {
+      "module": "tests/test_v18_0_2_regression_contracts.py",
+      "result": "passed",
+      "passed": 11,
+      "skipped": 0,
+      "duration_seconds": 1.559,
+      "returncode": 0,
+      "output_tail": "...........                                                              [100%]\n11 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_3_regression_contracts.py",
+      "result": "passed",
+      "passed": 8,
+      "skipped": 0,
+      "duration_seconds": 1.632,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_4_professional_popup_contracts.py",
+      "result": "passed",
+      "passed": 12,
+      "skipped": 0,
+      "duration_seconds": 1.631,
+      "returncode": 0,
+      "output_tail": "............                                                             [100%]\n12 passed in 0.08s\n"
+    },
+    {
+      "module": "tests/test_v18_0_5_guided_word_scanner_contracts.py",
+      "result": "passed",
+      "passed": 7,
+      "skipped": 0,
+      "duration_seconds": 1.672,
+      "returncode": 0,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_6_scanner_watcher_print_contracts.py",
+      "result": "passed",
+      "passed": 10,
+      "skipped": 0,
+      "duration_seconds": 1.653,
+      "returncode": 0,
+      "output_tail": "..........                                                               [100%]\n10 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_7_security_update_popup_license_contracts.py",
+      "result": "passed",
+      "passed": 13,
+      "skipped": 0,
+      "duration_seconds": 1.513,
+      "returncode": 0,
+      "output_tail": ".............                                                            [100%]\n13 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_0_8_zero_touch_hardening_contracts.py",
+      "result": "passed",
+      "passed": 7,
+      "skipped": 0,
+      "duration_seconds": 1.455,
+      "returncode": 0,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_1_0_content_pack_sdk.py",
+      "result": "passed",
+      "passed": 4,
+      "skipped": 0,
+      "duration_seconds": 2.223,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.71s\n"
+    },
+    {
+      "module": "tests/test_v18_1_0_production_pilot_contracts.py",
+      "result": "passed",
+      "passed": 7,
+      "skipped": 0,
+      "duration_seconds": 1.331,
+      "returncode": 0,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_1_0_sidecar_staging.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.289,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_1_1_offline_runtime.py",
+      "result": "passed",
+      "passed": 3,
+      "skipped": 0,
+      "duration_seconds": 1.251,
+      "returncode": 0,
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_1_1_operational_hardening_contracts.py",
+      "result": "passed",
+      "passed": 11,
+      "skipped": 0,
+      "duration_seconds": 1.293,
+      "returncode": 0,
+      "output_tail": "...........                                                              [100%]\n11 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_1_1_reference_data_freshness.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 2.394,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 1.12s\n"
+    },
+    {
+      "module": "tests/test_v18_1_2_grounding_distributed_release_contracts.py",
+      "result": "passed",
+      "passed": 14,
+      "skipped": 0,
+      "duration_seconds": 1.334,
+      "returncode": 0,
+      "output_tail": "..............                                                           [100%]\n14 passed in 0.06s\n"
+    },
+    {
+      "module": "tests/test_v18_1_2_offline_runtime_bundle.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.303,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_1_2_rust_panic_audit.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.541,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.16s\n"
+    },
+    {
+      "module": "tests/test_v18_1_3_pilot_expansion_contracts.py",
+      "result": "passed",
+      "passed": 7,
+      "skipped": 0,
+      "duration_seconds": 1.345,
+      "returncode": 0,
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.04s\n"
+    },
+    {
+      "module": "tests/test_v18_2_0_component_delivery_contracts.py",
+      "result": "passed",
+      "passed": 6,
+      "skipped": 0,
+      "duration_seconds": 2.52,
+      "returncode": 0,
+      "output_tail": "......                                                                   [100%]\n6 passed in 1.12s\n"
+    },
+    {
+      "module": "tests/test_v18_2_1_resume_queue_modularization_contracts.py",
+      "result": "passed",
+      "passed": 6,
+      "skipped": 0,
+      "duration_seconds": 1.422,
+      "returncode": 0,
+      "output_tail": "......                                                                   [100%]\n6 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_2_2_adversarial_hardening_contracts.py",
+      "result": "passed",
+      "passed": 10,
+      "skipped": 0,
+      "duration_seconds": 4.369,
+      "returncode": 0,
+      "output_tail": "..........                                                               [100%]\n10 passed in 2.97s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_hardening_contracts.py",
+      "result": "passed",
+      "passed": 13,
+      "skipped": 0,
+      "duration_seconds": 5.134,
+      "returncode": 0,
+      "output_tail": ".............                                                            [100%]\n13 passed in 3.74s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_license_database_transport.py",
+      "result": "passed",
+      "passed": 3,
+      "skipped": 0,
+      "duration_seconds": 1.289,
+      "returncode": 0,
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_ocr_layout_contracts.py",
+      "result": "passed",
+      "passed": 4,
+      "skipped": 0,
+      "duration_seconds": 1.334,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_0_scanned_pdf_fixture.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.361,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_1_semantic_magic_contract.py",
+      "result": "passed",
+      "passed": 5,
+      "skipped": 0,
+      "duration_seconds": 1.403,
+      "returncode": 0,
+      "output_tail": ".....                                                                    [100%]\n5 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_3_2_central_queue_exactly_once.py",
+      "result": "passed",
+      "passed": 1,
+      "skipped": 0,
+      "duration_seconds": 1.614,
+      "returncode": 0,
+      "output_tail": ".                                                                        [100%]\n1 passed in 0.05s\n"
+    },
+    {
+      "module": "tests/test_v18_3_2_delivery_contract.py",
+      "result": "passed",
+      "passed": 4,
+      "skipped": 0,
+      "duration_seconds": 1.504,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.06s\n"
+    },
+    {
+      "module": "tests/test_v18_3_2_windows_regression_wall_contract.py",
+      "result": "passed",
+      "passed": 2,
+      "skipped": 0,
+      "duration_seconds": 1.406,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+    },
+    {
+      "module": "tests/test_v18_4_0_reliability_contracts.py",
+      "result": "passed",
+      "passed": 14,
+      "skipped": 0,
+      "duration_seconds": 1.682,
+      "returncode": 0,
+      "output_tail": "..............                                                           [100%]\n14 passed in 0.08s\n"
+    },
+    {
+      "module": "tests/test_v18_4_3_repair_contracts.py",
+      "result": "passed",
+      "passed": 8,
+      "skipped": 0,
+      "duration_seconds": 1.421,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.03s\n"
+    }
+  ]
+}

@@ -1,0 +1,2688 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
+use dokkomplekt_core::{SemanticAtom, SemanticCase, SemanticRecord};
+use dokkomplekt_docx::extract_docx_text;
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{Cursor, Read as _};
+use std::net::{IpAddr, ToSocketAddrs};
+use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+use uuid::Uuid;
+use zip::ZipArchive;
+
+const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
+const MAX_NORMALIZED_TEXT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES: usize = 256;
+const MAX_ARCHIVE_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ARCHIVE_DEPTH: usize = 3;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_LAYOUT_ITEMS: usize = 20_000;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IntakeCapability {
+    pub format: String,
+    pub extensions: Vec<String>,
+    pub ready: bool,
+    pub mode: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarToolStatus {
+    pub tool: String,
+    pub available: bool,
+    pub bundled: bool,
+    pub state: String,
+    pub component_id: Option<String>,
+    pub resolved_path: String,
+    pub purpose: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LayoutBoundingBox {
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NormalizedLayoutItem {
+    pub item_kind: String,
+    pub page_index: Option<usize>,
+    pub block_index: Option<usize>,
+    pub text: String,
+    pub cells: Vec<String>,
+    pub bbox: Option<LayoutBoundingBox>,
+    pub confidence: f32,
+    pub source_reference: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NormalizedSource {
+    pub text: String,
+    pub source_kind: String,
+    pub warnings: Vec<String>,
+    pub processed_files: Vec<PathBuf>,
+    pub layout_items: Vec<NormalizedLayoutItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WebIntakeResult {
+    pub source_text: String,
+    pub final_url: String,
+    pub content_type: String,
+    pub warnings: Vec<String>,
+}
+
+pub fn supported_extensions() -> &'static [&'static str] {
+    &[
+        "docx", "docm", "doc", "ppt", "pptx", "pdf", "jpg", "jpeg", "png", "tif", "tiff", "bmp",
+        "webp", "xlsx", "xls", "ods", "odt", "rtf", "txt", "md", "csv", "tsv", "json", "xml",
+        "html", "htm", "eml", "msg", "zip", "7z", "rar",
+    ]
+}
+
+pub fn is_supported_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            supported_extensions()
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        })
+}
+
+pub fn is_temporary_source(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    name.starts_with("~$")
+        || name.ends_with(".part")
+        || name.ends_with(".crdownload")
+        || name.ends_with(".tmp")
+        || name.contains(".dokkomplekt-processing")
+        || name.contains(".dokkomplekt-processed")
+}
+
+pub fn decode_uploaded_payload(file_name: &str, encoded: &str) -> Result<Vec<u8>, String> {
+    if !is_supported_path(Path::new(file_name)) {
+        return Err(format!(
+            "Формат файла не поддерживается: {file_name}. Поддерживаются: {}.",
+            supported_extensions().join(", ")
+        ));
+    }
+    let trimmed = encoded.trim();
+    if trimmed.len() > MAX_UPLOAD_BYTES.saturating_mul(2) {
+        return Err("Файл слишком большой: максимум 100 МБ для ручной загрузки.".into());
+    }
+    let bytes = BASE64_STANDARD
+        .decode(trimmed)
+        .map_err(|_| "Файл повреждён: не удалось декодировать содержимое.".to_string())?;
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err("Файл слишком большой: максимум 100 МБ для ручной загрузки.".into());
+    }
+    Ok(bytes)
+}
+
+pub fn capabilities() -> Vec<IntakeCapability> {
+    let pdftotext = command_available("pdftotext");
+    let pdftoppm = command_available("pdftoppm");
+    let tesseract = command_available("tesseract");
+    let soffice = command_available("soffice");
+    let msgconvert = command_available("msgconvert");
+    let seven_zip = command_available("7z");
+    vec![
+        capability("Word DOCX/DOCM", &["docx", "docm"], true, "встроенно", "Текст, таблицы, колонтитулы и сноски; удалённые правки, комментарии и инструкции полей исключаются."),
+        capability("Старый Word DOC", &["doc"], soffice, "LibreOffice", if soffice { "Готово через безоконную конвертацию в DOCX." } else { "Нужен LibreOffice/soffice или упакованный sidecar; без него DOC отклоняется fail-closed." }),
+        capability("PowerPoint PPT/PPTX", &["ppt", "pptx"], soffice && pdftotext, "LibreOffice + Poppler", if soffice && pdftotext { "Готово через безоконную конвертацию в PDF с извлечением текста слайдов." } else { "Нужны LibreOffice/soffice и Poppler/pdftotext; без них PPT/PPTX отклоняются fail-closed." }),
+        capability("PDF с текстовым слоем", &["pdf"], pdftotext, "Poppler/pdftotext", if pdftotext { "Готово." } else { "Установите Poppler или положите pdftotext в папку tools приложения." }),
+        capability("Сканированный PDF", &["pdf"], pdftotext && pdftoppm && tesseract, "Poppler + OCR", if pdftotext && pdftoppm && tesseract { "Готово: PDF без текста автоматически распознаётся OCR." } else { "Нужны pdftotext, pdftoppm и Tesseract с языками rus+eng." }),
+        capability("Сканы и фотографии", &["jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp"], tesseract, "Tesseract OCR", if tesseract { "Готово." } else { "Установите Tesseract OCR или положите его в папку tools приложения." }),
+        capability("XLSX / CSV / TSV", &["xlsx", "csv", "tsv"], true, "встроенно", "XLSX читается напрямую без запуска Excel."),
+        capability("XLS / ODS", &["xls", "ods"], soffice, "LibreOffice", if soffice { "Готово через безоконную конвертацию." } else { "Нужен LibreOffice/soffice или упакованный sidecar." }),
+        capability("ODT / RTF", &["odt", "rtf"], true, "встроенно", "Нормализация без запуска офисного приложения."),
+        capability("EML", &["eml"], true, "встроенно", "Заголовки, текст/HTML и поддерживаемые вложения."),
+        capability("MSG", &["msg"], msgconvert, "msgconvert", if msgconvert { "Готово." } else { "Нужен msgconvert/libemail-outlook-perl либо предварительный экспорт в EML." }),
+        capability("ZIP", &["zip"], true, "встроенно", "Рекурсивная распаковка с защитой от zip-slip, архивных бомб и чрезмерной вложенности."),
+        capability("7Z / RAR", &["7z", "rar"], seven_zip, "7-Zip", if seven_zip { "Готово." } else { "Нужен 7z sidecar или установленный 7-Zip." }),
+        capability("Сайты и API", &["https"], true, "HTTPS", "Публичные HTTPS-адреса, ограничение размера, проверка перенаправлений и нормализация HTML/JSON/XML/файлов."),
+    ]
+}
+
+pub fn sidecar_tool_statuses() -> Vec<SidecarToolStatus> {
+    [
+        ("tesseract", "OCR изображений и сканированных PDF"),
+        ("pdftotext", "извлечение текстового слоя PDF"),
+        ("pdftoppm", "преобразование страниц PDF для OCR"),
+        ("soffice", "XLS/ODS, PDF-экспорт и печать Office-документов"),
+        ("7z", "распаковка 7Z/RAR"),
+        ("msgconvert", "чтение Outlook MSG"),
+        ("sumatrapdf", "управляемая печать PDF на Windows"),
+    ]
+    .into_iter()
+    .map(|(tool, purpose)| {
+        let resolved = resolve_tool(tool);
+        let component_root = crate::component_manager::user_components_dir();
+        let downloaded = component_root
+            .as_ref()
+            .is_some_and(|root| resolved.starts_with(root));
+        let bundled = !downloaded && resolved.is_file() && resolved != Path::new(tool);
+        let probe_argument = if tool == "sumatrapdf" {
+            "-list-printers"
+        } else {
+            "--version"
+        };
+        let available = Command::new(&resolved)
+            .arg(probe_argument)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        SidecarToolStatus {
+            tool: tool.into(),
+            available,
+            bundled,
+            state: if downloaded {
+                "downloaded"
+            } else if bundled {
+                "bundled"
+            } else if available {
+                "system"
+            } else {
+                "missing"
+            }
+            .into(),
+            component_id: component_id_for_tool(tool).map(str::to_string),
+            resolved_path: resolved.display().to_string(),
+            purpose: purpose.into(),
+        }
+    })
+    .collect()
+}
+
+fn component_id_for_tool(tool: &str) -> Option<&'static str> {
+    match tool {
+        "tesseract" | "pdftotext" | "pdftoppm" => Some("ocr"),
+        "soffice" | "sumatrapdf" => Some("office"),
+        "llama_cpp" | "semantic_model" => Some("semantic"),
+        _ => None,
+    }
+}
+
+fn capability(
+    format: &str,
+    extensions: &[&str],
+    ready: bool,
+    mode: &str,
+    detail: &str,
+) -> IntakeCapability {
+    IntakeCapability {
+        format: format.into(),
+        extensions: extensions
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        ready,
+        mode: mode.into(),
+        detail: detail.into(),
+    }
+}
+
+pub fn cleanup_workspace(workspace: &Path, max_age: Duration) -> Result<usize, String> {
+    if !workspace.exists() {
+        return Ok(0);
+    }
+    let now = std::time::SystemTime::now();
+    let mut removed = 0usize;
+    for entry in std::fs::read_dir(workspace).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let metadata =
+            std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        let old_enough = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= max_age);
+        if !old_enough {
+            continue;
+        }
+        let path = entry.path();
+        let result = if metadata.file_type().is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if result.is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+pub fn normalize_uploaded_bytes(
+    file_name: &str,
+    bytes: &[u8],
+    workspace: &Path,
+) -> Result<NormalizedSource, String> {
+    std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
+    let safe_name = safe_file_name(file_name);
+    let path = workspace.join(format!("{}-{safe_name}", Uuid::new_v4()));
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("Не удалось сохранить источник во временную папку: {error}"))?;
+    let mut normalized = normalize_path(&path, workspace, 0)?;
+    normalized.processed_files.insert(0, path);
+    Ok(normalized)
+}
+
+pub fn normalize_path(
+    path: &Path,
+    workspace: &Path,
+    depth: usize,
+) -> Result<NormalizedSource, String> {
+    if depth > MAX_ARCHIVE_DEPTH {
+        return Err("Превышена допустимая глубина вложенных архивов (3).".into());
+    }
+    if is_temporary_source(path) {
+        return Err("Временный или служебный файл не обрабатывается.".into());
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut result = match extension.as_str() {
+        "docx" | "docm" => NormalizedSource {
+            text: extract_docx_text(path)
+                .map_err(|error| format!("Word-документ не читается: {error}"))?,
+            source_kind: "word".into(),
+            warnings: Vec::new(),
+            processed_files: vec![path.to_path_buf()],
+            layout_items: Vec::new(),
+        },
+        "doc" => {
+            let mut converted = normalize_office_via_libreoffice(path, workspace, "docx")?;
+            converted.source_kind = "legacy_word_converted".into();
+            converted.warnings.push(
+                "Старый DOC преобразован локальным LibreOffice в DOCX перед извлечением.".into(),
+            );
+            converted
+        }
+        "ppt" | "pptx" => {
+            let mut converted = normalize_office_via_libreoffice(path, workspace, "pdf")?;
+            converted.source_kind = "presentation_converted".into();
+            converted.warnings.push(
+                "Презентация преобразована локальным LibreOffice в PDF; извлечён текст слайдов."
+                    .into(),
+            );
+            converted
+        }
+        "pdf" => normalize_pdf(path, workspace)?,
+        "jpg" | "jpeg" | "png" | "tif" | "tiff" | "bmp" | "webp" => normalize_image(path)?,
+        "xlsx" => normalize_xlsx(path)?,
+        "xls" | "ods" => normalize_office_via_libreoffice(path, workspace, "xlsx")?,
+        "odt" => normalize_odt(path)?,
+        "rtf" => normalize_rtf(path)?,
+        "txt" | "md" | "csv" | "tsv" | "json" | "xml" => normalize_plain_text(path, &extension)?,
+        "html" | "htm" => normalize_html(path)?,
+        "eml" => normalize_eml(path, workspace, depth)?,
+        "msg" => normalize_msg(path, workspace, depth)?,
+        "zip" => normalize_zip(path, workspace, depth)?,
+        "7z" | "rar" => normalize_external_archive(path, workspace, depth)?,
+        _ => return Err(format!("Неподдерживаемый формат: .{extension}")),
+    };
+    if result.text.len() > MAX_NORMALIZED_TEXT_BYTES {
+        return Err(
+            "После распознавания получено больше 32 МБ текста; источник нужно разделить.".into(),
+        );
+    }
+    result.text = normalize_text(&result.text);
+    normalize_layout_items(&mut result.layout_items);
+    if result.layout_items.len() > MAX_LAYOUT_ITEMS {
+        result.layout_items.truncate(MAX_LAYOUT_ITEMS);
+        result.warnings.push(format!(
+            "Структурный слой ограничен {MAX_LAYOUT_ITEMS} строками для защиты памяти; текст источника сохранён полностью."
+        ));
+    }
+    if result.layout_items.is_empty() {
+        let source_reference = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_string);
+        result.layout_items = layout_items_from_text(&result.text, None, source_reference);
+    }
+    if result.text.trim().is_empty() {
+        return Err("Из источника не удалось получить содержательный текст.".into());
+    }
+    Ok(result)
+}
+
+#[derive(Debug, Clone)]
+pub struct NormalizedSourceFragment {
+    pub source_reference: String,
+    pub text: String,
+    pub layout_items: Vec<NormalizedLayoutItem>,
+}
+
+/// Split only compound containers. Ordinary documents remain one case even when
+/// their layout has page references. The root source prefix is written by the
+/// archive/e-mail normalizers and survives nested page/layout references.
+pub fn compound_source_fragments(
+    source_kind: &str,
+    source_text: &str,
+    items: &[NormalizedLayoutItem],
+) -> Vec<NormalizedSourceFragment> {
+    if !matches!(source_kind, "archive" | "email" | "spreadsheet") {
+        return vec![NormalizedSourceFragment {
+            source_reference: source_kind.to_string(),
+            text: source_text.to_string(),
+            layout_items: items.to_vec(),
+        }];
+    }
+    let mut grouped = BTreeMap::<String, Vec<NormalizedLayoutItem>>::new();
+    for item in items {
+        let Some(reference) = item.source_reference.as_deref() else {
+            continue;
+        };
+        let root = reference.split(';').next().unwrap_or(reference).trim();
+        if root.is_empty() {
+            continue;
+        }
+        grouped
+            .entry(root.to_string())
+            .or_default()
+            .push(item.clone());
+    }
+    let mut fragments = grouped
+        .into_iter()
+        .map(|(source_reference, layout_items)| {
+            let mut text = String::new();
+            for item in &layout_items {
+                if item.text.trim().is_empty() {
+                    continue;
+                }
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(item.text.trim());
+            }
+            NormalizedSourceFragment {
+                source_reference,
+                text,
+                layout_items,
+            }
+        })
+        .filter(|fragment| !fragment.text.trim().is_empty())
+        .collect::<Vec<_>>();
+    fragments.sort_by(|left, right| left.source_reference.cmp(&right.source_reference));
+    if fragments.is_empty() {
+        fragments.push(NormalizedSourceFragment {
+            source_reference: source_kind.to_string(),
+            text: source_text.to_string(),
+            layout_items: items.to_vec(),
+        });
+    }
+    fragments
+}
+
+pub fn apply_layout_to_case(
+    source_kind: &str,
+    items: &[NormalizedLayoutItem],
+    case: &mut SemanticCase,
+) {
+    case.blocks
+        .insert("source.kind".into(), source_kind.trim().to_string());
+    case.blocks
+        .insert("source.layout_item_count".into(), items.len().to_string());
+    let table_rows = items
+        .iter()
+        .filter(|item| item.item_kind == "table_row")
+        .count();
+    case.blocks
+        .insert("source.table_row_count".into(), table_rows.to_string());
+
+    let mut records = Vec::<SemanticRecord>::with_capacity(items.len().min(MAX_LAYOUT_ITEMS));
+    for item in items.iter().take(MAX_LAYOUT_ITEMS) {
+        let mut record = SemanticRecord::new();
+        record.insert("kind".into(), SemanticAtom::Text(item.item_kind.clone()));
+        record.insert("text".into(), SemanticAtom::Text(item.text.clone()));
+        record.insert(
+            "cells_json".into(),
+            SemanticAtom::Text(serde_json::to_string(&item.cells).unwrap_or_else(|_| "[]".into())),
+        );
+        record.insert(
+            "confidence".into(),
+            SemanticAtom::Decimal(format!("{:.4}", item.confidence.clamp(0.0, 1.0))),
+        );
+        if let Some(page_index) = item.page_index {
+            record.insert(
+                "page_index".into(),
+                SemanticAtom::Integer(i64::try_from(page_index).unwrap_or(i64::MAX)),
+            );
+        }
+        if let Some(block_index) = item.block_index {
+            record.insert(
+                "block_index".into(),
+                SemanticAtom::Integer(i64::try_from(block_index).unwrap_or(i64::MAX)),
+            );
+        }
+        if let Some(reference) = item.source_reference.as_ref() {
+            record.insert(
+                "source_reference".into(),
+                SemanticAtom::Text(reference.clone()),
+            );
+        }
+        if let Some(bbox) = item.bbox.as_ref() {
+            for (key, value) in [
+                ("bbox_left", bbox.left),
+                ("bbox_top", bbox.top),
+                ("bbox_width", bbox.width),
+                ("bbox_height", bbox.height),
+            ] {
+                record.insert(key.into(), SemanticAtom::Integer(i64::from(value)));
+            }
+        }
+        records.push(record);
+    }
+    case.collections
+        .insert("source.layout_items".into(), records);
+}
+
+pub fn attach_layout_evidence(items: &[NormalizedLayoutItem], case: &mut SemanticCase) {
+    let source_kind = case
+        .blocks
+        .get("source.kind")
+        .cloned()
+        .unwrap_or_else(|| "normalized_source".into());
+    for semantic_value in case.values.values_mut() {
+        let value_needle = evidence_needle(&semantic_value.value);
+        for evidence in &mut semantic_value.evidence {
+            if evidence.page_index.is_some() && evidence.source_reference.is_some() {
+                continue;
+            }
+            let excerpt_needle = evidence_needle(&evidence.excerpt);
+            let matched = items.iter().find(|item| {
+                let haystack = evidence_needle(&item.text);
+                (!value_needle.is_empty() && haystack.contains(&value_needle))
+                    || (!excerpt_needle.is_empty() && haystack.contains(&excerpt_needle))
+                    || (!haystack.is_empty() && excerpt_needle.contains(&haystack))
+            });
+            if let Some(item) = matched {
+                if evidence.page_index.is_none() {
+                    evidence.page_index = item.page_index;
+                }
+                if evidence.source_reference.is_none() {
+                    evidence.source_reference = item.source_reference.clone();
+                }
+                if evidence.source_kind.trim().is_empty() {
+                    evidence.source_kind = source_kind.clone();
+                }
+                evidence.confidence = evidence.confidence.min(item.confidence).clamp(0.0, 1.0);
+            }
+        }
+    }
+}
+
+fn evidence_needle(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PdfTextQuality {
+    meaningful: usize,
+    alphabetic_ratio: f32,
+    replacement_ratio: f32,
+    score: f32,
+}
+
+fn pdf_text_quality(text: &str) -> PdfTextQuality {
+    let characters = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<Vec<_>>();
+    let total = characters.len().max(1) as f32;
+    let meaningful = meaningful_character_count(text);
+    let alphabetic = characters
+        .iter()
+        .filter(|character| character.is_alphabetic())
+        .count() as f32;
+    let replacement = characters
+        .iter()
+        .filter(|character| matches!(character, '\u{fffd}' | '\u{25a1}' | '\u{25a0}'))
+        .count() as f32;
+    let control = characters
+        .iter()
+        .filter(|character| character.is_control())
+        .count() as f32;
+    let alphabetic_ratio = alphabetic / total;
+    let replacement_ratio = (replacement + control) / total;
+    let length_score = (meaningful as f32 / 240.0).clamp(0.0, 1.0);
+    let score =
+        (length_score * 0.55 + alphabetic_ratio * 0.45 - replacement_ratio * 1.5).clamp(0.0, 1.0);
+    PdfTextQuality {
+        meaningful,
+        alphabetic_ratio,
+        replacement_ratio,
+        score,
+    }
+}
+
+fn pdf_page_requires_ocr(text: &str) -> bool {
+    let quality = pdf_text_quality(text);
+    quality.meaningful < 80
+        || quality.score < 0.38
+        || quality.alphabetic_ratio < 0.18
+        || quality.replacement_ratio > 0.03
+}
+
+fn normalize_pdf(path: &Path, workspace: &Path) -> Result<NormalizedSource, String> {
+    let output = run_command(
+        "pdftotext",
+        &["-layout", path.to_string_lossy().as_ref(), "-"],
+    )?;
+    let extracted = String::from_utf8_lossy(&output.stdout).to_string();
+    // pdftotext separates pages with form-feed. Keep that boundary: a single
+    // text-heavy page must never hide nine scanned pages from OCR.
+    let mut pages = extracted
+        .split('\u{000c}')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    while pages.last().is_some_and(|page| page.trim().is_empty()) {
+        pages.pop();
+    }
+    if pages.is_empty() {
+        pages.push(String::new());
+    }
+
+    let ocr_pages = pages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, text)| pdf_page_requires_ocr(text).then_some(index))
+        .collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    let mut source_kind = if ocr_pages.is_empty() {
+        "pdf_text".to_string()
+    } else if ocr_pages.len() == pages.len() {
+        "scanned_pdf_ocr".to_string()
+    } else {
+        "mixed_pdf_page_ocr".to_string()
+    };
+    let images = workspace.join(format!("pdf-ocr-{}", Uuid::new_v4()));
+    if !ocr_pages.is_empty() {
+        std::fs::create_dir_all(&images).map_err(|error| error.to_string())?;
+        warnings.push(format!(
+            "Постраничный контроль PDF: OCR применён к страницам {} из {}.",
+            ocr_pages
+                .iter()
+                .map(|index| (index + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            pages.len()
+        ));
+    }
+
+    let mut text = String::new();
+    let mut layout_items = Vec::new();
+    let mut ocr_modes = Vec::new();
+    for (page_index, page_text) in pages.iter().enumerate() {
+        let page_number = page_index + 1;
+        let (normalized_page_text, mut page_items) = if ocr_pages.contains(&page_index) {
+            let prefix = images.join(format!("page-{page_number}"));
+            run_command(
+                "pdftoppm",
+                &[
+                    "-f",
+                    &page_number.to_string(),
+                    "-l",
+                    &page_number.to_string(),
+                    "-singlefile",
+                    "-png",
+                    "-r",
+                    "300",
+                    path.to_string_lossy().as_ref(),
+                    prefix.to_string_lossy().as_ref(),
+                ],
+            )?;
+            let image = prefix.with_extension("png");
+            let page_layout = ocr_image_layout(&image, page_index)?;
+            ocr_modes.push(format!(
+                "стр. {}: PSM {}, ориентация {}°",
+                page_number, page_layout.psm, page_layout.orientation_degrees
+            ));
+            (page_layout.text, page_layout.items)
+        } else {
+            (
+                page_text.clone(),
+                layout_items_from_text(page_text, Some(page_index), None),
+            )
+        };
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&format!("[Страница {page_number}]\n{normalized_page_text}"));
+        layout_items.append(&mut page_items);
+    }
+    if !ocr_pages.is_empty() {
+        let _ = std::fs::remove_dir_all(images);
+        let table_rows = layout_items
+            .iter()
+            .filter(|item| item.item_kind == "table_row")
+            .count();
+        warnings.push(format!(
+            "OCR сохранил структурных строк: {}; табличных строк: {table_rows}.",
+            layout_items.len()
+        ));
+        if !ocr_modes.is_empty() {
+            warnings.push(format!("OCR-стратегия: {}.", ocr_modes.join("; ")));
+        }
+        warnings.push("Печатный OCR не гарантирует распознавание рукописи; рукописные поля всегда требуют подтверждения.".into());
+    } else {
+        source_kind = "pdf_text".into();
+    }
+    Ok(NormalizedSource {
+        text,
+        source_kind,
+        warnings,
+        processed_files: vec![path.to_path_buf()],
+        layout_items,
+    })
+}
+
+fn normalize_image(path: &Path) -> Result<NormalizedSource, String> {
+    let page = ocr_image_layout(path, 0)?;
+    let table_rows = page
+        .items
+        .iter()
+        .filter(|item| item.item_kind == "table_row")
+        .count();
+    Ok(NormalizedSource {
+        text: page.text,
+        source_kind: "scanned_image".into(),
+        warnings: vec![
+            "Результат OCR требует риск-зависимой проверки критических полей.".into(),
+            format!(
+                "OCR сохранил структурных строк: {}; табличных строк: {table_rows}; режим PSM {}; ориентация {}°.",
+                page.items.len(), page.psm, page.orientation_degrees
+            ),
+            "Печатный OCR не гарантирует распознавание рукописи; рукописные поля всегда требуют подтверждения.".into(),
+        ],
+        processed_files: vec![path.to_path_buf()],
+        layout_items: page.items,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct OcrPageLayout {
+    text: String,
+    items: Vec<NormalizedLayoutItem>,
+    psm: u8,
+    orientation_degrees: i32,
+}
+
+#[derive(Debug, Clone)]
+struct OcrWord {
+    page: usize,
+    block: usize,
+    paragraph: usize,
+    line: usize,
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+    confidence: f32,
+    text: String,
+}
+
+fn ocr_languages() -> String {
+    std::env::var("DOKKOMPLEKT_OCR_LANGUAGES")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "rus+eng".into())
+}
+
+fn detect_ocr_orientation(path: &Path) -> i32 {
+    let executable = resolve_tool("tesseract");
+    let output = Command::new(executable)
+        .args([
+            path.to_string_lossy().as_ref(),
+            "stdout",
+            "-l",
+            "osd",
+            "--psm",
+            "0",
+        ])
+        .stdin(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return 0;
+    };
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    combined
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Rotate:")
+                .and_then(|value| value.trim().parse::<i32>().ok())
+        })
+        .unwrap_or(0)
+}
+
+fn ocr_layout_score(items: &[NormalizedLayoutItem]) -> f32 {
+    if items.is_empty() {
+        return 0.0;
+    }
+    let characters = items
+        .iter()
+        .map(|item| meaningful_character_count(&item.text))
+        .sum::<usize>();
+    let confidence = items.iter().map(|item| item.confidence).sum::<f32>() / items.len() as f32;
+    let table_bonus = items
+        .iter()
+        .filter(|item| item.item_kind == "table_row")
+        .count() as f32
+        / items.len() as f32;
+    ((characters as f32 / 500.0).clamp(0.0, 1.0) * 0.35 + confidence * 0.55 + table_bonus * 0.10)
+        .clamp(0.0, 1.0)
+}
+
+fn ocr_image_layout(path: &Path, forced_page_index: usize) -> Result<OcrPageLayout, String> {
+    let languages = ocr_languages();
+    let orientation_degrees = detect_ocr_orientation(path);
+    // PSM 1 performs orientation/layout analysis; 6 is strong for uniform text;
+    // 11 handles sparse forms and stamps. Pick the best grounded TSV result.
+    let mut best: Option<(u8, Vec<NormalizedLayoutItem>, f32)> = None;
+    for psm in [1_u8, 6_u8, 11_u8] {
+        let psm_text = psm.to_string();
+        let output = run_command(
+            "tesseract",
+            &[
+                path.to_string_lossy().as_ref(),
+                "stdout",
+                "-l",
+                &languages,
+                "--psm",
+                &psm_text,
+                "tsv",
+            ],
+        )?;
+        let tsv = String::from_utf8_lossy(&output.stdout);
+        let items = parse_tesseract_tsv(&tsv, forced_page_index)?;
+        let score = ocr_layout_score(&items);
+        if best.as_ref().is_none_or(|(_, _, current)| score > *current) {
+            best = Some((psm, items, score));
+        }
+    }
+    let (psm, mut items, _) = best.unwrap_or((6, Vec::new(), 0.0));
+    if items.is_empty() {
+        let psm_text = psm.to_string();
+        let fallback = run_command(
+            "tesseract",
+            &[
+                path.to_string_lossy().as_ref(),
+                "stdout",
+                "-l",
+                &languages,
+                "--psm",
+                &psm_text,
+            ],
+        )?;
+        let text = String::from_utf8_lossy(&fallback.stdout).to_string();
+        items = layout_items_from_text(&text, Some(forced_page_index), None);
+    }
+    let text = layout_text(&items);
+    if text.trim().is_empty() {
+        return Err("Tesseract не распознал содержательный текст изображения.".into());
+    }
+    Ok(OcrPageLayout {
+        text,
+        items,
+        psm,
+        orientation_degrees,
+    })
+}
+
+fn parse_tesseract_tsv(
+    tsv: &str,
+    forced_page_index: usize,
+) -> Result<Vec<NormalizedLayoutItem>, String> {
+    let mut lines = BTreeMap::<(usize, usize, usize, usize), Vec<OcrWord>>::new();
+    for (index, raw) in tsv.lines().enumerate() {
+        if index == 0 && raw.to_ascii_lowercase().starts_with("level\t") {
+            continue;
+        }
+        let columns = raw.splitn(12, '\t').collect::<Vec<_>>();
+        if columns.len() < 12 || columns[0] != "5" {
+            continue;
+        }
+        let text = columns[11].trim();
+        if text.is_empty() {
+            continue;
+        }
+        let parse_usize = |value: &str| value.parse::<usize>().unwrap_or_default();
+        let parse_u32 = |value: &str| value.parse::<u32>().unwrap_or_default();
+        let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
+        if confidence < 0.0 {
+            continue;
+        }
+        let word = OcrWord {
+            page: parse_usize(columns[1]),
+            block: parse_usize(columns[2]),
+            paragraph: parse_usize(columns[3]),
+            line: parse_usize(columns[4]),
+            left: parse_u32(columns[6]),
+            top: parse_u32(columns[7]),
+            width: parse_u32(columns[8]),
+            height: parse_u32(columns[9]),
+            confidence: (confidence / 100.0).clamp(0.0, 1.0),
+            text: text.to_string(),
+        };
+        lines
+            .entry((word.page, word.block, word.paragraph, word.line))
+            .or_default()
+            .push(word);
+    }
+
+    let mut items = Vec::new();
+    for ((_, block, _, _), mut words) in lines {
+        words.sort_by_key(|word| word.left);
+        let left = words.iter().map(|word| word.left).min().unwrap_or_default();
+        let top = words.iter().map(|word| word.top).min().unwrap_or_default();
+        let right = words
+            .iter()
+            .map(|word| word.left.saturating_add(word.width))
+            .max()
+            .unwrap_or(left);
+        let bottom = words
+            .iter()
+            .map(|word| word.top.saturating_add(word.height))
+            .max()
+            .unwrap_or(top);
+        let confidence =
+            words.iter().map(|word| word.confidence).sum::<f32>() / words.len().max(1) as f32;
+        let mut text = String::new();
+        let mut previous_right = None::<u32>;
+        let mut previous_char_width = 8.0_f32;
+        for word in &words {
+            if let Some(right_edge) = previous_right {
+                let gap = word.left.saturating_sub(right_edge);
+                let table_gap = (previous_char_width * 3.5).max(24.0) as u32;
+                text.push(if gap >= table_gap { '\t' } else { ' ' });
+            }
+            text.push_str(&word.text);
+            previous_right = Some(word.left.saturating_add(word.width));
+            previous_char_width = word.width as f32 / word.text.chars().count().max(1) as f32;
+        }
+        let cells = text
+            .split('\t')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let item_kind = if cells.len() >= 2 {
+            "table_row"
+        } else {
+            "text_line"
+        };
+        items.push(NormalizedLayoutItem {
+            item_kind: item_kind.into(),
+            page_index: Some(forced_page_index),
+            block_index: Some(block),
+            text: text.trim().to_string(),
+            cells,
+            bbox: Some(LayoutBoundingBox {
+                left,
+                top,
+                width: right.saturating_sub(left),
+                height: bottom.saturating_sub(top),
+            }),
+            confidence,
+            source_reference: Some(format!("page:{};block:{}", forced_page_index + 1, block)),
+        });
+    }
+    items.sort_by(|left, right| {
+        let left_box = left.bbox.as_ref();
+        let right_box = right.bbox.as_ref();
+        left.page_index
+            .cmp(&right.page_index)
+            .then_with(|| {
+                left_box
+                    .map(|bbox| bbox.top)
+                    .cmp(&right_box.map(|bbox| bbox.top))
+            })
+            .then_with(|| {
+                left_box
+                    .map(|bbox| bbox.left)
+                    .cmp(&right_box.map(|bbox| bbox.left))
+            })
+    });
+    Ok(items)
+}
+
+fn layout_items_from_text(
+    text: &str,
+    page_index: Option<usize>,
+    source_reference: Option<String>,
+) -> Vec<NormalizedLayoutItem> {
+    text.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let cells = line
+                .split('\t')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            NormalizedLayoutItem {
+                item_kind: if cells.len() >= 2 {
+                    "table_row"
+                } else {
+                    "text_line"
+                }
+                .into(),
+                page_index,
+                block_index: None,
+                text: line.trim().to_string(),
+                cells,
+                bbox: None,
+                confidence: 1.0,
+                source_reference: source_reference.clone(),
+            }
+        })
+        .collect()
+}
+
+fn normalize_layout_items(items: &mut Vec<NormalizedLayoutItem>) {
+    for item in items.iter_mut() {
+        item.text = normalize_text(&item.text);
+        item.cells = item
+            .cells
+            .iter()
+            .map(|cell| normalize_text(cell))
+            .filter(|cell| !cell.is_empty())
+            .collect();
+        item.confidence = item.confidence.clamp(0.0, 1.0);
+    }
+    items.retain(|item| !item.text.trim().is_empty());
+}
+
+fn layout_text(items: &[NormalizedLayoutItem]) -> String {
+    items
+        .iter()
+        .map(|item| item.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_xlsx(path: &Path) -> Result<NormalizedSource, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| format!("XLSX повреждён: {error}"))?;
+    let shared = read_xlsx_shared_strings(&mut archive)?;
+    let sheets = read_xlsx_sheet_entries(&mut archive)?;
+    let mut output = String::new();
+    let mut layout_items = Vec::new();
+    let mut formula_count = 0usize;
+    for (display_name, sheet_path) in sheets {
+        let mut entry = archive
+            .by_name(&sheet_path)
+            .map_err(|error| format!("Не удалось прочитать лист «{display_name}»: {error}"))?;
+        let mut xml = String::new();
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|error| error.to_string())?;
+        formula_count += xml.matches("<f").count();
+        let sheet = xlsx_sheet_to_text(&xml, &shared)?;
+        if !sheet.trim().is_empty() {
+            if !output.is_empty() {
+                output.push_str("\n\n");
+            }
+            output.push_str(&format!("[Лист: {display_name}]\n{sheet}"));
+            layout_items.extend(layout_items_from_text(
+                &sheet,
+                None,
+                Some(format!("xlsx:{display_name}")),
+            ));
+        }
+    }
+    let mut warnings = Vec::new();
+    if formula_count > 0 {
+        warnings.push(format!(
+            "В книге найдено формул: {formula_count}. Использованы сохранённые cached values; при давней пересборке книги значения могут быть устаревшими."
+        ));
+    }
+    warnings.push(
+        "Листы читаются по пользовательским именам и разделяются источниками; одинаковые поля с разных листов проходят conflict/case gate."
+            .into(),
+    );
+    Ok(NormalizedSource {
+        text: output,
+        source_kind: "spreadsheet".into(),
+        warnings,
+        processed_files: vec![path.to_path_buf()],
+        layout_items,
+    })
+}
+
+fn read_xlsx_sheet_entries<R: std::io::Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<Vec<(String, String)>, String> {
+    let workbook_xml = {
+        let mut entry = archive
+            .by_name("xl/workbook.xml")
+            .map_err(|error| format!("XLSX не содержит workbook.xml: {error}"))?;
+        let mut xml = String::new();
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|error| error.to_string())?;
+        xml
+    };
+    let relationships_xml = {
+        let mut entry = archive
+            .by_name("xl/_rels/workbook.xml.rels")
+            .map_err(|error| format!("XLSX не содержит workbook relationships: {error}"))?;
+        let mut xml = String::new();
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|error| error.to_string())?;
+        xml
+    };
+    let mut relationships = BTreeMap::<String, String>::new();
+    let mut rel_reader = Reader::from_str(&relationships_xml);
+    loop {
+        match rel_reader.read_event() {
+            Ok(Event::Start(event)) | Ok(Event::Empty(event))
+                if local_name(event.name().as_ref()) == b"Relationship" =>
+            {
+                let mut id = None;
+                let mut target = None;
+                for attribute in event.attributes().flatten() {
+                    let key = local_name(attribute.key.as_ref());
+                    let value = String::from_utf8_lossy(attribute.value.as_ref()).to_string();
+                    if key == b"Id" {
+                        id = Some(value);
+                    } else if key == b"Target" {
+                        target = Some(value);
+                    }
+                }
+                if let (Some(id), Some(target)) = (id, target) {
+                    let target = target.trim_start_matches('/');
+                    let path = if target.starts_with("xl/") {
+                        target.to_string()
+                    } else {
+                        format!("xl/{}", target.trim_start_matches("../"))
+                    };
+                    relationships.insert(id, path);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("workbook.xml.rels повреждён: {error}")),
+            _ => {}
+        }
+    }
+    let mut sheets = Vec::new();
+    let mut workbook_reader = Reader::from_str(&workbook_xml);
+    loop {
+        match workbook_reader.read_event() {
+            Ok(Event::Start(event)) | Ok(Event::Empty(event))
+                if local_name(event.name().as_ref()) == b"sheet" =>
+            {
+                let mut name = None;
+                let mut relationship_id = None;
+                for attribute in event.attributes().flatten() {
+                    let key = local_name(attribute.key.as_ref());
+                    let value = String::from_utf8_lossy(attribute.value.as_ref()).to_string();
+                    if key == b"name" {
+                        name = Some(value);
+                    } else if key == b"id" {
+                        relationship_id = Some(value);
+                    }
+                }
+                if let (Some(name), Some(relationship_id)) = (name, relationship_id) {
+                    if let Some(path) = relationships.get(&relationship_id) {
+                        sheets.push((name, path.clone()));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("workbook.xml повреждён: {error}")),
+            _ => {}
+        }
+    }
+    if sheets.is_empty() {
+        return Err("В XLSX не найдено доступных рабочих листов.".into());
+    }
+    Ok(sheets)
+}
+
+pub(crate) fn mail_merge_upload_to_delimited(
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "xlsx" => xlsx_bytes_first_sheet_to_tsv(bytes),
+        "csv" | "tsv" | "txt" => {
+            let text = decode_text_bytes(bytes);
+            if text.trim().is_empty() {
+                Err("Файл таблицы пуст.".into())
+            } else {
+                Ok(text)
+            }
+        }
+        _ => Err("Пакетная генерация принимает XLSX, CSV, TSV или TXT.".into()),
+    }
+}
+
+fn xlsx_bytes_first_sheet_to_tsv(bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err("XLSX превышает допустимый размер 100 МБ.".into());
+    }
+    let mut archive =
+        ZipArchive::new(Cursor::new(bytes)).map_err(|error| format!("XLSX повреждён: {error}"))?;
+    let shared = read_xlsx_shared_strings(&mut archive)?;
+    let sheets = read_xlsx_sheet_entries(&mut archive)?;
+    for (display_name, sheet_path) in sheets {
+        let mut entry = archive
+            .by_name(&sheet_path)
+            .map_err(|error| format!("Не удалось прочитать лист «{display_name}»: {error}"))?;
+        let mut xml = String::new();
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|error| error.to_string())?;
+        let text = xlsx_sheet_to_text(&xml, &shared)?;
+        if !text.trim().is_empty() {
+            return Ok(text);
+        }
+    }
+    Err("В XLSX не найден непустой рабочий лист.".into())
+}
+
+fn read_xlsx_shared_strings<R: std::io::Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<Vec<String>, String> {
+    let Ok(mut entry) = archive.by_name("xl/sharedStrings.xml") else {
+        return Ok(Vec::new());
+    };
+    let mut xml = String::new();
+    entry
+        .read_to_string(&mut xml)
+        .map_err(|error| error.to_string())?;
+    let mut reader = Reader::from_str(&xml);
+    reader.config_mut().trim_text(false);
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut in_si = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) if local_name(event.name().as_ref()) == b"si" => {
+                in_si = true;
+                current.clear();
+            }
+            Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"si" => {
+                in_si = false;
+                values.push(current.clone());
+            }
+            Ok(Event::Text(event)) if in_si => {
+                current.push_str(&decode_xml_text(&event)?);
+            }
+            Ok(Event::GeneralRef(event)) if in_si => {
+                current.push_str(&decode_xml_reference(&event)?);
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("sharedStrings.xml повреждён: {error}")),
+            _ => {}
+        }
+    }
+    Ok(values)
+}
+
+fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut output = String::new();
+    let mut current_type = String::new();
+    let mut current_value = String::new();
+    let mut current_column = 0usize;
+    let mut current_row = Vec::<String>::new();
+    let mut in_value = false;
+    let mut in_inline_text = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) if local_name(event.name().as_ref()) == b"c" => {
+                current_column = event
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| local_name(attribute.key.as_ref()) == b"r")
+                    .and_then(|attribute| String::from_utf8(attribute.value.into_owned()).ok())
+                    .and_then(|reference| xlsx_column_index(&reference))
+                    .unwrap_or(current_row.len());
+                current_type = event
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| local_name(attribute.key.as_ref()) == b"t")
+                    .and_then(|attribute| String::from_utf8(attribute.value.into_owned()).ok())
+                    .unwrap_or_default();
+                current_value.clear();
+            }
+            Ok(Event::Start(event)) if local_name(event.name().as_ref()) == b"v" => in_value = true,
+            Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"v" => in_value = false,
+            Ok(Event::Start(event)) if local_name(event.name().as_ref()) == b"t" => {
+                in_inline_text = true
+            }
+            Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"t" => {
+                in_inline_text = false
+            }
+            Ok(Event::Text(event)) if in_value || in_inline_text => {
+                current_value.push_str(&decode_xml_text(&event)?);
+            }
+            Ok(Event::GeneralRef(event)) if in_value || in_inline_text => {
+                current_value.push_str(&decode_xml_reference(&event)?);
+            }
+            Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"c" => {
+                let value = if current_type == "s" {
+                    current_value
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| shared.get(index))
+                        .cloned()
+                        .unwrap_or(current_value.clone())
+                } else {
+                    current_value.clone()
+                };
+                if current_row.len() <= current_column {
+                    current_row.resize(current_column + 1, String::new());
+                }
+                current_row[current_column] = value.trim().to_string();
+            }
+            Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"row" => {
+                while current_row.last().is_some_and(|value| value.is_empty()) {
+                    current_row.pop();
+                }
+                output.push_str(&current_row.join("\t"));
+                output.push('\n');
+                current_row.clear();
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("Лист XLSX повреждён: {error}")),
+            _ => {}
+        }
+    }
+    Ok(output)
+}
+
+fn xlsx_column_index(reference: &str) -> Option<usize> {
+    let mut value = 0usize;
+    let mut found = false;
+    for character in reference.chars() {
+        if !character.is_ascii_alphabetic() {
+            break;
+        }
+        found = true;
+        let digit = usize::from(character.to_ascii_uppercase() as u8 - b'A' + 1);
+        value = value.checked_mul(26)?.checked_add(digit)?;
+    }
+    found.then(|| value.saturating_sub(1))
+}
+
+fn normalize_odt(path: &Path) -> Result<NormalizedSource, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| format!("ODT повреждён: {error}"))?;
+    let mut entry = archive
+        .by_name("content.xml")
+        .map_err(|_| "В ODT отсутствует content.xml".to_string())?;
+    let mut xml = String::new();
+    entry
+        .read_to_string(&mut xml)
+        .map_err(|error| error.to_string())?;
+    Ok(NormalizedSource {
+        text: generic_xml_to_text(&xml)?,
+        source_kind: "odt".into(),
+        warnings: Vec::new(),
+        processed_files: vec![path.to_path_buf()],
+        layout_items: Vec::new(),
+    })
+}
+
+fn normalize_rtf(path: &Path) -> Result<NormalizedSource, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    Ok(NormalizedSource {
+        text: rtf_to_text(&bytes),
+        source_kind: "rtf".into(),
+        warnings: Vec::new(),
+        processed_files: vec![path.to_path_buf()],
+        layout_items: Vec::new(),
+    })
+}
+
+fn normalize_plain_text(path: &Path, extension: &str) -> Result<NormalizedSource, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let text = decode_text_bytes(&bytes);
+    let normalized = if extension == "json" {
+        serde_json::from_str::<serde_json::Value>(&text)
+            .map(|value| serde_json::to_string_pretty(&value).unwrap_or(text.clone()))
+            .unwrap_or(text)
+    } else if extension == "xml" {
+        generic_xml_to_text(&text).unwrap_or(text)
+    } else {
+        text
+    };
+    Ok(NormalizedSource {
+        text: normalized,
+        source_kind: extension.into(),
+        warnings: Vec::new(),
+        processed_files: vec![path.to_path_buf()],
+        layout_items: Vec::new(),
+    })
+}
+
+fn normalize_html(path: &Path) -> Result<NormalizedSource, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    Ok(NormalizedSource {
+        text: html_to_text(&decode_text_bytes(&bytes)),
+        source_kind: "html".into(),
+        warnings: Vec::new(),
+        processed_files: vec![path.to_path_buf()],
+        layout_items: Vec::new(),
+    })
+}
+
+fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
+    let raw = decode_text_bytes(&std::fs::read(path).map_err(|error| error.to_string())?);
+    let mut text = String::new();
+    let mut warnings = Vec::new();
+    let mut attachment_layout = Vec::new();
+    let (headers, body) = split_headers_body(&raw);
+    for header in ["From", "To", "Cc", "Date", "Subject"] {
+        if let Some(value) = header_value(headers, header) {
+            text.push_str(&format!("{header}: {value}\n"));
+        }
+    }
+    text.push('\n');
+    let content_type = header_value(headers, "Content-Type").unwrap_or_else(|| "text/plain".into());
+    if let Some(boundary) = mime_boundary(&content_type) {
+        for part in body.split(&format!("--{boundary}")) {
+            let (part_headers, part_body) = split_headers_body(part);
+            let part_type =
+                header_value(part_headers, "Content-Type").unwrap_or_else(|| "text/plain".into());
+            let encoding =
+                header_value(part_headers, "Content-Transfer-Encoding").unwrap_or_default();
+            let decoded = decode_mime_body(part_body, &encoding);
+            if part_type.to_ascii_lowercase().starts_with("text/plain") {
+                text.push_str(&decode_text_bytes(&decoded));
+                text.push('\n');
+            } else if part_type.to_ascii_lowercase().starts_with("text/html") {
+                text.push_str(&html_to_text(&decode_text_bytes(&decoded)));
+                text.push('\n');
+            } else if let Some(name) = mime_file_name(part_headers) {
+                let attachment_dir = workspace.join(format!("mail-{}", Uuid::new_v4()));
+                std::fs::create_dir_all(&attachment_dir).map_err(|error| error.to_string())?;
+                let attachment = attachment_dir.join(safe_file_name(&name));
+                std::fs::write(&attachment, decoded).map_err(|error| error.to_string())?;
+                if is_supported_path(&attachment) {
+                    match normalize_path(&attachment, workspace, depth + 1) {
+                        Ok(nested) => {
+                            text.push_str(&format!("\n[Вложение: {name}]\n{}\n", nested.text));
+                            let mut nested_layout = nested.layout_items;
+                            prefix_layout_source(
+                                &mut nested_layout,
+                                &format!("email_attachment:{name}"),
+                            );
+                            attachment_layout.extend(nested_layout);
+                            warnings.extend(nested.warnings);
+                        }
+                        Err(error) => {
+                            warnings.push(format!("Вложение «{name}» не обработано: {error}"))
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        let encoding = header_value(headers, "Content-Transfer-Encoding").unwrap_or_default();
+        let decoded = decode_mime_body(body, &encoding);
+        if content_type.to_ascii_lowercase().starts_with("text/html") {
+            text.push_str(&html_to_text(&decode_text_bytes(&decoded)));
+        } else {
+            text.push_str(&decode_text_bytes(&decoded));
+        }
+    }
+    let source_reference = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|name| format!("email:{name}"));
+    let mut layout_items = layout_items_from_text(&text, None, source_reference);
+    layout_items.extend(attachment_layout);
+    Ok(NormalizedSource {
+        text,
+        source_kind: "email".into(),
+        warnings,
+        processed_files: vec![path.to_path_buf()],
+        layout_items,
+    })
+}
+
+fn normalize_msg(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
+    let output_dir = workspace.join(format!("msg-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let output = run_command_in(
+        &output_dir,
+        "msgconvert",
+        &[path.to_string_lossy().as_ref()],
+    )?;
+    if !output.status.success() {
+        return Err(
+            "MSG не удалось преобразовать. Установите msgconvert/libemail-outlook-perl.".into(),
+        );
+    }
+    let eml = std::fs::read_dir(&output_dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|entry| {
+            entry
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("eml"))
+        })
+        .ok_or_else(|| "msgconvert не создал EML-файл.".to_string())?;
+    let result = normalize_eml(&eml, workspace, depth)?;
+    let _ = std::fs::remove_dir_all(output_dir);
+    Ok(result)
+}
+
+fn normalize_zip(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| format!("ZIP повреждён: {error}"))?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(format!("В архиве больше {MAX_ARCHIVE_ENTRIES} файлов."));
+    }
+    let extraction = workspace.join(format!("archive-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&extraction).map_err(|error| error.to_string())?;
+    let mut total = 0_u64;
+    let mut extracted = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        total = total
+            .checked_add(entry.size())
+            .ok_or_else(|| "Переполнение размера архива.".to_string())?;
+        if total > MAX_ARCHIVE_UNPACKED_BYTES {
+            return Err("Распакованный архив превышает 512 МБ.".into());
+        }
+        let Some(relative) = entry.enclosed_name() else {
+            return Err("Архив содержит небезопасный путь (zip-slip).".into());
+        };
+        if relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            return Err("Архив содержит небезопасный путь.".into());
+        }
+        let target = extraction.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let mut output = File::create(&target).map_err(|error| error.to_string())?;
+        std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+        extracted.push(target);
+    }
+    normalize_extracted_files(path, &extraction, extracted, workspace, depth)
+}
+
+fn normalize_external_archive(
+    path: &Path,
+    workspace: &Path,
+    depth: usize,
+) -> Result<NormalizedSource, String> {
+    let extraction = workspace.join(format!("archive-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&extraction).map_err(|error| error.to_string())?;
+    run_command(
+        "7z",
+        &[
+            "x",
+            "-y",
+            &format!("-o{}", extraction.display()),
+            path.to_string_lossy().as_ref(),
+        ],
+    )?;
+    let extracted = walk_files(&extraction, MAX_ARCHIVE_ENTRIES)?;
+    let total = extracted.iter().try_fold(0_u64, |sum, item| {
+        let size = std::fs::metadata(item)
+            .map_err(|error| error.to_string())?
+            .len();
+        sum.checked_add(size)
+            .ok_or_else(|| "Переполнение размера архива.".to_string())
+    })?;
+    if total > MAX_ARCHIVE_UNPACKED_BYTES {
+        return Err("Распакованный архив превышает 512 МБ.".into());
+    }
+    normalize_extracted_files(path, &extraction, extracted, workspace, depth)
+}
+
+fn prefix_layout_source(items: &mut [NormalizedLayoutItem], prefix: &str) {
+    for item in items {
+        item.source_reference = Some(match item.source_reference.take() {
+            Some(reference) if !reference.trim().is_empty() => format!("{prefix};{reference}"),
+            _ => prefix.to_string(),
+        });
+    }
+}
+
+fn normalize_extracted_files(
+    archive_path: &Path,
+    extraction: &Path,
+    extracted: Vec<PathBuf>,
+    workspace: &Path,
+    depth: usize,
+) -> Result<NormalizedSource, String> {
+    let mut text = String::new();
+    let mut warnings = Vec::new();
+    let mut processed_files = vec![archive_path.to_path_buf()];
+    let mut layout_items = Vec::new();
+    for item in extracted
+        .into_iter()
+        .filter(|item| is_supported_path(item) && !is_temporary_source(item))
+    {
+        match normalize_path(&item, workspace, depth + 1) {
+            Ok(nested) => {
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                let label = item.strip_prefix(extraction).unwrap_or(&item).display();
+                let label_text = label.to_string();
+                text.push_str(&format!("[Файл из архива: {label}]\n{}", nested.text));
+                let mut nested_layout = nested.layout_items;
+                prefix_layout_source(&mut nested_layout, &format!("archive:{label_text}"));
+                layout_items.extend(nested_layout);
+                warnings.extend(nested.warnings);
+                processed_files.extend(nested.processed_files);
+            }
+            Err(error) => warnings.push(format!("Файл «{}» пропущен: {error}", item.display())),
+        }
+    }
+    let _ = std::fs::remove_dir_all(extraction);
+    Ok(NormalizedSource {
+        text,
+        source_kind: "archive".into(),
+        warnings,
+        processed_files,
+        layout_items,
+    })
+}
+
+fn normalize_office_via_libreoffice(
+    path: &Path,
+    workspace: &Path,
+    target_extension: &str,
+) -> Result<NormalizedSource, String> {
+    let output_dir = workspace.join(format!("office-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    run_command(
+        "soffice",
+        &[
+            "--headless",
+            "--convert-to",
+            target_extension,
+            "--outdir",
+            output_dir.to_string_lossy().as_ref(),
+            path.to_string_lossy().as_ref(),
+        ],
+    )?;
+    let converted = std::fs::read_dir(&output_dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|item| {
+            item.extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case(target_extension))
+        })
+        .ok_or_else(|| "LibreOffice не создал преобразованный файл.".to_string())?;
+    let result = normalize_path(&converted, workspace, 0)?;
+    let _ = std::fs::remove_dir_all(output_dir);
+    Ok(result)
+}
+
+pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|error| format!("Некорректный URL: {error}"))?;
+    validate_web_url(&parsed)?;
+    crate::ensure_rustls_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                return attempt.error("слишком много перенаправлений");
+            }
+            match validate_web_url(attempt.url()) {
+                Ok(()) => attempt.follow(),
+                Err(_) => attempt.stop(),
+            }
+        }))
+        .user_agent(concat!("Dokkomplekt-Universal/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(parsed.clone())
+        .send()
+        .map_err(|error| format!("Не удалось получить источник: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Сайт вернул HTTP {}.", response.status()));
+    }
+    let final_url = response.url().clone();
+    validate_web_url(&final_url)?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .split(';')
+        .next()
+        .unwrap_or("application/octet-stream")
+        .trim()
+        .to_ascii_lowercase();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_UPLOAD_BYTES as u64)
+    {
+        return Err("Ответ сайта превышает 100 МБ.".into());
+    }
+    let bytes = response.bytes().map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err("Ответ сайта превышает 100 МБ.".into());
+    }
+
+    let mut warnings = vec![
+        "Источник получен извне; критические поля проходят risk gate и межполевые проверки.".into(),
+    ];
+    let source_text = if is_textual_content_type(&content_type) {
+        normalize_web_text(&bytes, &content_type)?
+    } else {
+        let extension = web_extension(&final_url, &content_type).ok_or_else(|| {
+            format!("Тип ответа «{content_type}» пока нельзя безопасно нормализовать.")
+        })?;
+        std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
+        let path = workspace.join(format!("web-{}.{}", Uuid::new_v4(), extension));
+        std::fs::write(&path, &bytes)
+            .map_err(|error| format!("Не удалось сохранить HTTPS-источник: {error}"))?;
+        let normalized = normalize_path(&path, workspace, 0);
+        let _ = std::fs::remove_file(&path);
+        let normalized = normalized?;
+        warnings.extend(normalized.warnings);
+        normalized.text
+    };
+    if source_text.trim().is_empty() {
+        return Err("HTTPS-источник не содержит пригодного для обработки текста.".into());
+    }
+    Ok(WebIntakeResult {
+        source_text: normalize_text(&source_text),
+        final_url: final_url.to_string(),
+        content_type,
+        warnings,
+    })
+}
+
+fn validate_web_url(url: &reqwest::Url) -> Result<(), String> {
+    if url.scheme() != "https" {
+        return Err("Для сайтов и информационных систем разрешён только HTTPS.".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("URL со встроенными учётными данными запрещён.".into());
+    }
+    ensure_public_destination(url)
+}
+
+fn is_textual_content_type(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || content_type.contains("json")
+        || content_type.contains("xml")
+        || content_type.contains("javascript")
+        || content_type.contains("x-www-form-urlencoded")
+}
+
+fn normalize_web_text(bytes: &[u8], content_type: &str) -> Result<String, String> {
+    let raw = decode_text_bytes(bytes);
+    if content_type.contains("html") {
+        Ok(html_to_text(&raw))
+    } else if content_type.contains("json") {
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .map(|value| serde_json::to_string_pretty(&value).unwrap_or(raw.clone()))
+            .map_err(|error| format!("JSON-ответ повреждён: {error}"))
+    } else if content_type.contains("xml") {
+        generic_xml_to_text(&raw)
+    } else {
+        Ok(raw)
+    }
+}
+
+fn web_extension(url: &reqwest::Url, content_type: &str) -> Option<&'static str> {
+    let from_type = match content_type {
+        "application/pdf" => Some("pdf"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some("docx"),
+        "application/vnd.ms-word.document.macroenabled.12" => Some("docm"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some("xlsx"),
+        "application/vnd.ms-excel" => Some("xls"),
+        "application/vnd.oasis.opendocument.spreadsheet" => Some("ods"),
+        "application/vnd.oasis.opendocument.text" => Some("odt"),
+        "application/rtf" | "text/rtf" => Some("rtf"),
+        "message/rfc822" => Some("eml"),
+        "application/zip" | "application/x-zip-compressed" => Some("zip"),
+        "application/x-7z-compressed" => Some("7z"),
+        "application/vnd.rar" | "application/x-rar-compressed" => Some("rar"),
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/tiff" => Some("tiff"),
+        "image/bmp" => Some("bmp"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    };
+    from_type.or_else(|| {
+        let extension = Path::new(url.path()).extension()?.to_str()?;
+        supported_extensions()
+            .iter()
+            .find(|known| extension.eq_ignore_ascii_case(known))
+            .copied()
+    })
+}
+
+fn ensure_public_destination(url: &reqwest::Url) -> Result<(), String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL не содержит имя узла.".to_string())?;
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|error| format!("Не удалось разрешить адрес: {error}"))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("Не удалось разрешить адрес сайта.".into());
+    }
+    if addresses.iter().any(|address| !is_public_ip(address.ip())) {
+        return Err("Доступ к локальным, служебным и приватным сетям запрещён.".into());
+    }
+    Ok(())
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+                || ip.octets()[0] == 0)
+        }
+        IpAddr::V6(ip) => {
+            !(ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local())
+        }
+    }
+}
+
+fn command_available(program: &str) -> bool {
+    let executable = resolve_tool(program);
+    Command::new(executable)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+pub(crate) fn resolve_tool(program: &str) -> PathBuf {
+    let executable_name = if cfg!(windows) && !program.to_ascii_lowercase().ends_with(".exe") {
+        format!("{program}.exe")
+    } else {
+        program.to_string()
+    };
+    if let Some(path) =
+        crate::component_manager::resolve_trusted_component_tool(program, &executable_name)
+    {
+        return path;
+    }
+    let mut candidates = Vec::new();
+    if let Some(dir) = std::env::var_os("DOKKOMPLEKT_TOOLS_DIR") {
+        append_tool_candidates(
+            &mut candidates,
+            &PathBuf::from(dir),
+            program,
+            &executable_name,
+        );
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            append_tool_candidates(
+                &mut candidates,
+                &parent.join("tools"),
+                program,
+                &executable_name,
+            );
+            append_tool_candidates(
+                &mut candidates,
+                &parent.join("resources").join("tools"),
+                program,
+                &executable_name,
+            );
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from(program))
+}
+
+fn append_tool_candidates(
+    candidates: &mut Vec<PathBuf>,
+    root: &Path,
+    program: &str,
+    executable_name: &str,
+) {
+    let platform = std::env::consts::OS;
+    let architecture = std::env::consts::ARCH;
+    let platform_arch = format!("{platform}-{architecture}");
+    candidates.extend([
+        root.join(executable_name),
+        root.join(platform).join(executable_name),
+        root.join(&platform_arch).join(executable_name),
+        root.join(program).join(executable_name),
+        root.join(program).join(platform).join(executable_name),
+        root.join(program)
+            .join(&platform_arch)
+            .join(executable_name),
+    ]);
+    match program {
+        "pdftotext" | "pdftoppm" => {
+            candidates.push(root.join("poppler").join("bin").join(executable_name));
+            candidates.push(
+                root.join("poppler")
+                    .join(&platform_arch)
+                    .join("bin")
+                    .join(executable_name),
+            );
+        }
+        "soffice" => {
+            candidates.push(
+                root.join("libreoffice")
+                    .join("program")
+                    .join(executable_name),
+            );
+            candidates.push(
+                root.join("libreoffice")
+                    .join(&platform_arch)
+                    .join("program")
+                    .join(executable_name),
+            );
+        }
+        "7z" => {
+            candidates.push(root.join("7zip").join(executable_name));
+            candidates.push(root.join("7zip").join(&platform_arch).join(executable_name));
+        }
+        "sumatrapdf" => {
+            candidates.push(root.join("sumatrapdf").join("SumatraPDF.exe"));
+            candidates.push(
+                root.join("sumatrapdf")
+                    .join(&platform_arch)
+                    .join("SumatraPDF.exe"),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn run_command(program: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    run_command_in(Path::new("."), program, args)
+}
+
+fn run_command_in(
+    cwd: &Path,
+    program: &str,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let executable = resolve_tool(program);
+    let mut command = Command::new(executable);
+    command
+        .current_dir(cwd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Не найден или не запускается «{program}»: {error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("Не удалось перехватить stdout процесса «{program}»."))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("Не удалось перехватить stderr процесса «{program}»."))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes);
+        (result, bytes)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stderr.read_to_end(&mut bytes);
+        (result, bytes)
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if started.elapsed() > COMMAND_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            let (_, stderr_bytes) = stderr_reader
+                .join()
+                .map_err(|_| format!("Поток stderr процесса «{program}» аварийно завершился."))?;
+            let _ = stdout_reader.join();
+            let stderr_text = String::from_utf8_lossy(&stderr_bytes);
+            let detail = stderr_text.trim();
+            return Err(if detail.is_empty() {
+                format!(
+                    "«{program}» не завершился за {} секунд.",
+                    COMMAND_TIMEOUT.as_secs()
+                )
+            } else {
+                format!(
+                    "«{program}» не завершился за {} секунд: {detail}",
+                    COMMAND_TIMEOUT.as_secs()
+                )
+            });
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    let (stdout_result, stdout_bytes) = stdout_reader
+        .join()
+        .map_err(|_| format!("Поток stdout процесса «{program}» аварийно завершился."))?;
+    stdout_result.map_err(|error| format!("Ошибка чтения stdout «{program}»: {error}"))?;
+    let (stderr_result, stderr_bytes) = stderr_reader
+        .join()
+        .map_err(|_| format!("Поток stderr процесса «{program}» аварийно завершился."))?;
+    stderr_result.map_err(|error| format!("Ошибка чтения stderr «{program}»: {error}"))?;
+
+    let output = std::process::Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    };
+    if !output.status.success() {
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "«{program}» завершился с ошибкой: {}",
+            stderr_text.trim()
+        ));
+    }
+    Ok(output)
+}
+
+fn generic_xml_to_text(xml: &str) -> Result<String, String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut output = String::new();
+    let block_tags = BTreeSet::from(["p", "h", "tr", "row", "table-row", "list-item"]);
+    let cell_tags = BTreeSet::from(["tc", "cell", "table-cell"]);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Text(event)) => output.push_str(&decode_xml_text(&event)?),
+            Ok(Event::GeneralRef(event)) => output.push_str(&decode_xml_reference(&event)?),
+            Ok(Event::End(event)) => {
+                let name =
+                    String::from_utf8_lossy(local_name(event.name().as_ref())).to_ascii_lowercase();
+                if block_tags.contains(name.as_str()) {
+                    output.push('\n');
+                } else if cell_tags.contains(name.as_str()) {
+                    output.push('\t');
+                }
+            }
+            Ok(Event::Empty(event)) if local_name(event.name().as_ref()) == b"br" => {
+                output.push('\n')
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("XML повреждён: {error}")),
+            _ => {}
+        }
+    }
+    Ok(output)
+}
+
+fn decode_xml_text(event: &quick_xml::events::BytesText<'_>) -> Result<String, String> {
+    event
+        .decode()
+        .map(|value| value.into_owned())
+        .map_err(|error| error.to_string())
+}
+
+fn decode_xml_reference(event: &quick_xml::events::BytesRef<'_>) -> Result<String, String> {
+    if let Some(character) = event
+        .resolve_char_ref()
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(character.to_string());
+    }
+    let name = event.decode().map_err(|error| error.to_string())?;
+    quick_xml::escape::resolve_predefined_entity(&name)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("неизвестная XML-сущность: &{name};"))
+}
+
+fn local_name(name: &[u8]) -> &[u8] {
+    name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+}
+
+fn html_to_text(html: &str) -> String {
+    let mut output = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut tag = String::new();
+    let mut skip_depth = 0_u32;
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                let raw = tag.trim().to_ascii_lowercase();
+                let closing = raw.starts_with('/');
+                let name = raw
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('/');
+                if matches!(name, "script" | "style" | "noscript") {
+                    if closing {
+                        skip_depth = skip_depth.saturating_sub(1);
+                    } else if !raw.ends_with('/') {
+                        skip_depth = skip_depth.saturating_add(1);
+                    }
+                }
+                if skip_depth == 0
+                    && (closing
+                        && matches!(
+                            name,
+                            "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                        )
+                        || !closing && name == "br")
+                {
+                    output.push('\n');
+                } else if skip_depth == 0 && closing && matches!(name, "td" | "th") {
+                    output.push('\t');
+                }
+            }
+            _ if in_tag || skip_depth > 0 => {
+                if in_tag {
+                    tag.push(character);
+                }
+            }
+            _ => output.push(character),
+        }
+    }
+    decode_html_entities(&output)
+}
+
+fn decode_html_entities(input: &str) -> String {
+    input
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
+fn rtf_to_text(bytes: &[u8]) -> String {
+    #[derive(Clone, Copy)]
+    struct RtfState {
+        skip_destination: bool,
+        unicode_fallback_len: usize,
+        code_page: u16,
+    }
+
+    let input = String::from_utf8_lossy(bytes);
+    let mut output = String::new();
+    let mut chars = input.chars().peekable();
+    let mut state = RtfState {
+        skip_destination: false,
+        unicode_fallback_len: 1,
+        code_page: 1252,
+    };
+    let mut stack = Vec::new();
+    let mut fallback_to_skip = 0_usize;
+
+    while let Some(character) = chars.next() {
+        match character {
+            '{' => stack.push(state),
+            '}' => {
+                state = stack.pop().unwrap_or(state);
+                fallback_to_skip = 0;
+            }
+            '\\' => {
+                let Some(next) = chars.peek().copied() else {
+                    break;
+                };
+                match next {
+                    '\\' | '{' | '}' => {
+                        let literal = chars.next().unwrap_or_default();
+                        if fallback_to_skip > 0 {
+                            fallback_to_skip -= 1;
+                        } else if !state.skip_destination {
+                            output.push(literal);
+                        }
+                    }
+                    '\'' => {
+                        chars.next();
+                        let first = chars.next();
+                        let second = chars.next();
+                        if fallback_to_skip > 0 {
+                            fallback_to_skip -= 1;
+                            continue;
+                        }
+                        if !state.skip_destination {
+                            if let (Some(first), Some(second)) = (first, second) {
+                                let hex = [first, second].iter().collect::<String>();
+                                if let Ok(value) = u8::from_str_radix(&hex, 16) {
+                                    output.push(decode_rtf_ansi_byte(value, state.code_page));
+                                }
+                            }
+                        }
+                    }
+                    '*' => {
+                        chars.next();
+                        state.skip_destination = true;
+                    }
+                    '~' => {
+                        chars.next();
+                        if fallback_to_skip > 0 {
+                            fallback_to_skip -= 1;
+                        } else if !state.skip_destination {
+                            output.push('\u{00a0}');
+                        }
+                    }
+                    '-' => {
+                        chars.next();
+                        fallback_to_skip = fallback_to_skip.saturating_sub(1);
+                    }
+                    '_' => {
+                        chars.next();
+                        if fallback_to_skip > 0 {
+                            fallback_to_skip -= 1;
+                        } else if !state.skip_destination {
+                            output.push('\u{2011}');
+                        }
+                    }
+                    _ => {
+                        let mut word = String::new();
+                        while chars
+                            .peek()
+                            .is_some_and(|value| value.is_ascii_alphabetic())
+                        {
+                            word.push(chars.next().unwrap_or_default());
+                        }
+                        let mut number = String::new();
+                        if chars.peek() == Some(&'-') {
+                            number.push(chars.next().unwrap_or_default());
+                        }
+                        while chars.peek().is_some_and(|value| value.is_ascii_digit()) {
+                            number.push(chars.next().unwrap_or_default());
+                        }
+                        if chars.peek() == Some(&' ') {
+                            chars.next();
+                        }
+
+                        match word.as_str() {
+                            "uc" => {
+                                if let Ok(value) = number.parse::<usize>() {
+                                    state.unicode_fallback_len = value.min(16);
+                                }
+                            }
+                            "ansicpg" => {
+                                if let Ok(value) = number.parse::<u16>() {
+                                    state.code_page = value;
+                                }
+                            }
+                            "u" => {
+                                if !state.skip_destination {
+                                    if let Ok(value) = number.parse::<i32>() {
+                                        let code = if value < 0 { value + 65_536 } else { value };
+                                        if let Some(character) = char::from_u32(code as u32) {
+                                            output.push(character);
+                                        }
+                                    }
+                                }
+                                fallback_to_skip = state.unicode_fallback_len;
+                            }
+                            "par" | "line" => {
+                                if fallback_to_skip > 0 {
+                                    fallback_to_skip -= 1;
+                                } else if !state.skip_destination {
+                                    output.push('\n');
+                                }
+                            }
+                            "tab" => {
+                                if fallback_to_skip > 0 {
+                                    fallback_to_skip -= 1;
+                                } else if !state.skip_destination {
+                                    output.push('\t');
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ if fallback_to_skip > 0 => fallback_to_skip -= 1,
+            _ if !state.skip_destination => output.push(character),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn decode_rtf_ansi_byte(value: u8, code_page: u16) -> char {
+    if value.is_ascii() {
+        return value as char;
+    }
+    if code_page == 1251 {
+        return match value {
+            0xA8 => 'Ё',
+            0xB8 => 'ё',
+            0xC0..=0xFF => char::from_u32(0x0410 + u32::from(value - 0xC0)).unwrap_or('\u{fffd}'),
+            _ => CP1251_EXTENDED[(value - 0x80) as usize],
+        };
+    }
+    CP1252_EXTENDED[(value - 0x80) as usize]
+}
+
+const CP1251_EXTENDED: [char; 64] = [
+    'Ђ', 'Ѓ', '‚', 'ѓ', '„', '…', '†', '‡', '€', '‰', 'Љ', '‹', 'Њ', 'Ќ', 'Ћ', 'Џ', 'ђ', '‘', '’',
+    '“', '”', '•', '–', '—', '\u{fffd}', '™', 'љ', '›', 'њ', 'ќ', 'ћ', 'џ', '\u{00a0}', 'Ў', 'ў',
+    'Ј', '¤', 'Ґ', '¦', '§', 'Ё', '©', 'Є', '«', '¬', '\u{00ad}', '®', 'Ї', '°', '±', 'І', 'і',
+    'ґ', 'µ', '¶', '·', 'ё', '№', 'є', '»', 'ј', 'Ѕ', 'ѕ', 'ї',
+];
+
+const CP1252_EXTENDED: [char; 128] = [
+    '€', '\u{0081}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{008d}', 'Ž',
+    '\u{008f}', '\u{0090}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{009d}',
+    'ž', 'Ÿ', '\u{00a0}', '¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '\u{00ad}',
+    '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À',
+    'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ð', 'Ñ', 'Ò', 'Ó',
+    'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'Ý', 'Þ', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ',
+    'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ð', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù',
+    'ú', 'û', 'ü', 'ý', 'þ', 'ÿ',
+];
+
+fn split_headers_body(input: &str) -> (&str, &str) {
+    input
+        .split_once("\r\n\r\n")
+        .or_else(|| input.split_once("\n\n"))
+        .unwrap_or(("", input))
+}
+
+fn header_value(headers: &str, name: &str) -> Option<String> {
+    let mut current_name = String::new();
+    let mut current_value = String::new();
+    for line in headers.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            current_value.push(' ');
+            current_value.push_str(line.trim());
+            continue;
+        }
+        if current_name.eq_ignore_ascii_case(name) {
+            return Some(current_value.trim().to_string());
+        }
+        if let Some((header_name, value)) = line.split_once(':') {
+            current_name = header_name.trim().to_string();
+            current_value = value.trim().to_string();
+        }
+    }
+    current_name
+        .eq_ignore_ascii_case(name)
+        .then(|| current_value.trim().to_string())
+}
+
+fn mime_boundary(content_type: &str) -> Option<String> {
+    content_type.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        key.eq_ignore_ascii_case("boundary")
+            .then(|| value.trim().trim_matches('"').to_string())
+    })
+}
+
+fn mime_file_name(headers: &str) -> Option<String> {
+    for header in ["Content-Disposition", "Content-Type"] {
+        let Some(value) = header_value(headers, header) else {
+            continue;
+        };
+        for part in value.split(';') {
+            let Some((key, raw)) = part.trim().split_once('=') else {
+                continue;
+            };
+            if key.eq_ignore_ascii_case("filename") || key.eq_ignore_ascii_case("name") {
+                let value = raw.trim().trim_matches('"').trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn decode_mime_body(body: &str, encoding: &str) -> Vec<u8> {
+    if encoding.eq_ignore_ascii_case("base64") {
+        let compact = body
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        BASE64_STANDARD.decode(compact).unwrap_or_default()
+    } else if encoding.eq_ignore_ascii_case("quoted-printable") {
+        decode_quoted_printable(body)
+    } else {
+        body.as_bytes().to_vec()
+    }
+}
+
+fn decode_quoted_printable(input: &str) -> Vec<u8> {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'=' {
+            if bytes.get(index + 1) == Some(&b'\r') && bytes.get(index + 2) == Some(&b'\n') {
+                index += 3;
+                continue;
+            }
+            if bytes.get(index + 1) == Some(&b'\n') {
+                index += 2;
+                continue;
+            }
+            if let (Some(a), Some(b)) = (bytes.get(index + 1), bytes.get(index + 2)) {
+                let hex = [*a, *b];
+                if let Ok(text) = std::str::from_utf8(&hex) {
+                    if let Ok(value) = u8::from_str_radix(text, 16) {
+                        output.push(value);
+                        index += 3;
+                        continue;
+                    }
+                }
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    output
+}
+
+fn decode_text_bytes(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&units);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8(bytes.to_vec())
+        .unwrap_or_else(|_| bytes.iter().map(|byte| *byte as char).collect())
+}
+
+fn normalize_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn meaningful_character_count(text: &str) -> usize {
+    text.chars()
+        .filter(|character| character.is_alphanumeric())
+        .count()
+}
+
+fn safe_file_name(input: &str) -> String {
+    Path::new(input)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("source")
+        .chars()
+        .map(|character| {
+            if matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            ) || character.is_control()
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+}
+
+fn walk_files(root: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(folder) = pending.pop() {
+        for entry in std::fs::read_dir(&folder)
+            .map_err(|error| error.to_string())?
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+                if files.len() > limit {
+                    return Err(format!(
+                        "После распаковки обнаружено больше {limit} файлов."
+                    ));
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supported_formats_cover_requested_universal_intake() {
+        for extension in [
+            "pdf", "jpg", "png", "xlsx", "xls", "odt", "rtf", "eml", "msg", "zip", "7z", "rar",
+        ] {
+            assert!(
+                supported_extensions().contains(&extension),
+                "missing {extension}"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf_ocr_decision_is_page_local() {
+        let rich_text_page = "Договор ".repeat(30);
+        let scanned_page = "  \n";
+        assert!(!pdf_page_requires_ocr(&rich_text_page));
+        assert!(pdf_page_requires_ocr(scanned_page));
+    }
+
+    #[test]
+    fn rtf_decoder_preserves_unicode_and_lines() {
+        let text = rtf_to_text(r#"{\rtf1\uc1 Первый\par \u1042?торой}"#.as_bytes());
+        assert!(text.contains("Первый"), "{text}");
+        assert!(text.contains("Второй"), "{text}");
+        assert!(text.contains('\n'), "{text}");
+    }
+
+    #[test]
+    fn rtf_decoder_supports_windows_1251_hex_escapes() {
+        let text = rtf_to_text(br#"{\rtf1\ansi\ansicpg1251 \'cf\'f0\'e8\'e2\'e5\'f2}"#);
+        assert!(text.contains("Привет"), "{text}");
+    }
+
+    #[test]
+    fn rtf_decoder_respects_unicode_fallback_length() {
+        let text = rtf_to_text(br#"{\rtf1\uc2 \u1042??test}"#);
+        assert!(text.contains("Вtest"), "{text}");
+        assert!(!text.contains('?'), "{text}");
+    }
+
+    #[test]
+    fn html_decoder_removes_scripts_and_preserves_table_boundaries() {
+        let text =
+            html_to_text("<script>bad()</script><table><tr><td>A</td><td>B</td></tr></table>");
+        assert!(!text.contains("bad"));
+        assert!(text.contains("A\tB"));
+    }
+
+    #[test]
+    fn private_networks_are_rejected() {
+        assert!(!is_public_ip("127.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("10.1.2.3".parse().unwrap()));
+        assert!(is_public_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn tesseract_tsv_preserves_page_coordinates_and_table_cells() {
+        let tsv = concat!(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n",
+            "5\t1\t2\t1\t1\t1\t10\t20\t30\t12\t96.0\tИНН\n",
+            "5\t1\t2\t1\t1\t2\t210\t20\t80\t12\t94.0\t7736050003\n",
+            "5\t1\t3\t1\t1\t1\t10\t60\t40\t12\t93.0\tОбычная\n",
+            "5\t1\t3\t1\t1\t2\t58\t60\t50\t12\t92.0\tстрока\n",
+        );
+        let items = parse_tesseract_tsv(tsv, 2).expect("valid tsv");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].item_kind, "table_row");
+        assert_eq!(
+            items[0].cells,
+            vec!["ИНН".to_string(), "7736050003".to_string()]
+        );
+        assert_eq!(items[0].page_index, Some(2));
+        assert_eq!(items[0].bbox.as_ref().map(|bbox| bbox.left), Some(10));
+        assert_eq!(items[1].item_kind, "text_line");
+        assert_eq!(items[1].text, "Обычная строка");
+    }
+
+    #[test]
+    fn real_image_only_pdf_tsv_fixture_preserves_table_rows() {
+        let tsv = include_str!("../../tests/fixtures/ocr/scanned_table.tesseract.tsv");
+        let items = parse_tesseract_tsv(tsv, 0).expect("golden OCR TSV must parse");
+        let table_rows = items
+            .iter()
+            .filter(|item| item.item_kind == "table_row")
+            .collect::<Vec<_>>();
+        assert!(table_rows.len() >= 4, "{table_rows:#?}");
+        let combined = items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for token in ["02.07.2026", "500100732259", "Сидорова", "6671000014"] {
+            assert!(combined.contains(token), "missing {token}: {combined}");
+        }
+        assert!(table_rows.iter().all(|item| item.page_index == Some(0)));
+        assert!(table_rows.iter().all(|item| item.bbox.is_some()));
+    }
+
+    #[test]
+    fn layout_is_exposed_to_case_and_enriches_field_evidence() {
+        use dokkomplekt_core::{SemanticValue, ValueEvidence, ValueSource};
+
+        let items = vec![NormalizedLayoutItem {
+            item_kind: "table_row".into(),
+            page_index: Some(4),
+            block_index: Some(7),
+            text: "ИНН 7736050003".into(),
+            cells: vec!["ИНН".into(), "7736050003".into()],
+            bbox: Some(LayoutBoundingBox {
+                left: 10,
+                top: 20,
+                width: 200,
+                height: 12,
+            }),
+            confidence: 0.93,
+            source_reference: Some("page:5;block:7".into()),
+        }];
+        let mut case = SemanticCase::default();
+        case.values.insert(
+            "org.inn".into(),
+            SemanticValue::new("org.inn", "7736050003", ValueSource::Scanner, 0.98)
+                .with_evidence(ValueEvidence::new("", "7736050003", "deterministic", 0.98)),
+        );
+
+        apply_layout_to_case("scanned_pdf_ocr", &items, &mut case);
+        attach_layout_evidence(&items, &mut case);
+
+        assert_eq!(
+            case.blocks.get("source.kind").map(String::as_str),
+            Some("scanned_pdf_ocr")
+        );
+        assert_eq!(
+            case.collection("source.layout_items")
+                .map(|records| records.len()),
+            Some(1)
+        );
+        let evidence = &case.values["org.inn"].evidence[0];
+        assert_eq!(evidence.page_index, Some(4));
+        assert_eq!(evidence.source_reference.as_deref(), Some("page:5;block:7"));
+        assert_eq!(evidence.source_kind, "scanned_pdf_ocr");
+        assert!(evidence.confidence <= 0.93);
+    }
+
+    #[test]
+    fn archive_paths_are_sanitized() {
+        assert_eq!(safe_file_name("../../secret.pdf"), "secret.pdf");
+    }
+}

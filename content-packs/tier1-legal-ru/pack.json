@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "pack_id": "tier1.legal.ru",
+  "version": "0.3.0",
+  "locale": "ru-RU",
+  "domain": "legal",
+  "status": "starter",
+  "publisher": {
+    "name": "Dokkomplekt content-pack SDK",
+    "reviewed_by": []
+  },
+  "template_slots": [
+    {
+      "document_id": "legal.contract",
+      "label": "Договор",
+      "required_fields": [
+        "contract.amount",
+        "contract.currency",
+        "contract.date",
+        "contract.end_date",
+        "contract.number",
+        "contract.start_date",
+        "contract.subject",
+        "counterparty.name",
+        "org.name"
+      ],
+      "template_path": "templates/contract.docx",
+      "sha256": "cb3ace13dcd1d3ec54f4399d2bdf53b045b94fda817cee97943d97d9020dbe50",
+      "referenced_fields": [
+        "contract.amount",
+        "contract.currency",
+        "contract.date",
+        "contract.end_date",
+        "contract.number",
+        "contract.start_date",
+        "contract.subject",
+        "counterparty.name",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "legal.acceptance_act",
+      "label": "Акт",
+      "required_fields": [
+        "contract.amount",
+        "contract.currency",
+        "contract.date",
+        "contract.number",
+        "contract.subject",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "org.name"
+      ],
+      "template_path": "templates/acceptance_act.docx",
+      "sha256": "5c7fa678f2ed215214376b4c389a7eee058019e28dfa2889bcae8e5f59dc8682",
+      "referenced_fields": [
+        "contract.amount",
+        "contract.currency",
+        "contract.date",
+        "contract.number",
+        "contract.subject",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "legal.claim",
+      "label": "Претензия",
+      "required_fields": [
+        "contract.date",
+        "contract.number",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "legal.claim_amount",
+        "legal.claim_subject",
+        "org.name"
+      ],
+      "template_path": "templates/claim.docx",
+      "sha256": "0b2d93f8f133b245aa60752b73f8ba1ec5a6b3516bb10987cd58d4edc3592a37",
+      "referenced_fields": [
+        "contract.date",
+        "contract.number",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "legal.claim_amount",
+        "legal.claim_subject",
+        "org.name"
+      ]
+    },
+    {
+      "document_id": "legal.cover_letter",
+      "label": "Сопроводительное письмо",
+      "required_fields": [
+        "contract.subject",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "org.name"
+      ],
+      "template_path": "templates/cover_letter.docx",
+      "sha256": "0c146de27b9c8ed0c71be8998a5b31f5788f589f7372f1a343f5bc79ce87d2c2",
+      "referenced_fields": [
+        "contract.subject",
+        "counterparty.name",
+        "document.date",
+        "document.number",
+        "org.name"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_id": "legal.contract_closeout",
+      "event": "Закрытие обязательств по договору",
+      "documents": [
+        "legal.acceptance_act",
+        "legal.cover_letter"
+      ]
+    },
+    {
+      "workflow_id": "legal.pretrial_claim",
+      "event": "Досудебная претензия",
+      "documents": [
+        "legal.claim",
+        "legal.cover_letter"
+      ]
+    }
+  ],
+  "review_note": "Пакет содержит работающие draft-only starter-шаблоны с каноническими полями. Перед пилотом каждая форма должна быть заменена или утверждена уполномоченным специалистом организации.",
+  "usage_mode": "draft_only",
+  "requires_organization_review": true
+}

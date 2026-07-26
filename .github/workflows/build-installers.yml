@@ -1,0 +1,235 @@
+name: Build Signed Offline Installers
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: REQUIRED Rust / dependency / contract gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
+      DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: test -f Cargo.lock
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Install controlled DOCX visual regression renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-writer poppler-utils fonts-liberation
+      - run: python scripts/verify_docx_visual_goldens.py
+      - run: python scripts/run_python_contracts_sharded.py --report verification/release/python-contracts.json
+      - run: python scripts/static_quality_gate.py --source-only
+      - run: python scripts/check_reference_data_freshness.py
+      - name: Install MSRV-compatible cargo-audit
+        run: cargo install cargo-audit --locked --version 0.21.2
+      - run: cargo audit --deny warnings
+      - run: bash scripts/prepackage_rust_gate.sh
+      - run: python scripts/assert_release_ready.py
+
+  windows-signed-offline:
+    name: Signed Windows NSIS + signed offline runtime
+    needs: release-gate
+    runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]
+    timeout-minutes: 120
+    env:
+      DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
+      DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
+      DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
+      DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
+      DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
+      DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64 }}
+      DOKKOMPLEKT_UPDATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_UPDATE_PUBKEY_B64 }}
+      DOKKOMPLEKT_COMPONENTS_CATALOG_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_CATALOG_URL }}
+      DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
+      DOKKOMPLEKT_SIDECAR_MANIFEST_PATH: ${{ vars.DOKKOMPLEKT_SIDECAR_MANIFEST_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Install MSRV-compatible cargo-audit on packaging runner
+        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Repeat mandatory Rust gate on packaging runner
+        shell: bash
+        run: bash scripts/prepackage_rust_gate.sh
+      - run: python scripts/assert_release_ready.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - name: Stage verified runtime from runner-owned manifest outside checkout
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH)) { throw 'DOKKOMPLEKT_SIDECAR_MANIFEST_PATH is required.' }
+          if (-not (Test-Path -LiteralPath $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH -PathType Leaf)) { throw 'Runner-owned sidecar manifest is missing.' }
+          python scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean
+      - name: Verify the pre-provisioned offline runtime staged from runner-owned manifest
+        shell: pwsh
+        run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
+      - run: python scripts/probe_offline_runtime.py --target windows-x86_64
+      - name: Verify image-only PDF table OCR with the staged runtime
+        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64
+      - name: Decode dedicated runtime signing key
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64)) { throw 'Runtime signing key is required.' }
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64)) { throw 'Pinned runtime public key is required.' }
+          [IO.File]::WriteAllBytes('runtime-signing-key.pem', [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64))
+          [IO.File]::WriteAllBytes('runtime-trusted-public.pem', [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
+      - name: Build deterministic signed optional component packs
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64)) { throw 'Update signing key is required for components catalog.' }
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_UPDATE_PUBKEY_B64)) { throw 'Pinned update public key is required for components catalog.' }
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_COMPONENTS_CATALOG_URL)) { throw 'DOKKOMPLEKT_COMPONENTS_CATALOG_URL is required at application build time.' }
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_COMPONENTS_BASE_URL)) { throw 'DOKKOMPLEKT_COMPONENTS_BASE_URL is required.' }
+          python scripts/build_component_packs.py --target windows-x86_64 --components ocr,office,semantic,archive --app-min-version 18.3.0 --base-url $env:DOKKOMPLEKT_COMPONENTS_BASE_URL --out release-components --require-trusted-public-key
+      - name: Build and sign deterministic all-in-one offline runtime bundle
+        shell: pwsh
+        run: |
+          python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production --output-dir release-runtime --signing-key runtime-signing-key.pem --trusted-public-key runtime-trusted-public.pem --require-signature
+          Remove-Item runtime-signing-key.pem -Force
+          $bundle = Get-ChildItem release-runtime -Filter '*.zip' | Select-Object -First 1
+          python scripts/verify_offline_runtime_bundle.py $bundle.FullName --payload "$($bundle.FullName).signing.json" --signature "$($bundle.FullName).signing.json.sig" --public-key "$($bundle.FullName).signing.json.public.pem" --trusted-public-key runtime-trusted-public.pem --require-signature
+      - name: Build unsigned application binary without bundling
+        run: npx tauri build --no-bundle
+      - name: Sign and verify application binary before it is embedded
+        shell: pwsh
+        run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
+      - name: Bundle thin signed application into NSIS
+        run: npx tauri bundle --bundles nsis --config src-tauri/tauri.thin.conf.json
+      - name: Sign and preserve thin NSIS installer
+        shell: pwsh
+        run: |
+          scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
+          New-Item -ItemType Directory -Force release-installers/thin | Out-Null
+          Copy-Item target/release/bundle/nsis/* release-installers/thin/ -Recurse -Force
+      - name: Bundle all-in-one offline NSIS from the same verified staged files
+        run: npx tauri bundle --bundles nsis --config src-tauri/tauri.offline.conf.json
+      - name: Sign and preserve offline NSIS installer
+        shell: pwsh
+        run: |
+          scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
+          New-Item -ItemType Directory -Force release-installers/offline | Out-Null
+          Copy-Item target/release/bundle/nsis/* release-installers/offline/ -Recurse -Force
+      - name: Windows installer/offline contract smoke
+        shell: pwsh
+        env:
+          DOKKOMPLEKT_REQUIRE_AUTHENTICODE: "1"
+        run: tests/installer/windows_installer_contract.ps1
+      - name: Write independently verifiable signed-build evidence
+        shell: pwsh
+        run: scripts/write_windows_release_evidence.ps1 -InstallerRoot release-installers -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey runtime-trusted-public.pem
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dokkomplekt-Windows-NSIS-Signed-Offline
+          path: |
+            release-installers/**
+            release-components/**
+            release-runtime/**
+            .cargo-gate/**
+            .release-gate/**
+          if-no-files-found: error
+
+
+  windows-hardware-e2e:
+    name: REQUIRED Windows Word / printer / watcher / reboot evidence
+    needs: windows-signed-offline
+    runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]
+    timeout-minutes: 120
+    env:
+      DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
+      DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
+      DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: Dokkomplekt-Windows-NSIS-Signed-Offline
+          path: signed-release
+      - name: Execute Word, spooler, signed installer and watcher hardware checks
+        shell: pwsh
+        run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot signed-release/release-installers
+      - name: Require two-boot watcher evidence
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH)) { throw 'DOKKOMPLEKT_REBOOT_EVIDENCE_PATH is required.' }
+          $source = (python scripts/source_fingerprint.py).Trim()
+          tests/windows/verify_reboot_evidence.ps1 -EvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -ExpectedSourceSha256 $source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dokkomplekt-Windows-Hardware-E2E-Evidence
+          path: |
+            .release-gate/WINDOWS_HARDWARE_E2E_PASSED.json
+            .release-gate/WINDOWS_REBOOT_E2E_PASSED.json
+          if-no-files-found: error
+
+  linux-bundles:
+    name: Linux AppImage / deb / rpm
+    needs: release-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
+      DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Linux Tauri deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
+      - run: cargo install cargo-audit --locked --version 0.21.2
+      - run: bash scripts/prepackage_rust_gate.sh
+      - run: python scripts/assert_release_ready.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - run: npx tauri build --bundles appimage,deb,rpm
+      - run: bash tests/installer/linux_installer_contract.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dokkomplekt-Linux-AppImage-deb-rpm
+          path: target/release/bundle/**
+          if-no-files-found: error

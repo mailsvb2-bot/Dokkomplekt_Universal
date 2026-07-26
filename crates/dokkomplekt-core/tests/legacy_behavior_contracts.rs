@@ -187,7 +187,7 @@ fn diary_dates_start_admission_plus_one_and_stop_on_discharge() {
 fn diary_signatures_are_never_lost() {
     let text = render_diary_text_with_signatures("Состояние стабильное.");
     assert!(text.contains("Лечащий врач"));
-    assert!(text.contains("Зав. отделением"));
+    assert!(text.contains("Заведующий отделением"));
 }
 
 #[test]

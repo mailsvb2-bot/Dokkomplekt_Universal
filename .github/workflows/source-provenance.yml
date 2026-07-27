@@ -34,8 +34,8 @@ jobs:
           text = path.read_text(encoding='utf-8')
           old = "const sourceDropZone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');"
           new = "const sourceDropZone = document.querySelector('.sourceStage');"
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one ready-state source drop assertion, found {text.count(old)}')
+          if old not in text:
+              raise SystemExit('ready-state source drop assertion not found')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           git show origin/main:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml

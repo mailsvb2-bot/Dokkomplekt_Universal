@@ -1,0 +1,55 @@
+{
+  "schema": "dokkomplekt.github-actions-evidence.v1",
+  "version": "18.4.3",
+  "repository": "mailsvb2-bot/Dokkomplekt_Universal",
+  "workflow": "Quality Gate",
+  "workflow_run_id": 30255769139,
+  "workflow_run_number": 113,
+  "head_sha": "52fe6ba01efcd956aad62ab377f6d165eac2209f",
+  "conclusion": "success",
+  "artifacts": [
+    {
+      "name": "windows-installer",
+      "artifact_id": 8649347282,
+      "size_bytes": 212657275,
+      "sha256": "1b47cd387964275128cf38686ff4ec142869adf1ec6eac7b0c146cfbff99b230",
+      "expires_at": "2026-10-25T09:52:46Z"
+    },
+    {
+      "name": "linux-bundles",
+      "artifact_id": 8649114241,
+      "size_bytes": 221984836,
+      "sha256": "651ccc66e4cb1d4b4dba1e204a09b52fe39cfc5323e88777da11fa52692e09b9",
+      "expires_at": "2026-10-25T09:52:46Z"
+    },
+    {
+      "name": "rust-compile-gate-diagnostics",
+      "artifact_id": 8648910520,
+      "size_bytes": 13579,
+      "sha256": "378afdd97ae456f93440e24e1ab7c65afa730030e8a1d10046a4ec333475ace8",
+      "expires_at": "2026-10-25T09:52:46Z"
+    },
+    {
+      "name": "rustsec-audit-diagnostics",
+      "artifact_id": 8648820259,
+      "size_bytes": 448,
+      "sha256": "6dc732deb919a5c538803f8f5f171568e040ba2d500541ef20338296aeca2435",
+      "expires_at": "2026-10-25T09:52:46Z"
+    },
+    {
+      "name": "packaging-diagnostics-Windows",
+      "artifact_id": 8649343742,
+      "size_bytes": 12786,
+      "sha256": "7a5819d1fe1ea2090093eb9ec22d44d69945d6508c9acf626af5118388323918",
+      "expires_at": "2026-10-25T09:52:46Z"
+    },
+    {
+      "name": "packaging-diagnostics-Linux",
+      "artifact_id": 8649108390,
+      "size_bytes": 13066,
+      "sha256": "0d7a27a4239251f5ae68d01ac26be41a4fe1ae2576fcd4f7d640fc78e30e3b6a",
+      "expires_at": "2026-10-25T09:52:46Z"
+    }
+  ],
+  "note": "Artifact digests are distinct from hashes of individual files inside each ZIP. Mutable CI evidence is not included in SOURCE_MANIFEST_SHA256.txt."
+}

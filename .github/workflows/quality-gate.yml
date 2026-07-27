@@ -110,7 +110,15 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements-dev.txt
-      - run: python scripts/run_python_contracts_sharded.py --report verification/ci/python-contracts.json
+      - name: Run isolated Python contracts
+        run: python scripts/run_python_contracts_sharded.py --report verification/ci/python-contracts.json
+      - name: Upload Python contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-contract-evidence
+          path: verification/ci/python-contracts.json
+          if-no-files-found: error
       - run: python scripts/verify_starter_content_packs.py
       - run: python scripts/static_quality_gate.py --source-only
       - run: python scripts/check_reference_data_freshness.py
@@ -128,7 +136,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run test
+      - name: Run Vitest with JSON evidence
+        run: npm run test -- --reporter=json --outputFile=verification/ci/vitest.json
+      - name: Upload Vitest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-evidence
+          path: verification/ci/vitest.json
+          if-no-files-found: error
       - run: npm run build
       - run: npm audit --audit-level=moderate
 

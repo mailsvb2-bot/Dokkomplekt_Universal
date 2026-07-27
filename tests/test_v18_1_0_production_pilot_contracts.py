@@ -81,7 +81,8 @@ class V1810ProductionPilotContracts(unittest.TestCase):
         self.assertIn("create_kedo_package", self.main)
         self.assertIn("kedo-manifest.xml", self.main)
         self.assertIn("SIGNATURES_REQUIRED.json", self.main)
-        self.assertIn("КЭДО-пакет", self.workspace)
+        self.assertIn("Создать пакет обмена", self.workspace)
+        self.assertIn("onExportLastOutputKedo", self.workspace)
 
     def test_version_and_toolchain_are_reproducible(self) -> None:
         self.assertEqual(text("VERSION").strip(), "18.4.3")

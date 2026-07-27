@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentOutput, CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, GuidedScannerMarkupAction, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, WorkflowPlan } from './lib/types';
 import {
@@ -54,16 +54,6 @@ type GuidedScannerState = {
   markupAction: GuidedScannerMarkupAction;
 };
 
-function domainLabel(cat: DomainKind): string {
-  if (typeof cat === 'object') return cat.Custom;
-  const map: Record<string, string> = { Generic: 'Общие', Medical: 'Медицина', Legal: 'Юридический', Hr: 'Кадры', Accounting: 'Бухгалтерия', Education: 'Образование' };
-  return map[cat] ?? cat;
-}
-function domainKey(cat: DomainKind): string {
-  return typeof cat === 'object' ? `Custom:${cat.Custom}` : cat;
-}
-
-const EXAMPLE_PROFILES = ['Бухгалтерия', 'Медицина', 'Образование', 'Кадры', 'Юридический'];
 
 export function App() {
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
@@ -72,8 +62,7 @@ export function App() {
   const [documents, setDocuments] = useState<DocumentTemplateSpec[]>([]);
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
-  const [activeProfile, setActiveProfile] = useState<string | null>(null);
-  const [status, setStatus] = useState('Готово. Разберите источник или добавьте документ для распознавания.');
+  const [status, setStatus] = useState('Добавьте исходный файл — остальное программа подготовит сама.');
   const [busy, setBusy] = useState(false);
 
   const [sourceText, setSourceText] = useState('');
@@ -142,10 +131,13 @@ export function App() {
         if (!alive) return;
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
+          setSelectedDocIds(res.pack.documents.map((document) => document.id));
+          setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
-          setUtilityOpen(true);
+          setStatus('Добавьте шаблоны документов — программа запомнит их и подготовит рабочий набор.');
+        } else if (res?.message) {
+          setStatus(res.message);
         }
-        if (res?.message) setStatus(res.message);
       } catch { /* no backend in browser/tests — start empty */ }
     })();
     return () => { alive = false; };
@@ -197,16 +189,7 @@ export function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [setupOpen]);
 
-  const profiles = useMemo(() => {
-    const seen = new Map<string, DomainKind>();
-    for (const d of documents) seen.set(domainKey(d.category), d.category);
-    return Array.from(seen.values());
-  }, [documents]);
-
-  const visibleDocs = useMemo(
-    () => (activeProfile ? documents.filter((d) => domainKey(d.category) === activeProfile) : documents),
-    [documents, activeProfile],
-  );
+  const visibleDocs = documents;
 
   useEffect(() => {
     const existing = new Set(documents.map((document) => document.id));
@@ -221,7 +204,7 @@ export function App() {
     try {
       return await fn();
     } catch (err) {
-      setStatus(`Ошибка сценария «${label}»: ${errorMessage(err)}`);
+      setStatus(`Не удалось выполнить действие: ${errorMessage(err)}`);
       return undefined;
     } finally {
       setBusy(false);
@@ -273,12 +256,11 @@ export function App() {
     setScannerText('');
     setRuntimePrompt(null);
     setRuntimeMessage('');
-    setStatus('Новый комплект начат. Персональные, договорные и иные данные предыдущего комплекта очищены.');
+    setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
   }
 
   function applyRoutingRecommendation(routing?: DocumentRoutingRecommendation): string {
     if (!routing) return '';
-    if (domainKey(routing.domain) !== 'Generic') setActiveProfile(domainKey(routing.domain));
     if (routing.auto_select && routing.recommended_document_ids.length) {
       setSelectedDocIds(routing.recommended_document_ids);
       const labels = routing.recommended_document_ids
@@ -310,7 +292,7 @@ export function App() {
     setPlan(null);
     setPreview(null);
     const routingSummary = applyRoutingRecommendation(res.routing);
-    setStatus(`Начат новый комплект. Источник разобран: извлечено полей — ${count}. Данные предыдущего комплекта очищены.${routingSummary}`);
+    setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
   async function pickSourceFile(event: React.ChangeEvent<HTMLInputElement>) {
@@ -344,7 +326,7 @@ export function App() {
     setPlan(null);
     setPreview(null);
     const routingSummary = applyRoutingRecommendation(res.routing);
-    setStatus(`Начат новый комплект по источнику «${file.name}»: извлечено полей — ${count}. Данные предыдущего комплекта очищены.${routingSummary}`);
+    setStatus(`Файл «${file.name}» прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
 
@@ -374,7 +356,7 @@ export function App() {
     setPlan(null);
     setPreview(null);
     const routingSummary = applyRoutingRecommendation(res.routing);
-    setStatus(`Источник HTTPS загружен: извлечено полей — ${count}.${routingSummary}`);
+    setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
   }
 
   async function selectDocument(doc: DocumentTemplateSpec) {
@@ -449,7 +431,7 @@ export function App() {
         ? await run('get_print_triage', () => getPrintTriage(documentIds, reviewFolder))
         : null);
       if (!triage) {
-        setStatus('Автопечать остановлена: не удалось получить проверяемое решение confidence-триажа.');
+        setStatus('Автоматическая печать остановлена: комплект нужно проверить вручную.');
         return;
       }
       if (!triage.auto_print_allowed) {
@@ -457,7 +439,7 @@ export function App() {
         const detail = blocker
           ? `${blocker.field_id}: ${blocker.reason}`
           : triage.reasons[0] ?? 'Требуется проверка специалиста.';
-        setStatus(`Комплект создан и помещён в очередь ревью, но не распечатан автоматически. ${detail}`);
+        setStatus(`Комплект создан, но автоматическая печать остановлена: ${detail}`);
         return;
       }
     }
@@ -467,7 +449,7 @@ export function App() {
       const first = result.failed_files[0];
       setStatus(`На печать отправлено экземпляров: ${result.queued_copies}; ошибок: ${result.failed_files.length}. ${first.error}`);
     } else {
-      setStatus(`${automatic ? 'Автопечать после confidence-триажа' : 'Печать'}: передано ${result.queued_copies} экземпляр(ов) из ${result.queued_files.length} документ(ов).`);
+      setStatus(`${automatic ? 'Автоматическая печать' : 'Печать'}: отправлено ${result.queued_copies} экземпляр(ов).`);
     }
   }
 
@@ -505,7 +487,7 @@ export function App() {
       lastOutput.folder || outputRoot.trim() || 'output/Готовые документы',
     ));
     if (!result) return;
-    setStatus(`КЭДО-пакет создан: ${result.package_folder}. ${result.conformance_note}`);
+    setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
   async function generateSelectedDocuments() {
@@ -609,12 +591,12 @@ export function App() {
   async function renameActiveDocument() {
     if (!activeDoc) return;
     const current = documents.find((document) => document.id === activeDoc);
-    const requested = globalThis.prompt?.('Новое название кнопки', current?.button_label ?? '')?.trim();
+    const requested = globalThis.prompt?.('Новое название документа', current?.button_label ?? '')?.trim();
     if (!requested || requested === current?.button_label) return;
     const pack = await run('rename_document_button', () => renameDocumentButton(activeDoc, requested));
     if (!pack) return;
     setDocuments(pack.documents);
-    setStatus(`Кнопка переименована: ${requested}. Исходный шаблон не изменён.`);
+    setStatus(`Документ переименован: ${requested}. Исходный шаблон не изменён.`);
   }
 
   async function approveActiveTemplate() {
@@ -635,13 +617,13 @@ export function App() {
       acknowledgement,
     }));
     if (!approval) return;
-    setStatus(`Форма утверждена для автопечати: ${approval.jurisdiction}; ревизия ${approval.template_sha256.slice(0, 12)}…`);
+    setStatus('Версия шаблона подтверждена и готова к использованию.');
   }
 
   async function removeActiveDocument() {
     if (!activeDoc) return;
     const current = documents.find((document) => document.id === activeDoc);
-    const confirmed = globalThis.confirm?.(`Убрать кнопку «${current?.button_label ?? activeDoc}»? Файл шаблона останется на диске.`) ?? false;
+    const confirmed = globalThis.confirm?.(`Убрать документ «${current?.button_label ?? activeDoc}» из набора? Файл шаблона останется на диске.`) ?? false;
     if (!confirmed) return;
     const pack = await run('remove_document_button', () => removeDocumentButton(activeDoc));
     if (!pack) return;
@@ -649,13 +631,13 @@ export function App() {
     setActiveDoc(null);
     setPlan(null);
     setPreview(null);
-    setStatus('Кнопка убрана из набора. Исходный шаблон сохранён.');
+    setStatus('Документ убран из набора. Исходный шаблон сохранён.');
   }
 
   async function pinField(fieldId: string) {
     const value = answers[fieldId] ?? '';
     await run('set_field', () => setField(fieldId, value));
-    setStatus(`Значение поля «${fieldId}» закреплено (set_field). Оно подтянется в другие документы.`);
+    setStatus('Значение сохранено и будет использовано в других документах комплекта.');
   }
 
   async function saveFields() {
@@ -676,7 +658,7 @@ export function App() {
   }
 
   async function generateDocx() {
-    if (!activeDoc) { setStatus('Выберите документ, чтобы сформировать DOCX.'); return; }
+    if (!activeDoc) { setStatus('Выберите документ, который нужно создать.'); return; }
     await requestGeneration({ kind: 'single', documentIds: [activeDoc] });
   }
 
@@ -697,7 +679,7 @@ export function App() {
   async function analyzeInDialog() {
     const res = await run('analyze_template', () => analyzeTemplate(templateText, newDocumentId(), importedTemplatePath ?? '', previewLabel));
     if (!res) return;
-    setStatus(`Шаблон проанализирован (analyze_template): плейсхолдеров — ${res.document.placeholders.length}.`);
+    setStatus(`Шаблон прочитан. Найдено мест для заполнения: ${res.document.placeholders.length}.`);
   }
 
   /** Пользователь выбрал .docx в диалоге: байты уходят в Rust, обратно приходят
@@ -748,7 +730,7 @@ export function App() {
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
-    setStatus(`Распознано шаблонов: ${importedRows.length}. Проверьте названия кнопок и подтвердите пакет.`);
+    setStatus(`Подготовлено шаблонов: ${importedRows.length}. Проверьте названия документов и добавьте их в набор.`);
   }
 
   async function processTemplateFile(file: File) {
@@ -804,7 +786,7 @@ export function App() {
     if (templateText === current.extracted_text) {
       setTemplateText(replaceAllLiteral(templateText, value, visibleReplacement));
     }
-    setStatus(`Разметка применена к копии шаблона: заменено фрагментов — ${report.replaced_occurrences}. Исходный Word-файл сохранён.`);
+    setStatus(`Шаблон размечен. Обновлено мест: ${report.replaced_occurrences}. Исходный файл сохранён.`);
   }
 
   async function startGuidedSourceScanner(preselectedFieldId = '') {
@@ -831,7 +813,7 @@ export function App() {
   async function reportSemanticFieldError(fieldId: string, value: string) {
     setScannerField(fieldId);
     setScannerText(value);
-    setStatus(`Исправление поля «${fieldId}»: покажите правильное значение один раз — программа исправит текущее дело и запомнит layout.`);
+    setStatus('Покажите правильное значение один раз — программа исправит текущий комплект и запомнит расположение.');
     await startGuidedSourceScanner(fieldId);
   }
 
@@ -1061,7 +1043,7 @@ export function App() {
     if (!rows) return;
     const staticRows = rows.filter((row) => row.is_static_copy);
     if (staticRows.length) {
-      setStatus(`Не добавлено шаблонов без размеченных полей {{field.id}}: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
+      setStatus(`Эти шаблоны пока не содержат мест для заполнения: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
       return;
     }
     const labels = new Map(pendingTemplates.map((item) => [item.document_id, item.button_label.trim()]));
@@ -1074,12 +1056,13 @@ export function App() {
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
     if (!pack) return;
     setDocuments(pack.documents);
+    setSelectedDocIds(pack.documents.map((document) => document.id));
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setSetupOpen(false);
-    setStatus(`Добавлено документов: ${confirmedRows.length}. Шаблоны сохранены, кнопки и правила подключены к универсальному Rust-ядру.`);
+    setStatus(`Добавлено документов: ${confirmedRows.length}. Шаблоны и правила сохранены.`);
   }
 
   async function chooseIcd(hit: Icd10Suggestion) {
@@ -1088,14 +1071,14 @@ export function App() {
       return setField('medical.diagnosis', hit.title);
     });
     setIcdQuery(`${hit.code} ${hit.title}`);
-    setStatus(`Диагноз выбран: ${hit.code} — ${hit.title}. Значение подключено ко всем документам.`);
+    setStatus(`Значение выбрано: ${hit.code} — ${hit.title}. Оно будет использовано во всех выбранных документах.`);
   }
 
   async function searchIcd() {
     const res = await run('icd10_suggest', () => icd10Suggest(icdQuery));
     if (!res) return;
     setIcdHits(res.slice(0, 6));
-    setStatus(`Словарь домена: найдено ${res.length} значений по запросу «${icdQuery}».`);
+    setStatus(`Найдено вариантов: ${res.length} по запросу «${icdQuery}».`);
   }
 
   async function seriesPlan() {
@@ -1118,7 +1101,7 @@ export function App() {
   }
   async function scanMarks(addQuestion = false) {
     if (!scannerField.trim() || !scannerText.trim()) {
-      setStatus('Для скан-разметки укажите идентификатор поля и выделенный текст.');
+      setStatus('Укажите смысл значения и выделенный фрагмент текста.');
       return;
     }
     const fieldId = scannerField.trim();
@@ -1142,10 +1125,10 @@ export function App() {
       const pack = await run('update_document_popup_fields', () => updateDocumentPopupFields(document.id, updatedFields));
       if (!pack) return;
       setDocuments(pack.documents);
-      setStatus(`Поле «${fieldId}» распознано и добавлено в popup документа «${document.button_label}».`);
+      setStatus(`Значение добавлено в уточнения документа «${document.button_label}».`);
       return;
     }
-    setStatus(`Скан-разметка: принято полей — ${res.applied_fields.length}, отклонено — ${res.rejected_fields.length}.`);
+    setStatus(`Разметка сохранена: принято ${res.applied_fields.length}, пропущено ${res.rejected_fields.length}.`);
   }
   async function outputPlan() {
     if (!outputRoot.trim()) {
@@ -1162,11 +1145,11 @@ export function App() {
   }
   async function saveSession() {
     await run('save_state', () => saveState(STATE_DB));
-    setStatus('Сессия сохранена (save_state).');
+    setStatus('Настройки и текущий набор сохранены.');
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));
-    if (res?.pack?.documents) { setDocuments(res.pack.documents); setStatus(`Сессия загружена (load_state): ${res.pack.documents.length} документов.`); }
+    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(res.pack.documents.map((document) => document.id)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`); }
   }
   async function checkAccess() {
     const res = await run('validate_product_access', () => validateProductAccess(null));
@@ -1175,7 +1158,7 @@ export function App() {
   async function verifyLicense() {
     // Доверенный публичный ключ вшит в Rust-бинарник; UI его не передаёт.
     const res = await run('verify_rust_license_text', () => verifyRustLicenseText(licenseText));
-    setStatus(`Проверка лицензии (verify_rust_license_text): ${res ? 'подпись верна, лицензия действует' : 'подпись не подтверждена'}.`);
+    setStatus(res ? 'Лицензия подтверждена.' : 'Не удалось подтвердить лицензию.');
   }
   async function checkUpdates() {
     const result = await run('check_for_updates', () => checkForUpdates());
@@ -1189,16 +1172,16 @@ export function App() {
 
   async function installWatcher() {
     const res = await run('install_background_watcher', () => installBackgroundWatcher(watchFolder.trim() || 'Созданные документы', DEFAULT_YEAR, sickLeave, folderParts, autoPrint, printCopies));
-    if (res) setStatus(`Фоновый агент запущен: следит за «${res.watch_folder ?? ''}»${res.warnings?.length ? `; предупреждения: ${res.warnings.join('; ')}` : ''}.`);
+    if (res) setStatus(`Автоматическая обработка включена для папки «${res.watch_folder ?? ''}»${res.warnings?.length ? `; замечания: ${res.warnings.join('; ')}` : ''}.`);
   }
   async function uninstallWatcher() {
     await run('uninstall_background_watcher', () => uninstallBackgroundWatcher());
-    setStatus('Фоновый агент отключён (uninstall_background_watcher).');
+    setStatus('Автоматическая обработка папки отключена.');
   }
 
   async function runZeroTouch() {
     if (!intakeSource.trim()) {
-      setStatus('Укажите путь к первичному документу поддерживаемого формата (в готовом приложении его подставит фоновый агент).');
+      setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
       return;
     }
     const res = await run('run_created_documents_intake', () =>
@@ -1218,70 +1201,31 @@ export function App() {
     if (!res) return;
     setSemantic(res);
     setStatus(res.model_applied
-      ? `Семантический разбор с внешней моделью: полей — ${res.fields.length}.`
-      : `Детерминированный разбор без модели: явно распознано полей — ${res.fields.length}.`);
+      ? `Проверка завершена: найдено значений — ${res.fields.length}.`
+      : `Проверка завершена: уверенно найдено значений — ${res.fields.length}.`);
   }
 
-  const hasDocuments = documents.length > 0;
 
   return (
     <div className="appRoot">
       <div className="window">
-        <header className="hdr">
+        <header className="hdr clientHeader">
           <div className="brand">
             <span className="logo" aria-hidden="true"><i className="ti ti-files" /></span>
-            <span className="bname">Доккомплект</span>
-            <span className="bnote">· универсальный парсер-генератор документов</span>
+            <div className="brandText">
+              <span className="bname">Доккомплект</span>
+              <span className="bnote">Из исходника — готовый комплект документов</span>
+            </div>
           </div>
           <div className="hdrRight">
-            <label className="sickToggle">
-              <input type="checkbox" checked={sickLeave} onChange={(e) => setSickLeave(e.target.checked)} />
-              <span>Доп. правила домена</span>
-            </label>
+            <button className="headerSettings" onClick={() => setUtilityOpen((value) => !value)} aria-expanded={utilityOpen}>
+              <i className="ti ti-settings" aria-hidden="true" /> Настройки
+            </button>
             <ThemeSwitcher theme={theme} onChange={setTheme} />
           </div>
         </header>
 
-        <nav className="tabs" aria-label="Профиль домена">
-          <span className="tabsLabel">Профиль:</span>
-          {hasDocuments ? (
-            <>
-              <button className={activeProfile === null ? 'tab on' : 'tab'} onClick={() => setActiveProfile(null)}>Все</button>
-              {profiles.map((cat) => {
-                const key = domainKey(cat);
-                return (
-                  <button key={key} className={activeProfile === key ? 'tab on' : 'tab'} onClick={() => setActiveProfile(key)}>
-                    {domainLabel(cat)}
-                  </button>
-                );
-              })}
-            </>
-          ) : (
-            <span className="tabsHint">универсально — {EXAMPLE_PROFILES.join(' · ')} · свой домен (профиль определяется по документу)</span>
-          )}
-        </nav>
-
-        <div className="grid">
-          <DocumentRail
-            documents={visibleDocs}
-            activeDocumentId={activeDoc}
-            selectedDocumentIds={selectedDocIds}
-            busy={busy}
-            printCopies={printCopies}
-            onSelect={selectDocument}
-            onToggleSelected={toggleDocumentSelected}
-            onPrintCopiesChange={updatePrintCopies}
-            onSelectAll={selectAllVisibleDocuments}
-            onClearSelected={clearSelectedDocuments}
-            onGenerateSelected={generateSelectedDocuments}
-            onRename={renameActiveDocument}
-            onConfigurePopups={openPopupDesigner}
-            onScanTemplate={startGuidedExistingTemplateScanner}
-            onRemove={removeActiveDocument}
-            onApprove={approveActiveTemplate}
-            onAdd={openTemplateSetup}
-            onToggleUtilities={() => setUtilityOpen((value) => !value)}
-          />
+        <div className="grid clientGrid">
           <Workspace
             busy={busy}
             watchFolder={watchFolder}
@@ -1302,8 +1246,6 @@ export function App() {
             semantic={semantic}
             plan={plan}
             answers={answers}
-            icdQuery={icdQuery}
-            icdHits={icdHits}
             preview={preview}
             setWatchFolder={setWatchFolder}
             setIntakeSource={setIntakeSource}
@@ -1315,7 +1257,6 @@ export function App() {
             setScannerText={setScannerText}
             setModelOutput={setModelOutput}
             setAnswers={setAnswers}
-            setIcdQuery={setIcdQuery}
             onRunZeroTouch={runZeroTouch}
             onOpenLastOutput={openLastOutput}
             onPrintLastOutput={printLastOutput}
@@ -1336,9 +1277,29 @@ export function App() {
             onPinField={pinField}
             onPreview={previewNow}
             onSaveFields={saveFields}
-            onSearchDictionary={searchIcd}
-            onChooseDictionaryValue={chooseIcd}
             onGenerate={generateDocx}
+          />
+          <DocumentRail
+            documents={visibleDocs}
+            activeDocumentId={activeDoc}
+            selectedDocumentIds={selectedDocIds}
+            busy={busy}
+            printCopies={printCopies}
+            extraRulesEnabled={sickLeave}
+            onExtraRulesChange={setSickLeave}
+            onSelect={selectDocument}
+            onToggleSelected={toggleDocumentSelected}
+            onPrintCopiesChange={updatePrintCopies}
+            onSelectAll={selectAllVisibleDocuments}
+            onClearSelected={clearSelectedDocuments}
+            onGenerateSelected={generateSelectedDocuments}
+            onRename={renameActiveDocument}
+            onConfigurePopups={openPopupDesigner}
+            onScanTemplate={startGuidedExistingTemplateScanner}
+            onRemove={removeActiveDocument}
+            onApprove={approveActiveTemplate}
+            onAdd={openTemplateSetup}
+            onToggleUtilities={() => setUtilityOpen((value) => !value)}
           />
         </div>
 

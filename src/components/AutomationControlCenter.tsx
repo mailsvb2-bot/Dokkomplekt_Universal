@@ -142,7 +142,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
     const fieldIds = blockers.map((entry: unknown) => typeof entry === 'object' && entry !== null && 'field_id' in entry ? String((entry as { field_id: unknown }).field_id) : '').filter(Boolean);
     const accepted = globalThis.confirm?.(`Подтвердить найденные значения сразу для ${fieldIds.length} полей и повторить создание комплекта?\n\n${fieldIds.join('\n')}`) ?? false;
     if (!accepted) return;
-    const result = await execute('пакетное подтверждение risk-gate', () => confirmRiskExceptionAndRetry(item.exception_id));
+    const result = await execute('подтверждение спорных данных', () => confirmRiskExceptionAndRetry(item.exception_id));
     if (!result) return;
     onStatus(result.message);
     await refresh();
@@ -180,14 +180,14 @@ export function AutomationControlCenter({ onStatus }: Props) {
       timeout_seconds: Math.max(5, Math.min(600, Math.trunc(model.timeout_seconds || 90))),
       consistency_passes: Math.max(2, Math.min(3, Math.trunc(model.consistency_passes || 2))),
     };
-    const saved = await execute('настройки локальной SemanticModel', () => updateSemanticModelConfig(normalized));
+    const saved = await execute('настройки локального анализа', () => updateSemanticModelConfig(normalized));
     if (!saved) return;
     setModel(saved.config); setModelStatus(saved.status);
-    onStatus('Настройки локальной SemanticModel сохранены. Разрешены только loopback-адреса; документы не отправляются во внешнюю сеть.');
+    onStatus('Настройки локального анализа сохранены. Документы обрабатываются только на этом компьютере и не отправляются во внешнюю сеть.');
   }
 
   async function checkModel() {
-    const status = await execute('проверка локальной SemanticModel', () => testSemanticModel());
+    const status = await execute('проверка локального анализа', () => testSemanticModel());
     if (!status) return;
     setModelStatus(status);
     onStatus(status.message);
@@ -195,11 +195,11 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
   async function exportPilotCorpus() {
     const date = new Date().toISOString().slice(0, 10);
-    const outputPath = globalThis.prompt?.('Имя JSON-файла обезличенного корпуса', `dokkomplekt-corpus-${date}.json`)?.trim();
+    const outputPath = globalThis.prompt?.('Имя файла с обезличенной историей проверок', `dokkomplekt-check-history-${date}.json`)?.trim();
     if (!outputPath) return;
-    const result = await execute('экспорт обезличенного корпуса', () => exportCorpus(outputPath));
+    const result = await execute('экспорт истории проверок', () => exportCorpus(outputPath));
     if (!result) return;
-    onStatus(`Экспортировано записей корпуса: ${result.entry_count}. Файл: ${result.output_path}`);
+    onStatus(`Экспортировано записей проверки: ${result.entry_count}. Файл: ${result.output_path}`);
     await refresh();
   }
 
@@ -245,7 +245,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
     const status = await execute('импорт подписанных порогов автопечати', () => importCalibratedThresholdsFile(file.name, btoa(binary)));
     if (!status) return;
     setCalibratedThresholds(current => [...current.filter(item => item.domain !== status.domain), status].sort((a, b) => a.domain.localeCompare(b.domain)));
-    onStatus(`Калибровка домена «${status.domain}» проверена. Автопечать использует только подписанные held-out метрики.`);
+    onStatus(`Настройки автопечати для набора «${status.domain}» проверены. Используются только подписанные контрольные показатели.`);
   }
 
   async function refreshReferenceData() {
@@ -287,32 +287,32 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
   return <div className="automationControlCenter">
     <section className="utilityCard advancedCard semanticModelCard">
-      <strong>Локальная SemanticModel</strong>
-      <small>Ollama или llama.cpp на этом компьютере. Модель предлагает структурированные факты, а Rust-ядро проверяет типы, форматы и контрольные суммы перед применением.</small>
+      <strong>Локальное понимание документов</strong>
+      <small>Подключите локальный модуль анализа текста. Программа перепроверит найденные значения, форматы и контрольные суммы перед применением.</small>
       <label><input type="checkbox" checked={model.enabled} onChange={e => setModel({ ...model, enabled: e.target.checked })}/> включить локальное понимание свободного текста</label>
-      <label>Провайдер<select value={model.provider} onChange={e => setModel({ ...model, provider: e.target.value })}><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp / OpenAI-compatible</option></select></label>
+      <label>Способ подключения<select value={model.provider} onChange={e => setModel({ ...model, provider: e.target.value })}><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp / OpenAI-compatible</option></select></label>
       <label>Локальный адрес<input value={model.endpoint} onChange={e => setModel({ ...model, endpoint: e.target.value })} placeholder="http://127.0.0.1:11434" /></label>
       <label>Модель<input value={model.model} onChange={e => setModel({ ...model, model: e.target.value })} placeholder="qwen2.5:7b-instruct" /></label>
       <label>Язык документов<select value={model.preferred_language} onChange={e => setModel({ ...model, preferred_language: e.target.value })}><option value="auto">Автоопределение</option><option value="ru-RU">Русский</option><option value="en-US">English</option><option value="de-DE">Deutsch</option><option value="fr-FR">Français</option><option value="es-ES">Español</option><option value="uk-UA">Українська</option><option value="kk-KZ">Қазақша</option><option value="zh-CN">中文</option><option value="ar">العربية</option></select></label>
       <label>Тайм-аут, секунд<input type="number" min={5} max={600} value={model.timeout_seconds} onChange={e => setModel({ ...model, timeout_seconds: Number(e.target.value) })}/></label>
       <label>Независимых проходов<select value={model.consistency_passes} onChange={e => setModel({ ...model, consistency_passes: Number(e.target.value) })}><option value={2}>2 — обязательная взаимная проверка</option><option value={3}>3 — максимум проверки</option></select></label>
-      <small>Для high-risk полей при 2–3 проходах принимается только значение, на котором независимо сошлись минимум два ответа.</small>
-      <label><input type="checkbox" checked={model.shadow_mode} onChange={e => setModel({ ...model, shadow_mode: e.target.checked, auto_apply_zero_touch: e.target.checked ? false : model.auto_apply_zero_touch })}/> shadow-mode: сравнивать с deterministic-парсером, но не влиять на документы</label>
-      <label><input type="checkbox" checked={model.corpus_recording_enabled} onChange={e => setModel({ ...model, corpus_recording_enabled: e.target.checked })}/> с согласия пилота сохранять обезличенный корпус «предложение → финал специалиста → фактический комплект»</label>
-      <label><input type="checkbox" disabled={model.shadow_mode} checked={model.auto_apply_zero_touch} onChange={e => setModel({ ...model, auto_apply_zero_touch: e.target.checked })}/> использовать модель в zero-touch; сомнительные значения всё равно блокируются risk-gate</label>
-      <div className="inlineButtons"><button className="utilBtn" disabled={busy} onClick={saveModel}>Сохранить</button><button className="softBtn" disabled={busy || !model.enabled} onClick={checkModel}>Проверить соединение</button><button className="softBtn" disabled={busy || !corpusStatus || corpusStatus.entry_count === 0} onClick={() => void exportPilotCorpus()}>Экспортировать корпус</button></div>
-      {corpusStatus && <div className="modelStatus ok"><b>Корпус: {corpusStatus.entry_count} дел</b><span>{corpusStatus.message}</span><small>Сырые тексты и значения не экспортируются; локальное хранилище зашифровано.</small></div>}
+      <small>Для важных полей значение принимается только тогда, когда минимум две независимые проверки дали одинаковый результат.</small>
+      <label><input type="checkbox" checked={model.shadow_mode} onChange={e => setModel({ ...model, shadow_mode: e.target.checked, auto_apply_zero_touch: e.target.checked ? false : model.auto_apply_zero_touch })}/> Режим наблюдения: сравнивать результаты, но не изменять документы</label>
+      <label><input type="checkbox" checked={model.corpus_recording_enabled} onChange={e => setModel({ ...model, corpus_recording_enabled: e.target.checked })}/> с согласия пользователя сохранять обезличенную историю проверок и исправлений</label>
+      <label><input type="checkbox" disabled={model.shadow_mode} checked={model.auto_apply_zero_touch} onChange={e => setModel({ ...model, auto_apply_zero_touch: e.target.checked })}/> использовать локальный анализ при автоматической обработке; сомнительные значения всё равно потребуют проверки</label>
+      <div className="inlineButtons"><button className="utilBtn" disabled={busy} onClick={saveModel}>Сохранить</button><button className="softBtn" disabled={busy || !model.enabled} onClick={checkModel}>Проверить соединение</button><button className="softBtn" disabled={busy || !corpusStatus || corpusStatus.entry_count === 0} onClick={() => void exportPilotCorpus()}>Экспортировать историю проверок</button></div>
+      {corpusStatus && <div className="modelStatus ok"><b>История проверок: {corpusStatus.entry_count} записей</b><span>{corpusStatus.message}</span><small>Сырые тексты и значения не экспортируются; локальное хранилище зашифровано.</small></div>}
       {modelStatus && <div className={modelStatus.reachable ? 'modelStatus ok' : 'modelStatus'}><b>{modelStatus.reachable ? 'Доступна' : modelStatus.configured ? 'Не подключена' : 'Некорректная настройка'}</b><span>{modelStatus.message}</span>{modelStatus.available_models.length > 0 && <small>Доступные модели: {modelStatus.available_models.join(', ')}</small>}</div>}
     </section>
 
 
     <section className="utilityCard advancedCard">
-      <strong>Доказанная автопечать</strong>
-      <small>Без подписанного доменного порога комплект создаётся только для review. Порог принимается лишь после сравнения с финалом специалиста и отдельной held-out проверки; интернет не нужен.</small>
+      <strong>Безопасная автопечать</strong>
+      <small>Автопечать включается только после подтверждённой проверки качества. Пока такой проверки нет, комплект создаётся для просмотра перед печатью.</small>
       <div className="compactList sidecarList">
-        {calibratedThresholds.length === 0 && <small>Подписанные пороги не установлены — автоматическая печать заблокирована fail-closed.</small>}
+        {calibratedThresholds.length === 0 && <small>Подтверждённые настройки качества не установлены — автоматическая печать пока недоступна.</small>}
         {calibratedThresholds.map(item => <div key={item.domain} className="sidecarReady">
-          <span><b>{item.domain}</b> · auto ≥ {(item.auto_min_confidence * 100).toFixed(1)}%<small>{item.message}</small><small>Обучение: {item.training_observations}; held-out: {item.holdout_observations}; предельная ошибка: {(item.max_auto_error_rate * 100).toFixed(2)}%</small></span>
+          <span><b>{item.domain}</b> · порог автопечати ≥ {(item.auto_min_confidence * 100).toFixed(1)}%<small>{item.message}</small><small>Проверено примеров: {item.training_observations}; контрольных примеров: {item.holdout_observations}; допустимая ошибка: {(item.max_auto_error_rate * 100).toFixed(2)}%</small></span>
         </div>)}
       </div>
       <label className="softBtn fileButton" aria-label="Импортировать подписанные пороги автопечати">
@@ -323,7 +323,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
     <section className="utilityCard advancedCard">
       <strong>Производственный календарь</strong>
-      <small>Календарь обновляется только подписанным Ed25519-пакетом. Неподтверждённые годы по-прежнему блокируются fail-closed.</small>
+      <small>Календарь обновляется только проверенным подписанным пакетом. Неподтверждённые годы не используются в расчётах.</small>
       {referenceData ? <><div className="modelStatus ok"><b>{referenceData.installed ? 'Подписанный календарь активен' : referenceData.cached ? 'Ожидает перезапуска' : 'Встроенный календарь'}</b><span>{referenceData.message}</span><small>Полные годы: {referenceData.complete_years.join(', ') || 'только встроенные данные'}</small></div><small className={calendarHorizon(referenceData.complete_years).urgent?'calendarWarning urgent':'calendarWarning'}>{calendarHorizon(referenceData.complete_years).message}</small></> : <small>Статус не загружен.</small>}
       <div className="inlineButtons">
         <button className="softBtn" disabled={busy} onClick={() => void refreshReferenceData()}>Проверить подписанное обновление</button>
@@ -335,13 +335,13 @@ export function AutomationControlCenter({ onStatus }: Props) {
     </section>
 
     <section className="utilityCard advancedCard">
-      <strong>Автоматизация → Зависимости</strong>
-      <small>Паки проверяются тем же встроенным Ed25519-ключом, что и обновления. Докачанные инструменты хранятся в пользовательской папке, проверяются по SHA-256 и после установки работают офлайн.</small>
+      <strong>Дополнительные возможности</strong>
+      <small>Дополнительные компоненты проверяются встроенной цифровой подписью и контрольной суммой. После установки они работают без интернета.</small>
       <div className="inlineButtons"><button className="softBtn" disabled={busy} onClick={() => void reloadComponentCatalog()}>Проверить подписанный каталог</button></div>
       {componentProgress && componentProgress.phase !== 'complete' && <div className="componentProgress"><progress max={100} value={componentProgress.percent}/><small>{componentProgress.message} · {componentProgress.percent}%</small></div>}
       <div className="compactList sidecarList">
         {components.map(item => <div key={item.id} className={item.available ? 'sidecarReady' : 'sidecarMissing'}>
-          <span><b>{item.label}</b> · {item.size_label}<small>{item.message}</small><small>Статус: {componentStateLabel(item.state)} · разблокирует: {item.unlocks.join(', ')}</small></span>
+          <span><b>{item.label}</b> · {item.size_label}<small>{item.message}</small><small>Статус: {componentStateLabel(item.state)} · добавляет: {item.unlocks.join(', ')}</small></span>
           <div className="inlineButtons">{item.state === 'downloaded' ? <button className="softBtn" disabled={busy} onClick={() => void deleteComponent(item)}>Удалить</button> : item.state === 'missing' ? <button className="utilBtn" disabled={busy} onClick={() => void downloadComponent(item)}>Скачать</button> : <small>Доступен</small>}</div>
         </div>)}
       </div>
@@ -355,7 +355,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
     <section className="utilityCard advancedCard semanticModelCard">
       <strong>Принтер и параметры вывода</strong>
       <label>Принтер<select value={printers.preferences.printer_name ?? ''} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, printer_name: e.target.value || null } })}><option value="">системный по умолчанию</option>{printers.printers.map(item => <option key={item.name} value={item.name}>{item.name}{item.is_default ? ' · по умолчанию' : ''}</option>)}</select></label>
-      <label>Двусторонняя печать<select value={printers.preferences.duplex_mode} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, duplex_mode: e.target.value } })}><option value="simplex">односторонняя</option><option value="long_edge">по длинной стороне</option><option value="short_edge">по короткой стороне</option><option value="manual">ручной duplex Word</option></select></label>
+      <label>Двусторонняя печать<select value={printers.preferences.duplex_mode} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, duplex_mode: e.target.value } })}><option value="simplex">односторонняя</option><option value="long_edge">по длинной стороне</option><option value="short_edge">по короткой стороне</option><option value="manual">ручная двусторонняя печать</option></select></label>
       <label>Лоток Word<select value={printers.preferences.tray ?? ''} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, tray: e.target.value === '' ? null : Number(e.target.value) } })}><option value="">по умолчанию</option><option value="0">драйвер по умолчанию</option><option value="1">верхний</option><option value="2">нижний</option><option value="3">средний</option><option value="4">ручная подача</option><option value="7">автоматическая подача</option><option value="10">крупный формат</option><option value="11">большая ёмкость</option><option value="14">кассета</option><option value="15">источник формы</option></select></label>
       <button className="utilBtn" disabled={busy} onClick={savePrinterPreferences}>Сохранить печать</button>
       <small>{printers.advanced_options_note || 'Список принтеров пока не загружен.'}</small>
@@ -363,7 +363,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
     <section className="utilityCard advancedCard">
       <strong>Дела и восстановление после сбоя</strong>
-      <small>Каждый zero-touch запуск проходит явные состояния. Незавершённое дело можно повторить, а завершённый комплект — безопасно переиздать новой атомарной попыткой без удаления прежнего результата.</small>
+      <small>Каждая автоматическая обработка имеет понятный статус. Незавершённую задачу можно повторить, а готовый комплект — создать заново без удаления прежнего результата.</small>
       <div className="compactList caseRunList">
         {caseRuns.length === 0 && <small>Обработанных дел пока нет.</small>}
         {caseRuns.map(item => <div key={item.case_id} className={`caseRunItem case-${item.status}`}>
@@ -382,7 +382,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       <label><input type="checkbox" checked={privacy.archive_processed_sources} onChange={e => setPrivacy({ ...privacy, archive_processed_sources: e.target.checked })}/> перемещать успешно обработанные источники из рабочей папки в архив</label>
       <label>Подпапка архива<input value={privacy.archive_folder_name} onChange={e => setPrivacy({ ...privacy, archive_folder_name: e.target.value })} placeholder="_обработано" /></label>
       <label>Архивировать служебные заметки через, дней<input type="number" min={1} max={3650} value={privacy.service_note_retention_days} onChange={e => setPrivacy({ ...privacy, service_note_retention_days: Number(e.target.value) })}/></label>
-      <label>Удалять осиротевшие processed-маркеры через, дней<input type="number" min={1} max={3650} value={privacy.processed_marker_retention_days} onChange={e => setPrivacy({ ...privacy, processed_marker_retention_days: Number(e.target.value) })}/></label>
+      <label>Удалять устаревшие служебные отметки через, дней<input type="number" min={1} max={3650} value={privacy.processed_marker_retention_days} onChange={e => setPrivacy({ ...privacy, processed_marker_retention_days: Number(e.target.value) })}/></label>
       <label>Удалять архивные источники через, дней<input type="number" min={0} max={3650} value={privacy.archived_source_retention_days} onChange={e => setPrivacy({ ...privacy, archived_source_retention_days: Number(e.target.value) })}/><small>0 — хранить бессрочно.</small></label>
       <div className="inlineButtons"><button className="utilBtn" disabled={busy} onClick={savePrivacy}>Сохранить политику</button><button className="softBtn" disabled={busy} onClick={cleanWorkspaceNow}>Очистить сейчас</button></div>
     </section>
@@ -391,10 +391,10 @@ export function AutomationControlCenter({ onStatus }: Props) {
       <strong>Межкомпьютерная очередь</strong>
       <small>{queueStatus?.message ?? 'Статус очереди ещё не загружен.'}</small>
       <div className="metricGrid">
-        <span>Режим <b>{queueStatus?.mode === 'central_mtls' ? 'центральная mTLS' : queueStatus?.mode === 'configuration_error' ? 'ошибка настройки' : 'локальная файловая'}</b></span>
+        <span>Режим <b>{queueStatus?.mode === 'central_mtls' ? 'защищённая центральная' : queueStatus?.mode === 'configuration_error' ? 'ошибка настройки' : 'локальная файловая'}</b></span>
         <span>Доступность <b>{queueStatus?.reachable ? 'готова' : 'нет соединения'}</b></span>
       </div>
-      {queueStatus?.mode === 'shared_filesystem' && <small>Локальная файловая очередь работает без интернета и подходит для одного ПК или общей папки малого офиса. Для многомашинного режима используйте HTTPS-сервис очереди с обязательным клиентским сертификатом.</small>}
+      {queueStatus?.mode === 'shared_filesystem' && <small>Локальная файловая очередь работает без интернета и подходит для одного ПК или общей папки малого офиса. Для нескольких компьютеров используйте защищённую центральную очередь с отдельным доступом для каждого устройства.</small>}
     </section>
 
     <section className="utilityCard advancedCard">
@@ -404,7 +404,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       <div className="compactList">
         {exceptions.length === 0 && <small>Неразрешённых остановок нет.</small>}
         {exceptions.map(item => <div key={item.exception_id} className="exceptionItem">
-          <span><b>{item.category}</b> · {item.message}<small>{safeSource(item.source_path)} · {item.created_at}</small></span>
+          <span><b>{exceptionCategoryLabel(item.category)}</b> · {item.message}<small>{safeSource(item.source_path)} · {item.created_at}</small></span>
           {item.status !== 'resolved' && <div className="inlineButtons">{item.category === 'risk_gate' && <button className="utilBtn" disabled={busy} onClick={() => void confirmAllRiskValues(item)}>Подтвердить всё и продолжить</button>}{item.category === 'bundle_decision' && <button className="utilBtn" disabled={busy} onClick={() => void confirmBundle(item)}>Подтвердить предложенный комплект</button>}<button className="softBtn" disabled={busy} onClick={() => void resolve(item)}>Закрыть</button></div>}
         </div>)}
       </div>
@@ -412,7 +412,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
     <section className="utilityCard advancedCard ownerDashboardCard">
       <strong>Сегодня — только результат и исключения</strong>
-      <small>Данные считаются локально по завершённым делам и событиям печати за {daily?.date_utc ?? 'текущую дату UTC'}.</small>
+      <small>Данные считаются локально по завершённым задачам и событиям печати за {daily?.date_utc ?? 'сегодня'}.</small>
       {daily ? <div className="ownerDashboardGrid">
         <span>Обработано дел<b>{daily.processed_cases}</b></span>
         <span>Автоматически завершено<b>{daily.automatically_completed_cases}</b></span>
@@ -424,20 +424,20 @@ export function AutomationControlCenter({ onStatus }: Props) {
     </section>
 
     <section className="utilityCard advancedCard">
-      <strong>Метрики автоматизации и ROI</strong>
-      <label>Минут ручной работы на один документ<input aria-label="Минут на документ" type="number" min={0} max={480} value={minutesPerDocument} onChange={event=>{const value=Math.max(0,Math.min(480,Number(event.target.value)||0));setMinutesPerDocument(value);globalThis.localStorage?.setItem('dokkomplekt.roi.minutesPerDocument',String(value))}}/><small>Оценка задаётся организацией и не считается доказанным временем без замера пилота.</small></label>
+      <strong>Результаты автоматизации</strong>
+      <label>Минут ручной работы на один документ<input aria-label="Минут на документ" type="number" min={0} max={480} value={minutesPerDocument} onChange={event=>{const value=Math.max(0,Math.min(480,Number(event.target.value)||0));setMinutesPerDocument(value);globalThis.localStorage?.setItem('dokkomplekt.roi.minutesPerDocument',String(value))}}/><small>Оценка задаётся организацией и не является фактически сэкономленным временем без замера на реальной работе.</small></label>
       {metrics ? <div className="metricGrid">
         <span>Источников <b>{metrics.processed_sources}</b></span><span>Документов <b>{metrics.generated_documents}</b></span>
-        <span>Zero-touch <b>{metrics.zero_touch_sources}</b></span><span>Доля zero-touch <b>{percent(metrics.zero_touch_sources, metrics.processed_sources)}</b></span>
-        <span>Остановлено <b>{metrics.blocked_sources}</b></span><span>Закрыто attention <b>{metrics.attention_resolutions}</b></span>
+        <span>Автоматически обработано <b>{metrics.zero_touch_sources}</b></span><span>Доля автоматической обработки <b>{percent(metrics.zero_touch_sources, metrics.processed_sources)}</b></span>
+        <span>Остановлено <b>{metrics.blocked_sources}</b></span><span>Проверено вручную <b>{metrics.attention_resolutions}</b></span>
         <span>Ошибок <b>{metrics.failed_sources}</b></span><span>Сбоев печати <b>{metrics.print_failures}</b></span>
-        <span>Подтверждений полей <b>{metrics.user_confirmations}</b></span><span>Отклонено LLM-grounding <b>{metrics.model_grounding_rejections}</b></span>
-        <span>Shadow-прогонов <b>{metrics.shadow_model_runs}</b></span><span>Совпадений shadow <b>{percent(metrics.shadow_model_agreements, metrics.shadow_model_proposals)}</b></span>
-        <span>Документов на источник <b>{ratio(metrics.generated_documents, metrics.processed_sources)}</b></span><span>Доля attention <b>{percent(metrics.blocked_sources, metrics.processed_sources)}</b></span>
-        <span>Переиспользовано при resume <b>{metrics.reused_documents ?? 0}</b></span><span>Пересоздано при resume <b>{metrics.rerendered_documents ?? 0}</b></span>
-        <span>Измеренное машинное время <b>{formatMinutes((metrics.processing_milliseconds ?? 0)/60000)}</b></span><span>В очередь ревью печати <b>{metrics.print_review_queued ?? 0}</b></span>
-        <span>Прошло автопечать-gate <b>{metrics.automatic_print_approved ?? 0}</b></span><span>Успех без ошибок <b>{percent(Math.max(0,metrics.processed_sources-metrics.failed_sources), metrics.processed_sources)}</b></span>
-        <span>Оценка сэкономленного времени <b>{formatMinutes(Math.max(0, metrics.generated_documents*minutesPerDocument-(metrics.processing_milliseconds ?? 0)/60000))}</b></span><span>Метод <b>базовая норма − замер runtime</b></span>
+        <span>Подтверждений полей <b>{metrics.user_confirmations}</b></span><span>Отклонено сомнительных предложений <b>{metrics.model_grounding_rejections}</b></span>
+        <span>Проверок в режиме наблюдения <b>{metrics.shadow_model_runs}</b></span><span>Совпадений результатов <b>{percent(metrics.shadow_model_agreements, metrics.shadow_model_proposals)}</b></span>
+        <span>Документов на источник <b>{ratio(metrics.generated_documents, metrics.processed_sources)}</b></span><span>Доля требующих проверки <b>{percent(metrics.blocked_sources, metrics.processed_sources)}</b></span>
+        <span>Использовано повторно <b>{metrics.reused_documents ?? 0}</b></span><span>Создано заново <b>{metrics.rerendered_documents ?? 0}</b></span>
+        <span>Время автоматической обработки <b>{formatMinutes((metrics.processing_milliseconds ?? 0)/60000)}</b></span><span>На проверку перед печатью <b>{metrics.print_review_queued ?? 0}</b></span>
+        <span>Допущено к автопечати <b>{metrics.automatic_print_approved ?? 0}</b></span><span>Успех без ошибок <b>{percent(Math.max(0,metrics.processed_sources-metrics.failed_sources), metrics.processed_sources)}</b></span>
+        <span>Оценка сэкономленного времени <b>{formatMinutes(Math.max(0, metrics.generated_documents*minutesPerDocument-(metrics.processing_milliseconds ?? 0)/60000))}</b></span><span>Метод <b>норма ручной работы − фактическое время обработки</b></span>
       </div> : <small>Метрики ещё не загружены.</small>}
     </section>
 
@@ -484,7 +484,9 @@ function caseStatusLabel(status: string) {
 function percent(value: number, total: number) { return total > 0 ? `${Math.round((value / total) * 100)}%` : '—'; }
 function ratio(value:number,total:number){return total>0?(value/total).toFixed(1):'—'}
 function formatMinutes(value:number){const minutes=Math.round(value);if(minutes<60)return `${minutes} мин`;const hours=Math.floor(minutes/60),rest=minutes%60;return rest?`${hours} ч ${rest} мин`:`${hours} ч`}
-function calendarHorizon(years:number[]){const current=new Date().getFullYear(),last=years.length?Math.max(...years):0,gap=last-current;if(gap>=2)return{urgent:false,message:`Горизонт подтверждён до ${last} года. Feed проверяется при запуске.`};if(gap>=1)return{urgent:false,message:`Календарь подтверждён только до ${last} года. Подготовьте подписанный пакет следующего года заранее.`};return{urgent:true,message:`Нет подтверждённого календаря после ${last||'текущего года'}. Расчёты будущих рабочих сроков будут остановлены fail-closed.`}}
+function exceptionCategoryLabel(category:string){if(category==='risk_gate')return 'Проверка данных';if(category==='bundle_decision')return 'Состав комплекта';return 'Требует внимания';}
+
+function calendarHorizon(years:number[]){const current=new Date().getFullYear(),last=years.length?Math.max(...years):0,gap=last-current;if(gap>=2)return{urgent:false,message:`Календарь подтверждён до ${last} года и проверяется при запуске.`};if(gap>=1)return{urgent:false,message:`Календарь подтверждён только до ${last} года. Подготовьте подписанный пакет следующего года заранее.`};return{urgent:true,message:`Нет подтверждённого календаря после ${last||'текущего года'}. Расчёты будущих рабочих сроков будут остановлены до обновления календаря.`}}
 function message(error: unknown) { return error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error); }
 function safeSource(source: string) { const parts = source.replaceAll('\\', '/').split('/'); return parts.at(-1) || 'источник не указан'; }
 

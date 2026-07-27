@@ -94,7 +94,7 @@ class V1821ResumeQueueModularizationContracts(unittest.TestCase):
         self.assertIn("get_queue_status", api)
         self.assertIn("interface QueueStatus", types)
         self.assertIn("Межкомпьютерная очередь", ui)
-        self.assertIn("Переиспользовано при resume", ui)
+        self.assertIn("Использовано повторно", ui)
 
     def test_release_still_requires_real_rust_and_windows_gates(self) -> None:
         quality = text(".github/workflows/quality-gate.yml")

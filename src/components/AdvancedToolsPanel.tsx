@@ -203,7 +203,7 @@ export function AdvancedToolsPanel({
 
   async function publishLearnedTemplate() {
     if (!learnedTemplatePath || !learnedDocumentId.trim() || !learnedButtonLabel.trim()) {
-      onStatus('Укажите идентификатор, название кнопки и сначала создайте обученную копию.');
+      onStatus('Укажите идентификатор, название документа и сначала создайте обученную копию.');
       return;
     }
     const result = await execute('публикация обученного шаблона', () =>
@@ -357,7 +357,7 @@ export function AdvancedToolsPanel({
     const document = result.document;
     const role = document.role_id && document.role_id !== 'unknown' ? document.role_id : 'не определена';
     const fields = [...new Set([...document.placeholders, ...document.required_fields])];
-    const report = `Роль: ${role}. Полей: ${fields.length}. Popup-вопросов: ${document.popup_fields?.length ?? 0}. Режим: ${document.is_static_copy ? 'статическая копия' : 'динамический DOCX'}.`;
+    const report = `Роль: ${role}. Полей: ${fields.length}. Уточняющих вопросов: ${document.popup_fields?.length ?? 0}. Режим: ${document.is_static_copy ? 'статическая копия' : 'динамический DOCX'}.`;
     setDryReport(report);
     onStatus(`Сухой прогон завершён. ${report}`);
   }
@@ -480,9 +480,9 @@ export function AdvancedToolsPanel({
         )}
         {learnedTemplatePath && (
           <div className="learnedPublish">
-            <input value={learnedDocumentId} onChange={(event) => setLearnedDocumentId(event.target.value)} placeholder="идентификатор: hr.order" />
-            <input value={learnedButtonLabel} onChange={(event) => setLearnedButtonLabel(event.target.value)} placeholder="название кнопки" />
-            <button className="primaryBtn" disabled={busy || !learnedDocumentId.trim() || !learnedButtonLabel.trim()} onClick={() => void publishLearnedTemplate()}>Создать рабочую кнопку</button>
+            <input value={learnedDocumentId} onChange={(event) => setLearnedDocumentId(event.target.value)} placeholder="идентификатор: document.custom" />
+            <input value={learnedButtonLabel} onChange={(event) => setLearnedButtonLabel(event.target.value)} placeholder="название документа" />
+            <button className="primaryBtn" disabled={busy || !learnedDocumentId.trim() || !learnedButtonLabel.trim()} onClick={() => void publishLearnedTemplate()}>Добавить документ в набор</button>
           </div>
         )}
       </section>
@@ -586,7 +586,7 @@ export function AdvancedToolsPanel({
         <label className="fileBtn">Загрузить XLSX/CSV/TSV
           <input hidden type="file" accept=".xlsx,.csv,.tsv,.txt" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadDataFile(file); event.currentTarget.value = ''; }} />
         </label>
-        <textarea value={tableText} onChange={(event) => setTableText(event.target.value)} placeholder={'ФИО;contract.number\nИванов Иван;Д-001'} />
+        <textarea value={tableText} onChange={(event) => setTableText(event.target.value)} placeholder={'Наименование;document.number\nПример;Д-001'} />
         {table && <small>Распознано: {table.rows.length} строк · {table.canonical_headers.join(', ')}</small>}
         <small>Выбрано документов: {selectedDocuments.map((document) => document.button_label).join(', ') || 'нет'}</small>
         <div className="inlineButtons">

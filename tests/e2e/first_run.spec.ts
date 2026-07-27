@@ -57,20 +57,20 @@ async function installTauriMock(page: Page) {
   });
 }
 
-test('first run does not show built-in medical buttons', async ({ page }) => {
+test('first run shows a neutral template setup path', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Создать свои кнопки' })).toBeVisible();
-  await expect(page.getByText('Дневники наблюдения')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Добавить шаблоны' })).toBeVisible();
+  await expect(page.getByText('Встроенный пример')).toHaveCount(0);
 });
 
 test('created document button appears after template setup confirmation', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Создать свои кнопки' }).click();
-  await expect(page.getByRole('dialog', { name: 'Настройка шаблона' })).toBeVisible();
-  await expect(page.getByText('Вы выбрали документ')).toBeVisible();
-  await page.getByRole('button', { name: 'Создать кнопку из шаблона' }).click();
+  await page.getByRole('button', { name: 'Добавить шаблоны' }).click();
+  await expect(page.getByRole('dialog', { name: 'Добавление шаблонов' })).toBeVisible();
+  await expect(page.getByText('Выбранный документ')).toBeVisible();
+  await page.getByRole('button', { name: 'Добавить документ' }).click();
   // Демо-шаблон в диалоге — «Счёт на оплату…»; именно такая кнопка и должна появиться.
   await expect(page.getByRole('button', { name: 'Счёт на оплату' })).toBeVisible();
   // Вставленный текст превратился в реальный DOCX через import_template_file,

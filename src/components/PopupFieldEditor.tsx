@@ -12,7 +12,7 @@ const KIND_OPTIONS: Array<[PromptInputKind, string]> = [
   ['snils', 'СНИЛС'],
   ['passport', 'Паспорт / документ'],
   ['vin', 'VIN'],
-  ['icd10', 'МКБ-10 / классификатор'],
+  ['icd10', 'Классификатор / справочник'],
   ['select', 'Выбор из списка'],
   ['yes_no', 'Да / Нет'],
 ];
@@ -66,7 +66,7 @@ export function PopupFieldEditor({ fields, onChange, compact = false }: PopupFie
       <div className="popupEditorHead">
         <div>
           <strong>Уточняющие вопросы</strong>
-          <small>Один объединённый popup откроется перед созданием документа или комплекта.</small>
+          <small>Одно окно уточнений откроется перед созданием документа или комплекта.</small>
         </div>
         <button className="softBtn" type="button" onClick={() => onChange([...fields, newPopupField()])}>
           + Добавить вопрос
@@ -100,7 +100,7 @@ export function PopupFieldEditor({ fields, onChange, compact = false }: PopupFie
                       field_id: event.target.value,
                       input_kind: field.input_kind === 'text' ? inferInputKind(event.target.value) : field.input_kind,
                     })}
-                    placeholder="например contract.number"
+                    placeholder="например document.number"
                   />
                 </label>
                 <label>
@@ -117,7 +117,7 @@ export function PopupFieldEditor({ fields, onChange, compact = false }: PopupFie
                 </label>
                 <label>
                   <span>Раздел окна</span>
-                  <input value={field.section ?? ''} onChange={(event) => update(index, { section: event.target.value || null })} placeholder="Данные договора" />
+                  <input value={field.section ?? ''} onChange={(event) => update(index, { section: event.target.value || null })} placeholder="Основные данные" />
                 </label>
                 <label>
                   <span>Значение по умолчанию</span>
@@ -132,7 +132,7 @@ export function PopupFieldEditor({ fields, onChange, compact = false }: PopupFie
                   <input
                     value={field.linked_to ?? ''}
                     onChange={(event) => update(index, { linked_to: event.target.value || null })}
-                    placeholder="например medical.commission_date"
+                    placeholder="например related.date"
                   />
                   <small>Связанное значение копируется, пока специалист не изменит это поле вручную.</small>
                 </label>
@@ -184,10 +184,10 @@ function humanizeFieldId(fieldId: string): string {
     'contract.date': 'Дата договора',
     'contract.party_a': 'Сторона 1',
     'contract.party_b': 'Сторона 2',
-    'medical.case_number': 'Номер истории болезни',
-    'medical.diagnosis': 'Диагноз',
-    'medical.treatment': 'Лечение',
-    'medical.discharge_date': 'Дата выписки',
+    'medical.case_number': 'Номер записи / дела',
+    'medical.diagnosis': 'Заключение',
+    'medical.treatment': 'Назначения / действия',
+    'medical.discharge_date': 'Дата завершения',
     'hr.order_number': 'Номер приказа',
     'hr.order_date': 'Дата приказа',
     'accounting.invoice_number': 'Номер счёта',

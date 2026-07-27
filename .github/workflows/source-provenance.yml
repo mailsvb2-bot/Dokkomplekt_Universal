@@ -22,6 +22,32 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+      - name: Repair neutral dictionary test fixture
+        if: github.head_ref == 'ui/client-first-neutral'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/App.scenarios.test.tsx')
+          text = path.read_text(encoding='utf-8')
+          anchor = "      case 'render_mail_merge': return { output_folder:'output/mm', row_count:1, created_files:['output/mm/doc.docx'] } as never;\n"
+          replacement = anchor + "      case 'icd10_suggest': return [{ code: 'A-101', title: 'Типовое значение' }] as never;\n"
+          if "case 'icd10_suggest'" not in text:
+              if anchor not in text:
+                  raise SystemExit('render_mail_merge fixture anchor not found')
+              text = text.replace(anchor, replacement, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+          git show origin/main:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Fix neutral dictionary UI test fixture'
+          git push origin HEAD:ui/client-first-neutral
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

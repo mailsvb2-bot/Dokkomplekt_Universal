@@ -356,7 +356,7 @@ describe('Полный прогон пользовательских сцена�
     const xlsxInput = screen.getByText('Загрузить XLSX/CSV/TSV').querySelector('input[type=file]'); expect(xlsxInput).toBeTruthy();
     fireEvent.change(xlsxInput as Element, { target: { files: [new File([new Uint8Array([0x50,0x4b,0x03,0x04])], 'Реестр.xlsx')] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'prepare_mail_merge_file')).toBe(true));
-    fireEvent.change(screen.getByPlaceholderText(/ФИО;contract\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
+    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
 
     // add-document dialog -> analyze_template, analyze_template_file, prepare + confirm
     await click(/Добавить шаблоны/);

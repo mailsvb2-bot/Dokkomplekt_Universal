@@ -89,6 +89,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'preview_mail_merge': return { delimiter:';', headers:['subject.name'], canonical_headers:['subject.name'], rows:[['Иванов']], warnings:[] } as never;
       case 'prepare_mail_merge_file': return { delimited_text: 'subject.name\nИванов', table: { delimiter:'\t', headers:['subject.name'], canonical_headers:['subject.name'], rows:[['Иванов']], warnings:[] } } as never;
       case 'render_mail_merge': return { output_folder:'output/mm', row_count:1, created_files:['output/mm/doc.docx'] } as never;
+      case 'icd10_suggest': return [{ code: 'A-101', title: 'Типовое значение' }] as never;
       case 'get_diary_plan':
         return [{ day_number: 1, date: '02.02.2026', month: 2, year: 2026 }] as never;
       case 'get_record_series_plan':

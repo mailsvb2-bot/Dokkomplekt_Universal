@@ -1,4 +1,0 @@
-
-> dokkomplekt-universal-tauri@18.4.3 typecheck
-> tsc --noEmit
-

@@ -1,0 +1,37 @@
+name: Apply Rustfmt Source Fix
+
+on:
+  push:
+    branches:
+      - fix/ci-quality-gate-20260726
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ci-quality-gate-20260726
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt
+      - name: Format Rust workspace and self-delete
+        shell: bash
+        run: |
+          cargo fmt --all
+          rm .github/workflows/apply-rustfmt-source-fix.yml
+      - name: Commit canonical Rust formatting
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Apply canonical Rust formatting after Windows fix"
+          git push origin HEAD:fix/ci-quality-gate-20260726

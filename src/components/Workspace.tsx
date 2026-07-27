@@ -238,7 +238,17 @@ export function Workspace(props: WorkspaceProps) {
             <div className="alternativeCard">
               <strong>Текст</strong>
               <p>Вставить содержимое вручную, если файла нет.</p>
-              <textarea value={props.sourceText} onChange={(event) => props.setSourceText(event.target.value)} placeholder="Вставьте текст источника" />
+              <textarea
+      value={props.sourceText}
+      onChange={(event) => props.setSourceText(event.target.value)}
+      onSelect={(event) => {
+        const target = event.currentTarget;
+        const start = target.selectionStart ?? 0;
+        const end = target.selectionEnd ?? start;
+        if (end > start) props.setScannerText(target.value.slice(start, end));
+      }}
+      placeholder="Вставьте текст источника"
+    />
               <button className="softBtn" onClick={props.onParseSource} disabled={props.busy || !props.sourceText.trim()}>Использовать текст</button>
             </div>
           </div>
@@ -303,6 +313,7 @@ export function Workspace(props: WorkspaceProps) {
           <label><span>Рабочая папка</span><input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="Созданные документы" /></label>
           <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
           <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
+          <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>
           {props.intakeResult && <div className={`automationResult ${props.intakeResult.status}`}><strong>{props.intakeResult.status === 'processed' ? 'Комплект создан' : props.intakeResult.status === 'attention' ? 'Нужно уточнение' : 'Информация'}</strong><span>{props.intakeResult.message}</span></div>}
         </div>
       </details>
@@ -322,7 +333,7 @@ export function Workspace(props: WorkspaceProps) {
                 {props.semantic.fields.map((field) => (
                   <li key={field.field_id}>
                     <div><strong>{field.value}</strong><small>{field.field_id} · уверенность {(field.confidence * 100).toFixed(0)}%</small></div>
-                    <div><button className="textBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy || !props.sourceFilePath} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Исправить правило</button></div>
+                    <div><button className="textBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy || !props.sourceFilePath} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Здесь ошибка</button></div>
                   </li>
                 ))}
               </ul>
@@ -339,7 +350,7 @@ export function Workspace(props: WorkspaceProps) {
               <input list="known-field-ids" value={props.scannerField} onChange={(event) => props.setScannerField(event.target.value)} placeholder="Идентификатор поля" />
               <datalist id="known-field-ids"><option value="document.number" /><option value="document.date" /><option value="subject.name" /><option value="organization.name" /><option value="organization.inn" /></datalist>
               <input value={props.scannerText} onChange={(event) => props.setScannerText(event.target.value)} placeholder="Выделенный текст" />
-              <button className="softBtn" onClick={props.onApplyScannerSelection} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>Назначить полю</button>
+              <button className="softBtn" onClick={props.onApplyScannerSelection} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>Назначить выделение полю</button>
               <button className="softBtn" onClick={props.onApplyScannerAndQuestion} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>Назначить и спрашивать при отсутствии</button>
             </div>
           </section>

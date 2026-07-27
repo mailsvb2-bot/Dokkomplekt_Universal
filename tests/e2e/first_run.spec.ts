@@ -2,11 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 /**
  * Browser E2E прогон против Vite dev-сервера. Настоящего Rust-бэкенда в браузере нет,
- * поэтому перед загрузкой страницы устанавливается мок Tauri-моста
- * (window.__TAURI_INTERNALS__.invoke) с каноническими DTO-ответами — теми же
- * формами, что проверяет контрактный тест TS↔Rust. Это не desktop/Tauri E2E и не проверка IPC/Rust. UI остаётся тонким:
- * тест проверяет провод «кнопка → команда → отрисовка ответа», а бизнес-логика
- * покрыта юнит-тестами Rust.
+ * поэтому перед загрузкой страницы устанавливается мок Tauri-моста с каноническими DTO.
  */
 async function installTauriMock(page: Page) {
   await page.addInitScript(() => {
@@ -18,8 +14,9 @@ async function installTauriMock(page: Page) {
       category: 'Accounting',
       role_id: 'generic',
       required_fields: [],
-      placeholders: ['document.number', 'org.inn'],
-      is_static_copy: false,
+      placeholders: [],
+      is_static_copy: true,
+      popup_fields: [],
     };
     const calls: Array<{ command: string; payload?: unknown }> = [];
     (window as unknown as Record<string, unknown>).__E2E_CALLS__ = calls;
@@ -29,8 +26,14 @@ async function installTauriMock(page: Page) {
         switch (command) {
           case 'first_run_state':
             return { pack: pack([]), has_user_buttons: false, message: 'Встроенных кнопок нет.' };
+          case 'get_intake_capabilities':
+            return [];
+          case 'update_background_watcher_preferences':
+            return true;
           case 'import_template_file':
-            return { template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' };
+            return { template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату' };
+          case 'analyze_template_file':
+            return { document: { ...invoiceDoc, popup_fields: [] } };
           case 'prepare_template_setup': {
             const req = (payload as { req?: { candidates?: Array<{ document_id: string; template_path: string }> } })?.req;
             const candidate = req?.candidates?.[0];
@@ -41,8 +44,9 @@ async function installTauriMock(page: Page) {
               suggested_button_label: 'Счёт на оплату',
               editable_button_label: 'Счёт на оплату',
               role_id: 'generic',
-              is_static_copy: false,
-              analysis: {},
+              is_static_copy: true,
+              analysis: { is_static: true },
+              popup_fields: [],
             }];
           }
           case 'confirm_template_setup':
@@ -57,26 +61,33 @@ async function installTauriMock(page: Page) {
   });
 }
 
-test('first run shows a neutral template setup path', async ({ page }) => {
+test('first run shows one clear create-buttons action', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Добавить шаблоны' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Создать свои кнопки' })).toBeVisible();
   await expect(page.getByText('Встроенный пример')).toHaveCount(0);
 });
 
-test('created document button appears after template setup confirmation', async ({ page }) => {
+test('ordinary DOCX becomes a button without mandatory markup', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Добавить шаблоны' }).click();
+  await page.getByRole('button', { name: 'Создать свои кнопки' }).click();
   await expect(page.getByRole('dialog', { name: 'Добавление шаблонов' })).toBeVisible();
-  await expect(page.getByText('Выбранный документ')).toBeVisible();
-  await page.getByRole('button', { name: 'Добавить документ' }).click();
-  // Демо-шаблон в диалоге — «Счёт на оплату…»; именно такая кнопка и должна появиться.
+
+  await page.getByTestId('template-file-input').setInputFiles({
+    name: 'Счёт на оплату.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+  });
+
+  await expect(page.getByDisplayValue('Счёт на оплату')).toBeVisible();
+  await expect(page.getByText('Всё готово')).toBeVisible();
+  await page.getByRole('button', { name: 'Создать кнопки (1)' }).click();
   await expect(page.getByRole('button', { name: 'Счёт на оплату' })).toBeVisible();
-  // Вставленный текст превратился в реальный DOCX через import_template_file,
-  // и кнопка ссылается на файл, который сможет отрендерить render_docx.
+
   const commands = await page.evaluate(() =>
     ((window as unknown as Record<string, unknown>).__E2E_CALLS__ as Array<{ command: string }>).map((c) => c.command));
   expect(commands).toContain('import_template_file');
+  expect(commands).toContain('analyze_template_file');
   expect(commands).toContain('confirm_template_setup');
 });

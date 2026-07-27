@@ -22,35 +22,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
-      - name: Keep profile dictionaries out of neutral UI scenario
-        if: github.head_ref == 'ui/client-first-neutral'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('src/App.scenarios.test.tsx')
-          lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
-          marker = '    // dictionary search -> icd10_suggest, chip shown\n'
-          if lines.count(marker) != 1:
-              raise SystemExit(f'profile-dictionary marker count: {lines.count(marker)}')
-          start = lines.index(marker)
-          del lines[start:start + 6]
-          lines.insert(start, '    // Profile-specific dictionaries are tested separately and appear only when a template requests them.\n\n')
-          text = ''.join(lines)
-          old = "const internalOrProfileOnly = new Set(['get_diary_plan',"
-          new = "const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan',"
-          if text.count(old) != 1:
-              raise SystemExit(f'profile-only command set anchor count: {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-          git show origin/main:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Keep profile dictionaries out of neutral UI scenario'
-          git push origin HEAD:ui/client-first-neutral
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

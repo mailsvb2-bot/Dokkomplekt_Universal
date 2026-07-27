@@ -282,11 +282,7 @@ describe('Полный прогон пользовательских сцена�
       req: { document_ids: ['acc_1'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
     }));
 
-    // dictionary search -> icd10_suggest, chip shown
-    fireEvent.change(screen.getByPlaceholderText('Введите код или значение'), { target: { value: 'A-101' } });
-    await click('Найти');
-    await screen.findByRole('button', { name: /A-101 — Типовое значение/ });
-    expect(parsePayload(calls, 'icd10_suggest')).toMatchObject({ query: 'A-101' });
+    // Profile-specific dictionaries are tested separately and appear only when a template requests them.
 
     // utility scenarios use real user inputs, not demo constants
     await click(/^Настройки$/);
@@ -430,7 +426,7 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['get_diary_plan', 'get_learned_kit_decision', 'route_intake', 'retry_case_run', 'delete_learned_scanner_rule', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'list_template_approvals', 'approve_document_template', 'revoke_document_template_approval', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint']);
+    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan', 'get_learned_kit_decision', 'route_intake', 'retry_case_run', 'delete_learned_scanner_rule', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'list_template_approvals', 'approve_document_template', 'revoke_document_template_approval', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);

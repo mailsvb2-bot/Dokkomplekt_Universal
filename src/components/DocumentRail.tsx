@@ -114,7 +114,7 @@ export function DocumentRail(props: DocumentRailProps) {
         </div>
       )}
 
-      <button className="settingsLink" aria-label="Настройки" onClick={props.onToggleUtilities}>
+      <button className="settingsLink" onClick={props.onToggleUtilities}>
         <i className="ti ti-adjustments-horizontal" aria-hidden="true" /> Настройки и автоматизация
       </button>
     </aside>

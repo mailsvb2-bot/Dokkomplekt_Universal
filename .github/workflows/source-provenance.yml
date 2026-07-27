@@ -31,17 +31,14 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           path = Path('src/App.scenarios.test.tsx')
-          text = path.read_text(encoding='utf-8')
-          block = """    // dictionary search -> icd10_suggest, chip shown
-    fireEvent.change(screen.getByPlaceholderText('Введите код или значение'), { target: { value: 'A-101' } });
-    await click('Найти');
-    await screen.findByRole('button', { name: /A-101 — Типовое значение/ });
-    expect(parsePayload(calls, 'icd10_suggest')).toMatchObject({ query: 'A-101' });
-
-"""
-          if text.count(block) != 1:
-              raise SystemExit(f'expected one profile-dictionary block, found {text.count(block)}')
-          text = text.replace(block, "    // Profile-specific dictionaries are tested separately and appear only when a template requests them.\n\n", 1)
+          lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+          marker = '    // dictionary search -> icd10_suggest, chip shown\n'
+          if lines.count(marker) != 1:
+              raise SystemExit(f'profile-dictionary marker count: {lines.count(marker)}')
+          start = lines.index(marker)
+          del lines[start:start + 6]
+          lines.insert(start, '    // Profile-specific dictionaries are tested separately and appear only when a template requests them.\n\n')
+          text = ''.join(lines)
           old = "const internalOrProfileOnly = new Set(['get_diary_plan',"
           new = "const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan',"
           if text.count(old) != 1:

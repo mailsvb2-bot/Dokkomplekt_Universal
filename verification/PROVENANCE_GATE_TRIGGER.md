@@ -6,4 +6,4 @@ It records that runner-generated manifests were synchronized on PR #3, PR #4, an
 
 PR #4 verifies the strict installer launch-liveness contract: a GUI process or Linux process group must remain alive for the complete smoke interval; an early exit with code 0 is a failure.
 
-PR #6 verifies the profession-neutral client-first UI after the runner-generated source manifest was synchronized.
+PR #6 verifies the profession-neutral client-first UI after the runner-generated source manifest was synchronized, including text selection, one-click correction, bounded unreadable-file feedback, and the neutral exchange-package action.

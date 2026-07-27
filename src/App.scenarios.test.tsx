@@ -291,7 +291,7 @@ describe('Полный прогон пользовательских сцена�
     // utility scenarios use real user inputs, not demo constants
     await click(/^Настройки$/);
     await screen.findByText('Конфиденциальность и хранение');
-    const semanticCard = screen.getByText('Локальная SemanticModel').closest('.utilityCard');
+    const semanticCard = screen.getByText('Локальное понимание документов').closest('.utilityCard');
     expect(semanticCard).toBeTruthy();
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('checkbox', { name: /включить локальное понимание/ }));
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: 'Сохранить' }));
@@ -299,9 +299,9 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Проверить соединение/ }));
     await waitFor(() => expect(calls.some((c) => c.command === 'test_semantic_model')).toBe(true));
     vi.spyOn(window, 'prompt').mockReturnValueOnce('corpus-test.json');
-    fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Экспортировать корпус/ }));
+    fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Экспортировать историю проверок/ }));
     await waitFor(() => expect(parsePayload(calls, 'export_corpus')).toMatchObject({ req: { output_path: 'corpus-test.json' } }));
-    const thresholdCard = screen.getByText('Доказанная автопечать').closest('.utilityCard');
+    const thresholdCard = screen.getByText('Безопасная автопечать').closest('.utilityCard');
     expect(thresholdCard).toBeTruthy();
     const thresholdInput = within(thresholdCard as HTMLElement).getByLabelText('Импортировать подписанные пороги автопечати').querySelector('input[type=file]');
     expect(thresholdInput).toBeTruthy();

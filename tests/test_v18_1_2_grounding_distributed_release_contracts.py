@@ -156,7 +156,7 @@ class V1812GroundingDistributedReleaseContracts(unittest.TestCase):
         self.assertIn("semantic_model_shadow_evaluated", main)
         self.assertIn('increment_metric(app, "shadow_model_runs", 1)', main)
         self.assertIn("shadow_model_agreements", storage)
-        self.assertIn("shadow-mode: сравнивать", ui)
+        self.assertIn("Режим наблюдения: сравнивать результаты, но не изменять документы", ui)
 
     def test_ui_exposes_one_click_correction_and_roi(self) -> None:
         workspace = read("src/components/Workspace.tsx")

@@ -136,7 +136,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run test
+      - name: Run Vitest with JSON evidence
+        run: npm run test -- --reporter=json --outputFile=verification/ci/vitest.json
+      - name: Upload Vitest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-evidence
+          path: verification/ci/vitest.json
+          if-no-files-found: error
       - run: npm run build
       - run: npm audit --audit-level=moderate
 

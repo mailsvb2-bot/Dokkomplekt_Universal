@@ -35,10 +35,10 @@ jobs:
             echo
             echo '=== FAILURE TAIL ==='
             tail -n 50 /tmp/python-contracts.log
-          } > verification/ci/pr7-python-failure.txt
+          } > PR7_PYTHON_FAILURE.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add verification/ci/pr7-python-failure.txt
+          git add PR7_PYTHON_FAILURE.txt
           git commit -m "chore(ci): capture PR7 Python failure" || true
           git push origin "HEAD:${BRANCH}"
           exit $code

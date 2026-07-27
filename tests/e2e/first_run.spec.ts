@@ -80,7 +80,7 @@ test('ordinary DOCX becomes a button without mandatory markup', async ({ page })
     buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
   });
 
-  await expect(page.getByDisplayValue('Счёт на оплату')).toBeVisible();
+  await expect(page.getByLabel('Название документа для Счёт на оплату.docx')).toHaveValue('Счёт на оплату');
   await expect(page.getByText('Всё готово')).toBeVisible();
   await page.getByRole('button', { name: 'Создать кнопки (1)' }).click();
   await expect(page.getByRole('button', { name: 'Счёт на оплату' })).toBeVisible();

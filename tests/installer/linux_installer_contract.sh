@@ -25,7 +25,7 @@ run_deb_install_smoke() {
   command -v xvfb-run >/dev/null || { echo "xvfb-run is required for launch smoke" >&2; exit 1; }
   command -v dbus-run-session >/dev/null || { echo "dbus-run-session is required for launch smoke" >&2; exit 1; }
 
-  local package_name install_log remove_log binary_path smoke_home pid status
+  local package_name install_log remove_log binary_path smoke_home pid status package_files
   package_name="$(dpkg-deb -f "$deb" Package)"
   install_log="$(mktemp)"
   remove_log="$(mktemp)"
@@ -51,7 +51,8 @@ run_deb_install_smoke() {
     exit 1
   }
 
-  binary_path="$(dpkg-query -L "$package_name" | grep -E '/(usr/)?bin/[^/]*dokkomplekt' | head -1)"
+  package_files="$(dpkg-query -L "$package_name")"
+  binary_path="$(awk '/\/(usr\/)?bin\/[^/]*dokkomplekt/ { print; exit }' <<<"$package_files")"
   [ -n "$binary_path" ] && [ -x "$binary_path" ] || {
     echo "installed executable was not found for $package_name" >&2
     cleanup_deb_install
@@ -131,7 +132,9 @@ if requires appimage; then
     echo "AppImage extraction did not produce AppRun" >&2
     exit 1
   }
-  find "$extract_dir/squashfs-root" -type f -perm -u+x | grep -Eiq 'dokkomplekt|AppRun' || {
+  executable_payload="$(find "$extract_dir/squashfs-root" -type f -perm -u+x \
+    \( -name 'AppRun' -o -iname '*dokkomplekt*' \) -print -quit)"
+  [ -n "$executable_payload" ] || {
     echo "AppImage does not contain an executable application payload" >&2
     exit 1
   }

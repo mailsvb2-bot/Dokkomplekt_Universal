@@ -51,7 +51,7 @@ async function selectTemplateAndCreateButton() {
     type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   });
   fireEvent.change(input, { target: { files: [file] } });
-  await screen.findByDisplayValue('Акт выполненных работ');
+  await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
   fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
 }
 

@@ -1148,13 +1148,13 @@ fn stable_machine_guid() -> Option<String> {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        return text
+        text
             .lines()
             .find(|line| line.contains("MachineGuid"))
             .and_then(|line| line.split_whitespace().last())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string);
+            .map(str::to_string)
     }
     #[cfg(target_os = "linux")]
     {

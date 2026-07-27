@@ -8,14 +8,22 @@
   "module_count": 37,
   "passed_test_count": 218,
   "skipped_test_count": 0,
+<<<<<<< HEAD
   "duration_seconds": 17.569,
+=======
+  "duration_seconds": 19.766,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
   "modules": [
     {
       "module": "tests/test_ed25519_compat.py",
       "result": "passed",
       "passed": 5,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.684,
+=======
+      "duration_seconds": 0.546,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".....                                                                    [100%]\n5 passed in 0.04s\n"
     },
@@ -24,7 +32,11 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.208,
+=======
+      "duration_seconds": 0.229,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.02s\n"
     },
@@ -33,43 +45,71 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 4.479,
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 4.29s\n"
+=======
+      "duration_seconds": 5.742,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 5.54s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_semantic_corpus_tools.py",
       "result": "passed",
       "passed": 4,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.444,
       "returncode": 0,
       "output_tail": "....                                                                     [100%]\n4 passed in 0.25s\n"
+=======
+      "duration_seconds": 0.493,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.29s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_source_fingerprint.py",
       "result": "passed",
       "passed": 3,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.476,
       "returncode": 0,
       "output_tail": "...                                                                      [100%]\n3 passed in 0.29s\n"
+=======
+      "duration_seconds": 0.608,
+      "returncode": 0,
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.41s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_source_manifest_integrity.py",
       "result": "failed",
       "passed": 1,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.356,
       "returncode": 1,
       "output_tail": "F.                                                                       [100%]\n=================================== FAILURES ===================================\n_____________ test_checked_in_source_manifest_matches_current_tree _____________\n\n    def test_checked_in_source_manifest_matches_current_tree() -> None:\n        report = MODULE.verify()\n>       assert report[\"matches\"], report\nE       AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}\nE       assert False\n\ntests/test_source_manifest_integrity.py:16: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_matches_current_tree - AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}\nassert False\n1 failed, 1 passed in 0.17s\n"
+=======
+      "duration_seconds": 0.451,
+      "returncode": 1,
+      "output_tail": "F.                                                                       [100%]\n=================================== FAILURES ===================================\n_____________ test_checked_in_source_manifest_matches_current_tree _____________\n\n    def test_checked_in_source_manifest_matches_current_tree() -> None:\n        report = MODULE.verify()\n>       assert report[\"matches\"], report\nE       AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}\nE       assert False\n\ntests/test_source_manifest_integrity.py:16: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_matches_current_tree - AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}\nassert False\n1 failed, 1 passed in 0.25s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_tauri_bundle_icon_contract.py",
       "result": "passed",
       "passed": 1,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.201,
+=======
+      "duration_seconds": 0.227,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".                                                                        [100%]\n1 passed in 0.02s\n"
     },
@@ -78,7 +118,11 @@
       "result": "passed",
       "passed": 11,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.214,
+=======
+      "duration_seconds": 0.244,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "...........                                                              [100%]\n11 passed in 0.03s\n"
     },
@@ -87,16 +131,26 @@
       "result": "passed",
       "passed": 8,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.207,
       "returncode": 0,
       "output_tail": "........                                                                 [100%]\n8 passed in 0.03s\n"
+=======
+      "duration_seconds": 0.244,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.04s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_0_4_professional_popup_contracts.py",
       "result": "passed",
       "passed": 12,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.275,
+=======
+      "duration_seconds": 0.33,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "............                                                             [100%]\n12 passed in 0.09s\n"
     },
@@ -105,7 +159,11 @@
       "result": "passed",
       "passed": 7,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.208,
+=======
+      "duration_seconds": 0.244,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
     },
@@ -114,7 +172,11 @@
       "result": "passed",
       "passed": 10,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.209,
+=======
+      "duration_seconds": 0.242,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..........                                                               [100%]\n10 passed in 0.03s\n"
     },
@@ -123,7 +185,11 @@
       "result": "passed",
       "passed": 13,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.214,
+=======
+      "duration_seconds": 0.253,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".............                                                            [100%]\n13 passed in 0.03s\n"
     },
@@ -132,7 +198,11 @@
       "result": "passed",
       "passed": 7,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.206,
+=======
+      "duration_seconds": 0.235,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".......                                                                  [100%]\n7 passed in 0.02s\n"
     },
@@ -141,16 +211,26 @@
       "result": "passed",
       "passed": 4,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 1.034,
       "returncode": 0,
       "output_tail": "....                                                                     [100%]\n4 passed in 0.85s\n"
+=======
+      "duration_seconds": 1.2,
+      "returncode": 0,
+      "output_tail": "....                                                                     [100%]\n4 passed in 1.00s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_1_0_production_pilot_contracts.py",
       "result": "passed",
       "passed": 7,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.214,
+=======
+      "duration_seconds": 0.237,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
     },
@@ -159,16 +239,26 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 1.124,
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.93s\n"
+=======
+      "duration_seconds": 0.678,
+      "returncode": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.47s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_1_1_offline_runtime.py",
       "result": "passed",
       "passed": 3,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.215,
+=======
+      "duration_seconds": 0.247,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "...                                                                      [100%]\n3 passed in 0.03s\n"
     },
@@ -177,7 +267,11 @@
       "result": "passed",
       "passed": 11,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.218,
+=======
+      "duration_seconds": 0.242,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "...........                                                              [100%]\n11 passed in 0.03s\n"
     },
@@ -186,7 +280,11 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.259,
+=======
+      "duration_seconds": 0.287,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.08s\n"
     },
@@ -195,16 +293,26 @@
       "result": "passed",
       "passed": 14,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.267,
       "returncode": 0,
       "output_tail": "..............                                                           [100%]\n14 passed in 0.08s\n"
+=======
+      "duration_seconds": 0.305,
+      "returncode": 0,
+      "output_tail": "..............                                                           [100%]\n14 passed in 0.11s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_1_2_offline_runtime_bundle.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.235,
+=======
+      "duration_seconds": 0.268,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.05s\n"
     },
@@ -213,7 +321,11 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.366,
+=======
+      "duration_seconds": 0.423,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.18s\n"
     },
@@ -222,7 +334,11 @@
       "result": "passed",
       "passed": 7,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.23,
+=======
+      "duration_seconds": 0.258,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".......                                                                  [100%]\n7 passed in 0.05s\n"
     },
@@ -231,43 +347,71 @@
       "result": "passed",
       "passed": 6,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.377,
       "returncode": 0,
       "output_tail": "......                                                                   [100%]\n6 passed in 0.19s\n"
+=======
+      "duration_seconds": 0.42,
+      "returncode": 0,
+      "output_tail": "......                                                                   [100%]\n6 passed in 0.21s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_2_1_resume_queue_modularization_contracts.py",
       "result": "passed",
       "passed": 6,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.208,
       "returncode": 0,
       "output_tail": "......                                                                   [100%]\n6 passed in 0.02s\n"
+=======
+      "duration_seconds": 0.234,
+      "returncode": 0,
+      "output_tail": "......                                                                   [100%]\n6 passed in 0.03s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_2_2_adversarial_hardening_contracts.py",
       "result": "passed",
       "passed": 10,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.654,
       "returncode": 0,
       "output_tail": "..........                                                               [100%]\n10 passed in 0.46s\n"
+=======
+      "duration_seconds": 0.782,
+      "returncode": 0,
+      "output_tail": "..........                                                               [100%]\n10 passed in 0.58s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_3_0_hardening_contracts.py",
       "result": "passed",
       "passed": 13,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 1.75,
       "returncode": 0,
       "output_tail": ".............                                                            [100%]\n13 passed in 1.55s\n"
+=======
+      "duration_seconds": 1.81,
+      "returncode": 0,
+      "output_tail": ".............                                                            [100%]\n13 passed in 1.60s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     },
     {
       "module": "tests/test_v18_3_0_license_database_transport.py",
       "result": "passed",
       "passed": 3,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.204,
+=======
+      "duration_seconds": 0.228,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "...                                                                      [100%]\n3 passed in 0.02s\n"
     },
@@ -276,7 +420,11 @@
       "result": "passed",
       "passed": 4,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.212,
+=======
+      "duration_seconds": 0.241,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "....                                                                     [100%]\n4 passed in 0.03s\n"
     },
@@ -285,7 +433,11 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.21,
+=======
+      "duration_seconds": 0.234,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
     },
@@ -294,7 +446,11 @@
       "result": "passed",
       "passed": 5,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.21,
+=======
+      "duration_seconds": 0.238,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": ".....                                                                    [100%]\n5 passed in 0.03s\n"
     },
@@ -303,16 +459,24 @@
       "result": "passed",
       "passed": 1,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.248,
+=======
+      "duration_seconds": 0.271,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
-      "output_tail": ".                                                                        [100%]\n1 passed in 0.06s\n"
+      "output_tail": ".                                                                        [100%]\n1 passed in 0.07s\n"
     },
     {
       "module": "tests/test_v18_3_2_delivery_contract.py",
       "result": "passed",
       "passed": 4,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.245,
+=======
+      "duration_seconds": 0.276,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "....                                                                     [100%]\n4 passed in 0.06s\n"
     },
@@ -321,7 +485,11 @@
       "result": "passed",
       "passed": 2,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.208,
+=======
+      "duration_seconds": 0.227,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.02s\n"
     },
@@ -330,7 +498,11 @@
       "result": "passed",
       "passed": 14,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.282,
+=======
+      "duration_seconds": 0.322,
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
       "returncode": 0,
       "output_tail": "..............                                                           [100%]\n14 passed in 0.10s\n"
     },
@@ -339,16 +511,27 @@
       "result": "passed",
       "passed": 8,
       "skipped": 0,
+<<<<<<< HEAD
       "duration_seconds": 0.218,
       "returncode": 0,
       "output_tail": "........                                                                 [100%]\n8 passed in 0.03s\n"
+=======
+      "duration_seconds": 0.25,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.05s\n"
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
     }
   ]
 }
 
 === FAILURE TAIL ===
+<<<<<<< HEAD
 [PASSED ] tests/test_source_fingerprint.py: passed=3 skipped=0 duration=0.476s
 [FAILED ] tests/test_source_manifest_integrity.py: passed=1 skipped=0 duration=0.356s
+=======
+[PASSED ] tests/test_source_fingerprint.py: passed=3 skipped=0 duration=0.608s
+[FAILED ] tests/test_source_manifest_integrity.py: passed=1 skipped=0 duration=0.451s
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)
 F.                                                                       [100%]
 =================================== FAILURES ===================================
 _____________ test_checked_in_source_manifest_matches_current_tree _____________
@@ -365,6 +548,7 @@ FAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_
 assert False
 1 failed, 1 passed in 0.17s
 
+<<<<<<< HEAD
 [PASSED ] tests/test_tauri_bundle_icon_contract.py: passed=1 skipped=0 duration=0.201s
 [PASSED ] tests/test_v18_0_2_regression_contracts.py: passed=11 skipped=0 duration=0.214s
 [PASSED ] tests/test_v18_0_3_regression_contracts.py: passed=8 skipped=0 duration=0.207s
@@ -397,3 +581,37 @@ assert False
 [PASSED ] tests/test_v18_4_0_reliability_contracts.py: passed=14 skipped=0 duration=0.282s
 [PASSED ] tests/test_v18_4_3_repair_contracts.py: passed=8 skipped=0 duration=0.218s
 {"schema": "dokkomplekt.python-contract-shards.v1", "result": "failed", "python": "3.12.13", "source_sha256": "f329a0680b6e188392bc76f8447d8409253c2bdf901e28d54887df4cc3d479fb", "source_unchanged_during_run": true, "module_count": 37, "passed_test_count": 218, "skipped_test_count": 0, "duration_seconds": 17.569}
+=======
+[PASSED ] tests/test_tauri_bundle_icon_contract.py: passed=1 skipped=0 duration=0.227s
+[PASSED ] tests/test_v18_0_2_regression_contracts.py: passed=11 skipped=0 duration=0.244s
+[PASSED ] tests/test_v18_0_3_regression_contracts.py: passed=8 skipped=0 duration=0.244s
+[PASSED ] tests/test_v18_0_4_professional_popup_contracts.py: passed=12 skipped=0 duration=0.330s
+[PASSED ] tests/test_v18_0_5_guided_word_scanner_contracts.py: passed=7 skipped=0 duration=0.244s
+[PASSED ] tests/test_v18_0_6_scanner_watcher_print_contracts.py: passed=10 skipped=0 duration=0.242s
+[PASSED ] tests/test_v18_0_7_security_update_popup_license_contracts.py: passed=13 skipped=0 duration=0.253s
+[PASSED ] tests/test_v18_0_8_zero_touch_hardening_contracts.py: passed=7 skipped=0 duration=0.235s
+[PASSED ] tests/test_v18_1_0_content_pack_sdk.py: passed=4 skipped=0 duration=1.200s
+[PASSED ] tests/test_v18_1_0_production_pilot_contracts.py: passed=7 skipped=0 duration=0.237s
+[PASSED ] tests/test_v18_1_0_sidecar_staging.py: passed=2 skipped=0 duration=0.678s
+[PASSED ] tests/test_v18_1_1_offline_runtime.py: passed=3 skipped=0 duration=0.247s
+[PASSED ] tests/test_v18_1_1_operational_hardening_contracts.py: passed=11 skipped=0 duration=0.242s
+[PASSED ] tests/test_v18_1_1_reference_data_freshness.py: passed=2 skipped=0 duration=0.287s
+[PASSED ] tests/test_v18_1_2_grounding_distributed_release_contracts.py: passed=14 skipped=0 duration=0.305s
+[PASSED ] tests/test_v18_1_2_offline_runtime_bundle.py: passed=2 skipped=0 duration=0.268s
+[PASSED ] tests/test_v18_1_2_rust_panic_audit.py: passed=2 skipped=0 duration=0.423s
+[PASSED ] tests/test_v18_1_3_pilot_expansion_contracts.py: passed=7 skipped=0 duration=0.258s
+[PASSED ] tests/test_v18_2_0_component_delivery_contracts.py: passed=6 skipped=0 duration=0.420s
+[PASSED ] tests/test_v18_2_1_resume_queue_modularization_contracts.py: passed=6 skipped=0 duration=0.234s
+[PASSED ] tests/test_v18_2_2_adversarial_hardening_contracts.py: passed=10 skipped=0 duration=0.782s
+[PASSED ] tests/test_v18_3_0_hardening_contracts.py: passed=13 skipped=0 duration=1.810s
+[PASSED ] tests/test_v18_3_0_license_database_transport.py: passed=3 skipped=0 duration=0.228s
+[PASSED ] tests/test_v18_3_0_ocr_layout_contracts.py: passed=4 skipped=0 duration=0.241s
+[PASSED ] tests/test_v18_3_0_scanned_pdf_fixture.py: passed=2 skipped=0 duration=0.234s
+[PASSED ] tests/test_v18_3_1_semantic_magic_contract.py: passed=5 skipped=0 duration=0.238s
+[PASSED ] tests/test_v18_3_2_central_queue_exactly_once.py: passed=1 skipped=0 duration=0.271s
+[PASSED ] tests/test_v18_3_2_delivery_contract.py: passed=4 skipped=0 duration=0.276s
+[PASSED ] tests/test_v18_3_2_windows_regression_wall_contract.py: passed=2 skipped=0 duration=0.227s
+[PASSED ] tests/test_v18_4_0_reliability_contracts.py: passed=14 skipped=0 duration=0.322s
+[PASSED ] tests/test_v18_4_3_repair_contracts.py: passed=8 skipped=0 duration=0.250s
+{"schema": "dokkomplekt.python-contract-shards.v1", "result": "failed", "python": "3.12.13", "source_sha256": "f329a0680b6e188392bc76f8447d8409253c2bdf901e28d54887df4cc3d479fb", "source_unchanged_during_run": true, "module_count": 37, "passed_test_count": 218, "skipped_test_count": 0, "duration_seconds": 19.766}
+>>>>>>> a0a0028 (chore(ci): capture PR7 Python failure)

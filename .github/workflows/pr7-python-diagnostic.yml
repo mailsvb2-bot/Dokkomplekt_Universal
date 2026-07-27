@@ -1,6 +1,7 @@
 name: PR7 Python diagnostic
 
 on:
+  pull_request:
   push:
     branches: [fix/simple-ui-button-creation]
 

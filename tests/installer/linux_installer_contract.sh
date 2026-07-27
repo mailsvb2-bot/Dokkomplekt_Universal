@@ -65,17 +65,15 @@ run_deb_install_smoke() {
     setsid xvfb-run -a dbus-run-session -- "$binary_path" >"$smoke_home/launch.log" 2>&1 &
   pid=$!
   sleep 5
-  if kill -0 "$pid" 2>/dev/null; then
-    status=0
-  else
+  # The whole isolated process group must still exist. A clean exit code is not
+  # enough: a GUI that flashes and closes is a failed launch from the user's view.
+  if ! kill -0 -- "-$pid" 2>/dev/null; then
     wait "$pid" || status=$?
     status="${status:-0}"
-    if [ "$status" -ne 0 ]; then
-      cat "$smoke_home/launch.log" >&2
-      cleanup_deb_install
-      echo "installed application exited during launch smoke with code $status" >&2
-      exit 1
-    fi
+    cat "$smoke_home/launch.log" >&2
+    cleanup_deb_install
+    echo "installed application exited early during launch smoke with code $status" >&2
+    exit 1
   fi
 
   # Stop the complete isolated launch session, not only the xvfb-run wrapper.

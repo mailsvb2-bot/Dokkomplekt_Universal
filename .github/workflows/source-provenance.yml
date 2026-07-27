@@ -24,7 +24,7 @@ jobs:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Apply staged client-first UI
-        if: github.ref_name == 'ui/client-first-neutral'
+        if: github.head_ref == 'ui/client-first-neutral' || github.ref_name == 'ui/client-first-neutral'
         shell: bash
         run: |
           set -Eeuo pipefail

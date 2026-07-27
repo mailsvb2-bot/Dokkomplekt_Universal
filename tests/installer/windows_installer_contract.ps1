@@ -53,13 +53,12 @@ if ($env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '1') {
 
 $process = Start-Process -FilePath $app.FullName -PassThru
 Start-Sleep -Seconds 5
-if ($process.HasExited -and $process.ExitCode -ne 0) {
-  throw "Installed application exited during launch smoke with code $($process.ExitCode)"
+if ($process.HasExited) {
+  $earlyExitCode = $process.ExitCode
+  throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
-if (!$process.HasExited) {
-  Stop-Process -Id $process.Id -Force
-  $process.WaitForExit()
-}
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
 
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |
   Where-Object { $_.Name -match "uninstall" } |
@@ -68,4 +67,4 @@ if (!$uninstaller) { throw "NSIS uninstaller was not created" }
 $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait -PassThru
 if ($uninstall.ExitCode -ne 0) { throw "NSIS silent uninstall failed with exit code $($uninstall.ExitCode)" }
 
-Write-Host "Windows installer validation OK: installed, launched and uninstalled $($installer.FullName)"
+Write-Host "Windows installer validation OK: installed, remained alive, and uninstalled $($installer.FullName)"

@@ -56,6 +56,20 @@ jobs:
                   message = '\n'.join(failure.get('failureMessages', []))
                   line_match = re.search(r'App\.scenarios\.test\.tsx:(\d+):', message)
                   line = line_match.group(1) if line_match else 'unknown-line'
+                  detail = ''
+                  selector_match = re.search(r'Found multiple elements with the role "([^"]+)" and name\s+([^\n]+)', message)
+                  if selector_match:
+                      detail = f'{selector_match.group(1)}-{selector_match.group(2)}'
+                  elif 'Found multiple elements' in message:
+                      for token, label in [
+                          ('Сохранить', 'save'), ('Проверить', 'check'), ('Удалить', 'delete'),
+                          ('Создать', 'create'), ('Настройки', 'settings'), ('Загрузить', 'load'),
+                          ('Рассчитать', 'calculate'), ('Добавить', 'add'), ('Печать', 'print'),
+                      ]:
+                          if token in message:
+                              detail = label
+                              break
+                  detail = re.sub(r'[^0-9A-Za-zА-Яа-яЁё._-]+', '_', detail).strip('_')[:70]
                   if 'Unable to find role=' in message or 'Unable to find an accessible element' in message:
                       kind = 'missing-role'
                   elif 'Unable to find an element with the text' in message:
@@ -68,7 +82,7 @@ jobs:
                       kind = 'timeout'
                   else:
                       kind = 'assertion'
-                  slug = f'L{line}-{kind}'
+                  slug = f'L{line}-{kind}' + (f'-{detail}' if detail else '')
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
               output.write(f'slug={slug}\n')
           PY

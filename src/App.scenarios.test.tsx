@@ -227,7 +227,7 @@ describe('Полный прогон пользовательских сцена�
     // Manual markup remains available inside advanced tools.
     fireEvent.change(screen.getByPlaceholderText('Идентификатор поля'), { target: { value: 'document.number' } });
     fireEvent.change(screen.getByPlaceholderText('Выделенный текст'), { target: { value: '148' } });
-    await click(/Назначить полю/);
+    await click(/Назначить выделение полю/);
     await waitFor(() => expect(calls.some((call) => {
       if (call.command !== 'apply_scanner') return false;
       const request = (call.payload as { req?: { marks?: Array<{ field_id?: string; selected_text?: string }> } } | undefined)?.req;

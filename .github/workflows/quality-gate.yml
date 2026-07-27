@@ -174,6 +174,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Restore packaging Rust cache
         uses: actions/cache@v4
         with:
@@ -196,14 +199,24 @@ jobs:
         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
       - name: Repeat mandatory Rust gate on packaging runner
         shell: bash
-        run: bash scripts/prepackage_rust_gate.sh
+        run: |
+          set -o pipefail
+          bash scripts/prepackage_rust_gate.sh 2>&1 | tee "packaging-rust-${{ runner.os }}.log"
       - run: npm ci
       - name: Build Windows NSIS bundle
         if: runner.os == 'Windows'
-        run: npx tauri build --bundles nsis
+        shell: pwsh
+        run: |
+          npx tauri build --bundles nsis 2>&1 | Tee-Object -FilePath "tauri-build-${{ runner.os }}.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Linux bundles
         if: runner.os == 'Linux'
-        run: npx tauri build --bundles appimage,deb,rpm
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          set -o pipefail
+          npx tauri build --bundles appimage,deb,rpm 2>&1 | tee "tauri-build-${{ runner.os }}.log"
       - name: Windows installer smoke
         if: runner.os == 'Windows'
         shell: pwsh
@@ -211,6 +224,15 @@ jobs:
       - name: Linux installer smoke
         if: runner.os == 'Linux'
         run: bash tests/installer/linux_installer_contract.sh
+      - name: Upload packaging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaging-diagnostics-${{ runner.os }}
+          path: |
+            packaging-rust-${{ runner.os }}.log
+            tauri-build-${{ runner.os }}.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

@@ -1,0 +1,46 @@
+name: Source Provenance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-provenance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-source-manifest:
+    name: Source manifest matches tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate candidate and compare with checked-in manifest
+        id: manifest
+        continue-on-error: true
+        run: |
+          python scripts/verify_source_manifest.py \
+            --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report verification/ci/source-manifest-report.json
+      - name: Upload source-manifest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manifest-candidate
+          path: |
+            verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
+            verification/ci/source-manifest-report.json
+          if-no-files-found: error
+      - name: Enforce source-manifest integrity
+        if: steps.manifest.outcome != 'success'
+        run: |
+          cat verification/ci/source-manifest-report.json
+          exit 1

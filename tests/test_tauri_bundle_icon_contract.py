@@ -24,6 +24,10 @@ def test_tauri_bundle_declares_existing_cross_platform_icons() -> None:
         "Tauri bundle.icon must explicitly declare application icons; "
         "otherwise AppImage packaging cannot select a square icon"
     )
+    assert len(icon_paths) == len(set(icon_paths)), (
+        "Tauri bundle.icon must not contain duplicate paths because target-specific "
+        "icon selection must remain deterministic"
+    )
 
     resolved = [TAURI_ROOT / relative_path for relative_path in icon_paths]
     missing = [path.relative_to(ROOT).as_posix() for path in resolved if not path.is_file()]

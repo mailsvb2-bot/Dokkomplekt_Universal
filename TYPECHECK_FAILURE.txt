@@ -1,0 +1,5 @@
+
+> dokkomplekt-universal-tauri@18.4.3 typecheck
+> tsc --noEmit
+
+tests/e2e/first_run.spec.ts(83,21): error TS2339: Property 'getByDisplayValue' does not exist on type 'Page'.

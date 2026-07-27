@@ -4,10 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 
-import build_source_archive as source_archive
+MODULE_PATH = Path(__file__).resolve().with_name("build_source_archive.py")
+SPEC = importlib.util.spec_from_file_location("build_source_archive", MODULE_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load source archive module: {MODULE_PATH}")
+source_archive = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(source_archive)
 
 ROOT = source_archive.ROOT
 MANIFEST_PATH = ROOT / source_archive.SOURCE_MANIFEST

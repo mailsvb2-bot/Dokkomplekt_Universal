@@ -18,6 +18,69 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  apply-windows-clippy-source-fix:
+    name: One-shot Windows source correction
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/ci-quality-gate-20260726'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ci-quality-gate-20260726
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Correct Windows-only Rust source and remove temporary workflow
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('src-tauri/src/main.rs')
+          text = source.read_text(encoding='utf-8')
+          old = '''        return text
+              .lines()
+              .find(|line| line.contains("MachineGuid"))
+              .and_then(|line| line.split_whitespace().last())
+              .map(str::trim)
+              .filter(|value| !value.is_empty())
+              .map(str::to_string);
+          '''
+          new = '''        text
+              .lines()
+              .find(|line| line.contains("MachineGuid"))
+              .and_then(|line| line.split_whitespace().last())
+              .map(str::trim)
+              .filter(|value| !value.is_empty())
+              .map(str::to_string)
+          '''
+          old_count = text.count(old)
+          new_count = text.count(new)
+          if old_count == 1:
+              source.write_text(text.replace(old, new, 1), encoding='utf-8')
+          elif new_count != 1:
+              raise SystemExit(
+                  f'expected old or corrected MachineGuid block exactly once; old={old_count}, new={new_count}'
+              )
+          temporary = Path('.github/workflows/apply-windows-clippy-source-fix.yml')
+          if temporary.exists():
+              temporary.unlink()
+          PY
+      - name: Commit source correction when needed
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Windows source is already corrected."
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/main.rs .github/workflows/apply-windows-clippy-source-fix.yml
+          git commit -m "Fix Windows-only Clippy failure at the source"
+          git push origin HEAD:fix/ci-quality-gate-20260726
+
   rust-compile-gate:
     name: REQUIRED Rust compile gate (non-bypassable)
     runs-on: ubuntu-latest
@@ -220,10 +283,15 @@ jobs:
       - name: Windows installer smoke
         if: runner.os == 'Windows'
         shell: pwsh
-        run: tests/installer/windows_installer_contract.ps1
+        run: |
+          tests/installer/windows_installer_contract.ps1 2>&1 | Tee-Object -FilePath "installer-smoke-${{ runner.os }}.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Linux installer smoke
         if: runner.os == 'Linux'
-        run: bash tests/installer/linux_installer_contract.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          bash tests/installer/linux_installer_contract.sh 2>&1 | tee "installer-smoke-${{ runner.os }}.log"
       - name: Upload packaging diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -232,6 +300,7 @@ jobs:
           path: |
             packaging-rust-${{ runner.os }}.log
             tauri-build-${{ runner.os }}.log
+            installer-smoke-${{ runner.os }}.log
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:

@@ -107,14 +107,14 @@ export function DocumentRail(props: DocumentRailProps) {
         </>
       ) : (
         <div className="emptyPackage">
-          <div><i className="ti ti-files" aria-hidden="true" /></div>
+          <div><i className="ti ti-files" /></div>
           <h3>Добавьте свои шаблоны</h3>
           <p>Программа превратит их в понятный набор документов и запомнит правила заполнения.</p>
           <button className="primaryBtn full" onClick={props.onAdd}>Добавить шаблоны</button>
         </div>
       )}
 
-      <button className="settingsLink" onClick={props.onToggleUtilities}>
+      <button className="settingsLink" aria-label="Настройки" onClick={props.onToggleUtilities}>
         <i className="ti ti-adjustments-horizontal" aria-hidden="true" /> Настройки и автоматизация
       </button>
     </aside>

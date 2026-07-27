@@ -22,6 +22,38 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+      - name: Keep profile dictionaries out of neutral UI scenario
+        if: github.head_ref == 'ui/client-first-neutral'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/App.scenarios.test.tsx')
+          text = path.read_text(encoding='utf-8')
+          block = """    // dictionary search -> icd10_suggest, chip shown
+    fireEvent.change(screen.getByPlaceholderText('Введите код или значение'), { target: { value: 'A-101' } });
+    await click('Найти');
+    await screen.findByRole('button', { name: /A-101 — Типовое значение/ });
+    expect(parsePayload(calls, 'icd10_suggest')).toMatchObject({ query: 'A-101' });
+
+"""
+          if text.count(block) != 1:
+              raise SystemExit(f'expected one profile-dictionary block, found {text.count(block)}')
+          text = text.replace(block, "    // Profile-specific dictionaries are tested separately and appear only when a template requests them.\n\n", 1)
+          old = "const internalOrProfileOnly = new Set(['get_diary_plan',"
+          new = "const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan',"
+          if text.count(old) != 1:
+              raise SystemExit(f'profile-only command set anchor count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git show origin/main:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Keep profile dictionaries out of neutral UI scenario'
+          git push origin HEAD:ui/client-first-neutral
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

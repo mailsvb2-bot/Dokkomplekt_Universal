@@ -1,112 +1,40 @@
-name: Vitest Diagnostic
+name: Apply Vitest Fix
 
 on:
   pull_request:
     paths:
-      - 'src/**'
-      - 'package.json'
-      - 'package-lock.json'
       - '.github/workflows/vitest-diagnostic.yml'
 
 permissions:
-  contents: read
-
-concurrency:
-  group: vitest-diagnostic-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  diagnose:
-    name: Exact Vitest failure
+  apply:
+    if: github.head_ref == 'ui/client-first-neutral'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - id: vitest
-        continue-on-error: true
-        run: npm run test -- --reporter=json --outputFile=verification/ci/vitest-diagnostic.json
-      - id: summary
-        if: always()
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Update neutral table placeholder test and remove diagnostic
         shell: bash
         run: |
+          set -Eeuo pipefail
           python - <<'PY'
-          import json
-          import os
-          import re
           from pathlib import Path
-
-          report_path = Path('verification/ci/vitest-diagnostic.json')
-          slug = 'report-missing'
-          if report_path.exists():
-              report = json.loads(report_path.read_text(encoding='utf-8'))
-              failures = []
-              for suite in report.get('testResults', []):
-                  for assertion in suite.get('assertionResults', []):
-                      if assertion.get('status') == 'failed':
-                          failures.append(assertion)
-              if not failures:
-                  slug = 'success'
-              else:
-                  failure = failures[0]
-                  message = '\n'.join(failure.get('failureMessages', []))
-                  line_match = re.search(r'App\.scenarios\.test\.tsx:(\d+):', message)
-                  line = line_match.group(1) if line_match else 'unknown-line'
-                  detail = ''
-                  selector_match = re.search(r'Found multiple elements with the role "([^"]+)" and name\s+([^\n]+)', message)
-                  if selector_match:
-                      detail = f'{selector_match.group(1)}-{selector_match.group(2)}'
-                  elif 'Found multiple elements' in message:
-                      for token, label in [
-                          ('Сохранить', 'save'), ('Проверить', 'check'), ('Удалить', 'delete'),
-                          ('Создать', 'create'), ('Настройки', 'settings'), ('Загрузить', 'load'),
-                          ('Рассчитать', 'calculate'), ('Добавить', 'add'), ('Печать', 'print'),
-                      ]:
-                          if token in message:
-                              detail = label
-                              break
-                  if not detail:
-                      meaningful = []
-                      for raw_line in message.splitlines():
-                          candidate = re.sub(r'\x1b\[[0-9;]*m', '', raw_line).strip()
-                          if not candidate or candidate.startswith('at ') or candidate.startswith('❯'):
-                              continue
-                          if candidate.startswith('<') or candidate.startswith('</'):
-                              continue
-                          meaningful.append(candidate)
-                      detail = meaningful[0] if meaningful else 'unknown'
-                  detail = re.sub(r'[^0-9A-Za-zА-Яа-яЁё._-]+', '_', detail).strip('_')[:80]
-                  if 'Unable to find role=' in message or 'Unable to find an accessible element' in message:
-                      kind = 'missing-role'
-                  elif 'Unable to find an element with the text' in message:
-                      kind = 'missing-text'
-                  elif 'Found multiple elements' in message:
-                      kind = 'multiple-elements'
-                  elif 'Unable to fire a' in message:
-                      kind = 'missing-event-target'
-                  elif 'unexpected command' in message:
-                      kind = 'unexpected-command'
-                  elif 'expected false to be true' in message or 'expected true to be false' in message:
-                      kind = 'expected-boolean'
-                  elif 'Timed out' in message or 'timeout' in message.lower():
-                      kind = 'timeout'
-                  else:
-                      kind = 'assertion'
-                  slug = f'L{line}-{kind}' + (f'-{detail}' if detail else '')
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f'slug={slug}\n')
+          path = Path('src/App.scenarios.test.tsx')
+          text = path.read_text(encoding='utf-8')
+          old = "getByPlaceholderText(/ФИО;contract\\.number/)"
+          new = "getByPlaceholderText(/Наименование;document\\.number/)"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one legacy table placeholder selector, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
-      - name: Upload exact diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitest-${{ steps.summary.outputs.slug }}
-          path: verification/ci/vitest-diagnostic.json
-          if-no-files-found: error
-      - name: Enforce Vitest result
-        if: steps.vitest.outcome != 'success'
-        run: exit 1
+          rm .github/workflows/vitest-diagnostic.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/App.scenarios.test.tsx .github/workflows/vitest-diagnostic.yml
+          git commit -m 'test(ui): use neutral table placeholder'
+          git push origin "HEAD:${{ github.head_ref }}"

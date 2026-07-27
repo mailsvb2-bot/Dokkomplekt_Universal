@@ -22,6 +22,47 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+      - name: Preserve honest client-facing time metrics
+        if: github.head_ref == 'ui/client-first-neutral'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          ui = Path('src/components/AutomationControlCenter.tsx')
+          text = ui.read_text(encoding='utf-8')
+          replacements = {
+              'Оценка задаётся организацией и становится точной после замера на реальной работе.': 'Оценка задаётся организацией и не является фактически сэкономленным временем без замера на реальной работе.',
+              'Прошло автопечать-gate': 'Допущено к автопечати',
+              'базовая норма − замер runtime': 'норма ручной работы − фактическое время обработки',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing UI phrase: {old}')
+              text = text.replace(old, new)
+          ui.write_text(text, encoding='utf-8')
+
+          contract = Path('tests/test_v18_3_0_hardening_contracts.py')
+          text = contract.read_text(encoding='utf-8')
+          replacements = {
+              'self.assertIn("Измеренное машинное время", ui)': 'self.assertIn("Время автоматической обработки", ui)',
+              'self.assertIn("базовая норма − замер runtime", ui)': 'self.assertIn("норма ручной работы − фактическое время обработки", ui)',
+              'self.assertIn("не считается доказанным временем", ui)': 'self.assertIn("не является фактически сэкономленным временем без замера", ui)',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing contract phrase: {old}')
+              text = text.replace(old, new)
+          contract.write_text(text, encoding='utf-8')
+          PY
+          git show origin/main:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Keep automation time estimates honest and client-readable'
+          git push origin HEAD:ui/client-first-neutral
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

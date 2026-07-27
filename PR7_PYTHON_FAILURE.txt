@@ -3,425 +3,289 @@
   "schema": "dokkomplekt.python-contract-shards.v1",
   "result": "failed",
   "python": "3.12.13",
-  "source_sha256": "2fc1f413d6e2b1fc1047fcd901900181d5bf9ac82263873745430b3471975f10",
+  "source_sha256": "f329a0680b6e188392bc76f8447d8409253c2bdf901e28d54887df4cc3d479fb",
   "source_unchanged_during_run": true,
   "module_count": 37,
-  "passed_test_count": 217,
+  "passed_test_count": 218,
   "skipped_test_count": 0,
-<<<<<<< HEAD
-  "duration_seconds": 18.894,
-=======
-  "duration_seconds": 19.735,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+  "duration_seconds": 17.569,
   "modules": [
     {
       "module": "tests/test_ed25519_compat.py",
       "result": "passed",
       "passed": 5,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.437,
-=======
-      "duration_seconds": 0.507,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.684,
       "returncode": 0,
-      "output_tail": ".....                                                                    [100%]\n5 passed in 0.05s\n"
+      "output_tail": ".....                                                                    [100%]\n5 passed in 0.04s\n"
     },
     {
       "module": "tests/test_installer_launch_liveness_contract.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.224,
-=======
-      "duration_seconds": 0.248,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.208,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.02s\n"
     },
     {
       "module": "tests/test_linux_installer_smoke_contract.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 5.627,
+      "duration_seconds": 4.479,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 5.43s\n"
-=======
-      "duration_seconds": 5.719,
-      "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 5.51s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "..                                                                       [100%]\n2 passed in 4.29s\n"
     },
     {
       "module": "tests/test_semantic_corpus_tools.py",
       "result": "passed",
       "passed": 4,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.471,
-=======
-      "duration_seconds": 0.506,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.444,
       "returncode": 0,
-      "output_tail": "....                                                                     [100%]\n4 passed in 0.27s\n"
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.25s\n"
     },
     {
       "module": "tests/test_source_fingerprint.py",
       "result": "passed",
       "passed": 3,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.602,
+      "duration_seconds": 0.476,
       "returncode": 0,
-      "output_tail": "...                                                                      [100%]\n3 passed in 0.40s\n"
-=======
-      "duration_seconds": 0.613,
-      "returncode": 0,
-      "output_tail": "...                                                                      [100%]\n3 passed in 0.42s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.29s\n"
     },
     {
       "module": "tests/test_source_manifest_integrity.py",
       "result": "failed",
       "passed": 1,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.443,
-=======
-      "duration_seconds": 0.448,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.356,
       "returncode": 1,
-      "output_tail": "F.                                                                       [100%]\n=================================== FAILURES ===================================\n_____________ test_checked_in_source_manifest_matches_current_tree _____________\n\n    def test_checked_in_source_manifest_matches_current_tree() -> None:\n        report = MODULE.verify()\n>       assert report[\"matches\"], report\nE       AssertionError: {'expected_file_count': 442, 'hash_mismatches': ['.github/workflows/pr7-python-diagnostic.yml'], 'manifest_file_count': 442, 'matches': False, ...}\nE       assert False\n\ntests/test_source_manifest_integrity.py:16: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_matches_current_tree - AssertionError: {'expected_file_count': 442, 'hash_mismatches': ['.github/workflows/pr7-python-diagnostic.yml'], 'manifest_file_count': 442, 'matches': False, ...}\nassert False\n1 failed, 1 passed in 0.25s\n"
+      "output_tail": "F.                                                                       [100%]\n=================================== FAILURES ===================================\n_____________ test_checked_in_source_manifest_matches_current_tree _____________\n\n    def test_checked_in_source_manifest_matches_current_tree() -> None:\n        report = MODULE.verify()\n>       assert report[\"matches\"], report\nE       AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}\nE       assert False\n\ntests/test_source_manifest_integrity.py:16: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_matches_current_tree - AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}\nassert False\n1 failed, 1 passed in 0.17s\n"
     },
     {
       "module": "tests/test_tauri_bundle_icon_contract.py",
       "result": "passed",
       "passed": 1,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.224,
-=======
-      "duration_seconds": 0.222,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.201,
       "returncode": 0,
-      "output_tail": ".                                                                        [100%]\n1 passed in 0.03s\n"
+      "output_tail": ".                                                                        [100%]\n1 passed in 0.02s\n"
     },
     {
       "module": "tests/test_v18_0_2_regression_contracts.py",
       "result": "passed",
       "passed": 11,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.239,
-=======
-      "duration_seconds": 0.238,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.214,
       "returncode": 0,
-      "output_tail": "...........                                                              [100%]\n11 passed in 0.04s\n"
+      "output_tail": "...........                                                              [100%]\n11 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_0_3_regression_contracts.py",
-      "result": "failed",
-      "passed": 7,
+      "result": "passed",
+      "passed": 8,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.252,
-      "returncode": 1,
-      "output_tail": "и.</small>\\n                    </div>\\n                    <button className=\"softBtn\" type=\"button\" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>\\n                      <i className=\"ti ti-hand-click\" aria-hidden=\"true\" /> Открыть Word и показать место\\n                    </button>\\n                  </div>\\n                  <details className=\"manualScannerDetails\">\\n                    <summary>Ручная разметка для опытных пользователей</summary>\\n                    <textarea\\n                      value={activePending.extracted_text}\\n                      readOnly\\n                      aria-label={`Текст шаблона ${activePending.file_name} для разметки`}\\n                      onSelect={(event) => {\\n                        const target = event.currentTarget;\\n                        const start = target.selectionStart ?? 0;\\n                        const end = target.selectionEnd ?? start;\\n                        setSelection(end > start ? { start, end, text: target.value.slice(start, end) } : null);\\n                      }}\\n                      spellCheck={false}\\n                    />\\n                    <ScannerToolbar\\n                      selection={selection?.text ?? \\'\\'}\\n                      fieldId={scannerField}\\n                      onFieldIdChange={setScannerField}\\n                      disabled={marking}\\n                      onReplace={() => void applyPendingVisualMarkup(\\'replace\\')}\\n                      onInsert={() => void applyPendingVisualMarkup(\\'insert_after\\')}\\n                    />\\n                  </details>\\n                  <PopupFieldEditor\\n                    compact\\n                    fields={activePending.popup_fields}\\n                    onChange={(fields) => props.onPendingPopupFieldsChange(activePending.document_id, fields)}\\n                  />\\n                </div>\\n              </details>\\n            ) : null}\\n\\n            <label className=\"softBtn fileBtn\">\\n              Добавить ещё шаблоны\\n              <input type=\"file\" accept=\".docx,.docm\" multiple onChange={props.onPickFile} style={{ display: \\'none\\' }} />\\n            </label>\\n          </>\\n        )}\\n\\n        <datalist id=\"template-scanner-field-suggestions\">\\n          <option value=\"document.number\" /><option value=\"document.date\" /><option value=\"subject.name\" /><option value=\"org.name\" />\\n          <option value=\"amount.total\" /><option value=\"period.start_date\" /><option value=\"period.end_date\" /><option value=\"related.number\" />\\n        </datalist>\\n\\n        <div className=\"modalActions\">\\n          <span className=\"spacer\" />\\n          <button className=\"softBtn\" onClick={props.onCancel}>Отмена</button>\\n          <button className=\"primaryBtn\" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>\\n            {confirmLabel}\\n          </button>\\n        </div>\\n      </div>\\n    </div>\\n  );\\n}\\n\\nfunction ScannerToolbar(props: {\\n  selection: string;\\n  fieldId: string;\\n  disabled?: boolean;\\n  onFieldIdChange(value: string): void;\\n  onReplace(): void;\\n  onInsert(): void;\\n}) {\\n  return (\\n    <div className=\"templateScanner\">\\n      <div className=\"scannerSelection\"><i className=\"ti ti-cursor-text\" aria-hidden=\"true\" />{props.selection ? `Выделено: ${props.selection}` : \\'Выделите мышкой примерное значение\\'}</div>\\n      <input value={props.fieldId} onChange={(event) => props.onFieldIdChange(event.target.value)} placeholder=\"поле, например document.number\" aria-label=\"Смысловое поле сканера\" list=\"template-scanner-field-suggestions\" />\\n      <button className=\"softBtn\" type=\"button\" onClick={props.onReplace} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Заменить</button>\\n      <button className=\"softBtn\" type=\"button\" onClick={props.onInsert} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Вставить после</button>\\n    </div>\\n  );\\n}\\n'\n1 failed, 7 passed in 0.05s\n"
-=======
-      "duration_seconds": 0.258,
-      "returncode": 1,
-      "output_tail": "и.</small>\\n                    </div>\\n                    <button className=\"softBtn\" type=\"button\" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>\\n                      <i className=\"ti ti-hand-click\" aria-hidden=\"true\" /> Открыть Word и показать место\\n                    </button>\\n                  </div>\\n                  <details className=\"manualScannerDetails\">\\n                    <summary>Ручная разметка для опытных пользователей</summary>\\n                    <textarea\\n                      value={activePending.extracted_text}\\n                      readOnly\\n                      aria-label={`Текст шаблона ${activePending.file_name} для разметки`}\\n                      onSelect={(event) => {\\n                        const target = event.currentTarget;\\n                        const start = target.selectionStart ?? 0;\\n                        const end = target.selectionEnd ?? start;\\n                        setSelection(end > start ? { start, end, text: target.value.slice(start, end) } : null);\\n                      }}\\n                      spellCheck={false}\\n                    />\\n                    <ScannerToolbar\\n                      selection={selection?.text ?? \\'\\'}\\n                      fieldId={scannerField}\\n                      onFieldIdChange={setScannerField}\\n                      disabled={marking}\\n                      onReplace={() => void applyPendingVisualMarkup(\\'replace\\')}\\n                      onInsert={() => void applyPendingVisualMarkup(\\'insert_after\\')}\\n                    />\\n                  </details>\\n                  <PopupFieldEditor\\n                    compact\\n                    fields={activePending.popup_fields}\\n                    onChange={(fields) => props.onPendingPopupFieldsChange(activePending.document_id, fields)}\\n                  />\\n                </div>\\n              </details>\\n            ) : null}\\n\\n            <label className=\"softBtn fileBtn\">\\n              Добавить ещё шаблоны\\n              <input type=\"file\" accept=\".docx,.docm\" multiple onChange={props.onPickFile} style={{ display: \\'none\\' }} />\\n            </label>\\n          </>\\n        )}\\n\\n        <datalist id=\"template-scanner-field-suggestions\">\\n          <option value=\"document.number\" /><option value=\"document.date\" /><option value=\"subject.name\" /><option value=\"org.name\" />\\n          <option value=\"amount.total\" /><option value=\"period.start_date\" /><option value=\"period.end_date\" /><option value=\"related.number\" />\\n        </datalist>\\n\\n        <div className=\"modalActions\">\\n          <span className=\"spacer\" />\\n          <button className=\"softBtn\" onClick={props.onCancel}>Отмена</button>\\n          <button className=\"primaryBtn\" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>\\n            {confirmLabel}\\n          </button>\\n        </div>\\n      </div>\\n    </div>\\n  );\\n}\\n\\nfunction ScannerToolbar(props: {\\n  selection: string;\\n  fieldId: string;\\n  disabled?: boolean;\\n  onFieldIdChange(value: string): void;\\n  onReplace(): void;\\n  onInsert(): void;\\n}) {\\n  return (\\n    <div className=\"templateScanner\">\\n      <div className=\"scannerSelection\"><i className=\"ti ti-cursor-text\" aria-hidden=\"true\" />{props.selection ? `Выделено: ${props.selection}` : \\'Выделите мышкой примерное значение\\'}</div>\\n      <input value={props.fieldId} onChange={(event) => props.onFieldIdChange(event.target.value)} placeholder=\"поле, например document.number\" aria-label=\"Смысловое поле сканера\" list=\"template-scanner-field-suggestions\" />\\n      <button className=\"softBtn\" type=\"button\" onClick={props.onReplace} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Заменить</button>\\n      <button className=\"softBtn\" type=\"button\" onClick={props.onInsert} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Вставить после</button>\\n    </div>\\n  );\\n}\\n'\n1 failed, 7 passed in 0.06s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.207,
+      "returncode": 0,
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_0_4_professional_popup_contracts.py",
       "result": "passed",
       "passed": 12,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.314,
-=======
-      "duration_seconds": 0.321,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.275,
       "returncode": 0,
-      "output_tail": "............                                                             [100%]\n12 passed in 0.12s\n"
+      "output_tail": "............                                                             [100%]\n12 passed in 0.09s\n"
     },
     {
       "module": "tests/test_v18_0_5_guided_word_scanner_contracts.py",
       "result": "passed",
       "passed": 7,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.231,
-=======
-      "duration_seconds": 0.23,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.208,
       "returncode": 0,
-      "output_tail": ".......                                                                  [100%]\n7 passed in 0.04s\n"
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_0_6_scanner_watcher_print_contracts.py",
       "result": "passed",
       "passed": 10,
       "skipped": 0,
-      "duration_seconds": 0.237,
+      "duration_seconds": 0.209,
       "returncode": 0,
-      "output_tail": "..........                                                               [100%]\n10 passed in 0.04s\n"
+      "output_tail": "..........                                                               [100%]\n10 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_0_7_security_update_popup_license_contracts.py",
       "result": "passed",
       "passed": 13,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.238,
-=======
-      "duration_seconds": 0.245,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.214,
       "returncode": 0,
-      "output_tail": ".............                                                            [100%]\n13 passed in 0.04s\n"
+      "output_tail": ".............                                                            [100%]\n13 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_0_8_zero_touch_hardening_contracts.py",
       "result": "passed",
       "passed": 7,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.23,
-=======
-      "duration_seconds": 0.229,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.206,
       "returncode": 0,
-      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.02s\n"
     },
     {
       "module": "tests/test_v18_1_0_content_pack_sdk.py",
       "result": "passed",
       "passed": 4,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 1.158,
+      "duration_seconds": 1.034,
       "returncode": 0,
-      "output_tail": "....                                                                     [100%]\n4 passed in 0.96s\n"
-=======
-      "duration_seconds": 1.179,
-      "returncode": 0,
-      "output_tail": "....                                                                     [100%]\n4 passed in 0.98s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.85s\n"
     },
     {
       "module": "tests/test_v18_1_0_production_pilot_contracts.py",
       "result": "passed",
       "passed": 7,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.235,
-=======
-      "duration_seconds": 0.24,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.214,
       "returncode": 0,
-      "output_tail": ".......                                                                  [100%]\n7 passed in 0.04s\n"
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_1_0_sidecar_staging.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.38,
+      "duration_seconds": 1.124,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.18s\n"
-=======
-      "duration_seconds": 0.589,
-      "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.38s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.93s\n"
     },
     {
       "module": "tests/test_v18_1_1_offline_runtime.py",
       "result": "passed",
       "passed": 3,
       "skipped": 0,
-      "duration_seconds": 0.243,
+      "duration_seconds": 0.215,
       "returncode": 0,
-      "output_tail": "...                                                                      [100%]\n3 passed in 0.04s\n"
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_1_1_operational_hardening_contracts.py",
       "result": "passed",
       "passed": 11,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.24,
-=======
-      "duration_seconds": 0.242,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.218,
       "returncode": 0,
-      "output_tail": "...........                                                              [100%]\n11 passed in 0.04s\n"
+      "output_tail": "...........                                                              [100%]\n11 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_1_1_reference_data_freshness.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.281,
-=======
-      "duration_seconds": 0.288,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.259,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.09s\n"
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.08s\n"
     },
     {
       "module": "tests/test_v18_1_2_grounding_distributed_release_contracts.py",
       "result": "passed",
       "passed": 14,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.304,
+      "duration_seconds": 0.267,
       "returncode": 0,
-      "output_tail": "..............                                                           [100%]\n14 passed in 0.10s\n"
-=======
-      "duration_seconds": 0.305,
-      "returncode": 0,
-      "output_tail": "..............                                                           [100%]\n14 passed in 0.11s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "..............                                                           [100%]\n14 passed in 0.08s\n"
     },
     {
       "module": "tests/test_v18_1_2_offline_runtime_bundle.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-      "duration_seconds": 0.26,
+      "duration_seconds": 0.235,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.06s\n"
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.05s\n"
     },
     {
       "module": "tests/test_v18_1_2_rust_panic_audit.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.412,
-=======
-      "duration_seconds": 0.416,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.366,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.22s\n"
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.18s\n"
     },
     {
       "module": "tests/test_v18_1_3_pilot_expansion_contracts.py",
       "result": "passed",
       "passed": 7,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.255,
-=======
-      "duration_seconds": 0.256,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.23,
       "returncode": 0,
-      "output_tail": ".......                                                                  [100%]\n7 passed in 0.06s\n"
+      "output_tail": ".......                                                                  [100%]\n7 passed in 0.05s\n"
     },
     {
       "module": "tests/test_v18_2_0_component_delivery_contracts.py",
       "result": "passed",
       "passed": 6,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.409,
+      "duration_seconds": 0.377,
       "returncode": 0,
-      "output_tail": "......                                                                   [100%]\n6 passed in 0.21s\n"
-=======
-      "duration_seconds": 0.42,
-      "returncode": 0,
-      "output_tail": "......                                                                   [100%]\n6 passed in 0.22s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "......                                                                   [100%]\n6 passed in 0.19s\n"
     },
     {
       "module": "tests/test_v18_2_1_resume_queue_modularization_contracts.py",
       "result": "passed",
       "passed": 6,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.227,
+      "duration_seconds": 0.208,
       "returncode": 0,
-      "output_tail": "......                                                                   [100%]\n6 passed in 0.03s\n"
-=======
-      "duration_seconds": 0.308,
-      "returncode": 0,
-      "output_tail": "......                                                                   [100%]\n6 passed in 0.11s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "......                                                                   [100%]\n6 passed in 0.02s\n"
     },
     {
       "module": "tests/test_v18_2_2_adversarial_hardening_contracts.py",
       "result": "passed",
       "passed": 10,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.767,
+      "duration_seconds": 0.654,
       "returncode": 0,
-      "output_tail": "..........                                                               [100%]\n10 passed in 0.57s\n"
-=======
-      "duration_seconds": 0.782,
-      "returncode": 0,
-      "output_tail": "..........                                                               [100%]\n10 passed in 0.58s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": "..........                                                               [100%]\n10 passed in 0.46s\n"
     },
     {
       "module": "tests/test_v18_3_0_hardening_contracts.py",
       "result": "passed",
       "passed": 13,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 1.718,
+      "duration_seconds": 1.75,
       "returncode": 0,
-      "output_tail": ".............                                                            [100%]\n13 passed in 1.51s\n"
-=======
-      "duration_seconds": 1.926,
-      "returncode": 0,
-      "output_tail": ".............                                                            [100%]\n13 passed in 1.72s\n"
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "output_tail": ".............                                                            [100%]\n13 passed in 1.55s\n"
     },
     {
       "module": "tests/test_v18_3_0_license_database_transport.py",
       "result": "passed",
       "passed": 3,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.224,
-=======
-      "duration_seconds": 0.231,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.204,
       "returncode": 0,
-      "output_tail": "...                                                                      [100%]\n3 passed in 0.03s\n"
+      "output_tail": "...                                                                      [100%]\n3 passed in 0.02s\n"
     },
     {
       "module": "tests/test_v18_3_0_ocr_layout_contracts.py",
       "result": "passed",
       "passed": 4,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.231,
-=======
-      "duration_seconds": 0.237,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.212,
       "returncode": 0,
-      "output_tail": "....                                                                     [100%]\n4 passed in 0.04s\n"
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_3_0_scanned_pdf_fixture.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.231,
-=======
-      "duration_seconds": 0.229,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.21,
       "returncode": 0,
       "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
     },
@@ -430,16 +294,16 @@
       "result": "passed",
       "passed": 5,
       "skipped": 0,
-      "duration_seconds": 0.234,
+      "duration_seconds": 0.21,
       "returncode": 0,
-      "output_tail": ".....                                                                    [100%]\n5 passed in 0.04s\n"
+      "output_tail": ".....                                                                    [100%]\n5 passed in 0.03s\n"
     },
     {
       "module": "tests/test_v18_3_2_central_queue_exactly_once.py",
       "result": "passed",
       "passed": 1,
       "skipped": 0,
-      "duration_seconds": 0.266,
+      "duration_seconds": 0.248,
       "returncode": 0,
       "output_tail": ".                                                                        [100%]\n1 passed in 0.06s\n"
     },
@@ -448,142 +312,88 @@
       "result": "passed",
       "passed": 4,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.272,
-=======
-      "duration_seconds": 0.277,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.245,
       "returncode": 0,
-      "output_tail": "....                                                                     [100%]\n4 passed in 0.08s\n"
+      "output_tail": "....                                                                     [100%]\n4 passed in 0.06s\n"
     },
     {
       "module": "tests/test_v18_3_2_windows_regression_wall_contract.py",
       "result": "passed",
       "passed": 2,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.223,
-=======
-      "duration_seconds": 0.225,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.208,
       "returncode": 0,
-      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s\n"
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.02s\n"
     },
     {
       "module": "tests/test_v18_4_0_reliability_contracts.py",
       "result": "passed",
       "passed": 14,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.315,
-=======
-      "duration_seconds": 0.323,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.282,
       "returncode": 0,
-      "output_tail": "..............                                                           [100%]\n14 passed in 0.12s\n"
+      "output_tail": "..............                                                           [100%]\n14 passed in 0.10s\n"
     },
     {
       "module": "tests/test_v18_4_3_repair_contracts.py",
       "result": "passed",
       "passed": 8,
       "skipped": 0,
-<<<<<<< HEAD
-      "duration_seconds": 0.24,
-=======
-      "duration_seconds": 0.238,
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+      "duration_seconds": 0.218,
       "returncode": 0,
-      "output_tail": "........                                                                 [100%]\n8 passed in 0.04s\n"
+      "output_tail": "........                                                                 [100%]\n8 passed in 0.03s\n"
     }
   ]
 }
 
 === FAILURE TAIL ===
+[PASSED ] tests/test_source_fingerprint.py: passed=3 skipped=0 duration=0.476s
+[FAILED ] tests/test_source_manifest_integrity.py: passed=1 skipped=0 duration=0.356s
+F.                                                                       [100%]
 =================================== FAILURES ===================================
 _____________ test_checked_in_source_manifest_matches_current_tree _____________
 
     def test_checked_in_source_manifest_matches_current_tree() -> None:
         report = MODULE.verify()
 >       assert report["matches"], report
-E       AssertionError: {'expected_file_count': 442, 'hash_mismatches': ['.github/workflows/pr7-python-diagnostic.yml'], 'manifest_file_count': 442, 'matches': False, ...}
+E       AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}
 E       assert False
 
 tests/test_source_manifest_integrity.py:16: AssertionError
 =========================== short test summary info ============================
-FAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_matches_current_tree - AssertionError: {'expected_file_count': 442, 'hash_mismatches': ['.github/workflows/pr7-python-diagnostic.yml'], 'manifest_file_count': 442, 'matches': False, ...}
+FAILED tests/test_source_manifest_integrity.py::test_checked_in_source_manifest_matches_current_tree - AssertionError: {'expected_file_count': 443, 'hash_mismatches': ['tests/test_v18_0_3_regression_contracts.py'], 'manifest_file_count': 442, 'matches': False, ...}
 assert False
-1 failed, 1 passed in 0.25s
+1 failed, 1 passed in 0.17s
 
-<<<<<<< HEAD
-[PASSED ] tests/test_tauri_bundle_icon_contract.py: passed=1 skipped=0 duration=0.224s
-[PASSED ] tests/test_v18_0_2_regression_contracts.py: passed=11 skipped=0 duration=0.239s
-[FAILED ] tests/test_v18_0_3_regression_contracts.py: passed=7 skipped=0 duration=0.252s
-и.</small>\n                    </div>\n                    <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>\n                      <i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место\n                    </button>\n                  </div>\n                  <details className="manualScannerDetails">\n                    <summary>Ручная разметка для опытных пользователей</summary>\n                    <textarea\n                      value={activePending.extracted_text}\n                      readOnly\n                      aria-label={`Текст шаблона ${activePending.file_name} для разметки`}\n                      onSelect={(event) => {\n                        const target = event.currentTarget;\n                        const start = target.selectionStart ?? 0;\n                        const end = target.selectionEnd ?? start;\n                        setSelection(end > start ? { start, end, text: target.value.slice(start, end) } : null);\n                      }}\n                      spellCheck={false}\n                    />\n                    <ScannerToolbar\n                      selection={selection?.text ?? \'\'}\n                      fieldId={scannerField}\n                      onFieldIdChange={setScannerField}\n                      disabled={marking}\n                      onReplace={() => void applyPendingVisualMarkup(\'replace\')}\n                      onInsert={() => void applyPendingVisualMarkup(\'insert_after\')}\n                    />\n                  </details>\n                  <PopupFieldEditor\n                    compact\n                    fields={activePending.popup_fields}\n                    onChange={(fields) => props.onPendingPopupFieldsChange(activePending.document_id, fields)}\n                  />\n                </div>\n              </details>\n            ) : null}\n\n            <label className="softBtn fileBtn">\n              Добавить ещё шаблоны\n              <input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} style={{ display: \'none\' }} />\n            </label>\n          </>\n        )}\n\n        <datalist id="template-scanner-field-suggestions">\n          <option value="document.number" /><option value="document.date" /><option value="subject.name" /><option value="org.name" />\n          <option value="amount.total" /><option value="period.start_date" /><option value="period.end_date" /><option value="related.number" />\n        </datalist>\n\n        <div className="modalActions">\n          <span className="spacer" />\n          <button className="softBtn" onClick={props.onCancel}>Отмена</button>\n          <button className="primaryBtn" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>\n            {confirmLabel}\n          </button>\n        </div>\n      </div>\n    </div>\n  );\n}\n\nfunction ScannerToolbar(props: {\n  selection: string;\n  fieldId: string;\n  disabled?: boolean;\n  onFieldIdChange(value: string): void;\n  onReplace(): void;\n  onInsert(): void;\n}) {\n  return (\n    <div className="templateScanner">\n      <div className="scannerSelection"><i className="ti ti-cursor-text" aria-hidden="true" />{props.selection ? `Выделено: ${props.selection}` : \'Выделите мышкой примерное значение\'}</div>\n      <input value={props.fieldId} onChange={(event) => props.onFieldIdChange(event.target.value)} placeholder="поле, например document.number" aria-label="Смысловое поле сканера" list="template-scanner-field-suggestions" />\n      <button className="softBtn" type="button" onClick={props.onReplace} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Заменить</button>\n      <button className="softBtn" type="button" onClick={props.onInsert} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Вставить после</button>\n    </div>\n  );\n}\n'
-1 failed, 7 passed in 0.05s
-
-[PASSED ] tests/test_v18_0_4_professional_popup_contracts.py: passed=12 skipped=0 duration=0.314s
-[PASSED ] tests/test_v18_0_5_guided_word_scanner_contracts.py: passed=7 skipped=0 duration=0.231s
-[PASSED ] tests/test_v18_0_6_scanner_watcher_print_contracts.py: passed=10 skipped=0 duration=0.237s
-[PASSED ] tests/test_v18_0_7_security_update_popup_license_contracts.py: passed=13 skipped=0 duration=0.238s
-[PASSED ] tests/test_v18_0_8_zero_touch_hardening_contracts.py: passed=7 skipped=0 duration=0.230s
-[PASSED ] tests/test_v18_1_0_content_pack_sdk.py: passed=4 skipped=0 duration=1.158s
-[PASSED ] tests/test_v18_1_0_production_pilot_contracts.py: passed=7 skipped=0 duration=0.235s
-[PASSED ] tests/test_v18_1_0_sidecar_staging.py: passed=2 skipped=0 duration=0.380s
-[PASSED ] tests/test_v18_1_1_offline_runtime.py: passed=3 skipped=0 duration=0.243s
-[PASSED ] tests/test_v18_1_1_operational_hardening_contracts.py: passed=11 skipped=0 duration=0.240s
-[PASSED ] tests/test_v18_1_1_reference_data_freshness.py: passed=2 skipped=0 duration=0.281s
-[PASSED ] tests/test_v18_1_2_grounding_distributed_release_contracts.py: passed=14 skipped=0 duration=0.304s
-[PASSED ] tests/test_v18_1_2_offline_runtime_bundle.py: passed=2 skipped=0 duration=0.260s
-[PASSED ] tests/test_v18_1_2_rust_panic_audit.py: passed=2 skipped=0 duration=0.412s
-[PASSED ] tests/test_v18_1_3_pilot_expansion_contracts.py: passed=7 skipped=0 duration=0.255s
-[PASSED ] tests/test_v18_2_0_component_delivery_contracts.py: passed=6 skipped=0 duration=0.409s
-[PASSED ] tests/test_v18_2_1_resume_queue_modularization_contracts.py: passed=6 skipped=0 duration=0.227s
-[PASSED ] tests/test_v18_2_2_adversarial_hardening_contracts.py: passed=10 skipped=0 duration=0.767s
-[PASSED ] tests/test_v18_3_0_hardening_contracts.py: passed=13 skipped=0 duration=1.718s
-[PASSED ] tests/test_v18_3_0_license_database_transport.py: passed=3 skipped=0 duration=0.224s
-[PASSED ] tests/test_v18_3_0_ocr_layout_contracts.py: passed=4 skipped=0 duration=0.231s
-[PASSED ] tests/test_v18_3_0_scanned_pdf_fixture.py: passed=2 skipped=0 duration=0.231s
-[PASSED ] tests/test_v18_3_1_semantic_magic_contract.py: passed=5 skipped=0 duration=0.234s
-[PASSED ] tests/test_v18_3_2_central_queue_exactly_once.py: passed=1 skipped=0 duration=0.266s
-[PASSED ] tests/test_v18_3_2_delivery_contract.py: passed=4 skipped=0 duration=0.272s
-[PASSED ] tests/test_v18_3_2_windows_regression_wall_contract.py: passed=2 skipped=0 duration=0.223s
-[PASSED ] tests/test_v18_4_0_reliability_contracts.py: passed=14 skipped=0 duration=0.315s
-[PASSED ] tests/test_v18_4_3_repair_contracts.py: passed=8 skipped=0 duration=0.240s
-{"schema": "dokkomplekt.python-contract-shards.v1", "result": "failed", "python": "3.12.13", "source_sha256": "2fc1f413d6e2b1fc1047fcd901900181d5bf9ac82263873745430b3471975f10", "source_unchanged_during_run": true, "module_count": 37, "passed_test_count": 217, "skipped_test_count": 0, "duration_seconds": 18.894}
-=======
-[PASSED ] tests/test_tauri_bundle_icon_contract.py: passed=1 skipped=0 duration=0.222s
-[PASSED ] tests/test_v18_0_2_regression_contracts.py: passed=11 skipped=0 duration=0.238s
-[FAILED ] tests/test_v18_0_3_regression_contracts.py: passed=7 skipped=0 duration=0.258s
-и.</small>\n                    </div>\n                    <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>\n                      <i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место\n                    </button>\n                  </div>\n                  <details className="manualScannerDetails">\n                    <summary>Ручная разметка для опытных пользователей</summary>\n                    <textarea\n                      value={activePending.extracted_text}\n                      readOnly\n                      aria-label={`Текст шаблона ${activePending.file_name} для разметки`}\n                      onSelect={(event) => {\n                        const target = event.currentTarget;\n                        const start = target.selectionStart ?? 0;\n                        const end = target.selectionEnd ?? start;\n                        setSelection(end > start ? { start, end, text: target.value.slice(start, end) } : null);\n                      }}\n                      spellCheck={false}\n                    />\n                    <ScannerToolbar\n                      selection={selection?.text ?? \'\'}\n                      fieldId={scannerField}\n                      onFieldIdChange={setScannerField}\n                      disabled={marking}\n                      onReplace={() => void applyPendingVisualMarkup(\'replace\')}\n                      onInsert={() => void applyPendingVisualMarkup(\'insert_after\')}\n                    />\n                  </details>\n                  <PopupFieldEditor\n                    compact\n                    fields={activePending.popup_fields}\n                    onChange={(fields) => props.onPendingPopupFieldsChange(activePending.document_id, fields)}\n                  />\n                </div>\n              </details>\n            ) : null}\n\n            <label className="softBtn fileBtn">\n              Добавить ещё шаблоны\n              <input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} style={{ display: \'none\' }} />\n            </label>\n          </>\n        )}\n\n        <datalist id="template-scanner-field-suggestions">\n          <option value="document.number" /><option value="document.date" /><option value="subject.name" /><option value="org.name" />\n          <option value="amount.total" /><option value="period.start_date" /><option value="period.end_date" /><option value="related.number" />\n        </datalist>\n\n        <div className="modalActions">\n          <span className="spacer" />\n          <button className="softBtn" onClick={props.onCancel}>Отмена</button>\n          <button className="primaryBtn" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>\n            {confirmLabel}\n          </button>\n        </div>\n      </div>\n    </div>\n  );\n}\n\nfunction ScannerToolbar(props: {\n  selection: string;\n  fieldId: string;\n  disabled?: boolean;\n  onFieldIdChange(value: string): void;\n  onReplace(): void;\n  onInsert(): void;\n}) {\n  return (\n    <div className="templateScanner">\n      <div className="scannerSelection"><i className="ti ti-cursor-text" aria-hidden="true" />{props.selection ? `Выделено: ${props.selection}` : \'Выделите мышкой примерное значение\'}</div>\n      <input value={props.fieldId} onChange={(event) => props.onFieldIdChange(event.target.value)} placeholder="поле, например document.number" aria-label="Смысловое поле сканера" list="template-scanner-field-suggestions" />\n      <button className="softBtn" type="button" onClick={props.onReplace} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Заменить</button>\n      <button className="softBtn" type="button" onClick={props.onInsert} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Вставить после</button>\n    </div>\n  );\n}\n'
-1 failed, 7 passed in 0.06s
-
-[PASSED ] tests/test_v18_0_4_professional_popup_contracts.py: passed=12 skipped=0 duration=0.321s
-[PASSED ] tests/test_v18_0_5_guided_word_scanner_contracts.py: passed=7 skipped=0 duration=0.230s
-[PASSED ] tests/test_v18_0_6_scanner_watcher_print_contracts.py: passed=10 skipped=0 duration=0.237s
-[PASSED ] tests/test_v18_0_7_security_update_popup_license_contracts.py: passed=13 skipped=0 duration=0.245s
-[PASSED ] tests/test_v18_0_8_zero_touch_hardening_contracts.py: passed=7 skipped=0 duration=0.229s
-[PASSED ] tests/test_v18_1_0_content_pack_sdk.py: passed=4 skipped=0 duration=1.179s
-[PASSED ] tests/test_v18_1_0_production_pilot_contracts.py: passed=7 skipped=0 duration=0.240s
-[PASSED ] tests/test_v18_1_0_sidecar_staging.py: passed=2 skipped=0 duration=0.589s
-[PASSED ] tests/test_v18_1_1_offline_runtime.py: passed=3 skipped=0 duration=0.243s
-[PASSED ] tests/test_v18_1_1_operational_hardening_contracts.py: passed=11 skipped=0 duration=0.242s
-[PASSED ] tests/test_v18_1_1_reference_data_freshness.py: passed=2 skipped=0 duration=0.288s
-[PASSED ] tests/test_v18_1_2_grounding_distributed_release_contracts.py: passed=14 skipped=0 duration=0.305s
-[PASSED ] tests/test_v18_1_2_offline_runtime_bundle.py: passed=2 skipped=0 duration=0.260s
-[PASSED ] tests/test_v18_1_2_rust_panic_audit.py: passed=2 skipped=0 duration=0.416s
-[PASSED ] tests/test_v18_1_3_pilot_expansion_contracts.py: passed=7 skipped=0 duration=0.256s
-[PASSED ] tests/test_v18_2_0_component_delivery_contracts.py: passed=6 skipped=0 duration=0.420s
-[PASSED ] tests/test_v18_2_1_resume_queue_modularization_contracts.py: passed=6 skipped=0 duration=0.308s
-[PASSED ] tests/test_v18_2_2_adversarial_hardening_contracts.py: passed=10 skipped=0 duration=0.782s
-[PASSED ] tests/test_v18_3_0_hardening_contracts.py: passed=13 skipped=0 duration=1.926s
-[PASSED ] tests/test_v18_3_0_license_database_transport.py: passed=3 skipped=0 duration=0.231s
-[PASSED ] tests/test_v18_3_0_ocr_layout_contracts.py: passed=4 skipped=0 duration=0.237s
-[PASSED ] tests/test_v18_3_0_scanned_pdf_fixture.py: passed=2 skipped=0 duration=0.229s
-[PASSED ] tests/test_v18_3_1_semantic_magic_contract.py: passed=5 skipped=0 duration=0.234s
-[PASSED ] tests/test_v18_3_2_central_queue_exactly_once.py: passed=1 skipped=0 duration=0.266s
-[PASSED ] tests/test_v18_3_2_delivery_contract.py: passed=4 skipped=0 duration=0.277s
-[PASSED ] tests/test_v18_3_2_windows_regression_wall_contract.py: passed=2 skipped=0 duration=0.225s
-[PASSED ] tests/test_v18_4_0_reliability_contracts.py: passed=14 skipped=0 duration=0.323s
-[PASSED ] tests/test_v18_4_3_repair_contracts.py: passed=8 skipped=0 duration=0.238s
-{"schema": "dokkomplekt.python-contract-shards.v1", "result": "failed", "python": "3.12.13", "source_sha256": "2fc1f413d6e2b1fc1047fcd901900181d5bf9ac82263873745430b3471975f10", "source_unchanged_during_run": true, "module_count": 37, "passed_test_count": 217, "skipped_test_count": 0, "duration_seconds": 19.735}
->>>>>>> 010b893 (chore(ci): capture PR7 Python failure)
+[PASSED ] tests/test_tauri_bundle_icon_contract.py: passed=1 skipped=0 duration=0.201s
+[PASSED ] tests/test_v18_0_2_regression_contracts.py: passed=11 skipped=0 duration=0.214s
+[PASSED ] tests/test_v18_0_3_regression_contracts.py: passed=8 skipped=0 duration=0.207s
+[PASSED ] tests/test_v18_0_4_professional_popup_contracts.py: passed=12 skipped=0 duration=0.275s
+[PASSED ] tests/test_v18_0_5_guided_word_scanner_contracts.py: passed=7 skipped=0 duration=0.208s
+[PASSED ] tests/test_v18_0_6_scanner_watcher_print_contracts.py: passed=10 skipped=0 duration=0.209s
+[PASSED ] tests/test_v18_0_7_security_update_popup_license_contracts.py: passed=13 skipped=0 duration=0.214s
+[PASSED ] tests/test_v18_0_8_zero_touch_hardening_contracts.py: passed=7 skipped=0 duration=0.206s
+[PASSED ] tests/test_v18_1_0_content_pack_sdk.py: passed=4 skipped=0 duration=1.034s
+[PASSED ] tests/test_v18_1_0_production_pilot_contracts.py: passed=7 skipped=0 duration=0.214s
+[PASSED ] tests/test_v18_1_0_sidecar_staging.py: passed=2 skipped=0 duration=1.124s
+[PASSED ] tests/test_v18_1_1_offline_runtime.py: passed=3 skipped=0 duration=0.215s
+[PASSED ] tests/test_v18_1_1_operational_hardening_contracts.py: passed=11 skipped=0 duration=0.218s
+[PASSED ] tests/test_v18_1_1_reference_data_freshness.py: passed=2 skipped=0 duration=0.259s
+[PASSED ] tests/test_v18_1_2_grounding_distributed_release_contracts.py: passed=14 skipped=0 duration=0.267s
+[PASSED ] tests/test_v18_1_2_offline_runtime_bundle.py: passed=2 skipped=0 duration=0.235s
+[PASSED ] tests/test_v18_1_2_rust_panic_audit.py: passed=2 skipped=0 duration=0.366s
+[PASSED ] tests/test_v18_1_3_pilot_expansion_contracts.py: passed=7 skipped=0 duration=0.230s
+[PASSED ] tests/test_v18_2_0_component_delivery_contracts.py: passed=6 skipped=0 duration=0.377s
+[PASSED ] tests/test_v18_2_1_resume_queue_modularization_contracts.py: passed=6 skipped=0 duration=0.208s
+[PASSED ] tests/test_v18_2_2_adversarial_hardening_contracts.py: passed=10 skipped=0 duration=0.654s
+[PASSED ] tests/test_v18_3_0_hardening_contracts.py: passed=13 skipped=0 duration=1.750s
+[PASSED ] tests/test_v18_3_0_license_database_transport.py: passed=3 skipped=0 duration=0.204s
+[PASSED ] tests/test_v18_3_0_ocr_layout_contracts.py: passed=4 skipped=0 duration=0.212s
+[PASSED ] tests/test_v18_3_0_scanned_pdf_fixture.py: passed=2 skipped=0 duration=0.210s
+[PASSED ] tests/test_v18_3_1_semantic_magic_contract.py: passed=5 skipped=0 duration=0.210s
+[PASSED ] tests/test_v18_3_2_central_queue_exactly_once.py: passed=1 skipped=0 duration=0.248s
+[PASSED ] tests/test_v18_3_2_delivery_contract.py: passed=4 skipped=0 duration=0.245s
+[PASSED ] tests/test_v18_3_2_windows_regression_wall_contract.py: passed=2 skipped=0 duration=0.208s
+[PASSED ] tests/test_v18_4_0_reliability_contracts.py: passed=14 skipped=0 duration=0.282s
+[PASSED ] tests/test_v18_4_3_repair_contracts.py: passed=8 skipped=0 duration=0.218s
+{"schema": "dokkomplekt.python-contract-shards.v1", "result": "failed", "python": "3.12.13", "source_sha256": "f329a0680b6e188392bc76f8447d8409253c2bdf901e28d54887df4cc3d479fb", "source_unchanged_during_run": true, "module_count": 37, "passed_test_count": 218, "skipped_test_count": 0, "duration_seconds": 17.569}

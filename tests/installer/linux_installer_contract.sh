@@ -25,6 +25,7 @@ run_deb_install_smoke() {
   command -v dpkg >/dev/null || { echo "dpkg is required for install smoke" >&2; exit 1; }
   command -v xvfb-run >/dev/null || { echo "xvfb-run is required for launch smoke" >&2; exit 1; }
   command -v dbus-run-session >/dev/null || { echo "dbus-run-session is required for launch smoke" >&2; exit 1; }
+  command -v setsid >/dev/null || { echo "setsid is required for isolated launch smoke" >&2; exit 1; }
 
   local package_name install_log remove_log binary_path smoke_home pid status package_files
   package_name="$(dpkg-deb -f "$deb" Package)"
@@ -61,12 +62,11 @@ run_deb_install_smoke() {
   }
 
   HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
-    xvfb-run -a dbus-run-session -- "$binary_path" >"$smoke_home/launch.log" 2>&1 &
+    setsid xvfb-run -a dbus-run-session -- "$binary_path" >"$smoke_home/launch.log" 2>&1 &
   pid=$!
   sleep 5
   if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
+    status=0
   else
     wait "$pid" || status=$?
     status="${status:-0}"
@@ -77,6 +77,16 @@ run_deb_install_smoke() {
       exit 1
     fi
   fi
+
+  # Stop the complete isolated launch session, not only the xvfb-run wrapper.
+  # GTK/Mesa helpers may otherwise survive briefly and race with temp cleanup.
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    kill -0 -- "-$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
 
   cleanup_deb_install
   if dpkg-query -W -f='${Status}' "$package_name" 2>/dev/null | grep -q 'install ok installed'; then
@@ -103,9 +113,17 @@ fi
 
 cleanup_paths=()
 cleanup() {
-  local path
+  local path attempt
   for path in "${cleanup_paths[@]:-}"; do
-    [ -z "$path" ] || rm -rf "$path"
+    [ -n "$path" ] || continue
+    for attempt in 1 2 3 4 5; do
+      rm -rf -- "$path" 2>/dev/null || true
+      [ ! -e "$path" ] && break
+      sleep 0.2
+    done
+    if [ -e "$path" ]; then
+      echo "WARNING: temporary smoke path remained after cleanup retries: $path" >&2
+    fi
   done
 }
 trap cleanup EXIT

@@ -275,7 +275,7 @@ describe('Полный прогон пользовательских сцена�
     // multi-document batch: selection is separate from opening a document
     fireEvent.click(screen.getByRole('button', { name: 'Очистить' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
-    await click(/Создать комплект \(1\)/);
+    await click(/Создать документы \(1\)/);
     const batchPrompt = await screen.findByRole('dialog', { name: /Уточнить данные комплекта/ });
     fireEvent.click(within(batchPrompt).getByRole('button', { name: /Применить и создать/ }));
     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
@@ -369,7 +369,7 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'import_template_file')).toBe(true));
     await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));
     expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Добавить документы (2)' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [

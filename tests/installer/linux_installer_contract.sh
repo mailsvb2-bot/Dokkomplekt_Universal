@@ -4,6 +4,7 @@ set -euo pipefail
 bundle_dir="${1:-target/release/bundle}"
 required_bundles="${DOKKOMPLEKT_REQUIRED_LINUX_BUNDLES:-appimage,deb,rpm}"
 [ -d "$bundle_dir" ] || { echo "Bundle directory not found: $bundle_dir" >&2; exit 1; }
+bundle_dir="$(cd "$bundle_dir" && pwd -P)"
 
 appimage="$(find "$bundle_dir" -type f -name '*.AppImage' -print -quit)"
 deb="$(find "$bundle_dir" -type f -name '*.deb' -print -quit)"

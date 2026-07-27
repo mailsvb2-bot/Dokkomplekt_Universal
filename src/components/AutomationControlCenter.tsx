@@ -425,7 +425,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
     <section className="utilityCard advancedCard">
       <strong>Результаты автоматизации</strong>
-      <label>Минут ручной работы на один документ<input aria-label="Минут на документ" type="number" min={0} max={480} value={minutesPerDocument} onChange={event=>{const value=Math.max(0,Math.min(480,Number(event.target.value)||0));setMinutesPerDocument(value);globalThis.localStorage?.setItem('dokkomplekt.roi.minutesPerDocument',String(value))}}/><small>Оценка задаётся организацией и становится точной после замера на реальной работе.</small></label>
+      <label>Минут ручной работы на один документ<input aria-label="Минут на документ" type="number" min={0} max={480} value={minutesPerDocument} onChange={event=>{const value=Math.max(0,Math.min(480,Number(event.target.value)||0));setMinutesPerDocument(value);globalThis.localStorage?.setItem('dokkomplekt.roi.minutesPerDocument',String(value))}}/><small>Оценка задаётся организацией и не является фактически сэкономленным временем без замера на реальной работе.</small></label>
       {metrics ? <div className="metricGrid">
         <span>Источников <b>{metrics.processed_sources}</b></span><span>Документов <b>{metrics.generated_documents}</b></span>
         <span>Автоматически обработано <b>{metrics.zero_touch_sources}</b></span><span>Доля автоматической обработки <b>{percent(metrics.zero_touch_sources, metrics.processed_sources)}</b></span>
@@ -436,8 +436,8 @@ export function AutomationControlCenter({ onStatus }: Props) {
         <span>Документов на источник <b>{ratio(metrics.generated_documents, metrics.processed_sources)}</b></span><span>Доля требующих проверки <b>{percent(metrics.blocked_sources, metrics.processed_sources)}</b></span>
         <span>Использовано повторно <b>{metrics.reused_documents ?? 0}</b></span><span>Создано заново <b>{metrics.rerendered_documents ?? 0}</b></span>
         <span>Время автоматической обработки <b>{formatMinutes((metrics.processing_milliseconds ?? 0)/60000)}</b></span><span>На проверку перед печатью <b>{metrics.print_review_queued ?? 0}</b></span>
-        <span>Прошло автопечать-gate <b>{metrics.automatic_print_approved ?? 0}</b></span><span>Успех без ошибок <b>{percent(Math.max(0,metrics.processed_sources-metrics.failed_sources), metrics.processed_sources)}</b></span>
-        <span>Оценка сэкономленного времени <b>{formatMinutes(Math.max(0, metrics.generated_documents*minutesPerDocument-(metrics.processing_milliseconds ?? 0)/60000))}</b></span><span>Метод <b>базовая норма − замер runtime</b></span>
+        <span>Допущено к автопечати <b>{metrics.automatic_print_approved ?? 0}</b></span><span>Успех без ошибок <b>{percent(Math.max(0,metrics.processed_sources-metrics.failed_sources), metrics.processed_sources)}</b></span>
+        <span>Оценка сэкономленного времени <b>{formatMinutes(Math.max(0, metrics.generated_documents*minutesPerDocument-(metrics.processing_milliseconds ?? 0)/60000))}</b></span><span>Метод <b>норма ручной работы − фактическое время обработки</b></span>
       </div> : <small>Метрики ещё не загружены.</small>}
     </section>
 

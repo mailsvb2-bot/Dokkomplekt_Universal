@@ -90,9 +90,9 @@ class V1830HardeningContracts(unittest.TestCase):
         self.assertIn("automatic_print_approved", storage)
         self.assertIn("intake_roi_measured", runtime)
         self.assertIn("organization_baseline_minus_measured_runtime", runtime)
-        self.assertIn("Измеренное машинное время", ui)
-        self.assertIn("базовая норма − замер runtime", ui)
-        self.assertIn("не считается доказанным временем", ui)
+        self.assertIn("Время автоматической обработки", ui)
+        self.assertIn("норма ручной работы − фактическое время обработки", ui)
+        self.assertIn("не является фактически сэкономленным временем без замера", ui)
 
     def test_registry_adapter_is_local_validated_and_user_confirmed(self) -> None:
         registry = text("src-tauri/src/subsystems/business_registry.rs")

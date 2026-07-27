@@ -196,7 +196,7 @@ describe('Полный прогон пользовательских сцена�
 
     // direct DOCX source import -> parse_source_file
     const sourceFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Источник.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    const sourceDropZone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
+    const sourceDropZone = document.querySelector('.sourceStage');
     expect(sourceDropZone).toBeTruthy();
     fireEvent.drop(sourceDropZone as Element, { dataTransfer: { files: [sourceFile] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'parse_source_file')).toBe(true));

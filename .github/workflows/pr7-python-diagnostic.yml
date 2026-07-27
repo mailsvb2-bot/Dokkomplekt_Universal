@@ -1,0 +1,31 @@
+name: PR7 Python diagnostic
+
+on:
+  push:
+    branches: [fix/simple-ui-button-creation]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Print compact failure evidence
+        shell: bash
+        run: |
+          set +e
+          python scripts/run_python_contracts_sharded.py --report /tmp/python-contracts.json >/tmp/python-contracts.log 2>&1
+          code=$?
+          echo '=== MACHINE REPORT ==='
+          cat /tmp/python-contracts.json
+          echo
+          echo '=== FAILURE TAIL ==='
+          tail -n 40 /tmp/python-contracts.log
+          exit $code

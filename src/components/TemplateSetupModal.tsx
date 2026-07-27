@@ -88,7 +88,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   }
 
   return (
-    <div className="backdrop" role="dialog" aria-modal="true" aria-label="Настройка шаблона">
+    <div className="backdrop" role="dialog" aria-modal="true" aria-label="Добавление шаблонов">
       <div
         className="modal fileDropZone templateSetupWide"
         onDragOver={(event: DragEvent<HTMLDivElement>) => event.preventDefault()}
@@ -98,22 +98,22 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           if (files.length) props.onDropFiles(files);
         }}
       >
-        <h2>Распознать новые документы</h2>
+        <h2>Добавить шаблоны документов</h2>
         <p className="hint">
-          Перетащите DOCX/DOCM или вставьте текст. Выделяйте примерные значения курсором, назначайте смысловые поля и сразу настраивайте вопросы, которые программа должна задавать перед каждым новым комплектом.
+          Выберите готовые формы DOCX/DOCM. Программа распознает их структуру, предложит понятные названия и запомнит, какие данные нужно подставлять.
         </p>
 
         {hasBatch ? (
           <>
             <div className="templateBatch" aria-label="Подготовленные шаблоны">
-              <div className="templateBatchHead">Проверьте названия будущих кнопок</div>
+              <div className="templateBatchHead">Проверьте названия документов в наборе</div>
               {props.pendingTemplates.map((item) => (
                 <div className={activePending?.document_id === item.document_id ? 'templateBatchRow selected' : 'templateBatchRow'} key={item.document_id}>
                   <button className="templateFileSelect" type="button" title="Открыть текст и вопросы" onClick={() => { setActivePendingId(item.document_id); setSelection(null); }}>
                     {item.file_name}
                   </button>
                   <input
-                    aria-label={`Название кнопки для ${item.file_name}`}
+                    aria-label={`Название документа для ${item.file_name}`}
                     value={item.button_label}
                     onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)}
                   />
@@ -188,9 +188,9 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             />
             <table className="confirm">
               <tbody>
-                <tr><th>Вы выбрали документ</th><td>{props.previewTitle}</td></tr>
+                <tr><th>Выбранный документ</th><td>{props.previewTitle}</td></tr>
                 <tr>
-                  <th>Кнопка будет называться</th>
+                  <th>Название в наборе</th>
                   <td><input value={props.buttonLabel} placeholder={props.previewTitle} onChange={(event) => props.onButtonLabelChange(event.target.value)} /></td>
                 </tr>
               </tbody>
@@ -201,9 +201,8 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
 
         <datalist id="template-scanner-field-suggestions">
           <option value="document.number" /><option value="document.date" /><option value="subject.name" /><option value="org.name" />
-          <option value="contract.number" /><option value="contract.date" /><option value="period.start_date" /><option value="period.end_date" />
-          <option value="hr.order_number" /><option value="hr.order_date" /><option value="accounting.invoice_number" /><option value="accounting.invoice_date" />
-          <option value="medical.case_number" /><option value="medical.diagnosis" /><option value="medical.treatment" /><option value="medical.discharge_date" />
+          <option value="amount.total" /><option value="period.start_date" /><option value="period.end_date" /><option value="related.number" />
+          <option value="amount.total" /><option value="period.start_date" /><option value="period.end_date" />
         </datalist>
 
         <div className="modalActions">
@@ -215,7 +214,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
           <button className="primaryBtn" onClick={props.onConfirm}>
-            {props.pendingTemplates.length > 1 ? `Создать кнопки (${props.pendingTemplates.length})` : 'Создать кнопку из шаблона'}
+            {props.pendingTemplates.length > 1 ? `Добавить документы (${props.pendingTemplates.length})` : 'Добавить документ'}
           </button>
         </div>
       </div>
@@ -234,7 +233,7 @@ function ScannerToolbar(props: {
   return (
     <div className="templateScanner">
       <div className="scannerSelection"><i className="ti ti-cursor-text" aria-hidden="true" />{props.selection ? `Выделено: ${props.selection}` : 'Выделите мышкой примерное значение'}</div>
-      <input value={props.fieldId} onChange={(event) => props.onFieldIdChange(event.target.value)} placeholder="поле, например contract.number" aria-label="Смысловое поле сканера" list="template-scanner-field-suggestions" />
+      <input value={props.fieldId} onChange={(event) => props.onFieldIdChange(event.target.value)} placeholder="поле, например document.number" aria-label="Смысловое поле сканера" list="template-scanner-field-suggestions" />
       <button className="softBtn" type="button" onClick={props.onReplace} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Заменить</button>
       <button className="softBtn" type="button" onClick={props.onInsert} disabled={props.disabled || !props.selection || !props.fieldId.trim()}>Вставить после</button>
     </div>

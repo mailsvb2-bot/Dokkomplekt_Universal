@@ -6,8 +6,8 @@ import { __resetInvokeForTests, __setInvokeForTests, rustCommandNames } from './
 type Call = { command: string; payload?: Record<string, unknown> };
 
 const accDoc = { id: 'acc_1', button_label: 'Счёт на оплату', template_path: 'a.docx', category: 'Accounting', role_id: 'invoice', required_fields: [], placeholders: ['org.inn'], is_static_copy: false };
-const medDoc = { id: 'med_1', button_label: 'Первичный осмотр', template_path: 'b.docx', category: 'Medical', role_id: 'exam', required_fields: [], placeholders: [], is_static_copy: false };
-const pack = { pack_id: 'default', name: 'Пакет', documents: [accDoc, medDoc] };
+const secondDoc = { id: 'doc_2', button_label: 'Сопроводительное письмо', template_path: 'b.docx', category: 'Generic', role_id: 'generic', required_fields: [], placeholders: [], is_static_copy: false };
+const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secondDoc] };
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
@@ -89,8 +89,6 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'preview_mail_merge': return { delimiter:';', headers:['subject.name'], canonical_headers:['subject.name'], rows:[['Иванов']], warnings:[] } as never;
       case 'prepare_mail_merge_file': return { delimited_text: 'subject.name\nИванов', table: { delimiter:'\t', headers:['subject.name'], canonical_headers:['subject.name'], rows:[['Иванов']], warnings:[] } } as never;
       case 'render_mail_merge': return { output_folder:'output/mm', row_count:1, created_files:['output/mm/doc.docx'] } as never;
-      case 'icd10_suggest':
-        return [{ code: 'F32.1', title: 'Депрессивный эпизод' }] as never;
       case 'get_diary_plan':
         return [{ day_number: 1, date: '02.02.2026', month: 2, year: 2026 }] as never;
       case 'get_record_series_plan':
@@ -171,41 +169,41 @@ describe('Полный прогон пользовательских сцена�
     installMock(calls);
     render(<App />);
 
-    // first_run_state populates documents + profile tabs
+    // first_run_state populates a profession-neutral document set
     await screen.findByRole('button', { name: 'Счёт на оплату' });
-    expect(screen.getByRole('button', { name: 'Бухгалтерия' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Медицина' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Сопроводительное письмо' })).toBeTruthy();
+    expect(screen.queryByText('Медицина')).toBeNull();
 
     // A new set must explicitly clear case-specific values before another person/contract.
     await click(/Новый комплект/);
     await waitFor(() => expect(calls.some((c) => c.command === 'reset_case')).toBe(true));
 
+    // Document configuration stays out of the daily flow but remains available on demand.
+    fireEvent.click(screen.getByText('Настройка документов'));
+    fireEvent.click(screen.getByText('Экземпляры для печати'));
     // Each document keeps its own print-copy count (including 0 = do not print).
     fireEvent.change(screen.getByLabelText('Количество копий для Счёт на оплату'), { target: { value: '3' } });
-    fireEvent.change(screen.getByLabelText('Количество копий для Первичный осмотр'), { target: { value: '10' } });
-    expect(JSON.parse(localStorage.getItem('dokkomplekt.print-copies.v1') || '{}')).toMatchObject({ acc_1: 3, med_1: 10 });
+    fireEvent.change(screen.getByLabelText('Количество копий для Сопроводительное письмо'), { target: { value: '10' } });
+    expect(JSON.parse(localStorage.getItem('dokkomplekt.print-copies.v1') || '{}')).toMatchObject({ acc_1: 3, doc_2: 10 });
 
-    // profile filter: switch to Медицина hides Accounting doc
-    fireEvent.click(screen.getByRole('button', { name: 'Медицина' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Счёт на оплату' })).toBeNull());
-    fireEvent.click(screen.getByRole('button', { name: 'Все' }));
-    await screen.findByRole('button', { name: 'Счёт на оплату' });
-
-    // parse source text
-    await click(/Разобрать текст/);
+    // parse source text through the alternative-source path
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Счёт № 148' } });
+    await click(/Использовать текст/);
     await waitFor(() => expect(calls.some((c) => c.command === 'parse_source')).toBe(true));
     expect(parsePayload(calls, 'parse_source')).toMatchObject({ req: { default_year: expect.any(Number) } });
 
     // direct DOCX source import -> parse_source_file
     const sourceFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Источник.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    const sourceDropZone = screen.getByText(/Перетащите Word\/PDF\/фото\/таблицу\/письмо\/архив/).closest('.fileDropZone');
+    const sourceDropZone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
     expect(sourceDropZone).toBeTruthy();
     fireEvent.drop(sourceDropZone as Element, { dataTransfer: { files: [sourceFile] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'parse_source_file')).toBe(true));
 
     // Guided Word scanner: the program opens the document, reads the mouse selection,
     // suggests the semantic destination, remembers it and closes Word itself.
-    await click(/Открыть Word и показать значение мышкой/);
+    fireEvent.click(screen.getByText('Расширенные инструменты'));
+    await click(/Показать значение в Word/);
     const guidedSource = await screen.findByRole('dialog', { name: 'Простой сканер мышью' });
     fireEvent.click(within(guidedSource).getByRole('button', { name: /Word не видно/ }));
     await waitFor(() => expect(calls.some((c) => c.command === 'activate_word_scanner')).toBe(true));
@@ -220,18 +218,15 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Простой сканер мышью' })).toBeNull());
 
     // Cancellation also closes the document automatically.
-    await click(/Открыть Word и показать значение мышкой/);
+    await click(/Показать значение в Word/);
     const guidedCancel = await screen.findByRole('dialog', { name: 'Простой сканер мышью' });
     fireEvent.click(within(guidedCancel).getByRole('button', { name: /Отмена — всё закрыть/ }));
     await waitFor(() => expect(calls.some((c) => c.command === 'close_word_scanner')).toBe(true));
 
-    // In-app cursor scanner: select a fragment with the mouse and bind it to a semantic field.
-    const sourceArea = document.querySelector('.fileDropZone textarea.source') as HTMLTextAreaElement;
-    sourceArea.focus();
-    sourceArea.setSelectionRange(7, 10);
-    fireEvent.select(sourceArea);
-    fireEvent.change(screen.getByLabelText('Поле для выделенного фрагмента'), { target: { value: 'document.number' } });
-    await click(/Назначить выделение полю/);
+    // Manual markup remains available inside advanced tools.
+    fireEvent.change(screen.getByPlaceholderText('Идентификатор поля'), { target: { value: 'document.number' } });
+    fireEvent.change(screen.getByPlaceholderText('Выделенный текст'), { target: { value: '148' } });
+    await click(/Назначить полю/);
     await waitFor(() => expect(calls.some((call) => {
       if (call.command !== 'apply_scanner') return false;
       const request = (call.payload as { req?: { marks?: Array<{ field_id?: string; selected_text?: string }> } } | undefined)?.req;
@@ -244,7 +239,7 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'get_document_template_text')).toBe(true));
 
     // Existing template is marked through the same guided Word workflow.
-    await click(/Разметить шаблон мышью/);
+    await click(/Разметить шаблон/);
     const guidedTemplate = await screen.findByRole('dialog', { name: 'Простой сканер мышью' });
     fireEvent.click(within(guidedTemplate).getByRole('button', { name: /Я показал значение/ }));
     await waitFor(() => expect(within(guidedTemplate).getAllByText(/Номер счёта/).length).toBeGreaterThan(0));
@@ -253,15 +248,15 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'update_document_template')).toBe(true));
 
     // pin field -> set_field
-    fireEvent.click(screen.getByRole('button', { name: 'Закрепить значение' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Использовать ИНН во всех документах' }));
     await waitFor(() => expect(parsePayload(calls, 'set_field')).toMatchObject({ req: { field_id: 'org.inn', value: '7701234567' } }));
 
     // save fields -> apply_popup
-    await click(/Сохранить поля/);
+    await click(/Сохранить ответы/);
     await waitFor(() => expect(parsePayload(calls, 'apply_popup')).toMatchObject({ req: { document_id: 'acc_1', answers: [{ field_id: 'org.inn', value: '7701234567' }] } }));
 
     // specialist can configure the document-specific popup without changing the template.
-    await click(/Настроить вопросы/);
+    await click(/Настроить уточнения/);
     const popupDesigner = await screen.findByRole('dialog', { name: 'Конструктор уточняющих вопросов' });
     fireEvent.click(within(popupDesigner).getByRole('button', { name: /Сохранить вопросы/ }));
     await waitFor(() => expect(parsePayload(calls, 'update_document_popup_fields')).toMatchObject({ req: { document_id: 'acc_1' } }));
@@ -271,14 +266,15 @@ describe('Полный прогон пользовательских сцена�
     await screen.findByText('СЧЁТ-ПРЕВЬЮ');
 
     // generate docx -> render_docx
-    await click(/Сформировать DOCX/);
+    await click(/Создать только этот документ/);
     const singlePrompt = await screen.findByRole('dialog', { name: 'Уточнить данные документа' });
     fireEvent.click(within(singlePrompt).getByRole('button', { name: /Применить и создать/ }));
     await waitFor(() => expect(parsePayload(calls, 'render_docx')).toMatchObject({ req: { document_id: 'acc_1' } }));
 
     // multi-document batch: selection is separate from opening a document
+    fireEvent.click(screen.getByRole('button', { name: 'Очистить' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
-    await click(/Сформировать комплект \(1\)/);
+    await click(/Создать комплект \(1\)/);
     const batchPrompt = await screen.findByRole('dialog', { name: /Уточнить данные комплекта/ });
     fireEvent.click(within(batchPrompt).getByRole('button', { name: /Применить и создать/ }));
     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
@@ -286,13 +282,13 @@ describe('Полный прогон пользовательских сцена�
     }));
 
     // dictionary search -> icd10_suggest, chip shown
-    fireEvent.change(screen.getByPlaceholderText(/код или значение/), { target: { value: 'F32' } });
+    fireEvent.change(screen.getByPlaceholderText('Введите код или значение'), { target: { value: 'A-101' } });
     await click('Найти');
-    await screen.findByRole('button', { name: /F32\.1 — Депрессивный эпизод/ });
-    expect(parsePayload(calls, 'icd10_suggest')).toMatchObject({ query: 'F32' });
+    await screen.findByRole('button', { name: /A-101 — Типовое значение/ });
+    expect(parsePayload(calls, 'icd10_suggest')).toMatchObject({ query: 'A-101' });
 
     // utility scenarios use real user inputs, not demo constants
-    await click(/Служебные сценарии/);
+    await click(/^Настройки$/);
     await screen.findByText('Конфиденциальность и хранение');
     const semanticCard = screen.getByText('Локальная SemanticModel').closest('.utilityCard');
     expect(semanticCard).toBeTruthy();
@@ -366,8 +362,8 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.change(screen.getByPlaceholderText(/ФИО;contract\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
 
     // add-document dialog -> analyze_template, analyze_template_file, prepare + confirm
-    await click(/Добавить документ/);
-    const dialog = screen.getByRole('dialog', { name: 'Настройка шаблона' });
+    await click(/Добавить шаблоны/);
+    const dialog = screen.getByRole('dialog', { name: 'Добавление шаблонов' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Анализировать' }));
     // Настоящий выбор файла: байты DOCX уходят в Rust через import_template_file.
     const docxFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Договор.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
@@ -376,8 +372,8 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'import_template_file')).toBe(true));
     await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));
     expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Настройка шаблона' })).toBeNull());
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Добавить документы (2)' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
       { template_path: '/app-data/user-templates/tpl.docx' },
@@ -385,35 +381,38 @@ describe('Полный прогон пользовательских сцена�
     ] } });
 
     // HTTPS/site/API intake -> parse_web_source
-    fireEvent.change(screen.getByLabelText('HTTPS-источник'), { target: { value: 'https://example.com/doc' } });
-    await click(/Загрузить HTTPS/);
+    fireEvent.change(screen.getByLabelText('Адрес источника'), { target: { value: 'https://example.com/doc' } });
+    await click(/^Загрузить$/);
     await waitFor(() => expect(parsePayload(calls, 'parse_web_source')).toMatchObject({ req: { url: 'https://example.com/doc' } }));
 
-    // zero-touch «Созданные документы» -> run_created_documents_intake
-    fireEvent.change(screen.getByLabelText('Исходный документ'), { target: { value: 'C:/Созданные документы/Первичный.docx' } });
-    await click(/Обработать источник/);
-    await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Первичный.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
-    await screen.findByText(/Комплект создан:/);
-    await click(/Открыть папку/);
+    // Folder automation remains available without cluttering the primary workflow.
+    fireEvent.click(screen.getByText('Автоматическая обработка папки'));
+    const automation = screen.getByText('Автоматическая обработка папки').closest('.automationCard');
+    expect(automation).toBeTruthy();
+    fireEvent.change(within(automation as HTMLElement).getByPlaceholderText('Путь к файлу'), { target: { value: 'C:/Созданные документы/Источник.docx' } });
+    fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
+    await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
+    await screen.findByRole('heading', { name: /Создано документов:/ });
+    await click(/Открыть комплект/);
+    fireEvent.click(screen.getByRole('button', { name: 'Дополнительные форматы' }));
     await click(/^Создать PDF$/);
     await waitFor(() => expect(calls.some((c) => c.command === 'export_files_to_pdf')).toBe(true));
-    await click(/КЭДО-пакет/);
+    await click(/Создать пакет обмена/);
     await waitFor(() => expect(calls.some((c) => c.command === 'create_kedo_package')).toBe(true));
-    await click(/Распечатать выбранное количество/);
+    await click(/^Печать$/);
     await waitFor(() => expect(parsePayload(calls, 'open_in_file_manager')).toMatchObject({ req: { path: 'C:/Созданные документы/Иванов' } }));
     await waitFor(() => expect(parsePayload(calls, 'print_files')).toMatchObject({ req: { jobs: [{ path: 'C:/Созданные документы/Иванов/Договор.docx', copies: 3 }] } }));
 
-    // semantic understanding -> semantic_extract
-    await click(/Извлечь поля/);
+    // Explicit recognition refresh remains available in advanced tools.
+    await click(/Обновить распознанные данные/);
     await waitFor(() => expect(parsePayload(calls, 'semantic_extract')).toMatchObject({ req: { source_text: expect.any(String), default_year: expect.any(Number) } }));
-    await screen.findByText(/Извлечено полей:/);
 
     // button management preserves the template while changing only the registry
     vi.spyOn(window, 'prompt').mockReturnValue('Договор новый');
     await click(/Переименовать/);
     await waitFor(() => expect(calls.some((c) => c.command === 'rename_document_button')).toBe(true));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await click(/Убрать кнопку/);
+    await click(/Удалить из набора/);
     await waitFor(() => expect(calls.some((c) => c.command === 'remove_document_button')).toBe(true));
 
     // theme: preset B applies dark bg + persists
@@ -442,7 +441,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'system-scan.png', { type: 'image/png' });
-    const zone = screen.getByText(/Перетащите Word\/PDF\/фото\/таблицу\/письмо\/архив/).closest('.fileDropZone');
+    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.some(call => call.command === 'install_component')).toBe(false);
@@ -456,7 +455,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'scan.png', { type: 'image/png' });
-    const zone = screen.getByText(/Перетащите Word\/PDF\/фото\/таблицу\/письмо\/архив/).closest('.fileDropZone');
+    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'install_component')).toBe(true));
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));

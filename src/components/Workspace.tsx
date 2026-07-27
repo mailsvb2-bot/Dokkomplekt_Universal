@@ -2,7 +2,6 @@ import { useState, type ChangeEvent, type Dispatch, type DragEvent, type ReactNo
 import type {
   CreatedDocumentsIntakeResult,
   GeneratedOutput,
-  Icd10Suggestion,
   GeneratedPrintItem,
   IntakeCapability,
   PromptSpec,
@@ -44,8 +43,6 @@ interface WorkspaceProps {
   semantic: SemanticExtractResult | null;
   plan: WorkflowPlan | null;
   answers: Record<string, string>;
-  icdQuery: string;
-  icdHits: Icd10Suggestion[];
   preview: PreviewState | null;
   setWatchFolder(value: string): void;
   setIntakeSource(value: string): void;
@@ -57,7 +54,6 @@ interface WorkspaceProps {
   setScannerText(value: string): void;
   setModelOutput(value: string): void;
   setAnswers: Dispatch<SetStateAction<Record<string, string>>>;
-  setIcdQuery(value: string): void;
   onRunZeroTouch(): void;
   onOpenLastOutput(): void;
   onPrintLastOutput(): void;
@@ -78,26 +74,24 @@ interface WorkspaceProps {
   onPinField(fieldId: string): void;
   onPreview(): void;
   onSaveFields(): void;
-  onSearchDictionary(): void;
-  onChooseDictionaryValue(value: Icd10Suggestion): void;
   onGenerate(): void;
 }
 
 function sourceKindLabel(kind?: string): string {
   switch (kind) {
-    case 'scanned_image': return 'скан/фото · OCR';
-    case 'scanned_pdf_ocr': return 'скан-PDF · OCR';
-    case 'mixed_pdf_page_ocr': return 'смешанный PDF · постраничный OCR';
-    case 'pdf_text': return 'PDF с текстовым слоем';
+    case 'scanned_image': return 'изображение';
+    case 'scanned_pdf_ocr': return 'сканированный PDF';
+    case 'mixed_pdf_page_ocr': return 'PDF смешанного типа';
+    case 'pdf_text': return 'PDF';
     case 'word': return 'Word';
-    case 'legacy_word_converted': return 'старый DOC · локально преобразован';
-    case 'presentation_converted': return 'презентация · локально преобразована';
+    case 'legacy_word_converted': return 'документ Word';
+    case 'presentation_converted': return 'презентация';
     case 'spreadsheet': return 'таблица';
     case 'archive': return 'архив';
     case 'email': return 'письмо';
-    case 'https': return 'HTTPS';
+    case 'https': return 'веб-источник';
     case 'manual_text': return 'вставленный текст';
-    default: return kind || 'источник';
+    default: return kind || 'файл';
   }
 }
 
@@ -119,18 +113,39 @@ export function Workspace(props: WorkspaceProps) {
     ? props.semantic?.fields.find(field => field.field_id === reviewFieldId) ?? null
     : null;
   const reviewEvidence = reviewField?.evidence?.[0];
+  const sourceReady = Boolean(props.sourceFileName || props.parsed);
+  const prompts = props.plan?.prompts ?? [];
+  const reviewCount = props.semantic?.fields.filter(field => field.confidence < .95).length ?? 0;
+
   return (
-    <>
-      <main className="mid">
-        <section className="block zeroTouch">
-          <div className="blockHead"><i className="ti ti-folder-bolt" aria-hidden="true" /> Созданные документы — автоматический комплект</div>
-          <p className="hint">Специалист кладёт исходный документ, письмо, таблицу, изображение или архив в эту папку — программа нормализует источник и строит весь настроенный комплект в отдельной обезличенной папке. Не хватает данных — рядом появляется «…_ТРЕБУЕТ_ВНИМАНИЯ.txt». Файл повреждён или не читается — появляется «… — НЕ ПРОЧИТАН.txt» с простыми шагами исправления. До изменения источника программа не повторяет попытку бесконечно. Одна версия источника обрабатывается один раз.</p>
-          {props.lastOutput && (
-            <div className="completionCard" role="status">
-              <div className="completionTitle"><i className="ti ti-circle-check" aria-hidden="true" /> Комплект готов: {props.lastOutput.files.length} документ(ов)</div>
-              <div className="completionPath">{props.lastOutput.folder || props.lastOutput.files[0]}</div>
-              {props.lastOutput.print_items?.length ? (
-                <div className="printCopyList" aria-label="Количество копий по документам">
+    <main className="clientWorkspace">
+      <section className="workflowHero" aria-labelledby="workflow-title">
+        <div>
+          <span className="workflowEyebrow">Новый комплект</span>
+          <h1 id="workflow-title">Из исходника — готовые документы</h1>
+          <p>Добавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.</p>
+        </div>
+        <div className="workflowHeroActions">
+          <button className="softBtn newCaseBtn" onClick={props.onResetCase} disabled={props.busy}><i className="ti ti-file-plus" aria-hidden="true" /> Новый комплект</button>
+          <ol className="workflowSteps" aria-label="Этапы работы">
+            <li className={sourceReady ? 'done' : 'current'}><span>1</span><strong>Источник</strong></li>
+            <li className={sourceReady && !props.lastOutput ? 'current' : props.lastOutput ? 'done' : ''}><span>2</span><strong>Проверка</strong></li>
+            <li className={props.lastOutput ? 'current done' : ''}><span>3</span><strong>Результат</strong></li>
+          </ol>
+        </div>
+      </section>
+
+      {props.lastOutput && (
+        <section className="resultCard" role="status" aria-label="Комплект готов">
+          <div className="resultIcon"><i className="ti ti-check" aria-hidden="true" /></div>
+          <div className="resultBody">
+            <span className="resultEyebrow">Готово</span>
+            <h2>Создано документов: {props.lastOutput.files.length}</h2>
+            <p title={props.lastOutput.folder || props.lastOutput.files[0]}>{props.lastOutput.folder || props.lastOutput.files[0]}</p>
+            {props.lastOutput.print_items?.length ? (
+              <details className="resultCopies">
+                <summary>Количество экземпляров для печати</summary>
+                <div className="printCopyList">
                   {props.lastOutput.print_items.map((item: GeneratedPrintItem) => (
                     <label key={`${item.document_id}:${item.path}`} className="printCopyRow">
                       <span title={item.path}>{item.label}</span>
@@ -139,285 +154,203 @@ export function Workspace(props: WorkspaceProps) {
                         min={0}
                         max={99}
                         value={props.printCopies[item.document_id] ?? 1}
-                        aria-label={`Количество копий для ${item.label}`}
+                        aria-label={`Количество экземпляров для ${item.label}`}
                         onChange={(event) => props.onPrintCopyChange(item.document_id, Number(event.target.value))}
                       />
                       <small>экз.</small>
                     </label>
                   ))}
                 </div>
-              ) : null}
-              <div className="completionActions">
-                <button className="softBtn" onClick={props.onOpenLastOutput} disabled={props.busy}><i className="ti ti-folder-open" aria-hidden="true" /> Открыть папку</button>
-                <button className="softBtn" onClick={props.onExportLastOutputPdf} disabled={props.busy}><i className="ti ti-file-type-pdf" aria-hidden="true" /> Создать PDF</button>
-                <button className="softBtn" onClick={props.onExportLastOutputPdfa} disabled={props.busy}><i className="ti ti-archive" aria-hidden="true" /> Архивный PDF/A-1</button>
-                <button className="softBtn" onClick={props.onExportLastOutputKedo} disabled={props.busy}><i className="ti ti-package-export" aria-hidden="true" /> КЭДО-пакет</button>
-                <button className="primaryBtn" onClick={props.onPrintLastOutput} disabled={props.busy}><i className="ti ti-printer" aria-hidden="true" /> Распечатать выбранное количество</button>
+              </details>
+            ) : null}
+          </div>
+          <div className="resultActions">
+            <button className="primaryBtn" onClick={props.onOpenLastOutput} disabled={props.busy}><i className="ti ti-folder-open" aria-hidden="true" /> Открыть комплект</button>
+            <button className="softBtn" onClick={props.onPrintLastOutput} disabled={props.busy}><i className="ti ti-printer" aria-hidden="true" /> Печать</button>
+            <details className="moreActions">
+              <summary aria-label="Дополнительные форматы"><i className="ti ti-dots" aria-hidden="true" /></summary>
+              <div>
+                <button onClick={props.onExportLastOutputPdf} disabled={props.busy}>Создать PDF</button>
+                <button onClick={props.onExportLastOutputPdfa} disabled={props.busy}>Создать PDF/A</button>
+                <button onClick={props.onExportLastOutputKedo} disabled={props.busy}>Создать пакет обмена</button>
               </div>
-            </div>
-          )}
-          <div className="ztRow">
-            <i className="ti ti-folder" aria-hidden="true" />
-            <input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="папка «Созданные документы»" aria-label="Папка Созданные документы" />
+            </details>
           </div>
-          <div className="ztRow">
-            <i className="ti ti-file-import" aria-hidden="true" />
-            <input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="путь к исходному документу: Word, PDF, фото, таблица, письмо или архив" aria-label="Исходный документ" />
-            <button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}><i className="ti ti-bolt" aria-hidden="true" /> Обработать источник</button>
-          </div>
-          <label className="autoPrintToggle">
-            <input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} />
-            <span><i className="ti ti-printer" aria-hidden="true" /> Печатать готовый комплект автоматически без вопроса</span>
-          </label>
-          {props.intakeResult && (
-            <div className={`ztResult ${props.intakeResult.status}`}>
-              {props.intakeResult.status === 'processed' && (
-                <>
-                  <div className="ztLine ok"><i className="ti ti-check" aria-hidden="true" /> Комплект создан: {props.intakeResult.created_files.length} документ(ов)</div>
-                  {props.intakeResult.patient_folder && <div className="ztPath">{props.intakeResult.patient_folder}</div>}
-                </>
-              )}
-              {props.intakeResult.status === 'attention' && (
-                <>
-                  <div className="ztLine warn"><i className="ti ti-alert-triangle" aria-hidden="true" /> Не хватает данных — ничего не создано</div>
-                  <ul className="ztMissing">{props.intakeResult.missing.map((item) => <li key={item}>{item}</li>)}</ul>
-                  {props.intakeResult.attention_file && <div className="ztPath">{props.intakeResult.attention_file}</div>}
-                </>
-              )}
-              {(props.intakeResult.status === 'setup_needed' || props.intakeResult.status === 'ignored') && (
-                <div className="ztLine"><i className="ti ti-info-circle" aria-hidden="true" /> {props.intakeResult.message}</div>
-              )}
-            </div>
-          )}
         </section>
+      )}
 
-        <section
-          className="block fileDropZone"
-          onDragOver={(event: DragEvent<HTMLElement>) => event.preventDefault()}
-          onDrop={(event: DragEvent<HTMLElement>) => {
-            event.preventDefault();
-            const file = event.dataTransfer.files?.[0];
-            if (file) props.onDropSourceFile(file);
-          }}
-        >
-          <div className="blockHead"><i className="ti ti-scan" aria-hidden="true" /> Источник — распознавание</div>
-          <div className="sourceToolbar">
-            <button className="softBtn" onClick={props.onResetCase} disabled={props.busy}>
-              <i className="ti ti-file-plus" aria-hidden="true" /> Новый комплект
-            </button>
-            <label className="softBtn fileBtn">
-              <i className="ti ti-file-upload" aria-hidden="true" /> Выбрать исходный файл
+      <section
+        className={`sourceStage ${sourceReady ? 'ready' : ''}`}
+        onDragOver={(event: DragEvent<HTMLElement>) => event.preventDefault()}
+        onDrop={(event: DragEvent<HTMLElement>) => {
+          event.preventDefault();
+          const file = event.dataTransfer.files?.[0];
+          if (file) props.onDropSourceFile(file);
+        }}
+      >
+        <div className="stageHeading">
+          <span className="stageNumber">1</span>
+          <div>
+            <h2>{sourceReady ? 'Источник принят' : 'Добавьте исходный файл'}</h2>
+            <p>{sourceReady ? 'Данные уже извлечены. При необходимости замените файл или проверьте распознанное.' : 'Перетащите файл сюда или выберите его на компьютере.'}</p>
+          </div>
+        </div>
+
+        {!sourceReady ? (
+          <div className="dropHero">
+            <div className="dropIcon"><i className="ti ti-file-upload" aria-hidden="true" /></div>
+            <strong>Перетащите документ в эту область</strong>
+            <span>Word, PDF, изображение, таблица, письмо, архив и другие поддерживаемые форматы</span>
+            <label className="primaryBtn fileBtn largeAction">
+              Выбрать файл
               <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
             </label>
-            <span className="hint">{props.sourceFileName ? `Выбран: ${props.sourceFileName}` : 'Перетащите Word/PDF/фото/таблицу/письмо/архив, выберите файл, загрузите HTTPS-источник или вставьте текст.'}</span>
           </div>
-          <div className="ztRow webSourceRow">
-            <i className="ti ti-world" aria-hidden="true" />
-            <input
-              value={props.webSourceUrl}
-              onChange={(event) => props.setWebSourceUrl(event.target.value)}
-              placeholder="https://сайт.example/документ или JSON/XML/CSV API"
-              aria-label="HTTPS-источник"
-            />
-            <button className="softBtn" onClick={props.onLoadWebSource} disabled={props.busy || !props.webSourceUrl.trim()}>
-              <i className="ti ti-download" aria-hidden="true" /> Загрузить HTTPS
-            </button>
-          </div>
-          {props.intakeCapabilities.length > 0 && (
-            <details className="intakeCapabilities">
-              <summary>Готовность форматов и внешних движков</summary>
-              <ul>
-                {props.intakeCapabilities.map((item) => (
-                  <li key={item.format} className={item.ready ? 'ready' : 'missing'}>
-                    <strong>{item.format}</strong> · {item.extensions.join(', ')} · {item.ready ? 'готово' : 'нужен компонент'} · {item.mode}
-                    <small>{item.detail}</small>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-          <div className="guidedScannerLaunch">
-            <div className="guidedScannerLaunchText">
-              <span className="guidedScannerEyebrow">Самый простой способ</span>
-              <strong>Покажите значение прямо в Word — остальное программа сделает сама</strong>
-              <small>1. Программа откроет документ. 2. Вы выделите нужное мышкой или поставите курсор внутрь слова. 3. Программа сама предложит, что это и в какие документы подставить, затем сама закроет Word.</small>
+        ) : (
+          <div className="sourceAccepted">
+            <div className="sourceFileIcon"><i className="ti ti-file-check" aria-hidden="true" /></div>
+            <div className="sourceFileInfo">
+              <strong>{props.sourceFileName || props.parsed?.title || 'Вставленный текст'}</strong>
+              <span>{sourceKindLabel(props.parsed?.sourceKind)}{props.parsed ? ` · найдено значений: ${props.parsed.count}` : ''}</span>
+              {props.parsed?.warnings.length ? <em>Нужно проверить замечаний: {props.parsed.warnings.length}</em> : <em className="okText">Источник прочитан без критических замечаний</em>}
             </div>
-            <button className="primaryBtn guidedScannerLaunchButton" onClick={props.onStartGuidedSourceScanner} disabled={props.busy || !props.sourceFilePath || !/\.doc[xm]$/i.test(props.sourceFileName ?? '')}>
-              <i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать значение мышкой
-            </button>
-            {(!props.sourceFilePath || !/\.doc[xm]$/i.test(props.sourceFileName ?? '')) && <small className="guidedScannerDisabledHint">Разметка мышкой в Word доступна только для DOCX/DOCM; остальные форматы сначала автоматически распознаются.</small>}
+            <div className="sourceActions">
+              <label className="softBtn fileBtn">
+                Заменить файл
+                <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
+              </label>
+              <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Начать заново</button>
+            </div>
           </div>
-          <textarea
-            className="source"
-            value={props.sourceText}
-            onChange={(event) => {
-              props.setSourceText(event.target.value);
-              props.setSourceFileName(null);
-            }}
-            onSelect={(event) => {
-              const target = event.currentTarget;
-              const start = target.selectionStart ?? 0;
-              const end = target.selectionEnd ?? start;
-              if (end > start) props.setScannerText(target.value.slice(start, end));
-            }}
-            spellCheck={false}
-          />
-          <details className="manualScannerDetails">
-            <summary>Ручной режим для опытных пользователей</summary>
-            <div className="visualScannerBar">
-              <div className="scannerSelection" title={props.scannerText || 'Выделите текст мышкой в документе'}>
-                <i className="ti ti-cursor-text" aria-hidden="true" />
-                {props.scannerText ? `Выделено: ${props.scannerText}` : 'Выделите фрагмент мышкой в тексте источника'}
+        )}
+
+        <details className="alternativeSource">
+          <summary>Другой способ добавить источник</summary>
+          <div className="alternativeGrid">
+            <div className="alternativeCard">
+              <strong>Ссылка</strong>
+              <p>Загрузить страницу, открытый файл или данные из API.</p>
+              <div className="inlineInput">
+                <input value={props.webSourceUrl} onChange={(event) => props.setWebSourceUrl(event.target.value)} placeholder="https://..." aria-label="Адрес источника" />
+                <button className="softBtn" onClick={props.onLoadWebSource} disabled={props.busy || !props.webSourceUrl.trim()}>Загрузить</button>
               </div>
-              <input
-                value={props.scannerField}
-                onChange={(event) => props.setScannerField(event.target.value)}
-                placeholder="идентификатор поля: document.number"
-                aria-label="Поле для выделенного фрагмента"
-                list="scanner-field-suggestions"
-              />
-              <datalist id="scanner-field-suggestions">
-                <option value="document.number" />
-                <option value="document.date" />
-                <option value="subject.name" />
-                <option value="org.name" />
-                <option value="period.start_date" />
-                <option value="period.end_date" />
-                <option value="medical.case_number" />
-                <option value="medical.diagnosis" />
-                <option value="medical.treatment" />
-              </datalist>
-              <button className="softBtn" onClick={props.onApplyScannerSelection} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>
-                <i className="ti ti-color-swatch" aria-hidden="true" /> Назначить выделение полю
-              </button>
-              <button className="softBtn" onClick={props.onApplyScannerAndQuestion} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>
-                <i className="ti ti-message-plus" aria-hidden="true" /> Назначить и добавить вопрос
-              </button>
             </div>
-          </details>
-          <div className="rowBetween">
-            <span className="hint">Извлекаем поля из вашего документа и сразу подключаем их к сценариям и генерации.</span>
-            <button className="primaryBtn" onClick={props.onParseSource} disabled={props.busy}><i className="ti ti-wand" aria-hidden="true" /> Разобрать текст</button>
+            <div className="alternativeCard">
+              <strong>Текст</strong>
+              <p>Вставить содержимое вручную, если файла нет.</p>
+              <textarea value={props.sourceText} onChange={(event) => props.setSourceText(event.target.value)} placeholder="Вставьте текст источника" />
+              <button className="softBtn" onClick={props.onParseSource} disabled={props.busy || !props.sourceText.trim()}>Использовать текст</button>
+            </div>
           </div>
-          {props.parsed && (
-            <div className="parsedNote">
-              <span className="badgeOk"><i className="ti ti-check" aria-hidden="true" /> {props.parsed.title}</span>
-              <span>извлечено полей: {props.parsed.count}</span>
-              <span>источник: {sourceKindLabel(props.parsed.sourceKind)}</span>
-              {!!props.parsed.layoutRows && <span>структурных строк: {props.parsed.layoutRows}</span>}
-              {!!props.parsed.tableRows && <span>табличных строк: {props.parsed.tableRows}</span>}
-              {props.parsed.warnings.length > 0 && <span className="badgeWarn"><i className="ti ti-alert-triangle" aria-hidden="true" /> {props.parsed.warnings.length}</span>}
-            </div>
-          )}
-        </section>
+        </details>
+      </section>
 
-        <section className="block">
-          <div className="blockHead"><i className="ti ti-brain" aria-hidden="true" /> Извлечение полей из документа</div>
-          <div className="rowBetween">
-            <span className="hint">Детерминированный парсер работает всегда. Дополнительно можно включить локальную Ollama/llama.cpp в центре автоматизации: документ остаётся на компьютере, модель только предлагает факты, а Rust-валидаторы решают, можно ли их использовать.</span>
-            <button className="primaryBtn" onClick={props.onUnderstand} disabled={props.busy}><i className="ti ti-brain" aria-hidden="true" /> Извлечь поля</button>
+      {sourceReady && (
+        <section className="reviewStage">
+          <div className="stageHeading">
+            <span className="stageNumber">2</span>
+            <div>
+              <h2>{prompts.length ? 'Уточните недостающие данные' : 'Источник готов к созданию комплекта'}</h2>
+              <p>{prompts.length ? 'Показываем только то, чего не удалось надёжно найти в источнике.' : 'Обязательных уточнений сейчас нет. Выберите состав комплекта справа и запустите создание.'}</p>
+            </div>
           </div>
-          <details className="modelDetails">
-            <summary>Диагностический JSON модели — вручную</summary>
-            <textarea className="source" value={props.modelOutput} onChange={(event) => props.setModelOutput(event.target.value)} placeholder={'Вставьте JSON, полученный от отдельно подключённой модели: {"org.inn": {"value": "…", "confidence": 0.9}}'} spellCheck={false} />
-          </details>
-          {props.semantic && (
-            <div className="semanticResult">
-              <div className="semHead">Извлечено полей: {props.semantic.fields.length}{props.semantic.model_applied ? ' · локальная/внешняя модель учтена' : ' · детерминированно'} · безопасных {props.semantic.fields.filter(field => field.confidence >= .95).length} · проверить {props.semantic.fields.filter(field => field.confidence < .95).length}</div>
-              <ul className="semFields">
-                {props.semantic.fields.map((field) => (
-                  <li key={field.field_id} className={field.confidence < .8 ? 'semRisk' : field.confidence < .95 ? 'semReview' : 'semTrusted'}>
-                    <span className="semId">{field.field_id}</span>
-                    <span className="semVal">{field.value}</span>
-                    <span className="semMeta">{field.confidence < .8 ? 'обязательно проверить' : field.confidence < .95 ? 'проверить' : 'высокая уверенность'} · {field.method} · {field.source || 'источник не указан'} · {(field.confidence * 100).toFixed(0)}%</span>
-                    {!!field.evidence?.length && <details className="semEvidence"><summary>Показать доказательство</summary>{field.evidence.map((excerpt, index) => <blockquote key={`${field.field_id}-${index}`}>{excerpt}</blockquote>)}</details>}
-                    <div className="semanticFieldActions">
-                      <button className="softBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить источник → результат</button>
-                      <button className="softBtn semCorrection" disabled={props.busy || !props.sourceFilePath} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Здесь ошибка</button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {props.semantic.warnings.length > 0 && <div className="semWarn"><i className="ti ti-alert-triangle" aria-hidden="true" /> {props.semantic.warnings.join('; ')}</div>}
-              {reviewField && <section className="evidenceReview" aria-label="Проверка источника и результата">
-                <div className="evidencePane">
-                  <div className="evidencePaneHead">Источник · доказательство для {reviewField.field_id}</div>
-                  <pre>{highlightedSource(props.sourceText, reviewEvidence)}</pre>
-                  {reviewEvidence && <small>Подсвечен первый подтверждающий фрагмент. Остальные доказательства доступны в карточке поля.</small>}
-                </div>
-                <div className="evidencePane">
-                  <div className="evidencePaneHead">Результат · значение и готовые файлы</div>
-                  <dl className="evidenceValue">
-                    <dt>{reviewField.field_id}</dt><dd>{reviewField.value}</dd>
-                    <dt>Уверенность</dt><dd>{(reviewField.confidence * 100).toFixed(1)}%</dd>
-                    <dt>Метод</dt><dd>{reviewField.method}</dd>
-                  </dl>
-                  {props.preview?.text && <details><summary>Текст предпросмотра документа</summary><pre>{props.preview.text}</pre></details>}
-                  {props.lastOutput?.files?.length ? <ul className="evidenceOutputFiles">{props.lastOutput.files.map(path => <li key={path}>{path}</li>)}</ul> : <small>После генерации здесь появятся пути готовых документов.</small>}
-                </div>
-              </section>}
-            </div>
-          )}
-        </section>
 
-        <section className="block">
-          <div className="blockHead"><i className="ti ti-list-details" aria-hidden="true" /> Извлечённые поля{props.plan ? ` · нужно уточнить: ${props.plan.prompts.length}` : ''}</div>
-          {props.plan?.prompts.length ? (
-            <div className="fields">
-              {props.plan.prompts.map((prompt: PromptSpec) => (
-                <div className="fieldRow" key={prompt.field_id}>
-                  <div className="fieldLabel">{prompt.title}{prompt.required && <span className="req">*</span>}</div>
-                  <div className="fieldInputWrap">
+          {prompts.length ? (
+            <div className="clientFields">
+              {prompts.map((prompt: PromptSpec) => (
+                <label className="clientField" key={prompt.field_id}>
+                  <span>{prompt.title}{prompt.required && <b>*</b>}</span>
+                  <div>
                     <input
                       value={props.answers[prompt.field_id] ?? ''}
-                      placeholder={prompt.field_id}
+                      placeholder={prompt.validation_hint || 'Введите значение'}
                       onChange={(event) => props.setAnswers((previous) => ({ ...previous, [prompt.field_id]: event.target.value }))}
                     />
-                    <button className="pin" aria-label="Закрепить значение" onClick={() => props.onPinField(prompt.field_id)}><i className="ti ti-pin" aria-hidden="true" /></button>
+                    <button className="iconOnlyBtn" title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={() => props.onPinField(prompt.field_id)}><i className="ti ti-pin" aria-hidden="true" /></button>
                   </div>
-                </div>
+                </label>
               ))}
-              <div className="fieldActions">
-                <button className="softBtn" onClick={props.onPreview}><i className="ti ti-eye" aria-hidden="true" /> Предпросмотр</button>
-                <button className="primaryBtn" onClick={props.onSaveFields}><i className="ti ti-device-floppy" aria-hidden="true" /> Сохранить поля</button>
+              <div className="reviewActions">
+                <button className="primaryBtn" onClick={props.onSaveFields} disabled={props.busy}>Сохранить ответы</button>
+                <button className="softBtn" onClick={props.onPreview} disabled={props.busy}>Предпросмотр</button>
               </div>
             </div>
           ) : (
-            <p className="hint">Выберите документ слева — покажем объединённый список полей, которые нужно уточнить.</p>
+            <div className="readyMessage">
+              <i className="ti ti-circle-check" aria-hidden="true" />
+              <div><strong>Можно создавать документы</strong><span>{props.semantic ? `Распознано значений: ${props.semantic.fields.length}${reviewCount ? ` · рекомендуем проверить: ${reviewCount}` : ''}` : 'Данные источника будут проверены ещё раз перед сохранением.'}</span></div>
+              <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy}>Проверить данные</button>
+            </div>
           )}
 
-          <div className="dictBar">
-            <span className="dictLabel"><i className="ti ti-book" aria-hidden="true" /> Словарь профиля</span>
-            <input value={props.icdQuery} placeholder="код или значение (например, F32 / ИНН)" onChange={(event) => props.setIcdQuery(event.target.value)} />
-            <button className="softBtn" onClick={props.onSearchDictionary}>Найти</button>
-          </div>
-          {props.icdHits.length > 0 && (
-            <div className="chips">
-              {props.icdHits.map((hit) => (
-                <button key={hit.code} className="chip" onClick={() => props.onChooseDictionaryValue(hit)}>{hit.code} — {hit.title}</button>
-              ))}
-            </div>
+          {props.preview && (
+            <details className="clientPreview" open>
+              <summary>Предпросмотр документа{props.preview.missing ? ` · не заполнено: ${props.preview.missing}` : ''}</summary>
+              <pre>{props.preview.text || '—'}</pre>
+              <button className="primaryBtn" onClick={props.onGenerate} disabled={props.busy}>Создать только этот документ</button>
+            </details>
           )}
         </section>
-      </main>
+      )}
 
-      <aside className="prev">
-        <div className="railHead">Предпросмотр</div>
-        <div className="paper">
-          {props.preview ? <pre className="paperText">{props.preview.text || '—'}</pre> : (
-            <div className="paperSkeleton">
-              <span className="ln title" /><span className="ln" style={{ width: '100%' }} /><span className="ln" style={{ width: '92%' }} />
-              <span className="ln" style={{ width: '96%' }} /><span className="ln hl" style={{ width: '54%' }} /><span className="ln" style={{ width: '80%' }} />
+      <details className="automationCard">
+        <summary>
+          <span className="automationIcon"><i className="ti ti-bolt" aria-hidden="true" /></span>
+          <span><strong>Автоматическая обработка папки</strong><small>Программа может сама замечать новые файлы и создавать комплект без ручного запуска.</small></span>
+          <i className="ti ti-chevron-down" aria-hidden="true" />
+        </summary>
+        <div className="automationBody">
+          <label><span>Рабочая папка</span><input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="Созданные документы" /></label>
+          <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
+          <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
+          {props.intakeResult && <div className={`automationResult ${props.intakeResult.status}`}><strong>{props.intakeResult.status === 'processed' ? 'Комплект создан' : props.intakeResult.status === 'attention' ? 'Нужно уточнение' : 'Информация'}</strong><span>{props.intakeResult.message}</span></div>}
+        </div>
+      </details>
+
+      <details className="advancedCard">
+        <summary><i className="ti ti-adjustments" aria-hidden="true" /> Расширенные инструменты</summary>
+        <div className="advancedBody">
+          <section>
+            <h3>Точность распознавания</h3>
+            <p>Проверьте найденные значения, источник каждого результата и при необходимости обучите правило на выделении.</p>
+            <div className="advancedActions">
+              <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy}>Обновить распознанные данные</button>
+              <button className="softBtn" onClick={props.onStartGuidedSourceScanner} disabled={props.busy || !props.sourceFilePath || !/\.doc[xm]$/i.test(props.sourceFilePath)}>Показать значение в Word</button>
             </div>
-          )}
+            {props.semantic && (
+              <ul className="neutralDataList">
+                {props.semantic.fields.map((field) => (
+                  <li key={field.field_id}>
+                    <div><strong>{field.value}</strong><small>{field.field_id} · уверенность {(field.confidence * 100).toFixed(0)}%</small></div>
+                    <div><button className="textBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy || !props.sourceFilePath} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Исправить правило</button></div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {reviewField && <div className="evidenceReview">
+              <div className="evidencePane"><strong>Фрагмент источника</strong><pre>{highlightedSource(props.sourceText, reviewEvidence)}</pre></div>
+              <div className="evidencePane"><strong>Распознанное значение</strong><pre>{reviewField.value}</pre></div>
+            </div>}
+          </section>
+
+          <section>
+            <h3>Ручная разметка</h3>
+            <div className="manualMarkup">
+              <input list="known-field-ids" value={props.scannerField} onChange={(event) => props.setScannerField(event.target.value)} placeholder="Идентификатор поля" />
+              <datalist id="known-field-ids"><option value="document.number" /><option value="document.date" /><option value="subject.name" /><option value="organization.name" /><option value="organization.inn" /></datalist>
+              <input value={props.scannerText} onChange={(event) => props.setScannerText(event.target.value)} placeholder="Выделенный текст" />
+              <button className="softBtn" onClick={props.onApplyScannerSelection} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>Назначить полю</button>
+              <button className="softBtn" onClick={props.onApplyScannerAndQuestion} disabled={props.busy || !props.scannerText.trim() || !props.scannerField.trim()}>Назначить и спрашивать при отсутствии</button>
+            </div>
+          </section>
+
+          <section>
+            <h3>Диагностика форматов</h3>
+            {props.intakeCapabilities.length ? <ul className="capabilityList">{props.intakeCapabilities.map(item => <li key={item.format}><strong>{item.format}</strong><span>{item.ready ? 'готово' : 'требуется компонент'}</span><small>{item.detail}</small></li>)}</ul> : <p>Сведения появятся после проверки компонентов.</p>}
+            <details className="modelDetails"><summary>Дополнительные данные распознавания</summary><textarea value={props.modelOutput} onChange={(event) => props.setModelOutput(event.target.value)} placeholder="Служебные данные в формате JSON" spellCheck={false} /></details>
+          </section>
         </div>
-        <div className="prevStat">
-          {props.preview
-            ? (props.preview.missing ? <><i className="ti ti-alert-triangle" aria-hidden="true" /> не заполнено: {props.preview.missing}</> : <><i className="ti ti-check" aria-hidden="true" /> плейсхолдеры заполнены</>)
-            : <>нажмите «Предпросмотр»</>}
-        </div>
-        <button className="primaryBtn full" onClick={props.onGenerate} disabled={props.busy}><i className="ti ti-file-download" aria-hidden="true" /> Сформировать DOCX</button>
-      </aside>
-    </>
+      </details>
+    </main>
   );
 }

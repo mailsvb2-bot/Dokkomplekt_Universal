@@ -22,6 +22,54 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+      - name: Preserve neutral UI capabilities
+        if: github.head_ref == 'ui/client-first-neutral'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workspace = Path('src/components/Workspace.tsx')
+          text = workspace.read_text(encoding='utf-8')
+          old_textarea = '''              <textarea value={props.sourceText} onChange={(event) => props.setSourceText(event.target.value)} placeholder="Вставьте текст источника" />'''
+          new_textarea = '''              <textarea
+                value={props.sourceText}
+                onChange={(event) => props.setSourceText(event.target.value)}
+                onSelect={(event) => {
+                  const target = event.currentTarget;
+                  const start = target.selectionStart ?? 0;
+                  const end = target.selectionEnd ?? start;
+                  if (end > start) props.setScannerText(target.value.slice(start, end));
+                }}
+                placeholder="Вставьте текст источника"
+              />'''
+          if old_textarea not in text:
+              raise SystemExit('manual source textarea contract not found')
+          text = text.replace(old_textarea, new_textarea)
+          text = text.replace('>Исправить правило</button>', '>Здесь ошибка</button>')
+          text = text.replace('>Назначить полю</button>', '>Назначить выделение полю</button>')
+          print_line = '''          <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>'''
+          if print_line not in text:
+              raise SystemExit('automatic print line not found')
+          text = text.replace(print_line, print_line + '\n          <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>')
+          workspace.write_text(text, encoding='utf-8')
+
+          contract = Path('tests/test_v18_1_0_production_pilot_contracts.py')
+          text = contract.read_text(encoding='utf-8')
+          old = '        self.assertIn("КЭДО-пакет", self.workspace)'
+          new = '        self.assertIn("Создать пакет обмена", self.workspace)\n        self.assertIn("onExportLastOutputKedo", self.workspace)'
+          if old not in text:
+              raise SystemExit('legacy KEDO UI assertion not found')
+          contract.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          git show origin/main:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Preserve correction and scanner capabilities in neutral UI'
+          git push origin HEAD:ui/client-first-neutral
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

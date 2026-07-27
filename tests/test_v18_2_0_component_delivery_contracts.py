@@ -72,7 +72,7 @@ class ComponentDeliveryContracts(unittest.TestCase):
         ]:
             self.assertIn(invariant, app)
         for invariant in [
-            "Автоматизация → Зависимости",
+            "Дополнительные возможности",
             "component://progress",
             "Проверить подписанный каталог",
             "Скачать",

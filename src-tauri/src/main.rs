@@ -1148,8 +1148,7 @@ fn stable_machine_guid() -> Option<String> {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        text
-            .lines()
+        text.lines()
             .find(|line| line.contains("MachineGuid"))
             .and_then(|line| line.split_whitespace().last())
             .map(str::trim)

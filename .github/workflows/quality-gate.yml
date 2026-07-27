@@ -2,11 +2,16 @@ name: Quality Gate
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
@@ -22,12 +27,48 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt, clippy
+      - name: Restore Rust build and audit cache
+        id: rust-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-compile-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-audit-0.22.2
+          restore-keys: |
+            rust-compile-${{ runner.os }}-
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Cargo lock must be committed
         run: test -f Cargo.lock
-      - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Install current CVSS-4-compatible cargo-audit
+        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
       - name: Mandatory Rust compile gate
-        run: bash scripts/prepackage_rust_gate.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/prepackage_rust_gate.sh 2>&1 | tee rust-compile-gate.log
+      - name: Upload Rust compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-compile-gate-diagnostics
+          path: rust-compile-gate.log
+          if-no-files-found: error
+      - name: Save Rust build and audit cache
+        if: always() && steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-compile-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-audit-0.22.2
 
   rust-dependency-audit:
     name: RustSec dependency audit
@@ -36,10 +77,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.97.1
-      - name: Install MSRV-compatible cargo-audit
-        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Restore cargo-audit cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-audit-${{ runner.os }}-0.22.2
+      - name: Install current CVSS-4-compatible cargo-audit
+        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
       - name: Audit locked Rust dependencies
-        run: cargo audit --deny warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit --deny warnings 2>&1 | tee rustsec-audit.log
+      - name: Upload RustSec diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustsec-audit-diagnostics
+          path: rustsec-audit.log
+          if-no-files-found: error
 
   python-contracts:
     name: Python regression contour
@@ -115,30 +174,71 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore packaging Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-package-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-audit-0.22.2
+          restore-keys: |
+            rust-package-${{ runner.os }}-
+            rust-compile-${{ runner.os }}-
       - name: Linux deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
-      - name: Install MSRV-compatible cargo-audit on packaging runner
-        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Install current CVSS-4-compatible cargo-audit on packaging runner
+        shell: bash
+        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
       - name: Repeat mandatory Rust gate on packaging runner
         shell: bash
-        run: bash scripts/prepackage_rust_gate.sh
+        run: |
+          set -o pipefail
+          bash scripts/prepackage_rust_gate.sh 2>&1 | tee "packaging-rust-${{ runner.os }}.log"
       - run: npm ci
       - name: Build Windows NSIS bundle
         if: runner.os == 'Windows'
-        run: npx tauri build --bundles nsis
+        shell: pwsh
+        run: |
+          npx tauri build --bundles nsis 2>&1 | Tee-Object -FilePath "tauri-build-${{ runner.os }}.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Linux bundles
         if: runner.os == 'Linux'
-        run: npx tauri build --bundles appimage,deb,rpm
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          set -o pipefail
+          npx tauri build --bundles appimage,deb,rpm 2>&1 | tee "tauri-build-${{ runner.os }}.log"
       - name: Windows installer smoke
         if: runner.os == 'Windows'
         shell: pwsh
-        run: tests/installer/windows_installer_contract.ps1
+        run: |
+          tests/installer/windows_installer_contract.ps1 2>&1 | Tee-Object -FilePath "installer-smoke-${{ runner.os }}.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Linux installer smoke
         if: runner.os == 'Linux'
-        run: bash tests/installer/linux_installer_contract.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          bash tests/installer/linux_installer_contract.sh 2>&1 | tee "installer-smoke-${{ runner.os }}.log"
+      - name: Upload packaging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaging-diagnostics-${{ runner.os }}
+          path: |
+            packaging-rust-${{ runner.os }}.log
+            tauri-build-${{ runner.os }}.log
+            installer-smoke-${{ runner.os }}.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

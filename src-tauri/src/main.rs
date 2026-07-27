@@ -1148,13 +1148,12 @@ fn stable_machine_guid() -> Option<String> {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        return text
-            .lines()
+        text.lines()
             .find(|line| line.contains("MachineGuid"))
             .and_then(|line| line.split_whitespace().last())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string);
+            .map(str::to_string)
     }
     #[cfg(target_os = "linux")]
     {
@@ -2218,7 +2217,20 @@ mod tests {
         let second = load_or_create_local_data_key(&db).expect("reuse key");
         assert_eq!(first, second);
         assert_ne!(first, [0u8; 32]);
-        let stored = std::fs::read(root.join("state.sqlite.key")).expect("stored key");
+        let key_path = root.join("state.sqlite.key");
+        let stored = std::fs::read(&key_path).expect("stored key");
+        #[cfg(windows)]
+        {
+            assert!(
+                stored.starts_with(super::DPAPI_KEY_FILE_MAGIC),
+                "Windows key file must use the DPAPI envelope"
+            );
+            assert_ne!(stored.as_slice(), first.as_slice());
+            let decoded =
+                super::decode_or_migrate_local_key(&key_path, &stored).expect("decode stored key");
+            assert_eq!(decoded, first);
+        }
+        #[cfg(not(windows))]
         assert_eq!(stored, first);
         #[cfg(unix)]
         {

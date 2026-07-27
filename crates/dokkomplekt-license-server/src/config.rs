@@ -173,7 +173,7 @@ fn database_endpoint_from_url(value: &str) -> anyhow::Result<DatabaseEndpoint> {
         .map(|(_, remainder)| remainder)
         .ok_or_else(|| anyhow::anyhow!("DATABASE_URL has no PostgreSQL scheme"))?;
     let authority = without_scheme
-        .split(|character| matches!(character, '/' | '?' | '#'))
+        .split(['/', '?', '#'])
         .next()
         .unwrap_or_default();
     if authority.is_empty() {
@@ -182,7 +182,9 @@ fn database_endpoint_from_url(value: &str) -> anyhow::Result<DatabaseEndpoint> {
         }
         return Ok(DatabaseEndpoint::UnixSocket);
     }
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = if let Some(bracketed) = host_port.strip_prefix('[') {
         bracketed
             .split_once(']')
@@ -206,7 +208,12 @@ fn database_endpoint_from_keyword_dsn(value: &str) -> anyhow::Result<DatabaseEnd
 }
 
 fn query_parameter(value: &str, name: &str) -> Option<String> {
-    let query = value.split_once('?')?.1.split('#').next().unwrap_or_default();
+    let query = value
+        .split_once('?')?
+        .1
+        .split('#')
+        .next()
+        .unwrap_or_default();
     query.split('&').find_map(|part| {
         let (key, raw_value) = part.split_once('=')?;
         (key == name).then(|| raw_value.replace("%2F", "/").replace("%2f", "/"))
@@ -312,4 +319,3 @@ mod tests {
         .is_ok());
     }
 }
-

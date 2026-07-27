@@ -11,6 +11,18 @@
 - License server и Python native binding, исключённые из desktop workspace, получили обязательный изолированный Rust gate: `fmt`, `check`, `clippy -D warnings`, `test`, RustSec audit. Его lock/audit evidence криптографически связывается с release attestation.
 - Детерминированный source-archive builder формирует новый SHA-256 manifest и проверяет CRC, безопасные пути, дубликаты и каждый файл архива.
 
+## GitHub Actions repair
+
+- Обновлён уязвимый `pyo3 0.24.2` до исправленного `0.29.0` в Python binding и workspace policy.
+- `cargo-audit` обновлён до версии `0.22.2`, поддерживающей новые RustSec-записи с CVSS 4.0; security gate не ослаблен.
+- Rust compile gate на Ubuntu теперь устанавливает обязательные GLib/GTK/WebKitGTK development-пакеты до сборки Tauri.
+- Устранены неотформатированные Rust-файлы как в основном workspace, так и в отдельно проверяемых коммерческих crates.
+- Исправлены устаревшие проверки подписей дневников; compatibility-путь теперь формирует каноническую строку `Заведующий отделением` и не добавляет её повторно, если полная строка уже существует.
+- Устранён Clippy-дефект `manual_pattern_char_comparison` в разборе PostgreSQL URL license-server.
+- Исправлен Windows-only тест локального ключа: он больше не сравнивает DPAPI-зашифрованный файл с открытым 32-байтовым ключом, а проверяет DPAPI-конверт, отсутствие plaintext и успешное восстановление того же ключа.
+- Для повторных CI-прогонов добавлен безопасный Cargo cache, а дублирующий одновременный запуск workflow по `push` и `pull_request` для одной ветки устранён.
+- При падении Rust gate полный диагностический лог сохраняется как GitHub Actions artifact без `continue-on-error` и без ослабления обязательных проверок.
+
 ## Проверено в доступной среде
 
 - `python -m pytest -q`: 212 passed.

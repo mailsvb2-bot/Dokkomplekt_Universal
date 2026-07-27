@@ -181,7 +181,6 @@ pub fn unmet_blocks(
     unmet
 }
 
-
 fn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {
     rendered_text.lines().any(|line| {
         let normalized = line
@@ -268,7 +267,7 @@ mod tests {
         let bad_case = case_with(&[("subject.name", "Иванов Иван")]);
         let unmet = unmet_blocks(&blocks, &bad_case, "Просто текст без подписи");
         assert!(unmet.iter().any(|t| t.contains("Диагноз")));
-        assert!(unmet.iter().any(|t| t.contains("подписи")));
+        assert!(unmet.iter().any(|t| t.contains("Подпись лечащего врача")));
     }
 
     #[test]

@@ -385,7 +385,7 @@ mod tests {
         match batch {
             CreatedDocumentsBatch::Attention { missing, .. } => {
                 assert!(missing.iter().any(|m| m.contains("Диагноз")));
-                assert!(missing.iter().any(|m| m.contains("подписи")));
+                assert!(missing.iter().any(|m| m.contains("Подпись лечащего врача")));
             }
             other => panic!("expected Attention, got {other:?}"),
         }

@@ -28,7 +28,6 @@ jobs:
         run: |
           set +e
           python scripts/run_python_contracts_sharded.py --report /tmp/python-contracts.json >/tmp/python-contracts.log 2>&1
-          code=$?
           {
             echo '=== MACHINE REPORT ==='
             cat /tmp/python-contracts.json
@@ -38,7 +37,11 @@ jobs:
           } > PR7_PYTHON_FAILURE.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add PR7_PYTHON_FAILURE.txt
-          git commit -m "chore(ci): capture PR7 Python failure" || true
-          git push origin "HEAD:${BRANCH}"
-          exit $code
+          for attempt in 1 2 3; do
+            git pull --rebase origin "${BRANCH}" || true
+            git add PR7_PYTHON_FAILURE.txt
+            git commit -m "chore(ci): capture PR7 Python failure" || true
+            git push origin "HEAD:${BRANCH}" && exit 0
+            sleep 2
+          done
+          exit 1

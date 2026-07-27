@@ -1,0 +1,41 @@
+name: PR7 TypeScript diagnostic
+
+on:
+  push:
+    branches: [fix/simple-ui-button-creation]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Persist exact type errors
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set +e
+          npm run typecheck > TYPECHECK_FAILURE.txt 2>&1
+          code=$?
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          for attempt in 1 2 3; do
+            git pull --rebase origin "${BRANCH}" || true
+            git add TYPECHECK_FAILURE.txt
+            git commit -m "chore(ci): capture PR7 typecheck failure" || true
+            git push origin "HEAD:${BRANCH}" && exit 0
+            sleep 2
+          done
+          exit $code

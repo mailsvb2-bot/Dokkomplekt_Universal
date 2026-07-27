@@ -27,6 +27,9 @@ EXCLUDED_DIRS = {
     ".ruff_cache",
     "playwright-report",
     "test-results",
+    # CI/runtime evidence is not authored source. It is hashed separately.
+    "verification",
+    "build-evidence",
 }
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 ZIP_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
@@ -72,12 +75,17 @@ def source_files() -> list[Path]:
     return sorted(files, key=lambda item: item.relative_to(ROOT).as_posix())
 
 
-def write_source_manifest(files: list[Path]) -> bytes:
+def source_manifest_payload(files: list[Path] | None = None) -> bytes:
+    selected = source_files() if files is None else files
     lines = [
         f"{sha256_file(path)}  {path.relative_to(ROOT).as_posix()}"
-        for path in files
+        for path in selected
     ]
-    payload = ("\n".join(lines) + "\n").encode("utf-8")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def write_source_manifest(files: list[Path]) -> bytes:
+    payload = source_manifest_payload(files)
     (ROOT / SOURCE_MANIFEST).write_bytes(payload)
     return payload
 

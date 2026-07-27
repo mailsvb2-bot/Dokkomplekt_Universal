@@ -31,16 +31,16 @@ export function DocumentRail(props: DocumentRailProps) {
     <aside className="packagePanel" aria-label="Состав комплекта">
       <div className="packageHeader">
         <div>
-          <span>Шаг 3</span>
-          <h2>Что создать</h2>
+          <span>03</span>
+          <h2>Документы для создания</h2>
         </div>
         {hasDocuments && <span className="packageCount">{selectedCount}/{props.documents.length}</span>}
       </div>
 
       {hasDocuments ? (
         <>
-          <p className="packageHint">Отметьте документы, которые должны войти в комплект.</p>
-          <div className="packageList">
+          <p className="packageHint">Отметьте нужные документы. Название каждой кнопки взято из вашего шаблона.</p>
+          <div className="packageList simpleDocumentButtons">
             {props.documents.map((document) => {
               const selected = props.selectedDocumentIds.includes(document.id);
               const active = props.activeDocumentId === document.id;
@@ -58,7 +58,7 @@ export function DocumentRail(props: DocumentRailProps) {
                   <button className="packageOpen" onClick={() => props.onSelect(document)} aria-label={document.button_label}>
                     <i className="ti ti-file-text" aria-hidden="true" />
                     <span>{document.button_label}</span>
-                    <small>{active ? 'открыт для проверки' : selected ? 'в комплекте' : 'не выбран'}</small>
+                    <small>{selected ? 'выбран' : 'не выбран'}</small>
                   </button>
                 </div>
               );
@@ -67,7 +67,7 @@ export function DocumentRail(props: DocumentRailProps) {
 
           <div className="packageSelectionActions">
             <button className="textBtn" onClick={props.onSelectAll}>Выбрать всё</button>
-            <button className="textBtn" onClick={props.onClearSelected} disabled={!selectedCount}>Очистить</button>
+            <button className="textBtn" onClick={props.onClearSelected} disabled={!selectedCount}>Снять выбор</button>
           </div>
 
           <button
@@ -76,11 +76,11 @@ export function DocumentRail(props: DocumentRailProps) {
             disabled={!selectedCount || props.busy}
           >
             <i className="ti ti-sparkles" aria-hidden="true" />
-            {props.busy ? 'Создаём…' : selectedCount ? `Создать комплект (${selectedCount})` : 'Выберите документы'}
+            {props.busy ? 'Создаём документы…' : selectedCount ? `Создать документы (${selectedCount})` : 'Выберите документы'}
           </button>
 
           <details className="packageSettings">
-            <summary><i className="ti ti-settings" aria-hidden="true" /> Настройка документов</summary>
+            <summary><i className="ti ti-settings" aria-hidden="true" /> Управление кнопками</summary>
             <div className="packageSettingsBody">
               <button className="softBtn" onClick={props.onAdd}><i className="ti ti-plus" aria-hidden="true" /> Добавить шаблоны</button>
               {props.activeDocumentId && (
@@ -89,12 +89,12 @@ export function DocumentRail(props: DocumentRailProps) {
                   <button className="softBtn" onClick={props.onScanTemplate}>Разметить шаблон</button>
                   <button className="softBtn" onClick={props.onRename}>Переименовать</button>
                   <button className="softBtn" onClick={props.onApprove}>Подтвердить версию</button>
-                  <button className="softBtn danger" onClick={props.onRemove}>Удалить из набора</button>
+                  <button className="softBtn danger" onClick={props.onRemove}>Убрать из набора</button>
                 </>
               )}
-              <label className="checkLine compact"><input type="checkbox" checked={props.extraRulesEnabled} onChange={(event) => props.onExtraRulesChange(event.target.checked)} /><span>Учитывать дополнительные правила для выбранных шаблонов</span></label>
+              <label className="checkLine compact"><input type="checkbox" checked={props.extraRulesEnabled} onChange={(event) => props.onExtraRulesChange(event.target.checked)} /><span>Учитывать дополнительные правила выбранных шаблонов</span></label>
               <details className="copySettings">
-                <summary>Экземпляры для печати</summary>
+                <summary>Количество экземпляров</summary>
                 {props.documents.map(document => (
                   <label key={document.id}>
                     <span>{document.button_label}</span>
@@ -106,16 +106,16 @@ export function DocumentRail(props: DocumentRailProps) {
           </details>
         </>
       ) : (
-        <div className="emptyPackage">
+        <div className="emptyPackage firstRunButtons">
           <div><i className="ti ti-files" /></div>
-          <h3>Добавьте свои шаблоны</h3>
-          <p>Программа превратит их в понятный набор документов и запомнит правила заполнения.</p>
-          <button className="primaryBtn full" onClick={props.onAdd}>Добавить шаблоны</button>
+          <h3>Сначала создайте свои кнопки</h3>
+          <p>Выберите используемые вами шаблоны Word. Каждый шаблон сразу станет кнопкой документа.</p>
+          <button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd}>Создать свои кнопки</button>
         </div>
       )}
 
       <button className="settingsLink" onClick={props.onToggleUtilities}>
-        <i className="ti ti-adjustments-horizontal" aria-hidden="true" /> Настройки и автоматизация
+        <i className="ti ti-adjustments-horizontal" aria-hidden="true" /> Дополнительные настройки
       </button>
     </aside>
   );

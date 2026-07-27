@@ -134,7 +134,7 @@ export function App() {
           setSelectedDocIds(res.pack.documents.map((document) => document.id));
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
-          setStatus('Добавьте шаблоны документов — программа запомнит их и подготовит рабочий набор.');
+          setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');
         } else if (res?.message) {
           setStatus(res.message);
         }
@@ -730,7 +730,7 @@ export function App() {
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
-    setStatus(`Подготовлено шаблонов: ${importedRows.length}. Проверьте названия документов и добавьте их в набор.`);
+    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
   }
 
   async function processTemplateFile(file: File) {
@@ -1043,8 +1043,7 @@ export function App() {
     if (!rows) return;
     const staticRows = rows.filter((row) => row.is_static_copy);
     if (staticRows.length) {
-      setStatus(`Эти шаблоны пока не содержат мест для заполнения: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
-      return;
+      setStatus(`Кнопки будут созданы. Шаблоны без полей будут копироваться без изменений: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
     }
     const labels = new Map(pendingTemplates.map((item) => [item.document_id, item.button_label.trim()]));
     const popupById = new Map(pendingTemplates.map((item) => [item.document_id, item.popup_fields]));
@@ -1062,7 +1061,7 @@ export function App() {
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setSetupOpen(false);
-    setStatus(`Добавлено документов: ${confirmedRows.length}. Шаблоны и правила сохранены.`);
+    setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
   }
 
   async function chooseIcd(hit: Icd10Suggestion) {

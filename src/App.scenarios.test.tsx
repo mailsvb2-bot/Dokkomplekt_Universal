@@ -180,8 +180,8 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'reset_case')).toBe(true));
 
     // Document configuration stays out of the daily flow but remains available on demand.
-    fireEvent.click(screen.getByText('Настройка документов'));
-    fireEvent.click(screen.getByText('Экземпляры для печати'));
+    fireEvent.click(screen.getByText('Управление кнопками'));
+    fireEvent.click(screen.getByText('Количество экземпляров'));
     // Each document keeps its own print-copy count (including 0 = do not print).
     fireEvent.change(screen.getByLabelText('Количество копий для Счёт на оплату'), { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Количество копий для Сопроводительное письмо'), { target: { value: '10' } });
@@ -273,9 +273,9 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(parsePayload(calls, 'render_docx')).toMatchObject({ req: { document_id: 'acc_1' } }));
 
     // multi-document batch: selection is separate from opening a document
-    fireEvent.click(screen.getByRole('button', { name: 'Очистить' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
-    await click(/Создать комплект \(1\)/);
+    await click(/Создать документы \(1\)/);
     const batchPrompt = await screen.findByRole('dialog', { name: /Уточнить данные комплекта/ });
     fireEvent.click(within(batchPrompt).getByRole('button', { name: /Применить и создать/ }));
     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
@@ -361,6 +361,7 @@ describe('Полный прогон пользовательских сцена�
     // add-document dialog -> analyze_template, analyze_template_file, prepare + confirm
     await click(/Добавить шаблоны/);
     const dialog = screen.getByRole('dialog', { name: 'Добавление шаблонов' });
+    fireEvent.click(within(dialog).getByText('Создать шаблон из вставленного текста'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Анализировать' }));
     // Настоящий выбор файла: байты DOCX уходят в Rust через import_template_file.
     const docxFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Договор.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
@@ -369,7 +370,7 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'import_template_file')).toBe(true));
     await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));
     expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Добавить документы (2)' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
@@ -409,7 +410,7 @@ describe('Полный прогон пользовательских сцена�
     await click(/Переименовать/);
     await waitFor(() => expect(calls.some((c) => c.command === 'rename_document_button')).toBe(true));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    await click(/Удалить из набора/);
+    await click(/Убрать из набора/);
     await waitFor(() => expect(calls.some((c) => c.command === 'remove_document_button')).toBe(true));
 
     // theme: preset B applies dark bg + persists

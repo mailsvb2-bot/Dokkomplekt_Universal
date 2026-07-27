@@ -9,8 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests" / "installer" / "linux_installer_contract.sh"
 
 
-def test_appimage_validation_is_pipefail_safe(tmp_path: Path) -> None:
-    bundle_dir = tmp_path / "bundle" / "appimage"
+def test_appimage_validation_is_pipefail_safe_with_relative_bundle_path(
+    tmp_path: Path,
+) -> None:
+    bundle_root = tmp_path / "bundle"
+    bundle_dir = bundle_root / "appimage"
     bundle_dir.mkdir(parents=True)
     appimage = bundle_dir / "Dokkomplekt Universal_test_amd64.AppImage"
     appimage.write_text(
@@ -37,8 +40,9 @@ done
             "DOKKOMPLEKT_SKIP_LINUX_INSTALL_SMOKE": "1",
         }
     )
+    relative_bundle_root = os.path.relpath(bundle_root, ROOT)
     result = subprocess.run(
-        ["bash", str(CONTRACT), str(tmp_path / "bundle")],
+        ["bash", str(CONTRACT), relative_bundle_root],
         cwd=ROOT,
         env=env,
         text=True,
@@ -50,3 +54,4 @@ done
 
     assert result.returncode == 0, result.stdout
     assert "Linux bundle validation OK" in result.stdout
+    assert str(bundle_root.resolve()) in result.stdout

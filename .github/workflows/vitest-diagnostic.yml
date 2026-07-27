@@ -69,13 +69,27 @@ jobs:
                           if token in message:
                               detail = label
                               break
-                  detail = re.sub(r'[^0-9A-Za-zА-Яа-яЁё._-]+', '_', detail).strip('_')[:70]
+                  if not detail:
+                      meaningful = []
+                      for raw_line in message.splitlines():
+                          candidate = re.sub(r'\x1b\[[0-9;]*m', '', raw_line).strip()
+                          if not candidate or candidate.startswith('at ') or candidate.startswith('❯'):
+                              continue
+                          if candidate.startswith('<') or candidate.startswith('</'):
+                              continue
+                          meaningful.append(candidate)
+                      detail = meaningful[0] if meaningful else 'unknown'
+                  detail = re.sub(r'[^0-9A-Za-zА-Яа-яЁё._-]+', '_', detail).strip('_')[:80]
                   if 'Unable to find role=' in message or 'Unable to find an accessible element' in message:
                       kind = 'missing-role'
                   elif 'Unable to find an element with the text' in message:
                       kind = 'missing-text'
                   elif 'Found multiple elements' in message:
                       kind = 'multiple-elements'
+                  elif 'Unable to fire a' in message:
+                      kind = 'missing-event-target'
+                  elif 'unexpected command' in message:
+                      kind = 'unexpected-command'
                   elif 'expected false to be true' in message or 'expected true to be false' in message:
                       kind = 'expected-boolean'
                   elif 'Timed out' in message or 'timeout' in message.lower():

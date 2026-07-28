@@ -14,51 +14,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  format-hardening:
-    name: Format catastrophic hardening
+  verify-source-manifest:
+    name: Source manifest matches tree
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-      - uses: dtolnay/rust-toolchain@1.97.1
-        with:
-          components: rustfmt
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Format, verify scope and publish
+      - name: Generate candidate and compare with checked-in manifest
+        id: manifest
+        continue-on-error: true
+        run: |
+          python scripts/verify_source_manifest.py \
+            --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report verification/ci/source-manifest-report.json
+      - name: Upload source-manifest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manifest-candidate
+          path: |
+            verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
+            verification/ci/source-manifest-report.json
+          if-no-files-found: error
+      - name: Synchronize manifest on same-repository pull request
         if: >-
+          steps.manifest.outcome != 'success' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         env:
           BRANCH: ${{ github.head_ref }}
         run: |
-          set -euo pipefail
-          cargo fmt --all
-          python - <<'PY'
-          import importlib.util
-          from pathlib import Path
-          root = Path.cwd()
-          spec = importlib.util.spec_from_file_location('build_source_archive', root / 'scripts' / 'build_source_archive.py')
-          if spec is None or spec.loader is None:
-              raise RuntimeError('cannot load build_source_archive')
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          (root / module.SOURCE_MANIFEST).write_bytes(module.source_manifest_payload())
-          PY
+          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            crates/dokkomplekt-docx/src/lib.rs \
-            crates/dokkomplekt-storage/src/lib.rs \
-            src-tauri/src/main.rs \
-            src-tauri/src/subsystems/automation_runtime.rs \
-            src-tauri/src/subsystems/document_commands.rs \
-            src-tauri/src/subsystems/watcher_commands.rs \
-            src-tauri/src/universal_intake.rs \
-            SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt
           git diff --cached --quiet && exit 0
-          git commit -m 'style(rust): format catastrophic hardening'
+          git commit -m "chore(provenance): regenerate source manifest"
           git push origin "HEAD:${BRANCH}"
+      - name: Enforce source-manifest integrity
+        if: steps.manifest.outcome != 'success'
+        run: |
+          cat verification/ci/source-manifest-report.json
+          exit 1

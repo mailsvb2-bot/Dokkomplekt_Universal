@@ -45,6 +45,11 @@ jobs:
           if len(matches) != 1:
               raise SystemExit(f'expected one anchor assignment, found {len(matches)}')
           lines[matches[0]] = 'anchor = "fn main() {"'
+          workflow_start = next((index for index, line in enumerate(lines) if line.startswith('workflow_path = ROOT / ')), None)
+          unlink_index = next((index for index, line in enumerate(lines) if line == 'Path(__file__).unlink()'), None)
+          if workflow_start is None or unlink_index is None or workflow_start >= unlink_index:
+              raise SystemExit('workflow self-restoration block not found')
+          lines[workflow_start:unlink_index + 1] = ['Path(__file__).unlink()']
           path.write_text('\n'.join(lines) + '\n', 'utf-8')
           PY
           set +e

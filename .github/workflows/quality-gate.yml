@@ -151,19 +151,14 @@ jobs:
   e2e:
     name: Browser UI e2e (mocked Tauri IPC)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     needs: [rust-compile-gate, python-contracts]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Linux Tauri deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - run: npm run e2e:install
       - run: npm run e2e

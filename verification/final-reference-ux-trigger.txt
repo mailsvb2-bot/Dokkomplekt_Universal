@@ -1,1 +1,0 @@
-Trigger final Source Provenance and Quality Gate validation for the cleaned reference UX changes.

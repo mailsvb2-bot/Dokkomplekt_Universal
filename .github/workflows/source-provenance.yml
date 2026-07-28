@@ -14,80 +14,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  replace-obsolete-macro-contract:
-    name: Replace obsolete macro preservation contract
+  verify-source-manifest:
+    name: Source manifest matches tree
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-      - uses: dtolnay/rust-toolchain@1.97.1
-        with:
-          components: rustfmt
-      - uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-compile-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-audit-0.22.2
-          restore-keys: |
-            rust-compile-${{ runner.os }}-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Linux Tauri compile dependencies
+      - name: Generate candidate and compare with checked-in manifest
+        id: manifest
+        continue-on-error: true
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - name: Replace contract, run all Rust tests and publish
+          python scripts/verify_source_manifest.py \
+            --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report verification/ci/source-manifest-report.json
+      - name: Upload source-manifest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manifest-candidate
+          path: |
+            verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
+            verification/ci/source-manifest-report.json
+          if-no-files-found: error
+      - name: Synchronize manifest on same-repository pull request
         if: >-
+          steps.manifest.outcome != 'success' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         env:
           BRANCH: ${{ github.head_ref }}
-          REPLACEMENT_B64: "ICAgICNbdGVzdF0KICAgIGZuIG1hY3JvX2JpbmFyeV9wYXJ0c19hcmVfcmVqZWN0ZWRfYmVmb3JlX3JlbmRlcmluZ19kb2NtKCkgewogICAgICAgIGxldCBkaXIgPSBzdGQ6OmVudjo6dGVtcF9kaXIoKS5qb2luKCJkb2trb21wbGVrdC1kb2NtLXJlamVjdGlvbi10ZXN0Iik7CiAgICAgICAgbGV0IHRwbCA9IGRpci5qb2luKCJtYWNyby10ZW1wbGF0ZS5kb2NtIik7CiAgICAgICAgbGV0IG91dCA9IGRpci5qb2luKCJtYWNyby1yZW5kZXJlZC5kb2NtIik7CiAgICAgICAgc3RkOjpmczo6Y3JlYXRlX2Rpcl9hbGwoJmRpcikuZXhwZWN0KCJjcmVhdGUgdGVzdCBkaXIiKTsKICAgICAgICB7CiAgICAgICAgICAgIGxldCBmaWxlID0gRmlsZTo6Y3JlYXRlKCZ0cGwpLmV4cGVjdCgiY3JlYXRlIGRvY20iKTsKICAgICAgICAgICAgbGV0IG11dCB3cml0ZXIgPSBaaXBXcml0ZXI6Om5ldyhmaWxlKTsKICAgICAgICAgICAgbGV0IG9wdGlvbnMgPSBTaW1wbGVGaWxlT3B0aW9uczo6ZGVmYXVsdCgpOwogICAgICAgICAgICB3cml0ZXIKICAgICAgICAgICAgICAgIC5zdGFydF9maWxlKCJbQ29udGVudF9UeXBlc10ueG1sIiwgb3B0aW9ucykKICAgICAgICAgICAgICAgIC5leHBlY3QoImNvbnRlbnQgdHlwZXMiKTsKICAgICAgICAgICAgd3JpdGVyLndyaXRlX2FsbChiIjxUeXBlcy8+IikuZXhwZWN0KCJjb250ZW50IHR5cGVzIGJ5dGVzIik7CiAgICAgICAgICAgIHdyaXRlcgogICAgICAgICAgICAgICAgLnN0YXJ0X2ZpbGUoIndvcmQvZG9jdW1lbnQueG1sIiwgb3B0aW9ucykKICAgICAgICAgICAgICAgIC5leHBlY3QoImRvY3VtZW50Iik7CiAgICAgICAgICAgIHdyaXRlcgogICAgICAgICAgICAgICAgLndyaXRlX2FsbChiIjx3OmRvY3VtZW50Pjx3OmJvZHk+PHc6cD48dzpyPjx3OnQ+e3tvcmcubmFtZX19PC93OnQ+PC93OnI+PC93OnA+PC93OmJvZHk+PC93OmRvY3VtZW50PiIpCiAgICAgICAgICAgICAgICAuZXhwZWN0KCJkb2N1bWVudCBieXRlcyIpOwogICAgICAgICAgICB3cml0ZXIKICAgICAgICAgICAgICAgIC5zdGFydF9maWxlKCJ3b3JkL3ZiYVByb2plY3QuYmluIiwgb3B0aW9ucykKICAgICAgICAgICAgICAgIC5leHBlY3QoIm1hY3JvIHBhcnQiKTsKICAgICAgICAgICAgd3JpdGVyCiAgICAgICAgICAgICAgICAud3JpdGVfYWxsKGIic3ludGhldGljLXZiYS1wcm9qZWN0IikKICAgICAgICAgICAgICAgIC5leHBlY3QoIm1hY3JvIGJ5dGVzIik7CiAgICAgICAgICAgIHdyaXRlci5maW5pc2goKS5leHBlY3QoImZpbmlzaCBkb2NtIik7CiAgICAgICAgfQoKICAgICAgICBsZXQgZXJyb3IgPSByZW5kZXJfZG9jeF9maWxlKCZ0cGwsICZvdXQsICZjYXNlX3dpdGgoJlsoIm9yZy5uYW1lIiwgItCg0L7QvNCw0YjQutCwIildKSwgdHJ1ZSkKICAgICAgICAgICAgLmV4cGVjdF9lcnIoImFjdGl2ZSBjb250ZW50IG11c3QgYmUgcmVqZWN0ZWQiKTsKICAgICAgICBhc3NlcnQhKG1hdGNoZXMhKAogICAgICAgICAgICBlcnJvciwKICAgICAgICAgICAgRG9jeEVycm9yOjpVbnNhZmVBY3RpdmVDb250ZW50KHJlZiBwYXJ0KSBpZiBwYXJ0ID09ICJ3b3JkL3ZiYVByb2plY3QuYmluIgogICAgICAgICkpOwogICAgICAgIGFzc2VydCEoIW91dC5leGlzdHMoKSwgInJlamVjdGVkIERPQ00gbXVzdCBub3QgY3JlYXRlIGFuIG91dHB1dCBmaWxlIik7CiAgICAgICAgbGV0IF8gPSBzdGQ6OmZzOjpyZW1vdmVfZGlyX2FsbCgmZGlyKTsKICAgIH0KCg=="
         run: |
-          set -euo pipefail
-          mkdir -p verification/ci
-          exec > >(tee verification/ci/macro-contract.log) 2>&1
-          python - <<'PY'
-          import base64
-          import os
-          from pathlib import Path
-          path = Path('crates/dokkomplekt-docx/src/lib.rs')
-          text = path.read_text('utf-8')
-          marker = '    #[test]\n    fn macro_binary_parts_are_preserved_byte_for_byte_when_rendering_docm() {'
-          start = text.index(marker)
-          end = text.index('    #[test]\n    fn license_watermark_is_written_into_the_resulting_docx()', start)
-          replacement = base64.b64decode(os.environ['REPLACEMENT_B64']).decode('utf-8')
-          if '&[("org.name", "Ромашка")]' not in replacement:
-              raise RuntimeError('decoded macro rejection fixture is corrupt')
-          path.write_text(text[:start] + replacement + text[end:], 'utf-8')
-          PY
-          cargo fmt --all
-          cargo test --workspace --all-targets
-          python - <<'PY'
-          import importlib.util
-          from pathlib import Path
-          root = Path.cwd()
-          spec = importlib.util.spec_from_file_location('build_source_archive', root / 'scripts' / 'build_source_archive.py')
-          if spec is None or spec.loader is None:
-              raise RuntimeError('cannot load build_source_archive')
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          (root / module.SOURCE_MANIFEST).write_bytes(module.source_manifest_payload())
-          PY
+          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/dokkomplekt-docx/src/lib.rs SOURCE_MANIFEST_SHA256.txt
-          git commit -m 'test(security): reject macro-bearing DOCM fixtures'
+          git add SOURCE_MANIFEST_SHA256.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(provenance): regenerate source manifest"
           git push origin "HEAD:${BRANCH}"
-      - name: Upload macro-contract diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macro-contract-diagnostics
-          path: verification/ci/macro-contract.log
-          if-no-files-found: warn
+      - name: Enforce source-manifest integrity
+        if: steps.manifest.outcome != 'success'
+        run: |
+          cat verification/ci/source-manifest-report.json
+          exit 1

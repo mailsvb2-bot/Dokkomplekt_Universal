@@ -38,6 +38,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sign_windows_release
 call npx tauri bundle --bundles nsis --config src-tauri\tauri.offline.conf.json || exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sign_windows_release.ps1 -ArtifactRoot target\release\bundle\nsis || exit /b 1
 set "DOKKOMPLEKT_REQUIRE_AUTHENTICODE=1"
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\installer\windows_installer_contract.ps1 || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\installer\windows_installer_contract.ps1 -TauriConfig src-tauri\tauri.offline.conf.json -ExpectedWebViewMode offlineInstaller || exit /b 1
 
 echo SIGNED OFFLINE INSTALLER CREATED AND VERIFIED.

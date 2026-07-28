@@ -22,9 +22,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Build one-time audit snapshot
+        run: |
+          mkdir -p verification/ci
+          git archive --format=zip --output=verification/ci/audit-source.zip HEAD
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true
@@ -40,6 +45,7 @@ jobs:
           path: |
             verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
             verification/ci/source-manifest-report.json
+            verification/ci/audit-source.zip
           if-no-files-found: error
       - name: Synchronize manifest on same-repository pull request
         if: >-

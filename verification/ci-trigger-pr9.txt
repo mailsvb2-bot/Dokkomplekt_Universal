@@ -1,0 +1,1 @@
+Temporary excluded CI trigger for PR #9. This file is removed in the next commit.

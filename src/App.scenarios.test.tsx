@@ -124,8 +124,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         return true as never;
       case 'uninstall_background_watcher':
         return { platform: 'windows', installed: false, removed_files: [], warnings: [] } as never;
-      case 'import_template_file':
-        return { template_path: '/app-data/user-templates/tpl.docx', extracted_text: 'Договор\n{{org.inn}}' } as never;
+      case 'import_template_file': { const req=(payload as {req?:{file_name?:string}})?.req; const fileName=req?.file_name ?? 'Договор.docx'; const title=fileName.replace(/\.(docx|docm)$/i, ''); return { template_path: `/app-data/user-templates/${fileName}`, extracted_text: `${title}\n{{org.inn}}` } as never; }
       case 'print_files':
         return { queued_files: ['C:/Созданные документы/Иванов/Договор.docx'], queued_copies: 3, failed_files: [] } as never;
       case 'update_print_preferences': return { platform: 'windows', printers: [], preferences: (payload as { req?: { preferences?: unknown } })?.req?.preferences, advanced_options_note: 'ok' } as never;
@@ -142,10 +141,8 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'analyze_template':
       case 'analyze_template_file':
         return { document: { ...accDoc, placeholders: ['org.inn', 'org.name'] }, analysis_json: {}, core_pipeline_json: {} } as never;
-      case 'prepare_template_setup':
-        return [{ document_id: 'tpl', template_path: 't.docx', detected_title: 'Договор', suggested_button_label: 'Договор', editable_button_label: 'Договор', role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }] as never;
-      case 'confirm_template_setup':
-        return { pack_id: 'default', name: 'Пакет', documents: [{ ...accDoc, id: 'tpl', button_label: 'Договор' }] } as never;
+      case 'prepare_template_setup': { const candidates=(payload as {req?:{candidates?:Array<{template_path:string}>}})?.req?.candidates ?? []; return candidates.map((candidate,index)=>{ const fileName=candidate.template_path.split('/').pop() ?? `Шаблон-${index+1}.docx`; const title=fileName.replace(/\.(docx|docm)$/i, ''); return { document_id: `tpl-${index+1}`, template_path: candidate.template_path, detected_title: title, suggested_button_label: title, editable_button_label: title, role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }; }) as never; }
+      case 'confirm_template_setup': { const rows=(payload as {req?:{rows?:Array<{document_id:string;editable_button_label:string;template_path:string}>}})?.req?.rows ?? []; return { pack_id: 'default', name: 'Пакет', documents: rows.map((row)=>({ ...accDoc, id: row.document_id, button_label: row.editable_button_label, template_path: row.template_path })) } as never; }
       case 'rename_document_button':
         return { pack_id: 'default', name: 'Пакет', documents: [{ ...accDoc, id: 'tpl', button_label: 'Договор новый' }] } as never;
       case 'remove_document_button':
@@ -274,7 +271,10 @@ describe('Полный прогон пользовательских сцена�
 
     // multi-document batch: selection is separate from opening a document
     fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
+    const invoiceTile = screen.getByRole('button', { name: 'Счёт на оплату' });
+    expect(invoiceTile.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(invoiceTile);
+    await waitFor(() => expect(invoiceTile.getAttribute('aria-pressed')).toBe('true'));
     await click(/Создать документы \(1\)/);
     const batchPrompt = await screen.findByRole('dialog', { name: /Уточнить данные комплекта/ });
     fireEvent.click(within(batchPrompt).getByRole('button', { name: /Применить и создать/ }));
@@ -356,7 +356,14 @@ describe('Полный прогон пользовательских сцена�
     const xlsxInput = screen.getByText('Загрузить XLSX/CSV/TSV').querySelector('input[type=file]'); expect(xlsxInput).toBeTruthy();
     fireEvent.change(xlsxInput as Element, { target: { files: [new File([new Uint8Array([0x50,0x4b,0x03,0x04])], 'Реестр.xlsx')] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'prepare_mail_merge_file')).toBe(true));
-    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
+    const mailMergeTile = screen.getByRole('button', { name: 'Счёт на оплату' });
+    expect(mailMergeTile.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(mailMergeTile);
+    await waitFor(() => expect(mailMergeTile.getAttribute('aria-pressed')).toBe('true'));
+    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await waitFor(() => expect(calls.some((c) => c.command === 'preview_mail_merge')).toBe(true));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Создать комплекты' }) as HTMLButtonElement).disabled).toBe(false));
+    await click(/Создать комплекты/);
+    await waitFor(() => expect(calls.some((c) => c.command === 'render_mail_merge')).toBe(true));
 
     // add-document dialog -> analyze_template, analyze_template_file, prepare + confirm
     await click(/Добавить шаблоны/);
@@ -368,14 +375,14 @@ describe('Полный прогон пользовательских сцена�
     const docmFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Акт.docm', { type: 'application/vnd.ms-word.document.macroEnabled.12' });
     fireEvent.change(within(dialog).getByTestId('template-file-input'), { target: { files: [docxFile, docmFile] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'import_template_file')).toBe(true));
-    await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));
-    expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);
+    await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(2));
+    expect(calls.filter((call) => call.command === 'analyze_template_file')).toHaveLength(2);
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
-      { template_path: '/app-data/user-templates/tpl.docx' },
-      { template_path: '/app-data/user-templates/tpl.docx' },
+      { template_path: '/app-data/user-templates/Договор.docx' },
+      { template_path: '/app-data/user-templates/Акт.docm' },
     ] } });
 
     // HTTPS/site/API intake -> parse_web_source

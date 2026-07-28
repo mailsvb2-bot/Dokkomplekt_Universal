@@ -368,7 +368,7 @@ function installContractMock(calls: Call[]) {
       case 'export_one_c_counterparties':
         return 'output/Контрагенты_1С.json' as never;
       case 'print_files':
-        return { queued_files: ['out.docx'], failed_files: [] } as never;
+        return { queued_files: ['out.docx'], queued_copies: 3, failed_files: [] } as never;
       case 'open_in_file_manager':
         return undefined as never;
       case 'run_created_documents_intake':

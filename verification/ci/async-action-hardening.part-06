@@ -1,0 +1,124 @@
+     listOrganizationKnowledge(undefined, true).then((items) => setRecords(Array.isArray(items) ? items : [])).catch(() => undefined);
+@@ -42,18 +43,6 @@
+ 
+   const visible = useMemo(() => records.filter((record) => record.category === category), [category, records]);
+ 
+-  async function execute<T>(name: string, action: () => Promise<T>): Promise<T | undefined> {
+-    setBusy(true);
+-    try {
+-      return await action();
+-    } catch (error) {
+-      onStatus(`Ошибка «${name}»: ${message(error)}`);
+-      return undefined;
+-    } finally {
+-      setBusy(false);
+-    }
+-  }
+-
+   function parseFields(): Record<string, string> {
+     const fields: Record<string, string> = {};
+     for (const rawLine of fieldsText.split(/\r?\n/)) {
+@@ -74,7 +63,7 @@
+     try {
+       fields = parseFields();
+     } catch (error) {
+-      onStatus(message(error));
++      onStatus(actionErrorMessage(error));
+       return;
+     }
+     const result = await execute('сохранение организационных знаний', () => upsertOrganizationKnowledge({
+@@ -155,6 +144,3 @@
+   );
+ }
+ 
+-function message(error: unknown): string {
+-  return error instanceof Error ? error.message : String(error);
+-}
+--- a/src/components/BusinessRegistryPanel.test.tsx
++++ b/src/components/BusinessRegistryPanel.test.tsx
+@@ -50,4 +50,26 @@
+     expect(statuses.join(' ')).toContain('Проверенный справочник обновлён');
+     expect(statuses.join(' ')).toContain('Реквизиты подтверждены');
+   });
++
++  it('keeps the backend error instead of reporting a failed lookup as not found', async () => {
++    const statuses: string[] = [];
++    __setInvokeForTests(async (command) => {
++      if (command === 'lookup_business_registry') throw new Error('локальный справочник недоступен');
++      throw new Error(`unexpected command ${command}`);
++    });
++
++    render(
++      <BusinessRegistryPanel
++        outputRoot="C:/out"
++        onStatus={(message) => statuses.push(message)}
++        onCaseChanged={() => undefined}
++      />,
++    );
++
++    fireEvent.change(screen.getByPlaceholderText('ИНН контрагента'), { target: { value: '7736050003' } });
++    fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
++    await waitFor(() => expect(statuses.at(-1)).toBe('локальный справочник недоступен'));
++    expect(statuses).not.toContain('ИНН не найден в локальном проверенном справочнике.');
++  });
++
+ });
+--- /dev/null
++++ b/src/hooks/useActionRunner.test.tsx
+@@ -0,0 +1,56 @@
++import { act, renderHook } from '@testing-library/react';
++import { describe, expect, it, vi } from 'vitest';
++import { labelledActionError, useActionRunner } from './useActionRunner';
++
++function deferred<T>() {
++  let resolve!: (value: T) => void;
++  let reject!: (reason?: unknown) => void;
++  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
++    resolve = resolvePromise;
++    reject = rejectPromise;
++  });
++  return { promise, resolve, reject };
++}
++
++describe('useActionRunner', () => {
++  it('stays busy until every overlapping action has completed', async () => {
++    const first = deferred<string>();
++    const second = deferred<string>();
++    const { result } = renderHook(() => useActionRunner(vi.fn()));
++
++    let firstRun!: Promise<string | undefined>;
++    let secondRun!: Promise<string | undefined>;
++    act(() => {
++      firstRun = result.current.run('first', () => first.promise);
++      secondRun = result.current.run('second', () => second.promise);
++    });
++    expect(result.current.busy).toBe(true);
++
++    await act(async () => {
++      first.resolve('one');
++      await firstRun;
++    });
++    expect(result.current.busy).toBe(true);
++
++    await act(async () => {
++      second.resolve('two');
++      await secondRun;
++    });
++    expect(result.current.busy).toBe(false);
++  });
++
++  it('formats failures and clears busy after rejection', async () => {
++    const onStatus = vi.fn();
++    const { result } = renderHook(() => useActionRunner(onStatus, labelledActionError));
++
++    await act(async () => {
++      const value = await result.current.run('печать', async () => {
++        throw new Error('принтер недоступен');
++      });
++      expect(value).toBeUndefined();
++    });
++
++    expect(onStatus).toHaveBeenCalledWith('Ошибка «печать»: принтер недоступен');
++    expect(result.current.busy).toBe(false);
++  });
++});

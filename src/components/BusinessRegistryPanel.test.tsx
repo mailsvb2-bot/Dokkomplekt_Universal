@@ -50,4 +50,26 @@ describe('BusinessRegistryPanel', () => {
     expect(statuses.join(' ')).toContain('Проверенный справочник обновлён');
     expect(statuses.join(' ')).toContain('Реквизиты подтверждены');
   });
+
+  it('keeps the backend error instead of reporting a failed lookup as not found', async () => {
+    const statuses: string[] = [];
+    __setInvokeForTests(async (command) => {
+      if (command === 'lookup_business_registry') throw new Error('локальный справочник недоступен');
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    render(
+      <BusinessRegistryPanel
+        outputRoot="C:/out"
+        onStatus={(message) => statuses.push(message)}
+        onCaseChanged={() => undefined}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('ИНН контрагента'), { target: { value: '7736050003' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Найти' }));
+    await waitFor(() => expect(statuses.at(-1)).toBe('локальный справочник недоступен'));
+    expect(statuses).not.toContain('ИНН не найден в локальном проверенном справочнике.');
+  });
+
 });

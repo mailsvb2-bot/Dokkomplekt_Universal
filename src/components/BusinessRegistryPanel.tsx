@@ -6,6 +6,7 @@ import {
   lookupBusinessRegistry,
 } from '../lib/api';
 import type { BusinessRegistryRecord, SemanticCase } from '../lib/types';
+import { plainActionError, useActionRunner } from '../hooks/useActionRunner';
 
 interface BusinessRegistryPanelProps {
   outputRoot: string;
@@ -27,25 +28,13 @@ export function BusinessRegistryPanel(props: BusinessRegistryPanelProps) {
   const [replace, setReplace] = useState(false);
   const [target, setTarget] = useState<'organization' | 'counterparty'>('counterparty');
   const [exportPath, setExportPath] = useState(`${props.outputRoot.replace(/[\\/]$/, '')}/Контрагенты_1С.json`);
-  const [busy, setBusy] = useState(false);
-
-  async function run<T>(action: () => Promise<T>): Promise<T | null> {
-    setBusy(true);
-    try {
-      return await action();
-    } catch (error) {
-      props.onStatus(error instanceof Error ? error.message : String(error));
-      return null;
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { busy, run } = useActionRunner(props.onStatus, plainActionError);
 
   async function importJson(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    const imported = await run(async () => {
+    const imported = await run('импорт справочника контрагентов', async () => {
       const records = normalizeImportedPayload(JSON.parse(await file.text()));
       return importBusinessRegistry(records, replace);
     });
@@ -55,20 +44,21 @@ export function BusinessRegistryPanel(props: BusinessRegistryPanelProps) {
   }
 
   async function lookup() {
-    const found = await run(() => lookupBusinessRegistry(inn));
-    setRecord(found ?? null);
+    const found = await run('поиск контрагента', () => lookupBusinessRegistry(inn));
+    if (found === undefined) return;
+    setRecord(found);
     props.onStatus(found ? `Найден контрагент: ${found.name}.` : 'ИНН не найден в локальном проверенном справочнике.');
   }
 
   async function apply() {
-    const semanticCase = await run(() => applyBusinessRegistryRecord(inn, target));
+    const semanticCase = await run('применение реквизитов контрагента', () => applyBusinessRegistryRecord(inn, target));
     if (!semanticCase) return;
     props.onCaseChanged(semanticCase);
     props.onStatus(`Реквизиты подтверждены и подставлены в блок ${target === 'organization' ? 'организации' : 'контрагента'}.`);
   }
 
   async function exportOneC() {
-    const path = await run(() => exportOneCCounterparties(exportPath, inn.trim() ? [inn] : []));
+    const path = await run('экспорт контрагентов для 1С', () => exportOneCCounterparties(exportPath, inn.trim() ? [inn] : []));
     if (path) props.onStatus(`Обменный JSON для 1С создан: ${path}`);
   }
 

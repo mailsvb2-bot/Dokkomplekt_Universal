@@ -57,7 +57,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rust-compile-gate-diagnostics
-          path: rust-compile-gate.log
+          path: |
+            rust-compile-gate.log
+            .cargo-gate/RUSTSEC_AUDIT.json
+            .cargo-gate/RUSTSEC_EVIDENCE.json
           if-no-files-found: error
       - name: Save Rust build and audit cache
         if: always() && steps.rust-cache.outputs.cache-hit != 'true'
@@ -87,17 +90,23 @@ jobs:
           key: cargo-audit-${{ runner.os }}-0.22.2
       - name: Install current CVSS-4-compatible cargo-audit
         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
-      - name: Audit locked Rust dependencies
+      - name: Audit locked Rust dependencies and bind evidence
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          mkdir -p .cargo-gate
+          cargo audit --deny warnings --json > .cargo-gate/RUSTSEC_AUDIT.json
+          python3 scripts/write_rustsec_evidence.py
           cargo audit --deny warnings 2>&1 | tee rustsec-audit.log
       - name: Upload RustSec diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rustsec-audit-diagnostics
-          path: rustsec-audit.log
+          path: |
+            rustsec-audit.log
+            .cargo-gate/RUSTSEC_AUDIT.json
+            .cargo-gate/RUSTSEC_EVIDENCE.json
           if-no-files-found: error
 
   python-contracts:

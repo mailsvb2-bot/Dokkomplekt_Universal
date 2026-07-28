@@ -35,7 +35,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/dokkomplekt-patch
+          mkdir -p /tmp/dokkomplekt-patch verification/ci
+          exec > >(tee verification/ci/patch-apply.log) 2>&1
           python - <<'PY'
           import base64
           import json
@@ -64,12 +65,12 @@ jobs:
               with urllib.request.urlopen(request, timeout=30) as response:
                   payload = json.load(response)
               chunk = base64.b64decode(payload['content'])
-              path = root / f'chunk-{index:02d}'
-              path.write_bytes(chunk)
+              (root / f'chunk-{index:02d}').write_bytes(chunk)
               chunks.append(chunk)
           (root / 'product.patch.gz.b64').write_bytes(b''.join(chunks))
           PY
           base64 -d /tmp/dokkomplekt-patch/product.patch.gz.b64 | gzip -dc > /tmp/dokkomplekt-patch/product.patch
+          sha256sum /tmp/dokkomplekt-patch/product.patch
           git apply --check /tmp/dokkomplekt-patch/product.patch
           git apply /tmp/dokkomplekt-patch/product.patch
           python scripts/audit_rust_production_panics.py
@@ -141,7 +142,8 @@ jobs:
           path: |
             verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
             verification/ci/source-manifest-report.json
-          if-no-files-found: error
+            verification/ci/patch-apply.log
+          if-no-files-found: warn
       - name: Synchronize manifest on same-repository pull request
         if: >-
           steps.manifest.outcome != 'success' &&

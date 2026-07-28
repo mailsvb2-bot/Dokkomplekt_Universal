@@ -18,6 +18,8 @@ import { GuidedScannerModal } from './components/GuidedScannerModal';
 import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields, type ScannerFieldSuggestion } from './lib/scannerSuggestions';
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
+import { useActionRunner } from './hooks/useActionRunner';
+import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 
 const DEFAULT_YEAR = new Date().getFullYear();
 const STATE_DB = 'dokkomplekt-user-state.sqlite';
@@ -63,7 +65,7 @@ export function App() {
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [status, setStatus] = useState('Добавьте исходный файл — остальное программа подготовит сама.');
-  const [busy, setBusy] = useState(false);
+  const { busy, run } = useActionRunner(setStatus);
 
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
@@ -161,17 +163,21 @@ export function App() {
   useEffect(() => {
     let disposed = false;
     let stopListening: (() => void) | undefined;
-    listen<CreatedDocumentsIntakeResult>('document-batch-ready', (event) => {
-      const result = event.payload;
-      setIntakeResult(result);
-      setStatus(result.message);
-      if (result.status === 'processed' && result.created_files.length) {
-        setLastOutput({
-          folder: result.patient_folder,
-          files: result.created_files,
-          source: 'watcher',
-          print_items: createdPrintItems(result.created_documents, result.created_files, documents),
-        });
+    listen<unknown>('document-batch-ready', (event) => {
+      try {
+        const result = normalizeCreatedDocumentsIntakeResult(event.payload);
+        setIntakeResult(result);
+        setStatus(result.message);
+        if (result.status === 'processed' && result.created_files.length) {
+          setLastOutput({
+            folder: result.patient_folder,
+            files: result.created_files,
+            source: 'watcher',
+            print_items: createdPrintItems(result.created_documents, result.created_files, documents),
+          });
+        }
+      } catch (error) {
+        setStatus(`Фоновая обработка вернула некорректный результат: ${errorMessage(error)}`);
       }
     }).then((unlisten) => {
       if (disposed) unlisten(); else stopListening = unlisten;
@@ -198,18 +204,6 @@ export function App() {
 
   const previewTitle = detectTitle(templateText) || 'Документ';
   const previewLabel = buttonLabel.trim() || previewTitle;
-
-  async function run<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
-    setBusy(true);
-    try {
-      return await fn();
-    } catch (err) {
-      setStatus(`Не удалось выполнить действие: ${errorMessage(err)}`);
-      return undefined;
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function ensureOptionalComponent(id: string, fallbackLabel: string): Promise<boolean> {
     const statuses = await run('get_component_statuses', () => getComponentStatuses());

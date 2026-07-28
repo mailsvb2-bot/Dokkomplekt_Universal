@@ -1,5 +1,11 @@
 {
   "bundle": {
-    "resources": []
+    "resources": [],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
   }
 }

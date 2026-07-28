@@ -33,7 +33,7 @@ def test_active_python_gates_run_the_complete_pytest_contour() -> None:
     for relative in (
         ".github/workflows/quality-gate.yml",
         ".github/workflows/build-installers.yml",
-        "ПРОВЕРИТЬ_ПРОЕКТ.bat",
+        "CHECK_PROJECT.bat",
         "BUILD_WINDOWS_INSTALLER.bat",
     ):
         content = text(relative)

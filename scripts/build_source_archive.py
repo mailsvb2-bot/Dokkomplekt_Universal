@@ -25,6 +25,12 @@ EXCLUDED_DIRS = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    ".venv",
+    "venv",
+    "env",
+    ".tox",
+    ".nox",
+    "coverage",
     "playwright-report",
     "test-results",
     # CI/runtime evidence is not authored source. It is hashed separately.

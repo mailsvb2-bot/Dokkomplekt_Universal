@@ -2,6 +2,11 @@
   "bundle": {
     "resources": [
       "resources/tools/**"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
   }
 }

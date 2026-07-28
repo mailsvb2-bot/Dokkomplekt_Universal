@@ -1036,7 +1036,7 @@ fn dpapi_unprotect_key(protected: &[u8]) -> Result<[u8; 32], String> {
 }
 
 const TRIAL_DOCUMENT_LIMIT_MONTH: u32 = 30;
-const TRIAL_MAX_DOCUMENTS_PER_RUN: u32 = 3;
+const TRIAL_MAX_DOCUMENTS_PER_RUN: u32 = TRIAL_DOCUMENT_LIMIT_MONTH;
 
 #[derive(Debug, Clone, Serialize)]
 struct DesktopAccessDecision {
@@ -1301,11 +1301,14 @@ fn reserve_generation_access(
     let decision = inspect_desktop_access(app, state, requested_documents)?;
     if !decision.accepted {
         return Err(format!(
-            "Генерация заблокирована лицензией: {} (план {}, использовано {}/{})",
+            "Генерация заблокирована лицензией: {} (план {}, запрошено {}, лимит за запуск {}, использовано за месяц {}/{}, осталось {})",
             decision.reason,
             decision.plan,
+            requested_documents,
+            decision.max_documents_per_run,
             decision.documents_used_month,
-            decision.document_limit_month
+            decision.document_limit_month,
+            decision.documents_left_month
         ));
     }
     if requested_documents > decision.max_documents_per_run {

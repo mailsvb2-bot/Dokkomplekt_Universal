@@ -1,4 +1,5 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { validateRustResponse } from './runtimeValidation';
 import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
 
 export type InvokeFn = <T>(command: string, payload?: Record<string, unknown>) => Promise<T>;
@@ -20,7 +21,8 @@ export function __resetInvokeForTests(): void {
 }
 
 async function callRust<T>(command: string, payload?: Record<string, unknown>): Promise<T> {
-  return invokeFn<T>(command, payload);
+  const value = await invokeFn<unknown>(command, payload);
+  return validateRustResponse<T>(command, value);
 }
 
 export type AnalyzeTemplateResponse = {

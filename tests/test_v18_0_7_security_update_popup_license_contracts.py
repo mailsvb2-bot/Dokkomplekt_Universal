@@ -113,9 +113,15 @@ class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
     def test_security_files_and_hardened_workflows_exist(self) -> None:
         for path in ["SECURITY.md", "CONTRIBUTING.md", ".env.example", "requirements-dev.txt"]:
             self.assertTrue((ROOT / path).is_file(), path)
-        for path in [".github/workflows/quality-gate.yml", ".github/workflows/build-installers.yml"]:
-            workflow = text(path)
-            self.assertIn("permissions:\n  contents: read", workflow)
+
+        quality = text(".github/workflows/quality-gate.yml")
+        release = text(".github/workflows/build-installers.yml")
+        self.assertIn("permissions:\n  contents: read", quality)
+        self.assertIn("permissions:\n  contents: write", release)
+        self.assertIn("types: [published]", release)
+        self.assertIn("Publish only verified signed release assets", release)
+        self.assertIn("needs: [windows-hardware-e2e, linux-bundles]", release)
+        for workflow in [quality, release]:
             self.assertIn("concurrency:", workflow)
             self.assertIn("timeout-minutes:", workflow)
             self.assertIn("scripts/run_python_contracts_sharded.py", workflow)
@@ -144,10 +150,8 @@ class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
             rule_promoted = learned == 2
             user_confirmed = mode == 1 and band == 3
             auto = user_confirmed or (rule_promoted and confidence >= 0.98)
-            # Инвариант 1: без обученного правила и без подтверждения — никогда.
             if not rule_promoted and not user_confirmed:
                 self.assertFalse(auto, (domain, label_family, band, learned, mode))
-            # Инвариант 2: низкая уверенность не спасается обучением.
             if confidence < 0.98 and not user_confirmed:
                 self.assertFalse(auto, (domain, label_family, band, learned, mode))
             executed += 1
@@ -160,16 +164,13 @@ class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
             has_value = state != 0
             ask_every_time = ask >= 2
             closes = has_value and not ask_every_time if required else True
-            # Инвариант 3: обязательное поле без значения не закрывает popup.
             if required and not has_value:
                 self.assertFalse(closes, (kind, domain, ask, state, batch))
-            # Инвариант 4: режим «спрашивать каждый раз» всегда показывается.
             if required and ask_every_time:
                 self.assertFalse(closes, (kind, domain, ask, state, batch))
             executed += 1
 
         self.assertEqual(executed, 1152 + 1008)
-        # Тест обязан что-то РАЗРЕШАТЬ, иначе инварианты тривиальны.
         self.assertGreater(auto_allowed, 0)
 
     def test_source_archiver_skips_excluded_trees_before_symlink_rejection(self) -> None:
@@ -177,7 +178,6 @@ class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
         excluded_index = archiver.index("if is_excluded(path):")
         symlink_index = archiver.index("if path.is_symlink():")
         self.assertLess(excluded_index, symlink_index)
-
 
 
 if __name__ == "__main__":

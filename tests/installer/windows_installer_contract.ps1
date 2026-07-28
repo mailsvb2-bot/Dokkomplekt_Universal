@@ -1,14 +1,22 @@
 param(
   [string]$BundleDir = "target\release\bundle",
-  [string]$TauriConfig = "src-tauri\tauri.conf.json"
+  [string]$TauriConfig = "src-tauri\tauri.conf.json",
+  [ValidateSet("", "downloadBootstrapper", "offlineInstaller")]
+  [string]$ExpectedWebViewMode = ""
 )
 
 $ErrorActionPreference = "Stop"
+$baseConfig = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
 $config = Get-Content $TauriConfig -Raw | ConvertFrom-Json
-if ($config.bundle.windows.webviewInstallMode.type -ne "offlineInstaller") {
-  throw "Windows WebView2 offline installer mode is not enabled"
+$webViewMode = [string]$config.bundle.windows.webviewInstallMode.type
+if ($webViewMode -notin @("downloadBootstrapper", "offlineInstaller")) {
+  throw "Unsupported Windows WebView2 installer mode: $webViewMode"
 }
-if ($config.bundle.targets -notcontains "nsis") {
+if (-not [string]::IsNullOrWhiteSpace($ExpectedWebViewMode) -and $webViewMode -ne $ExpectedWebViewMode) {
+  throw "Windows WebView2 installer mode mismatch: expected $ExpectedWebViewMode, got $webViewMode"
+}
+$targets = if ($null -ne $config.bundle.targets) { @($config.bundle.targets) } else { @($baseConfig.bundle.targets) }
+if ($targets -notcontains "nsis") {
   throw "NSIS target is not enabled"
 }
 if (!(Test-Path $BundleDir)) { throw "Bundle directory not found: $BundleDir" }
@@ -26,7 +34,11 @@ $install = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D
 if ($install.ExitCode -ne 0) { throw "NSIS silent install failed with exit code $($install.ExitCode)" }
 if (!(Test-Path $installDir)) { throw "NSIS completed but install directory was not created: $installDir" }
 
-$productName = [string]$config.productName
+$productName = if (-not [string]::IsNullOrWhiteSpace([string]$config.productName)) {
+  [string]$config.productName
+} else {
+  [string]$baseConfig.productName
+}
 $appCandidates = @(Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |
   Where-Object { $_.Name -notmatch "uninstall" } |
   Where-Object {
@@ -47,6 +59,8 @@ if (-not [string]::IsNullOrWhiteSpace($productName) -and
   throw "Installed executable product name mismatch: $($app.VersionInfo.ProductName)"
 }
 if ($env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '1') {
+  $installerSignature = Get-AuthenticodeSignature -FilePath $installer.FullName
+  if ($installerSignature.Status -ne 'Valid') { throw "Installer signature is invalid: $($installerSignature.Status)" }
   $appSignature = Get-AuthenticodeSignature -FilePath $app.FullName
   if ($appSignature.Status -ne 'Valid') { throw "Installed application signature is invalid: $($appSignature.Status)" }
 }
@@ -67,4 +81,4 @@ if (!$uninstaller) { throw "NSIS uninstaller was not created" }
 $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait -PassThru
 if ($uninstall.ExitCode -ne 0) { throw "NSIS silent uninstall failed with exit code $($uninstall.ExitCode)" }
 
-Write-Host "Windows installer validation OK: installed, remained alive, and uninstalled $($installer.FullName)"
+Write-Host "Windows installer validation OK ($webViewMode): installed, remained alive, and uninstalled $($installer.FullName)"

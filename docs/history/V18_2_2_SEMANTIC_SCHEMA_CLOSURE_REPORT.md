@@ -34,7 +34,7 @@ This corrective pass closes the highest-risk gaps discovered during the destruct
    - all 11 starter templates and their public copies were regenerated deterministically; manifests are version 0.3.0.
 
 6. **Fail-closed build path**
-   - `СОБРАТЬ_EXE.bat` can no longer bypass the full offline-runtime production builder.
+   - `BUILD_EXE.bat` can no longer bypass the full offline-runtime production builder.
    - project verification creates an isolated Python environment, installs declared dependencies, runs Python contracts and verifies deterministic starter packs.
    - the Windows production builder uses the same Python environment and runs content-pack checks before packaging.
 

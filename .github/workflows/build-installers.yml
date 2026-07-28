@@ -3,10 +3,10 @@ name: Build Signed Offline Installers
 on:
   workflow_dispatch:
   release:
-    types: [created]
+    types: [published]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: installers-${{ github.workflow }}-${{ github.ref }}
@@ -159,7 +159,6 @@ jobs:
             .release-gate/**
           if-no-files-found: error
 
-
   windows-hardware-e2e:
     name: REQUIRED Windows Word / printer / watcher / reboot evidence
     needs: windows-signed-offline
@@ -233,3 +232,38 @@ jobs:
           name: Dokkomplekt-Linux-AppImage-deb-rpm
           path: target/release/bundle/**
           if-no-files-found: error
+
+  publish-release-assets:
+    name: Publish only verified signed release assets
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: [windows-hardware-e2e, linux-bundles]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Dokkomplekt-Windows-NSIS-Signed-Offline
+          path: release/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: Dokkomplekt-Windows-Hardware-E2E-Evidence
+          path: release/evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: Dokkomplekt-Linux-AppImage-deb-rpm
+          path: release/linux
+      - name: Create complete release checksum register
+        shell: bash
+        run: |
+          cd release
+          find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          test -s SHA256SUMS.txt
+      - name: Attach artifacts only after signing and hardware E2E
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          mapfile -d '' files < <(find release -type f -print0)
+          gh release upload "$TAG" "${files[@]}" --clobber

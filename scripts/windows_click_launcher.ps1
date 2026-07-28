@@ -7,8 +7,8 @@ Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)
 if ($Mode -eq 'Run') {
   cmd.exe /c main.bat
 } elseif ($Mode -eq 'Build') {
-  cmd.exe /c "СОБРАТЬ_EXE.bat"
+  cmd.exe /c "BUILD_EXE.bat"
 } else {
-  cmd.exe /c "ПРОВЕРИТЬ_ПРОЕКТ.bat"
+  cmd.exe /c "CHECK_PROJECT.bat"
 }
 exit $LASTEXITCODE

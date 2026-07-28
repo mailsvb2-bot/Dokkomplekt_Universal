@@ -1,0 +1,75 @@
+-    const result = await execute('каталог компонентов', refreshComponentCatalog);
+-    if (result) { setComponents(result); setSidecars(await getSidecarStatus()); onStatus('Подписанный каталог компонентов обновлён.'); }
++    const components = await execute('каталог компонентов', refreshComponentCatalog);
++    if (!components) return;
++    setComponents(components);
++    onStatus('Подписанный каталог компонентов обновлён.');
++    const sidecars = await execute('состояние локальных компонентов', getSidecarStatus);
++    if (sidecars) setSidecars(sidecars);
+   }
+ 
+   async function downloadComponent(item: ComponentStatus) {
+-    const result = await execute(`компонент ${item.label}`, () => installComponent(item.id));
+-    if (result) {
+-      setComponents(current => current.map(component => component.id === result.id ? result : component));
+-      setSidecars(await getSidecarStatus());
+-      onStatus(`${result.label}: компонент установлен и доступен офлайн.`);
+-    }
++    const component = await execute(`компонент ${item.label}`, () => installComponent(item.id));
++    if (!component) return;
++    setComponents(current => current.map(currentItem => currentItem.id === component.id ? component : currentItem));
++    onStatus(`${component.label}: компонент установлен и доступен офлайн.`);
++    const sidecars = await execute('состояние локальных компонентов', getSidecarStatus);
++    if (sidecars) setSidecars(sidecars);
+   }
+ 
+   async function deleteComponent(item: ComponentStatus) {
+     if (!globalThis.confirm?.(`Удалить компонент «${item.label}»? Функции снова станут недоступны офлайн.`)) return;
+-    const result = await execute(`удаление ${item.label}`, () => removeComponent(item.id));
+-    if (result) {
+-      setComponents(current => current.map(component => component.id === result.id ? result : component));
+-      setSidecars(await getSidecarStatus());
+-      onStatus(`${result.label}: компонент удалён.`);
+-    }
++    const component = await execute(`удаление ${item.label}`, () => removeComponent(item.id));
++    if (!component) return;
++    setComponents(current => current.map(currentItem => currentItem.id === component.id ? component : currentItem));
++    onStatus(`${component.label}: компонент удалён.`);
++    const sidecars = await execute('состояние локальных компонентов', getSidecarStatus);
++    if (sidecars) setSidecars(sidecars);
+   }
+ 
+   async function importSignedThresholds(file: File) {
+@@ -236,13 +234,15 @@
+       onStatus('Размер подписанного пакета порогов должен быть от 1 байта до 1 МБ.');
+       return;
+     }
+-    const bytes = await readFileBytes(file);
+-    let binary = '';
+-    const chunk = 0x8000;
+-    for (let offset = 0; offset < bytes.length; offset += chunk) {
+-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+-    }
+-    const status = await execute('импорт подписанных порогов автопечати', () => importCalibratedThresholdsFile(file.name, btoa(binary)));
++    const status = await execute('импорт подписанных порогов автопечати', async () => {
++      const bytes = await readFileBytes(file);
++      let binary = '';
++      const chunk = 0x8000;
++      for (let offset = 0; offset < bytes.length; offset += chunk) {
++        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
++      }
++      return importCalibratedThresholdsFile(file.name, btoa(binary));
++    });
+     if (!status) return;
+     setCalibratedThresholds(current => [...current.filter(item => item.domain !== status.domain), status].sort((a, b) => a.domain.localeCompare(b.domain)));
+     onStatus(`Настройки автопечати для набора «${status.domain}» проверены. Используются только подписанные контрольные показатели.`);
+@@ -264,13 +264,15 @@
+       onStatus('Размер подписанного календарного пакета должен быть от 1 байта до 4 МБ.');
+       return;
+     }
+-    const bytes = await readFileBytes(file);
+-    let binary = '';
+-    const chunk = 0x8000;
+-    for (let offset = 0; offset < bytes.length; offset += chunk) {
+-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+-    }

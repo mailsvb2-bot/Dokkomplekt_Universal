@@ -1,0 +1,411 @@
+name: Agent PR9 reference UX refinement
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    if: github.head_ref == 'agent/fix-simple-button-creation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-simple-button-creation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply proven simple UX contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one occurrence, found {count}: {old[:100]!r}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          document_rail = r'''import type { DocumentTemplateSpec } from '../lib/types';
+
+interface DocumentRailProps {
+  documents: DocumentTemplateSpec[];
+  activeDocumentId: string | null;
+  selectedDocumentIds: string[];
+  busy: boolean;
+  printCopies: Record<string, number>;
+  extraRulesEnabled: boolean;
+  onExtraRulesChange(value: boolean): void;
+  onSelect(document: DocumentTemplateSpec): void;
+  onToggleSelected(documentId: string): void;
+  onPrintCopiesChange(documentId: string, copies: number): void;
+  onSelectAll(): void;
+  onClearSelected(): void;
+  onGenerateSelected(): void;
+  onRename(): void;
+  onConfigurePopups(): void;
+  onScanTemplate(): void;
+  onApprove(): void;
+  onRemove(): void;
+  onAdd(): void;
+  onToggleUtilities(): void;
+}
+
+export function DocumentRail(props: DocumentRailProps) {
+  const hasDocuments = props.documents.length > 0;
+  const selectedCount = props.selectedDocumentIds.length;
+
+  return (
+    <aside className="packagePanel" aria-label="Состав комплекта">
+      <div className="packageHeader">
+        <div>
+          <span>03</span>
+          <h2>Документы для создания</h2>
+        </div>
+        {hasDocuments && <span className="packageCount">{selectedCount}/{props.documents.length}</span>}
+      </div>
+
+      {hasDocuments ? (
+        <>
+          <p className="packageHint">Нажмите нужные документы. Повторный клик убирает документ из комплекта.</p>
+          <div className="packageList simpleDocumentButtons">
+            {props.documents.map((document) => {
+              const selected = props.selectedDocumentIds.includes(document.id);
+              const active = props.activeDocumentId === document.id;
+              return (
+                <button
+                  type="button"
+                  key={document.id}
+                  className={`packageItem ${selected ? 'selected' : ''} ${active ? 'active' : ''}`}
+                  aria-label={document.button_label}
+                  aria-pressed={selected}
+                  onClick={() => {
+                    props.onSelect(document);
+                    props.onToggleSelected(document.id);
+                  }}
+                >
+                  <span className="packageTileIcon" aria-hidden="true"><i className="ti ti-file-text" /></span>
+                  <span className="packageTileText">
+                    <strong>{document.button_label}</strong>
+                    <small>{selected ? 'В комплекте' : 'Нажмите, чтобы добавить'}</small>
+                  </span>
+                  <span className="packageTileState" aria-hidden="true"><i className={selected ? 'ti ti-check' : 'ti ti-plus'} /></span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="packageSelectionActions">
+            <button className="textBtn" onClick={props.onSelectAll}>Выбрать всё</button>
+            <button className="textBtn" onClick={props.onClearSelected} disabled={!selectedCount}>Снять выбор</button>
+          </div>
+
+          <button
+            className="primaryBtn full packageGenerate"
+            onClick={props.onGenerateSelected}
+            disabled={!selectedCount || props.busy}
+          >
+            <i className="ti ti-sparkles" aria-hidden="true" />
+            {props.busy ? 'Создаём документы…' : selectedCount ? `Создать документы (${selectedCount})` : 'Выберите документы'}
+          </button>
+
+          <details className="packageSettings">
+            <summary><i className="ti ti-settings" aria-hidden="true" /> Управление кнопками</summary>
+            <div className="packageSettingsBody">
+              <button className="softBtn" onClick={props.onAdd}><i className="ti ti-plus" aria-hidden="true" /> Добавить шаблоны</button>
+              {props.activeDocumentId && (
+                <>
+                  <button className="softBtn" onClick={props.onConfigurePopups}>Настроить уточнения</button>
+                  <button className="softBtn" onClick={props.onScanTemplate}>Разметить шаблон</button>
+                  <button className="softBtn" onClick={props.onRename}>Переименовать</button>
+                  <button className="softBtn" onClick={props.onApprove}>Подтвердить версию</button>
+                  <button className="softBtn danger" onClick={props.onRemove}>Убрать из набора</button>
+                </>
+              )}
+              <label className="checkLine compact"><input type="checkbox" checked={props.extraRulesEnabled} onChange={(event) => props.onExtraRulesChange(event.target.checked)} /><span>Учитывать дополнительные правила выбранных шаблонов</span></label>
+              <details className="copySettings">
+                <summary>Количество экземпляров</summary>
+                {props.documents.map(document => (
+                  <label key={document.id}>
+                    <span>{document.button_label}</span>
+                    <input type="number" min={0} max={99} value={props.printCopies[document.id] ?? 1} aria-label={`Количество копий для ${document.button_label}`} onChange={(event) => props.onPrintCopiesChange(document.id, Number(event.target.value))} />
+                  </label>
+                ))}
+              </details>
+            </div>
+          </details>
+        </>
+      ) : (
+        <div className="emptyPackage firstRunButtons">
+          <div><i className="ti ti-files" /></div>
+          <h3>Сначала создайте свои кнопки</h3>
+          <p>Выберите используемые вами шаблоны Word. Каждый шаблон сразу станет кнопкой документа.</p>
+          <button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd}>Создать свои кнопки</button>
+        </div>
+      )}
+
+      {hasDocuments && (
+        <button className="settingsLink" onClick={props.onToggleUtilities}>
+          <i className="ti ti-adjustments-horizontal" aria-hidden="true" /> Дополнительные настройки
+        </button>
+      )}
+    </aside>
+  );
+}
+'''
+          Path('src/components/DocumentRail.tsx').write_text(document_rail, encoding='utf-8')
+
+          replace_once(
+              'src/components/TemplateSetupModal.tsx',
+              "  onPendingTemplateLabelChange(documentId: string, value: string): void;\n  onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;",
+              "  onPendingTemplateLabelChange(documentId: string, value: string): void;\n  onRemovePendingTemplate(documentId: string): void;\n  onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;",
+          )
+          replace_once(
+              'src/components/TemplateSetupModal.tsx',
+              "  const hasBatch = props.pendingTemplates.length > 0;\n  const [scannerField, setScannerField] = useState('');",
+              "  const hasBatch = props.pendingTemplates.length > 0;\n  const normalizedLabels = props.pendingTemplates.map((item) => item.button_label.trim().toLocaleLowerCase());\n  const hasBlankLabel = hasBatch && normalizedLabels.some((label) => !label);\n  const hasDuplicateLabel = hasBatch && new Set(normalizedLabels).size !== normalizedLabels.length;\n  const batchValidationMessage = hasBlankLabel\n    ? 'Укажите название для каждой кнопки.'\n    : hasDuplicateLabel\n      ? 'Названия кнопок должны отличаться.'\n      : '';\n  const [scannerField, setScannerField] = useState('');",
+          )
+          replace_once(
+              'src/components/TemplateSetupModal.tsx',
+              "                  <input\n                    aria-label={`Название документа для ${item.file_name}`}\n                    value={item.button_label}\n                    onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)}\n                  />",
+              "                  <input\n                    aria-label={`Название документа для ${item.file_name}`}\n                    value={item.button_label}\n                    onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)}\n                  />\n                  <button\n                    className=\"templateRemove\"\n                    type=\"button\"\n                    title=\"Убрать ошибочно выбранный шаблон\"\n                    aria-label={`Убрать ${item.file_name}`}\n                    onClick={() => props.onRemovePendingTemplate(item.document_id)}\n                  >\n                    ×\n                  </button>",
+          )
+          replace_once(
+              'src/components/TemplateSetupModal.tsx',
+              "            <div className=\"readyMessage templateReadyMessage\">\n              <i className=\"ti ti-circle-check\" aria-hidden=\"true\" />\n              <div>\n                <strong>Всё готово</strong>\n                <span>Нажмите «{confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.</span>\n              </div>\n            </div>",
+              "            <div className={batchValidationMessage ? 'readyMessage templateReadyMessage warning' : 'readyMessage templateReadyMessage'}>\n              <i className={batchValidationMessage ? 'ti ti-alert-triangle' : 'ti ti-circle-check'} aria-hidden=\"true\" />\n              <div>\n                <strong>{batchValidationMessage ? 'Нужно исправить' : 'Всё готово'}</strong>\n                <span>{batchValidationMessage || `Нажмите «${confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.`}</span>\n              </div>\n            </div>",
+          )
+          replace_once(
+              'src/components/TemplateSetupModal.tsx',
+              "          <button className=\"primaryBtn\" onClick={props.onConfirm} disabled={props.busy || (!hasBatch && !props.templateText.trim())}>",
+              "          <button className=\"primaryBtn\" onClick={props.onConfirm} disabled={props.busy || (hasBatch ? Boolean(batchValidationMessage) : !props.templateText.trim())}>",
+          )
+
+          replace_once(
+              'src/App.tsx',
+              "          setSelectedDocIds(res.pack.documents.map((document) => document.id));",
+              "          setSelectedDocIds([]);",
+          )
+          replace_once(
+              'src/App.tsx',
+              "    setSelectedDocIds(pack.documents.map((document) => document.id));",
+              "    setSelectedDocIds([]);",
+          )
+          replace_once(
+              'src/App.tsx',
+              "if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(res.pack.documents.map((document) => document.id)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`); }",
+              "if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds([]); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов). Выберите нужные кнопки.`); }",
+          )
+          replace_once(
+              'src/App.tsx',
+              "  function updatePendingTemplateLabel(documentId: string, value: string) {\n    setPendingTemplates((previous) => previous.map((item) => (\n      item.document_id === documentId ? { ...item, button_label: value } : item\n    )));\n  }",
+              "  function updatePendingTemplateLabel(documentId: string, value: string) {\n    setPendingTemplates((previous) => previous.map((item) => (\n      item.document_id === documentId ? { ...item, button_label: value } : item\n    )));\n  }\n\n  function removePendingTemplate(documentId: string) {\n    const next = pendingTemplates.filter((item) => item.document_id !== documentId);\n    setPendingTemplates(next);\n    const last = next.at(-1) ?? null;\n    setImportedTemplatePath(last?.template_path ?? null);\n    setTemplateText(last?.extracted_text ?? '');\n    setButtonLabel(last?.button_label ?? '');\n    setStatus(next.length\n      ? `Шаблон убран. Осталось: ${next.length}.`\n      : 'Список очищен. Выберите нужные шаблоны Word.');\n  }",
+          )
+          replace_once(
+              'src/App.tsx',
+              "    setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);",
+              "    setStatus(`Кнопки созданы: ${confirmedRows.length}. Нажмите нужные кнопки, затем добавьте исходный документ.`);",
+          )
+          replace_once(
+              'src/App.tsx',
+              "          onPendingTemplateLabelChange={updatePendingTemplateLabel}\n          onPendingPopupFieldsChange={updatePendingPopupFields}",
+              "          onPendingTemplateLabelChange={updatePendingTemplateLabel}\n          onRemovePendingTemplate={removePendingTemplate}\n          onPendingPopupFieldsChange={updatePendingPopupFields}",
+          )
+
+          css_path = Path('src/styles.css')
+          css = css_path.read_text(encoding='utf-8')
+          old_package = ".packageItem { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: center; min-height: 56px; padding: 7px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel2); transition: border-color .16s, background .16s, transform .16s; }\n.packageItem:hover { border-color: var(--accent-line); }\n.packageItem.selected { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--panel2)); }\n.packageItem.active { box-shadow: inset 3px 0 0 var(--accent); }\n.packageCheck { position: relative; display: grid; place-items: center; width: 27px; height: 27px; cursor: pointer; }\n.packageCheck input { position: absolute; opacity: 0; }\n.packageCheck span { display: grid; place-items: center; width: 21px; height: 21px; border: 1px solid var(--field-line); border-radius: 7px; color: transparent; background: var(--panel2); font-size: 12px; }\n.packageCheck input:checked + span { border-color: var(--accent); background: var(--accent); color: white; }\n.packageOpen { display: grid; grid-template-columns: auto minmax(0,1fr); column-gap: 8px; align-items: center; min-width: 0; border: 0; background: transparent; padding: 3px; text-align: left; }\n.packageOpen > i { grid-row: 1 / 3; color: var(--accent); font-size: 18px; }\n.packageOpen > span { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }\n.packageOpen > small { color: var(--muted); font-size: 9px; }"
+          new_package = ".packageItem { appearance: none; width: 100%; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; min-height: 56px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel2); color: inherit; text-align: left; transition: border-color .16s, background .16s, transform .16s, box-shadow .16s; }\n.packageItem:hover { border-color: var(--accent-line); transform: translateY(-1px); }\n.packageItem:focus-visible { outline: 3px solid var(--accent-bg); border-color: var(--accent); }\n.packageItem.selected { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel2)); }\n.packageItem.active { box-shadow: inset 3px 0 0 var(--accent); }\n.packageTileIcon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-bg); color: var(--accent); font-size: 18px; }\n.packageTileText { min-width: 0; display: grid; gap: 3px; }\n.packageTileText strong { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }\n.packageTileText small { color: var(--muted); font-size: 9px; }\n.packageTileState { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--field-line); border-radius: 8px; color: var(--muted); background: var(--panel2); font-size: 12px; }\n.packageItem.selected .packageTileState { border-color: var(--accent); background: var(--accent); color: white; }"
+          if css.count(old_package) != 1:
+              raise SystemExit('src/styles.css: package selector block changed')
+          css = css.replace(old_package, new_package, 1)
+          old_batch = ".templateBatchRow { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(160px, 1.2fr); gap: 8px; align-items: center; padding: 7px 8px; border: .5px solid var(--line); border-radius: var(--radius); background: var(--panel); }\n.templateBatchRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }\n.templateBatchRow input { min-width: 0; height: 30px; border: .5px solid var(--field-line); border-radius: var(--radius); background: var(--field); padding: 0 9px; font-size: 12px; }"
+          new_batch = ".templateBatchRow { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(160px, 1.2fr) 32px; gap: 8px; align-items: center; padding: 7px 8px; border: .5px solid var(--line); border-radius: var(--radius); background: var(--panel); }\n.templateBatchRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }\n.templateBatchRow input { min-width: 0; height: 30px; border: .5px solid var(--field-line); border-radius: var(--radius); background: var(--field); padding: 0 9px; font-size: 12px; }\n.templateRemove { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--btn-line); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 19px; line-height: 1; }\n.templateRemove:hover { border-color: color-mix(in srgb, var(--danger) 45%, var(--btn-line)); color: var(--danger); }\n.templateReadyMessage.warning { background: color-mix(in srgb, var(--warn) 10%, var(--panel2)); }\n.templateReadyMessage.warning > i { color: var(--warn); }"
+          if css.count(old_batch) != 1:
+              raise SystemExit('src/styles.css: template batch selector block changed')
+          css_path.write_text(css.replace(old_batch, new_batch, 1), encoding='utf-8')
+
+          app_test = r'''import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { App } from './App';
+import { __resetInvokeForTests, __setInvokeForTests } from './lib/api';
+
+const sampleDocument = {
+  id: 'template_1',
+  button_label: 'Акт выполненных работ',
+  template_path: 'x.docx',
+  category: 'Generic',
+  role_id: 'generic',
+  required_fields: [],
+  placeholders: [],
+  is_static_copy: true,
+};
+
+function installTemplateMock(staticCopy: boolean) {
+  const calls: string[] = [];
+  __setInvokeForTests(async (name: string) => {
+    calls.push(name);
+    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false } as never;
+    if (name === 'get_intake_capabilities') return [] as never;
+    if (name === 'import_template_file') return { template_path: 'x.docx', extracted_text: 'Акт выполненных работ' } as never;
+    if (name === 'analyze_template_file') return { document: { popup_fields: [] } } as never;
+    if (name === 'prepare_template_setup') {
+      return [{
+        document_id: 'template_1',
+        template_path: 'x.docx',
+        detected_title: 'Акт выполненных работ',
+        suggested_button_label: 'Акт выполненных работ',
+        editable_button_label: 'Акт выполненных работ',
+        role_id: 'generic',
+        is_static_copy: staticCopy,
+        analysis: { is_static: staticCopy },
+        popup_fields: [],
+      }] as never;
+    }
+    if (name === 'confirm_template_setup') {
+      return { pack_id: 'default', name: 'Набор', documents: [{ ...sampleDocument, is_static_copy: staticCopy }] } as never;
+    }
+    if (name === 'get_workflow_plan') return { document_id: 'template_1', prompts: [], blocked: false, block_reasons: [] } as never;
+    return {} as never;
+  });
+  return calls;
+}
+
+function templateFile(name = 'Акт выполненных работ.docx') {
+  return new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], name, {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+}
+
+async function openTemplateSetup() {
+  fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
+  return screen.getByTestId('template-file-input');
+}
+
+async function selectTemplateAndCreateButton() {
+  const input = await openTemplateSetup();
+  fireEvent.change(input, { target: { files: [templateFile()] } });
+  await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
+  fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
+}
+
+describe('App', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetInvokeForTests();
+  });
+
+  it('starts without built-in examples and shows only the clear first-run action', async () => {
+    installTemplateMock(false);
+    render(<App />);
+    expect(await screen.findByRole('button', { name: 'Создать свои кнопки' })).toBeTruthy();
+    expect(screen.queryByText('Встроенный пример')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Дополнительные настройки' })).toBeNull();
+  });
+
+  it('adds a document through the simple Rust-backed setup path', async () => {
+    const calls = installTemplateMock(false);
+    render(<App />);
+    await selectTemplateAndCreateButton();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Акт выполненных работ' })).toBeTruthy());
+    expect(calls).toContain('confirm_template_setup');
+  });
+
+  it('creates a button for an ordinary DOCX without placeholders', async () => {
+    const calls = installTemplateMock(true);
+    render(<App />);
+    await selectTemplateAndCreateButton();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Акт выполненных работ' })).toBeTruthy());
+    expect(calls).toContain('confirm_template_setup');
+  });
+
+  it('keeps document buttons unselected and toggles the whole tile with one click', async () => {
+    installTemplateMock(true);
+    render(<App />);
+    await selectTemplateAndCreateButton();
+    const tile = await screen.findByRole('button', { name: 'Акт выполненных работ' });
+    expect(tile.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(tile);
+    await waitFor(() => expect(tile.getAttribute('aria-pressed')).toBe('true'));
+  });
+
+  it('allows an accidentally selected template to be removed before button creation', async () => {
+    installTemplateMock(true);
+    render(<App />);
+    const input = await openTemplateSetup();
+    fireEvent.change(input, { target: { files: [templateFile()] } });
+    await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать Акт выполненных работ.docx' }));
+    expect(await screen.findByTestId('template-file-input')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Создать кнопки (1)' })).toBeNull();
+  });
+
+  it('blocks indistinguishable duplicate button labels', async () => {
+    installTemplateMock(true);
+    render(<App />);
+    const input = await openTemplateSetup();
+    fireEvent.change(input, { target: { files: [templateFile('Первый.docx'), templateFile('Второй.docx')] } });
+    await screen.findByLabelText('Название документа для Первый.docx');
+    await screen.findByLabelText('Название документа для Второй.docx');
+    const confirm = screen.getByRole('button', { name: 'Создать кнопки (2)' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(screen.getByText('Названия кнопок должны отличаться.')).toBeTruthy();
+  });
+});
+'''
+          Path('src/App.test.tsx').write_text(app_test, encoding='utf-8')
+
+          regression = Path('tests/test_v18_0_3_regression_contracts.py')
+          regression_text = regression.read_text(encoding='utf-8')
+          anchor = "\n\nclass VersionContractTest(unittest.TestCase):"
+          addition = r'''
+
+    def test_reference_projects_keep_first_run_and_selection_simple(self) -> None:
+        app = text("src/App.tsx")
+        rail = text("src/components/DocumentRail.tsx")
+        modal = text("src/components/TemplateSetupModal.tsx")
+        package_area = rail[rail.index('className="packageList'):rail.index('className="packageSelectionActions')]
+        self.assertGreaterEqual(app.count("setSelectedDocIds([])"), 3)
+        self.assertIn("aria-pressed={selected}", rail)
+        self.assertNotIn('type="checkbox"', package_area)
+        self.assertIn("{hasDocuments && (", rail)
+        self.assertIn("onRemovePendingTemplate", modal)
+        self.assertIn("Названия кнопок должны отличаться", modal)
+'''
+          if regression_text.count(anchor) != 1:
+              raise SystemExit('regression contract anchor changed')
+          regression.write_text(regression_text.replace(anchor, addition + anchor, 1), encoding='utf-8')
+          PY
+      - name: Remove helper workflow and refresh source manifest
+        run: |
+          rm .github/workflows/agent-pr9-reference-ux.yml
+          python - <<'PY'
+          from scripts.build_source_archive import source_files, write_source_manifest
+          write_source_manifest(source_files())
+          PY
+      - name: Verify focused and full frontend contours
+        run: |
+          python tests/test_v18_0_3_regression_contracts.py
+          python scripts/verify_source_manifest.py
+          npm ci
+          npm run typecheck
+          npm test
+      - name: Commit reference UX refinements
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add SOURCE_MANIFEST_SHA256.txt src/App.tsx src/App.test.tsx src/components/DocumentRail.tsx src/components/TemplateSetupModal.tsx src/styles.css tests/test_v18_0_3_regression_contracts.py .github/workflows/agent-pr9-reference-ux.yml
+          git commit -m "Adopt proven simple document UX contracts"
+          git push origin HEAD:agent/fix-simple-button-creation

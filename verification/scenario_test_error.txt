@@ -5,47 +5,412 @@
 
 [1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal[39m
 
- [32m✓[39m src/lib/api.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 14[2mms[22m[39m
- [32m✓[39m src/lib/scannerSuggestions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 26[2mms[22m[39m
- [32m✓[39m src/lib/updateSecurity.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 427[2mms[22m[39m
- [32m✓[39m src/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 1625[2mms[22m[39m
-     [33m[2m✓[22m[39m adds a document through the simple Rust-backed setup path [33m 440[2mms[22m[39m
-     [33m[2m✓[22m[39m creates a button for an ordinary DOCX without placeholders [33m 339[2mms[22m[39m
- [32m✓[39m src/lib/api.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
- [32m✓[39m src/components/AdvancedToolsPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 144[2mms[22m[39m
- [32m✓[39m src/components/BusinessRegistryPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 181[2mms[22m[39m
- [32m✓[39m src/components/GuidedScannerModal.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 88[2mms[22m[39m
- [31m❯[39m src/App.scenarios.test.tsx [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 3667[2mms[22m[39m
-[31m     [31m×[31m каждый пользовательский сценарий вызывает соответствующую Rust-команду[39m[33m 3566[2mms[22m[39m
-     [32m✓[39m не предлагает загрузку, когда OCR уже найден в системе[32m 48[2mms[22m[39m
-     [32m✓[39m для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан[32m 48[2mms[22m[39m
+ [32m✓[39m src/lib/api.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/lib/scannerSuggestions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/lib/updateSecurity.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 609[2mms[22m[39m
+     [33m[2m✓[22m[39m shows a visible Check updates button [33m 340[2mms[22m[39m
+ [32m✓[39m src/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 2123[2mms[22m[39m
+     [33m[2m✓[22m[39m adds a document through the simple Rust-backed setup path [33m 582[2mms[22m[39m
+     [33m[2m✓[22m[39m creates a button for an ordinary DOCX without placeholders [33m 400[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps document buttons unselected and toggles the whole tile with one click [33m 408[2mms[22m[39m
+ [32m✓[39m src/lib/api.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/components/AdvancedToolsPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 182[2mms[22m[39m
+ [32m✓[39m src/components/BusinessRegistryPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 300[2mms[22m[39m
+ [32m✓[39m src/components/GuidedScannerModal.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 121[2mms[22m[39m
+ [31m❯[39m src/App.scenarios.test.tsx [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 5920[2mms[22m[39m
+[31m     [31m×[31m каждый пользовательский сценарий вызывает соответствующую Rust-команду[39m[33m 5808[2mms[22m[39m
+     [32m✓[39m не предлагает загрузку, когда OCR уже найден в системе[32m 51[2mms[22m[39m
+     [32m✓[39m для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан[32m 58[2mms[22m[39m
 
 [31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
 
 [41m[1m FAIL [22m[49m src/App.scenarios.test.tsx[2m > [22mПолный прогон пользовательских сценариев и тем[2m > [22mкаждый пользовательский сценарий вызывает соответствующую Rust-команду
-[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+[31m[1mTestingLibraryElementError[22m[39m: Unable to find role="button" and name "Договор"
 
-[32m- Expected[39m
-[31m+ Received[39m
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"appRoot"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"window"[39m
+      [36m>[39m
+        [36m<header[39m
+          [33mclass[39m=[32m"hdr clientHeader"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"brand"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"logo"[39m
+            [36m>[39m
+              [36m<i[39m
+                [33mclass[39m=[32m"ti ti-files"[39m
+              [36m/>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"brandText"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"bname"[39m
+              [36m>[39m
+                [0mДоккомплект[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"bnote"[39m
+              [36m>[39m
+                [0mИз исходника — готовый комплект документов[0m
+              [36m</span>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"hdrRight"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"true"[39m
+              [33mclass[39m=[32m"headerSettings"[39m
+            [36m>[39m
+              [36m<i[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"ti ti-settings"[39m
+              [36m/>[39m
+              [0m Настройки[0m
+            [36m</button>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"themeSwitch"[39m
+            [36m>[39m
+              [36m<button[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-label[39m=[32m"Тема оформления"[39m
+                [33mclass[39m=[32m"iconButton"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"themeDot"[39m
+                  [33mstyle[39m=[32m"background: var(--accent);"[39m
+                [36m/>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"themeDotLabel"[39m
+                [36m>[39m
+                  [0mТема[0m
+                [36m</span>[39m
+              [36m</button>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</header>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"grid clientGrid"[39m
+        [36m>[39m
+          [36m<main[39m
+            [33mclass[39m=[32m"clientWorkspace"[39m
+          [36m>[39m
+            [36m<section[39m
+              [33maria-labelledby[39m=[32m"workflow-title"[39m
+              [33mclass[39m=[32m"workflowHero"[39m
+            [36m>[39m
+              [36m<div>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"workflowEyebrow"[39m
+                [36m>[39m
+                  [0mНовый комплект[0m
+                [36m</span>[39m
+                [36m<h1[39m
+                  [33mid[39m=[32m"workflow-title"[39m
+                [36m>[39m
+                  [0mИз исходника — готовые документы[0m
+                [36m</h1>[39m
+                [36m<p>[39m
+                  [0mДобавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.[0m
+                [36m</p>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"workflowHeroActions"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"softBtn newCaseBtn"[39m
+                [36m>[39m
+                  [36m<i[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"ti ti-file-plus"[39m
+                  [36m/>[39m
+                  [0m Новый комплект[0m
+                [36m</button>[39m
+                [36m<ol[39m
+                  [33maria-label[39m=[32m"Этапы работы"[39m
+                  [33mclass[39m=[32m"workflowSteps"[39m
+                [36m>[39m
+                  [36m<li[39m
+                    [33mclass[39m=[32m"done"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0m1[0m
+                    [36m</span>[39m
+                    [36m<strong>[39m
+                      [0mИсточник[0m
+                    [36m</strong>[39m
+                  [36m</li>[39m
+                  [36m<li[39m
+                    [33mclass[39m=[32m"done"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0m2[0m
+                    [36m</span>[39m
+                    [36m<strong>[39m
+                      [0mПроверка[0m
+                    [36m</strong>[39m
+                  [36m</li>[39m
+                  [36m<li[39m
+                    [33mclass[39m=[32m"current done"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0m3[0m
+                    [36m</span>[39m
+                    [36m<strong>[39m
+                      [0mРезультат[0m
+                    [36m</strong>[39m
+                  [36m</li>[39m
+                [36m</ol>[39m
+              [36m</div>[39m
+            [36m</section>[39m
+            [36m<section[39m
+              [33maria-label[39m=[32m"Комплект готов"[39m
+              [33mclass[39m=[32m"resultCard"[39m
+              [33mrole[39m=[32m"status"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"resultIcon"[39m
+              [36m>[39m
+                [36m<i[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"ti ti-check"[39m
+                [36m/>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"resultBody"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"resultEyebrow"[39m
+                [36m>[39m
+                  [0mГотово[0m
+                [36m</span>[39m
+                [36m<h2>[39m
+                  [0mСоздано документов: [0m
+                  [0m1[0m
+                [36m</h2>[39m
+                [36m<p[39m
+                  [33mtitle[39m=[32m"output/148_2026-02-01"[39m
+                [36m>[39m
+                  [0moutput/148_2026-02-01[0m
+                [36m</p>[39m
+                [36m<details[39m
+                  [33mclass[39m=[32m"resultCopies"[39m
+                [36m>[39m
+                  [36m<summary>[39m
+                    [0mКоличество экземпляр...
 
-[32m- true[39m
-[31m+ false[39m
-
-[36m [2m❯[22m src/App.scenarios.test.tsx:[2m376:107[22m[39m
-    [90m374|[39m       [33m.[39m[34mmap[39m((call) [33m=>[39m [33mJSON[39m[33m.[39m[34mstringify[39m(call[33m.[39mpayload))[33m;[39m
-    [90m375|[39m     expect(analyzedTemplatePayloads.some((value) => value.includes('/a…
-    [90m376|[39m     expect(analyzedTemplatePayloads.some((value) => value.includes('/a…
-    [90m   |[39m                                                                                                           [31m^[39m
-    [90m377|[39m     fireEvent.click(await within(dialog).findByRole('button', { name: …
-    [90m378|[39m     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Д…
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"appRoot"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"window"[39m
+      [36m>[39m
+        [36m<header[39m
+          [33mclass[39m=[32m"hdr clientHeader"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"brand"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"logo"[39m
+            [36m>[39m
+              [36m<i[39m
+                [33mclass[39m=[32m"ti ti-files"[39m
+              [36m/>[39m
+            [36m</span>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"brandText"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"bname"[39m
+              [36m>[39m
+                [0mДоккомплект[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"bnote"[39m
+              [36m>[39m
+                [0mИз исходника — готовый комплект документов[0m
+              [36m</span>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"hdrRight"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"true"[39m
+              [33mclass[39m=[32m"headerSettings"[39m
+            [36m>[39m
+              [36m<i[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"ti ti-settings"[39m
+              [36m/>[39m
+              [0m Настройки[0m
+            [36m</button>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"themeSwitch"[39m
+            [36m>[39m
+              [36m<button[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-label[39m=[32m"Тема оформления"[39m
+                [33mclass[39m=[32m"iconButton"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"themeDot"[39m
+                  [33mstyle[39m=[32m"background: var(--accent);"[39m
+                [36m/>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"themeDotLabel"[39m
+                [36m>[39m
+                  [0mТема[0m
+                [36m</span>[39m
+              [36m</button>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</header>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"grid clientGrid"[39m
+        [36m>[39m
+          [36m<main[39m
+            [33mclass[39m=[32m"clientWorkspace"[39m
+          [36m>[39m
+            [36m<section[39m
+              [33maria-labelledby[39m=[32m"workflow-title"[39m
+              [33mclass[39m=[32m"workflowHero"[39m
+            [36m>[39m
+              [36m<div>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"workflowEyebrow"[39m
+                [36m>[39m
+                  [0mНовый комплект[0m
+                [36m</span>[39m
+                [36m<h1[39m
+                  [33mid[39m=[32m"workflow-title"[39m
+                [36m>[39m
+                  [0mИз исходника — готовые документы[0m
+                [36m</h1>[39m
+                [36m<p>[39m
+                  [0mДобавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.[0m
+                [36m</p>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"workflowHeroActions"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"softBtn newCaseBtn"[39m
+                [36m>[39m
+                  [36m<i[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"ti ti-file-plus"[39m
+                  [36m/>[39m
+                  [0m Новый комплект[0m
+                [36m</button>[39m
+                [36m<ol[39m
+                  [33maria-label[39m=[32m"Этапы работы"[39m
+                  [33mclass[39m=[32m"workflowSteps"[39m
+                [36m>[39m
+                  [36m<li[39m
+                    [33mclass[39m=[32m"done"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0m1[0m
+                    [36m</span>[39m
+                    [36m<strong>[39m
+                      [0mИсточник[0m
+                    [36m</strong>[39m
+                  [36m</li>[39m
+                  [36m<li[39m
+                    [33mclass[39m=[32m"done"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0m2[0m
+                    [36m</span>[39m
+                    [36m<strong>[39m
+                      [0mПроверка[0m
+                    [36m</strong>[39m
+                  [36m</li>[39m
+                  [36m<li[39m
+                    [33mclass[39m=[32m"current done"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0m3[0m
+                    [36m</span>[39m
+                    [36m<strong>[39m
+                      [0mРезультат[0m
+                    [36m</strong>[39m
+                  [36m</li>[39m
+                [36m</ol>[39m
+              [36m</div>[39m
+            [36m</section>[39m
+            [36m<section[39m
+              [33maria-label[39m=[32m"Комплект готов"[39m
+              [33mclass[39m=[32m"resultCard"[39m
+              [33mrole[39m=[32m"status"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"resultIcon"[39m
+              [36m>[39m
+                [36m<i[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"ti ti-check"[39m
+                [36m/>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"resultBody"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"resultEyebrow"[39m
+                [36m>[39m
+                  [0mГотово[0m
+                [36m</span>[39m
+                [36m<h2>[39m
+                  [0mСоздано документов: [0m
+                  [0m1[0m
+                [36m</h2>[39m
+                [36m<p[39m
+                  [33mtitle[39m=[32m"output/148_2026-02-01"[39m
+                [36m>[39m
+                  [0moutput/148_2026-02-01[0m
+                [36m</p>[39m
+                [36m<details[39m
+                  [33mclass[39m=[32m"resultCopies"[39m
+                [36m>[39m
+                  [36m<summary>[39m
+                    [0mКоличество экземпляр...
+[90m [2m❯[22m waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:[2m163:27[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m86:33[22m[39m
+[36m [2m❯[22m src/App.scenarios.test.tsx:[2m375:18[22m[39m
+    [90m373|[39m     fireEvent.click(await within(dialog).findByRole('button', { name: …
+    [90m374|[39m     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Д…
+    [90m375|[39m     [35mawait[39m screen[33m.[39m[34mfindByRole[39m([32m'button'[39m[33m,[39m { name[33m:[39m [32m'Договор'[39m })[33m;[39m
+    [90m   |[39m                  [31m^[39m
+    [90m376|[39m     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObjec…
+    [90m377|[39m       { template_path[33m:[39m [32m'/app-data/user-templates/Договор.docx'[39m }[33m,[39m
 
 [31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
 
 
 [2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m8 passed[39m[22m[90m (9)[39m
 [2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m39 passed[39m[22m[90m (40)[39m
-[2m   Start at [22m 10:29:29
-[2m   Duration [22m 5.13s[2m (transform 1.17s, setup 0ms, import 2.57s, tests 6.18s, environment 4.39s)[22m
+[2m   Start at [22m 10:33:13
+[2m   Duration [22m 7.47s[2m (transform 1.08s, setup 0ms, import 2.74s, tests 9.34s, environment 5.57s)[22m
 
 
-::error file=/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/src/App.scenarios.test.tsx,title=src/App.scenarios.test.tsx > Полный прогон пользовательских сценариев и тем > каждый пользовательский сценарий вызывает соответствующую Rust-команду,line=376,column=107::AssertionError: expected false to be true // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- true%0A+ false%0A%0A ❯ src/App.scenarios.test.tsx:376:107%0A%0A
+::error file=/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/src/App.scenarios.test.tsx,title=src/App.scenarios.test.tsx > Полный прогон пользовательских сценариев и тем > каждый пользовательский сценарий вызывает соответствующую Rust-команду,line=375,column=18::TestingLibraryElementError: Unable to find role="button" and name "Договор"%0A%0AIgnored nodes: comments, script, style%0A<body>%0A  <div>%0A    <div%0A      class="appRoot"%0A    >%0A      <div%0A        class="window"%0A      >%0A        <header%0A          class="hdr clientHeader"%0A        >%0A          <div%0A            class="brand"%0A          >%0A            <span%0A              aria-hidden="true"%0A              class="logo"%0A            >%0A              <i%0A                class="ti ti-files"%0A              />%0A            </span>%0A            <div%0A              class="brandText"%0A            >%0A              <span%0A                class="bname"%0A              >%0A                Доккомплект%0A              </span>%0A              <span%0A                class="bnote"%0A              >%0A                Из исходника — готовый комплект документов%0A              </span>%0A            </div>%0A          </div>%0A          <div%0A            class="hdrRight"%0A          >%0A            <button%0A              aria-expanded="true"%0A              class="headerSettings"%0A            >%0A              <i%0A                aria-hidden="true"%0A                class="ti ti-settings"%0A              />%0A               Настройки%0A            </button>%0A            <div%0A              class="themeSwitch"%0A            >%0A              <button%0A                aria-expanded="false"%0A                aria-label="Тема оформления"%0A                class="iconButton"%0A                type="button"%0A              >%0A                <span%0A                  aria-hidden="true"%0A                  class="themeDot"%0A                  style="background: var(--accent);"%0A                />%0A                <span%0A                  class="themeDotLabel"%0A                >%0A                  Тема%0A                </span>%0A              </button>%0A            </div>%0A          </div>%0A        </header>%0A        <div%0A          class="grid clientGrid"%0A        >%0A          <main%0A            class="clientWorkspace"%0A          >%0A            <section%0A              aria-labelledby="workflow-title"%0A              class="workflowHero"%0A            >%0A              <div>%0A                <span%0A                  class="workflowEyebrow"%0A                >%0A                  Новый комплект%0A                </span>%0A                <h1%0A                  id="workflow-title"%0A                >%0A                  Из исходника — готовые документы%0A                </h1>%0A                <p>%0A                  Добавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.%0A                </p>%0A              </div>%0A              <div%0A                class="workflowHeroActions"%0A              >%0A                <button%0A                  class="softBtn newCaseBtn"%0A                >%0A                  <i%0A                    aria-hidden="true"%0A                    class="ti ti-file-plus"%0A                  />%0A                   Новый комплект%0A                </button>%0A                <ol%0A                  aria-label="Этапы работы"%0A                  class="workflowSteps"%0A                >%0A                  <li%0A                    class="done"%0A                  >%0A                    <span>%0A                      1%0A                    </span>%0A                    <strong>%0A                      Источник%0A                    </strong>%0A                  </li>%0A                  <li%0A                    class="done"%0A                  >%0A                    <span>%0A                      2%0A                    </span>%0A                    <strong>%0A                      Проверка%0A                    </strong>%0A                  </li>%0A                  <li%0A                    class="current done"%0A                  >%0A                    <span>%0A                      3%0A                    </span>%0A                    <strong>%0A                      Результат%0A                    </strong>%0A                  </li>%0A                </ol>%0A              </div>%0A            </section>%0A            <section%0A              aria-label="Комплект готов"%0A              class="resultCard"%0A              role="status"%0A            >%0A              <div%0A                class="resultIcon"%0A              >%0A                <i%0A                  aria-hidden="true"%0A                  class="ti ti-check"%0A                />%0A              </div>%0A              <div%0A                class="resultBody"%0A              >%0A                <span%0A                  class="resultEyebrow"%0A                >%0A                  Готово%0A                </span>%0A                <h2>%0A                  Создано документов: %0A                  1%0A                </h2>%0A                <p%0A                  title="output/148_2026-02-01"%0A                >%0A                  output/148_2026-02-01%0A                </p>%0A                <details%0A                  class="resultCopies"%0A                >%0A                  <summary>%0A                    Количество экземпляр...%0A%0AIgnored nodes: comments, script, style%0A<body>%0A  <div>%0A    <div%0A      class="appRoot"%0A    >%0A      <div%0A        class="window"%0A      >%0A        <header%0A          class="hdr clientHeader"%0A        >%0A          <div%0A            class="brand"%0A          >%0A            <span%0A              aria-hidden="true"%0A              class="logo"%0A            >%0A              <i%0A                class="ti ti-files"%0A              />%0A            </span>%0A            <div%0A              class="brandText"%0A            >%0A              <span%0A                class="bname"%0A              >%0A                Доккомплект%0A              </span>%0A              <span%0A                class="bnote"%0A              >%0A                Из исходника — готовый комплект документов%0A              </span>%0A            </div>%0A          </div>%0A          <div%0A            class="hdrRight"%0A          >%0A            <button%0A              aria-expanded="true"%0A              class="headerSettings"%0A            >%0A              <i%0A                aria-hidden="true"%0A                class="ti ti-settings"%0A              />%0A               Настройки%0A            </button>%0A            <div%0A              class="themeSwitch"%0A            >%0A              <button%0A                aria-expanded="false"%0A                aria-label="Тема оформления"%0A                class="iconButton"%0A                type="button"%0A              >%0A                <span%0A                  aria-hidden="true"%0A                  class="themeDot"%0A                  style="background: var(--accent);"%0A                />%0A                <span%0A                  class="themeDotLabel"%0A                >%0A                  Тема%0A                </span>%0A              </button>%0A            </div>%0A          </div>%0A        </header>%0A        <div%0A          class="grid clientGrid"%0A        >%0A          <main%0A            class="clientWorkspace"%0A          >%0A            <section%0A              aria-labelledby="workflow-title"%0A              class="workflowHero"%0A            >%0A              <div>%0A                <span%0A                  class="workflowEyebrow"%0A                >%0A                  Новый комплект%0A                </span>%0A                <h1%0A                  id="workflow-title"%0A                >%0A                  Из исходника — готовые документы%0A                </h1>%0A                <p>%0A                  Добавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.%0A                </p>%0A              </div>%0A              <div%0A                class="workflowHeroActions"%0A              >%0A                <button%0A                  class="softBtn newCaseBtn"%0A                >%0A                  <i%0A                    aria-hidden="true"%0A                    class="ti ti-file-plus"%0A                  />%0A                   Новый комплект%0A                </button>%0A                <ol%0A                  aria-label="Этапы работы"%0A                  class="workflowSteps"%0A                >%0A                  <li%0A                    class="done"%0A                  >%0A                    <span>%0A                      1%0A                    </span>%0A                    <strong>%0A                      Источник%0A                    </strong>%0A                  </li>%0A                  <li%0A                    class="done"%0A                  >%0A                    <span>%0A                      2%0A                    </span>%0A                    <strong>%0A                      Проверка%0A                    </strong>%0A                  </li>%0A                  <li%0A                    class="current done"%0A                  >%0A                    <span>%0A                      3%0A                    </span>%0A                    <strong>%0A                      Результат%0A                    </strong>%0A                  </li>%0A                </ol>%0A              </div>%0A            </section>%0A            <section%0A              aria-label="Комплект готов"%0A              class="resultCard"%0A              role="status"%0A            >%0A              <div%0A                class="resultIcon"%0A              >%0A                <i%0A                  aria-hidden="true"%0A                  class="ti ti-check"%0A                />%0A              </div>%0A              <div%0A                class="resultBody"%0A              >%0A                <span%0A                  class="resultEyebrow"%0A                >%0A                  Готово%0A                </span>%0A                <h2>%0A                  Создано документов: %0A                  1%0A                </h2>%0A                <p%0A                  title="output/148_2026-02-01"%0A                >%0A                  output/148_2026-02-01%0A                </p>%0A                <details%0A                  class="resultCopies"%0A                >%0A                  <summary>%0A                    Количество экземпляр...%0A ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27%0A ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33%0A ❯ src/App.scenarios.test.tsx:375:18%0A%0A

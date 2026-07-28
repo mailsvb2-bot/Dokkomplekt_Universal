@@ -18,8 +18,6 @@ original_verify_path = ROOT / "verification/original_verify_source.py"
 
 
 def record_failure() -> None:
-    if ERROR_PATH.exists():
-        return
     ERROR_PATH.parent.mkdir(parents=True, exist_ok=True)
     ERROR_PATH.write_text(traceback.format_exc(), encoding="utf-8")
     subprocess.run(["git", "config", "user.name", "github-actions[bot]"], cwd=ROOT, check=True)
@@ -30,14 +28,14 @@ def record_failure() -> None:
 
 
 try:
+    ERROR_PATH.unlink(missing_ok=True)
     if not helper.is_file() or not original_verify_path.is_file():
         raise RuntimeError("reference UX staging files are missing")
 
-    raw = helper.read_text(encoding="utf-8")
-    marker = "          python - <<'PY'\n"
-    start = raw.index(marker) + len(marker)
-    end = raw.index("\n          PY", start)
-    program = textwrap.dedent(raw[start:end])
+    lines = helper.read_text(encoding="utf-8").splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip() == "python - <<'PY'")
+    end = next(index for index in range(start + 1, len(lines)) if lines[index].strip() == "PY")
+    program = textwrap.dedent("\n".join(lines[start + 1:end]))
     exec(compile(program, str(helper), "exec"), {"__name__": "__reference_ux_patch__"})
 
     build_path = ROOT / "scripts/build_source_archive.py"

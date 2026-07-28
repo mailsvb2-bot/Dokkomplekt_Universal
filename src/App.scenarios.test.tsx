@@ -395,7 +395,7 @@ describe('Полный прогон пользовательских сцена�
     const automation = screen.getByText('Автоматическая обработка папки').closest('.automationCard');
     expect(automation).toBeTruthy();
     fireEvent.change(within(automation as HTMLElement).getByPlaceholderText('Путь к файлу'), { target: { value: 'C:/Созданные документы/Источник.docx' } });
-    fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
+    fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Обработать указанный файл' }));
     await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
     await screen.findByRole('heading', { name: /Создано документов:/ });
     await click(/Открыть комплект/);

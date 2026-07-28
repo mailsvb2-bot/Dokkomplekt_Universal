@@ -18,10 +18,10 @@ function installTemplateMock(staticCopy: boolean) {
   const calls: string[] = [];
   __setInvokeForTests(async (name: string) => {
     calls.push(name);
-    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false } as never;
+    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
     if (name === 'get_intake_capabilities') return [] as never;
     if (name === 'import_template_file') return { template_path: 'x.docx', extracted_text: 'Акт выполненных работ' } as never;
-    if (name === 'analyze_template_file') return { document: { popup_fields: [] } } as never;
+    if (name === 'analyze_template_file') return { document: { ...sampleDocument, is_static_copy: staticCopy, popup_fields: [] }, analysis_json: {}, core_pipeline_json: {} } as never;
     if (name === 'prepare_template_setup') {
       return [{
         document_id: 'template_1',

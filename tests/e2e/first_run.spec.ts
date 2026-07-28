@@ -61,7 +61,7 @@ test('one main button creates the selected full pack', async ({ page }) => {
   await installTauriMock(page, { withDocument: true, promptDone: true });
   await page.goto('/');
   await page.getByTestId('source-file-input').setInputFiles({ name: 'Исходник.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]) });
-  await expect(page.getByText('Исходник.docx')).toBeVisible();
+  await expect(page.getByText('Исходник.docx', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Создать комплект' }).click();
   await expect(page.getByRole('heading', { name: 'Создано документов: 1' })).toBeVisible();
   const commands = await page.evaluate(() => ((window as unknown as Record<string, unknown>).__E2E_CALLS__ as Array<{ command: string }>).map(call => call.command));

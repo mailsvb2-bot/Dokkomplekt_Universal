@@ -1,0 +1,68 @@
+name: Apply Async Action Hardening
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-async-action-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-and-clean:
+    if: github.ref == 'refs/heads/agent/harden-async-action-runner'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/harden-async-action-runner
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply reviewed patch and remove delivery helpers
+        shell: bash
+        run: |
+          cat verification/ci/async-action-hardening.part-* > /tmp/async-action-hardening.patch
+          patch -p1 --forward < /tmp/async-action-hardening.patch
+          rm verification/ci/async-action-hardening.part-*
+          rm .github/workflows/apply-async-action-hardening.yml
+      - name: Rebuild checked-in source manifest
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          module_path = Path('scripts/build_source_archive.py').resolve()
+          spec = importlib.util.spec_from_file_location('build_source_archive', module_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit('cannot load source archive module')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.write_source_manifest(module.source_files())
+          PY
+      - name: Verify frontend and source contracts before committing
+        shell: bash
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test
+          npm run build
+          python scripts/static_quality_gate.py --source-only
+          python scripts/verify_source_manifest.py
+      - name: Commit only final source changes
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          test ! -e .github/workflows/apply-async-action-hardening.yml
+          test -z "$(find verification/ci -maxdepth 1 -name 'async-action-hardening.part-*' -print -quit)"
+          git commit -m "Harden concurrent async UI actions"
+          git push origin HEAD:agent/harden-async-action-runner

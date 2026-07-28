@@ -1,0 +1,491 @@
+
+> dokkomplekt-universal-tauri@18.4.3 test
+> vitest run --config vitest.config.ts
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal[39m
+
+ [32m✓[39m src/lib/api.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/lib/scannerSuggestions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 2011[2mms[22m[39m
+     [33m[2m✓[22m[39m adds a document through the simple Rust-backed setup path [33m 638[2mms[22m[39m
+     [33m[2m✓[22m[39m creates a button for an ordinary DOCX without placeholders [33m 385[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps document buttons unselected and toggles the whole tile with one click [33m 389[2mms[22m[39m
+ [32m✓[39m src/lib/updateSecurity.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 659[2mms[22m[39m
+     [33m[2m✓[22m[39m shows a visible Check updates button [33m 351[2mms[22m[39m
+ [32m✓[39m src/lib/api.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/components/AdvancedToolsPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 193[2mms[22m[39m
+ [32m✓[39m src/components/BusinessRegistryPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 221[2mms[22m[39m
+ [32m✓[39m src/components/GuidedScannerModal.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 97[2mms[22m[39m
+ [31m❯[39m src/App.scenarios.test.tsx [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 5821[2mms[22m[39m
+[31m     [31m×[31m каждый пользовательский сценарий вызывает соответствующую Rust-команду[39m[33m 5718[2mms[22m[39m
+     [32m✓[39m не предлагает загрузку, когда OCR уже найден в системе[32m 49[2mms[22m[39m
+     [32m✓[39m для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан[32m 52[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/App.scenarios.test.tsx[2m > [22mПолный прогон пользовательских сценариев и тем[2m > [22mкаждый пользовательский сценарий вызывает соответствующую Rust-команду
+[31m[1mAssertionError[22m[39m: expected <div class="backdrop" …(3)>…(1)</div> to be null
+
+Ignored nodes: comments, script, style
+[36m<html[39m
+  [33mstyle[39m=[32m"--bg: #F5F7FA; --frame: #F5F7FA; --panel2: #FFFFFF; --panel: #F7F9FB; --line: #EEF2F6; --accent: #534AB7; --accent-bg: #EDECFB; --accent-tx: #3B348A; --accent-line: #D3CEF3; --text: #0F1B2A; --text-2: #5A6B7B; --muted: #94A3B4; --field: #FFFFFF; --field-line: #DDE5EE; --dash: #CBD6E2; --drop-bg: #FBFDFE; --muted-chip: #F1F5F9; --paper: #FFFFFF; --paper-line: #E4EAF1; --line-bar: #E1E8F0; --foot-bg: #FCFDFE; --btn-line: #D7DFE9; --on-accent: #FFFFFF; --warn: #BA7517; --ok: #1D9E75; --danger: #C0392B; --radius: 6px; --radius-card: 10px; color-scheme: light;"[39m
+[36m>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"appRoot"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"window"[39m
+        [36m>[39m
+          [36m<header[39m
+            [33mclass[39m=[32m"hdr clientHeader"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"brand"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"logo"[39m
+              [36m>[39m
+                [36m<i[39m
+                  [33mclass[39m=[32m"ti ti-files"[39m
+                [36m/>[39m
+              [36m</span>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"brandText"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"bname"[39m
+                [36m>[39m
+                  [0mДоккомплект[0m
+                [36m</span>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"bnote"[39m
+                [36m>[39m
+                  [0mИз исходника — готовый комплект документов[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"hdrRight"[39m
+            [36m>[39m
+              [36m<button[39m
+                [33maria-expanded[39m=[32m"true"[39m
+                [33mclass[39m=[32m"headerSettings"[39m
+              [36m>[39m
+                [36m<i[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mclass[39m=[32m"ti ti-settings"[39m
+                [36m/>[39m
+                [0m Настройки[0m
+              [36m</button>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"themeSwitch"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-expanded[39m=[32m"false"[39m
+                  [33maria-label[39m=[32m"Тема оформления"[39m
+                  [33mclass[39m=[32m"iconButton"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"themeDot"[39m
+                    [33mstyle[39m=[32m"background: var(--accent);"[39m
+                  [36m/>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"themeDotLabel"[39m
+                  [36m>[39m
+                    [0mТема[0m
+                  [36m</span>[39m
+                [36m</button>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</header>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"grid clientGrid"[39m
+          [36m>[39m
+            [36m<main[39m
+              [33mclass[39m=[32m"clientWorkspace"[39m
+            [36m>[39m
+              [36m<section[39m
+                [33maria-labelledby[39m=[32m"workflow-title"[39m
+                [33mclass[39m=[32m"workflowHero"[39m
+              [36m>[39m
+                [36m<div>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"workflowEyebrow"[39m
+                  [36m>[39m
+                    [0mНовый комплект[0m
+                  [36m</span>[39m
+                  [36m<h1[39m
+                    [33mid[39m=[32m"workflow-title"[39m
+                  [36m>[39m
+                    [0mИз исходника — готовые документы[0m
+                  [36m</h1>[39m
+                  [36m<p>[39m
+                    [0mДобавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.[0m
+                  [36m</p>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"workflowHeroActions"[39m
+                [36m>[39m
+                  [36m<button[39m
+                    [33mclass[39m=[32m"softBtn newCaseBtn"[39m
+                  [36m>[39m
+                    [36m<i[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"ti ti-file-plus"[39m
+                    [36m/>[39m
+                    [0m Новый комплект[0m
+                  [36m</button>[39m
+                  [36m<ol[39m
+                    [33maria-label[39m=[32m"Этапы работы"[39m
+                    [33mclass[39m=[32m"workflowSteps"[39m
+                  [36m>[39m
+                    [36m<li[39m
+                      [33mclass[39m=[32m"done"[39m
+                    [36m>[39m
+                      [36m<span>[39m
+                        [0m1[0m
+                      [36m</span>[39m
+                      [36m<strong>[39m
+                        [0mИсточник[0m
+                      [36m</strong>[39m
+                    [36m</li>[39m
+                    [36m<li[39m
+                      [33mclass[39m=[32m"done"[39m
+                    [36m>[39m
+                      [36m<span>[39m
+                        [0m2[0m
+                      [36m</span>[39m
+                      [36m<strong>[39m
+                        [0mПроверка[0m
+                      [36m</strong>[39m
+                    [36m</li>[39m
+                    [36m<li[39m
+                      [33mclass[39m=[32m"current done"[39m
+                    [36m>[39m
+                      [36m<span>[39m
+                        [0m3[0m
+                      [36m</span>[39m
+                      [36m<strong>[39m
+                        [0mРезультат[0m
+                      [36m</strong>[39m
+                    [36m</li>[39m
+                  [36m</ol>[39m
+                [36m</div>[39m
+              [36m</section>[39m
+              [36m<section[39m
+                [33maria-label[39m=[32m"Комплект готов"[39m
+                [33mclass[39m=[32m"resultCard"[39m
+                [33mrole[39m=[32m"status"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"resultIcon"[39m
+                [36m>[39m
+                  [36m<i[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+      ...
+
+[32m- Expected:[39m
+null
+
+[31m+ Received:[39m
+<div
+  aria-label="Добавление шаблонов"
+  aria-modal="true"
+  class="backdrop"
+  role="dialog"
+>
+  <div
+    class="modal fileDropZone templateSetupWide"
+  >
+    <h2>
+      Создать кнопки документов
+    </h2>
+    <p
+      class="hint"
+    >
+      Выберите свои DOCX или DOCM. Название каждого документа станет кнопкой на главном экране.
+    </p>
+    <div
+      aria-label="Подготовленные шаблоны"
+      class="templateBatch"
+    >
+      <div
+        class="templateBatchHead"
+      >
+        Так будут называться кнопки
+      </div>
+      <div
+        class="templateBatchRow selected"
+      >
+        <button
+          class="templateFileSelect"
+          title="Открыть дополнительную настройку"
+          type="button"
+        >
+          Договор.docx
+        </button>
+        <input
+          aria-label="Название документа для Договор.docx"
+          value="Договор"
+        />
+        <button
+          aria-label="Убрать Договор.docx"
+          class="templateRemove"
+          title="Убрать ошибочно выбранный шаблон"
+          type="button"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        class="templateBatchRow"
+      >
+        <button
+          class="templateFileSelect"
+          title="Открыть дополнительную настройку"
+          type="button"
+        >
+          Акт.docm
+        </button>
+        <input
+          aria-label="Название документа для Акт.docm"
+          value="Договор"
+        />
+        <button
+          aria-label="Убрать Акт.docm"
+          class="templateRemove"
+          title="Убрать ошибочно выбранный шаблон"
+          type="button"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+    <div
+      class="readyMessage templateReadyMessage warning"
+    >
+      <i
+        aria-hidden="true"
+        class="ti ti-alert-triangle"
+      />
+      <div>
+        <strong>
+          Нужно исправить
+        </strong>
+        <span>
+          Названия кнопок должны отличаться.
+        </span>
+      </div>
+    </div>
+    <details
+      class="manualScannerDetails templateAdvancedSetup"
+    >
+      <summary>
+        Дополнительная настройка выбранного шаблона
+      </summary>
+      <div
+        class="pendingCursorScanner"
+      >
+        <div
+          class="guidedTemplateLaunch"
+        >
+          <div>
+            <strong>
+              Показать места для автоматического заполнения
+            </strong>
+            <small>
+              Это необязательно. Кнопка документа создаётся и без разметки.
+            </small>
+          </div>
+          <button
+            class="softBtn"
+            type="button"
+          >
+            <i
+              aria-hidden="true"
+              class="ti ti-hand-click"
+            />
+             Открыть Word и показать место
+          </button>
+        </div>
+        <details
+          class="manualScannerDetails"
+        >
+          <summary>
+            Ручная разметка для опытных пользователей
+          </summary>
+          <textarea
+            aria-label="Текст шаблона Договор.docx для разметки"
+            readonly=""
+            spellcheck="false"
+          >
+            Договор
+{{org.inn}}
+          </textarea>
+          <div
+            class="templateScanner"
+          >
+            <div
+              class="scannerSelection"
+            >
+              <i
+                aria-hidden="true"
+                class="ti ti-cursor-text"
+              />
+              Выделите мышкой примерное значение
+            </div>
+            <input
+              aria-label="Смысловое поле сканера"
+              list="template-scanner-field-suggestions"
+              placeholder="поле, например document.number"
+              value=""
+            />
+            <button
+              class="softBtn"
+              disabled=""
+              type="button"
+            >
+              Заменить
+            </button>
+            <button
+              class="softBtn"
+              disabled=""
+              type="button"
+            >
+              Вставить после
+            </button>
+          </div>
+        </details>
+        <section
+          aria-label="Конструктор уточняющих вопросов"
+          class="popupEditor compact"
+        >
+          <div
+            class="popupEditorHead"
+          >
+            <div>
+              <strong>
+                Уточняющие вопросы
+              </strong>
+              <small>
+                Одно окно уточнений откроется перед созданием документа или комплекта.
+              </small>
+            </div>
+            <button
+              class="softBtn"
+              type="button"
+            >
+              + Добавить вопрос
+            </button>
+          </div>
+          <div
+            class="popupEmpty"
+          >
+            Вопросов пока нет. Добавьте поле вручную или выделите значение сканером курсора.
+          </div>
+        </section>
+      </div>
+    </details>
+    <label
+      class="softBtn fileBtn"
+    >
+      Добавить ещё шаблоны
+      <input
+        accept=".docx,.docm"
+        multiple=""
+        style="display: none;"
+        type="file"
+      />
+    </label>
+    <datalist
+      id="template-scanner-field-suggestions"
+    >
+      <option
+        value="document.number"
+      />
+      <option
+        value="document.date"
+      />
+      <option
+        value="subject.name"
+      />
+      <option
+        value="org.name"
+      />
+      <option
+        value="amount.total"
+      />
+      <option
+        value="period.start_date"
+      />
+      <option
+        value="period.end_date"
+      />
+      <option
+        value="related.number"
+      />
+    </datalist>
+    <div
+      aria-live="polite"
+      class="readyMessage templateSetupStatus"
+      role="status"
+    >
+      <i
+        aria-hidden="true"
+        class="ti ti-info-circle"
+      />
+      <div>
+        <span>
+          Шаблоны выбраны: 2. Проверьте названия и нажмите «Создать кнопки».
+        </span>
+      </div>
+    </div>
+    <div
+      class="modalActions"
+    >
+      <span
+        class="spacer"
+      />
+      <button
+        class="softBtn"
+      >
+        Отмена
+      </button>
+      <button
+        class="primaryBtn"
+        disabled=""
+      >
+        Создать кнопки (2)
+      </button>
+    </div>
+  </div>
+</div>
+
+[36m [2m❯[22m src/App.scenarios.test.tsx:[2m377:95[22m[39m
+    [90m375|[39m     expect(calls.filter((call) => call.command === 'analyze_template_f…
+    [90m376|[39m     fireEvent.click(await within(dialog).findByRole('button', { name: …
+    [90m377|[39m     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Д…
+    [90m   |[39m                                                                                               [31m^[39m
+    [90m378|[39m     [35mawait[39m screen[33m.[39m[34mfindByRole[39m([32m'button'[39m[33m,[39m { name[33m:[39m [32m'Договор'[39m })[33m;[39m
+    [90m379|[39m     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObjec…
+[90m [2m❯[22m runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:[2m47:12[22m[39m
+[90m [2m❯[22m checkCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m124:77[22m[39m
+[90m [2m❯[22m Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m118:16[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m8 passed[39m[22m[90m (9)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m39 passed[39m[22m[90m (40)[39m
+[2m   Start at [22m 10:22:35
+[2m   Duration [22m 7.53s[2m (transform 1.33s, setup 0ms, import 2.97s, tests 9.08s, environment 5.65s)[22m
+
+
+::error file=/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/src/App.scenarios.test.tsx,title=src/App.scenarios.test.tsx > Полный прогон пользовательских сценариев и тем > каждый пользовательский сценарий вызывает соответствующую Rust-команду,line=377,column=95::AssertionError: expected <div class="backdrop" …(3)>…(1)</div> to be null%0A%0AIgnored nodes: comments, script, style%0A<html%0A  style="--bg: #F5F7FA; --frame: #F5F7FA; --panel2: #FFFFFF; --panel: #F7F9FB; --line: #EEF2F6; --accent: #534AB7; --accent-bg: #EDECFB; --accent-tx: #3B348A; --accent-line: #D3CEF3; --text: #0F1B2A; --text-2: #5A6B7B; --muted: #94A3B4; --field: #FFFFFF; --field-line: #DDE5EE; --dash: #CBD6E2; --drop-bg: #FBFDFE; --muted-chip: #F1F5F9; --paper: #FFFFFF; --paper-line: #E4EAF1; --line-bar: #E1E8F0; --foot-bg: #FCFDFE; --btn-line: #D7DFE9; --on-accent: #FFFFFF; --warn: #BA7517; --ok: #1D9E75; --danger: #C0392B; --radius: 6px; --radius-card: 10px; color-scheme: light;"%0A>%0A  <head />%0A  <body>%0A    <div>%0A      <div%0A        class="appRoot"%0A      >%0A        <div%0A          class="window"%0A        >%0A          <header%0A            class="hdr clientHeader"%0A          >%0A            <div%0A              class="brand"%0A            >%0A              <span%0A                aria-hidden="true"%0A                class="logo"%0A              >%0A                <i%0A                  class="ti ti-files"%0A                />%0A              </span>%0A              <div%0A                class="brandText"%0A              >%0A                <span%0A                  class="bname"%0A                >%0A                  Доккомплект%0A                </span>%0A                <span%0A                  class="bnote"%0A                >%0A                  Из исходника — готовый комплект документов%0A                </span>%0A              </div>%0A            </div>%0A            <div%0A              class="hdrRight"%0A            >%0A              <button%0A                aria-expanded="true"%0A                class="headerSettings"%0A              >%0A                <i%0A                  aria-hidden="true"%0A                  class="ti ti-settings"%0A                />%0A                 Настройки%0A              </button>%0A              <div%0A                class="themeSwitch"%0A              >%0A                <button%0A                  aria-expanded="false"%0A                  aria-label="Тема оформления"%0A                  class="iconButton"%0A                  type="button"%0A                >%0A                  <span%0A                    aria-hidden="true"%0A                    class="themeDot"%0A                    style="background: var(--accent);"%0A                  />%0A                  <span%0A                    class="themeDotLabel"%0A                  >%0A                    Тема%0A                  </span>%0A                </button>%0A              </div>%0A            </div>%0A          </header>%0A          <div%0A            class="grid clientGrid"%0A          >%0A            <main%0A              class="clientWorkspace"%0A            >%0A              <section%0A                aria-labelledby="workflow-title"%0A                class="workflowHero"%0A              >%0A                <div>%0A                  <span%0A                    class="workflowEyebrow"%0A                  >%0A                    Новый комплект%0A                  </span>%0A                  <h1%0A                    id="workflow-title"%0A                  >%0A                    Из исходника — готовые документы%0A                  </h1>%0A                  <p>%0A                    Добавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.%0A                  </p>%0A                </div>%0A                <div%0A                  class="workflowHeroActions"%0A                >%0A                  <button%0A                    class="softBtn newCaseBtn"%0A                  >%0A                    <i%0A                      aria-hidden="true"%0A                      class="ti ti-file-plus"%0A                    />%0A                     Новый комплект%0A                  </button>%0A                  <ol%0A                    aria-label="Этапы работы"%0A                    class="workflowSteps"%0A                  >%0A                    <li%0A                      class="done"%0A                    >%0A                      <span>%0A                        1%0A                      </span>%0A                      <strong>%0A                        Источник%0A                      </strong>%0A                    </li>%0A                    <li%0A                      class="done"%0A                    >%0A                      <span>%0A                        2%0A                      </span>%0A                      <strong>%0A                        Проверка%0A                      </strong>%0A                    </li>%0A                    <li%0A                      class="current done"%0A                    >%0A                      <span>%0A                        3%0A                      </span>%0A                      <strong>%0A                        Результат%0A                      </strong>%0A                    </li>%0A                  </ol>%0A                </div>%0A              </section>%0A              <section%0A                aria-label="Комплект готов"%0A                class="resultCard"%0A                role="status"%0A              >%0A                <div%0A                  class="resultIcon"%0A                >%0A                  <i%0A                    aria-hidden="true"%0A      ...%0A%0A- Expected:%0Anull%0A%0A+ Received:%0A<div%0A  aria-label="Добавление шаблонов"%0A  aria-modal="true"%0A  class="backdrop"%0A  role="dialog"%0A>%0A  <div%0A    class="modal fileDropZone templateSetupWide"%0A  >%0A    <h2>%0A      Создать кнопки документов%0A    </h2>%0A    <p%0A      class="hint"%0A    >%0A      Выберите свои DOCX или DOCM. Название каждого документа станет кнопкой на главном экране.%0A    </p>%0A    <div%0A      aria-label="Подготовленные шаблоны"%0A      class="templateBatch"%0A    >%0A      <div%0A        class="templateBatchHead"%0A      >%0A        Так будут называться кнопки%0A      </div>%0A      <div%0A        class="templateBatchRow selected"%0A      >%0A        <button%0A          class="templateFileSelect"%0A          title="Открыть дополнительную настройку"%0A          type="button"%0A        >%0A          Договор.docx%0A        </button>%0A        <input%0A          aria-label="Название документа для Договор.docx"%0A          value="Договор"%0A        />%0A        <button%0A          aria-label="Убрать Договор.docx"%0A          class="templateRemove"%0A          title="Убрать ошибочно выбранный шаблон"%0A          type="button"%0A        >%0A          ×%0A        </button>%0A      </div>%0A      <div%0A        class="templateBatchRow"%0A      >%0A        <button%0A          class="templateFileSelect"%0A          title="Открыть дополнительную настройку"%0A          type="button"%0A        >%0A          Акт.docm%0A        </button>%0A        <input%0A          aria-label="Название документа для Акт.docm"%0A          value="Договор"%0A        />%0A        <button%0A          aria-label="Убрать Акт.docm"%0A          class="templateRemove"%0A          title="Убрать ошибочно выбранный шаблон"%0A          type="button"%0A        >%0A          ×%0A        </button>%0A      </div>%0A    </div>%0A    <div%0A      class="readyMessage templateReadyMessage warning"%0A    >%0A      <i%0A        aria-hidden="true"%0A        class="ti ti-alert-triangle"%0A      />%0A      <div>%0A        <strong>%0A          Нужно исправить%0A        </strong>%0A        <span>%0A          Названия кнопок должны отличаться.%0A        </span>%0A      </div>%0A    </div>%0A    <details%0A      class="manualScannerDetails templateAdvancedSetup"%0A    >%0A      <summary>%0A        Дополнительная настройка выбранного шаблона%0A      </summary>%0A      <div%0A        class="pendingCursorScanner"%0A      >%0A        <div%0A          class="guidedTemplateLaunch"%0A        >%0A          <div>%0A            <strong>%0A              Показать места для автоматического заполнения%0A            </strong>%0A            <small>%0A              Это необязательно. Кнопка документа создаётся и без разметки.%0A            </small>%0A          </div>%0A          <button%0A            class="softBtn"%0A            type="button"%0A          >%0A            <i%0A              aria-hidden="true"%0A              class="ti ti-hand-click"%0A            />%0A             Открыть Word и показать место%0A          </button>%0A        </div>%0A        <details%0A          class="manualScannerDetails"%0A        >%0A          <summary>%0A            Ручная разметка для опытных пользователей%0A          </summary>%0A          <textarea%0A            aria-label="Текст шаблона Договор.docx для разметки"%0A            readonly=""%0A            spellcheck="false"%0A          >%0A            Договор%0A{{org.inn}}%0A          </textarea>%0A          <div%0A            class="templateScanner"%0A          >%0A            <div%0A              class="scannerSelection"%0A            >%0A              <i%0A                aria-hidden="true"%0A                class="ti ti-cursor-text"%0A              />%0A              Выделите мышкой примерное значение%0A            </div>%0A            <input%0A              aria-label="Смысловое поле сканера"%0A              list="template-scanner-field-suggestions"%0A              placeholder="поле, например document.number"%0A              value=""%0A            />%0A            <button%0A              class="softBtn"%0A              disabled=""%0A              type="button"%0A            >%0A              Заменить%0A            </button>%0A            <button%0A              class="softBtn"%0A              disabled=""%0A              type="button"%0A            >%0A              Вставить после%0A            </button>%0A          </div>%0A        </details>%0A        <section%0A          aria-label="Конструктор уточняющих вопросов"%0A          class="popupEditor compact"%0A        >%0A          <div%0A            class="popupEditorHead"%0A          >%0A            <div>%0A              <strong>%0A                Уточняющие вопросы%0A              </strong>%0A              <small>%0A                Одно окно уточнений откроется перед созданием документа или комплекта.%0A              </small>%0A            </div>%0A            <button%0A              class="softBtn"%0A              type="button"%0A            >%0A              + Добавить вопрос%0A            </button>%0A          </div>%0A          <div%0A            class="popupEmpty"%0A          >%0A            Вопросов пока нет. Добавьте поле вручную или выделите значение сканером курсора.%0A          </div>%0A        </section>%0A      </div>%0A    </details>%0A    <label%0A      class="softBtn fileBtn"%0A    >%0A      Добавить ещё шаблоны%0A      <input%0A        accept=".docx,.docm"%0A        multiple=""%0A        style="display: none;"%0A        type="file"%0A      />%0A    </label>%0A    <datalist%0A      id="template-scanner-field-suggestions"%0A    >%0A      <option%0A        value="document.number"%0A      />%0A      <option%0A        value="document.date"%0A      />%0A      <option%0A        value="subject.name"%0A      />%0A      <option%0A        value="org.name"%0A      />%0A      <option%0A        value="amount.total"%0A      />%0A      <option%0A        value="period.start_date"%0A      />%0A      <option%0A        value="period.end_date"%0A      />%0A      <option%0A        value="related.number"%0A      />%0A    </datalist>%0A    <div%0A      aria-live="polite"%0A      class="readyMessage templateSetupStatus"%0A      role="status"%0A    >%0A      <i%0A        aria-hidden="true"%0A        class="ti ti-info-circle"%0A      />%0A      <div>%0A        <span>%0A          Шаблоны выбраны: 2. Проверьте названия и нажмите «Создать кнопки».%0A        </span>%0A      </div>%0A    </div>%0A    <div%0A      class="modalActions"%0A    >%0A      <span%0A        class="spacer"%0A      />%0A      <button%0A        class="softBtn"%0A      >%0A        Отмена%0A      </button>%0A      <button%0A        class="primaryBtn"%0A        disabled=""%0A      >%0A        Создать кнопки (2)%0A      </button>%0A    </div>%0A  </div>%0A</div>%0A%0A ❯ src/App.scenarios.test.tsx:377:95%0A ❯ runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:47:12%0A ❯ checkCallback node_modules/@testing-library/dom/dist/wait-for.js:124:77%0A ❯ Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:118:16%0A%0A

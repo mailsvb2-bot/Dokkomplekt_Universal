@@ -1,5 +1,6 @@
 name: Apply Async Action Hardening
 
+# Retrigger after the draft pull request exists.
 on:
   push:
     paths:

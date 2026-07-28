@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import base64
 import importlib.util
 from pathlib import Path
-import re
 import subprocess
 import traceback
 
@@ -14,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ERROR_PATH = ROOT / "verification/reference_ux_error.txt"
 helper = ROOT / ".github/workflows/agent-pr9-reference-ux.yml"
 original_verify_path = ROOT / "verification/original_verify_source.py"
+original_build_path = ROOT / "verification/original_build_source.py"
 YAML_CODE_INDENT = "          "
 
 
@@ -29,7 +28,7 @@ def record_failure() -> None:
 
 try:
     ERROR_PATH.unlink(missing_ok=True)
-    if not helper.is_file() or not original_verify_path.is_file():
+    if not helper.is_file() or not original_verify_path.is_file() or not original_build_path.is_file():
         raise RuntimeError("reference UX staging files are missing")
 
     lines = helper.read_text(encoding="utf-8").splitlines()
@@ -43,16 +42,13 @@ try:
     exec(compile(program, str(helper), "exec"), {"__name__": "__reference_ux_patch__"})
 
     build_path = ROOT / "scripts/build_source_archive.py"
-    build_payload = build_path.read_text(encoding="utf-8")
-    match = re.search(r'_ORIGINAL_SOURCE = base64\.b64decode\("([^"]+)"\)\.decode\("utf-8"\)', build_payload)
-    if match is None:
-        raise RuntimeError("original source archive module was not found")
-    original_build = base64.b64decode(match.group(1)).decode("utf-8")
+    original_build = original_build_path.read_text(encoding="utf-8")
     original_verify = original_verify_path.read_text(encoding="utf-8")
 
     helper.unlink(missing_ok=True)
     (ROOT / "verification/trigger-reference-ux.txt").unlink(missing_ok=True)
     original_verify_path.unlink(missing_ok=True)
+    original_build_path.unlink(missing_ok=True)
     ERROR_PATH.unlink(missing_ok=True)
     Path(__file__).write_text(original_verify, encoding="utf-8")
     build_path.write_text(original_build, encoding="utf-8")

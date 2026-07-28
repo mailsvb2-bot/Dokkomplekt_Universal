@@ -78,9 +78,8 @@ replace_once(
 )
 
 replace_once(
-    """    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);""",
-    """    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
-    await waitFor(() => expect(calls.some((c) => c.command === 'render_mail_merge')).toBe(true));""",
+    "await click(/Создать комплекты/);",
+    "await click(/Создать комплекты/);\n    await waitFor(() => expect(calls.some((c) => c.command === 'render_mail_merge')).toBe(true));",
     "wait for mail merge rendering",
 )
 

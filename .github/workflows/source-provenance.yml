@@ -53,13 +53,6 @@ jobs:
           set -e
           if [ "$result" -ne 0 ]; then
             cat verification/one_click_patch_error.log
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add -f verification/one_click_patch_error.log
-            if ! git diff --cached --quiet; then
-              git commit -m "chore: capture one-click patch failure"
-              git push origin "HEAD:${BRANCH}"
-            fi
             exit "$result"
           fi
           rm -f verification/one_click_patch_error.log
@@ -86,7 +79,8 @@ jobs:
           path: |
             verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
             verification/ci/source-manifest-report.json
-          if-no-files-found: error
+            verification/one_click_patch_error.log
+          if-no-files-found: warn
       - name: Synchronize manifest on same-repository pull request
         if: >-
           steps.manifest.outcome != 'success' &&

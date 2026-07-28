@@ -131,7 +131,7 @@ export function App() {
         if (!alive) return;
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
-          setSelectedDocIds(res.pack.documents.map((document) => document.id));
+          setSelectedDocIds([]);
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
           setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');
@@ -744,6 +744,18 @@ export function App() {
     )));
   }
 
+  function removePendingTemplate(documentId: string) {
+    const next = pendingTemplates.filter((item) => item.document_id !== documentId);
+    setPendingTemplates(next);
+    const last = next.at(-1) ?? null;
+    setImportedTemplatePath(last?.template_path ?? null);
+    setTemplateText(last?.extracted_text ?? '');
+    setButtonLabel(last?.button_label ?? '');
+    setStatus(next.length
+      ? `Шаблон убран. Осталось: ${next.length}.`
+      : 'Список очищен. Выберите нужные шаблоны Word.');
+  }
+
   function updatePendingPopupFields(documentId: string, fields: PopupFieldConfig[]) {
     setPendingTemplates((previous) => previous.map((item) => (
       item.document_id === documentId ? { ...item, popup_fields: fields } : item
@@ -1056,13 +1068,13 @@ export function App() {
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
     if (!pack) return;
     setDocuments(pack.documents);
-    setSelectedDocIds(pack.documents.map((document) => document.id));
+    setSelectedDocIds([]);
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setSetupOpen(false);
-    setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
+    setStatus(`Кнопки созданы: ${confirmedRows.length}. Нажмите нужные кнопки, затем добавьте исходный документ.`);
   }
 
   async function chooseIcd(hit: Icd10Suggestion) {
@@ -1149,7 +1161,7 @@ export function App() {
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));
-    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(res.pack.documents.map((document) => document.id)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`); }
+    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds([]); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов). Выберите нужные кнопки.`); }
   }
   async function checkAccess() {
     const res = await run('validate_product_access', () => validateProductAccess(null));
@@ -1370,6 +1382,7 @@ export function App() {
           onButtonLabelChange={setButtonLabel}
           onDraftPopupFieldsChange={setDraftPopupFields}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
+          onRemovePendingTemplate={removePendingTemplate}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}

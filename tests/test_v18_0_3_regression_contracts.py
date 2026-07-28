@@ -117,6 +117,19 @@ class SimpleButtonCreationContractTest(unittest.TestCase):
         self.assertIn("'import_template_file'", registry)
 
 
+    def test_reference_projects_keep_first_run_and_selection_simple(self) -> None:
+        app = text("src/App.tsx")
+        rail = text("src/components/DocumentRail.tsx")
+        modal = text("src/components/TemplateSetupModal.tsx")
+        package_area = rail[rail.index('className="packageList'):rail.index('className="packageSelectionActions')]
+        self.assertGreaterEqual(app.count("setSelectedDocIds([])"), 3)
+        self.assertIn("aria-pressed={selected}", rail)
+        self.assertNotIn('type="checkbox"', package_area)
+        self.assertIn("{hasDocuments && (", rail)
+        self.assertIn("onRemovePendingTemplate", modal)
+        self.assertIn("Названия кнопок должны отличаться", modal)
+
+
 class VersionContractTest(unittest.TestCase):
     def test_version_is_18_0_3_everywhere_primary(self) -> None:
         expected = text("VERSION").strip()

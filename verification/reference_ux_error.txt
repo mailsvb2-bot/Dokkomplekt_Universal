@@ -1,5 +1,0 @@
-Traceback (most recent call last):
-  File "/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/scripts/verify_source_manifest.py", line 50, in <module>
-    original_build = base64.b64decode(match.group(1)).decode("utf-8")
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb0 in position 1164: invalid start byte

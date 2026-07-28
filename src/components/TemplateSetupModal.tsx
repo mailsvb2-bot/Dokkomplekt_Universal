@@ -23,6 +23,7 @@ interface TemplateSetupModalProps {
   onButtonLabelChange(value: string): void;
   onDraftPopupFieldsChange(fields: PopupFieldConfig[]): void;
   onPendingTemplateLabelChange(documentId: string, value: string): void;
+  onRemovePendingTemplate(documentId: string): void;
   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
   onStartGuidedPendingScanner(documentId: string): void;
@@ -35,6 +36,14 @@ interface TemplateSetupModalProps {
 
 export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const hasBatch = props.pendingTemplates.length > 0;
+  const normalizedLabels = props.pendingTemplates.map((item) => item.button_label.trim().toLocaleLowerCase());
+  const hasBlankLabel = hasBatch && normalizedLabels.some((label) => !label);
+  const hasDuplicateLabel = hasBatch && new Set(normalizedLabels).size !== normalizedLabels.length;
+  const batchValidationMessage = hasBlankLabel
+    ? 'Укажите название для каждой кнопки.'
+    : hasDuplicateLabel
+      ? 'Названия кнопок должны отличаться.'
+      : '';
   const [scannerField, setScannerField] = useState('');
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
@@ -174,15 +183,24 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                     value={item.button_label}
                     onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)}
                   />
+                  <button
+                    className="templateRemove"
+                    type="button"
+                    title="Убрать ошибочно выбранный шаблон"
+                    aria-label={`Убрать ${item.file_name}`}
+                    onClick={() => props.onRemovePendingTemplate(item.document_id)}
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>
 
-            <div className="readyMessage templateReadyMessage">
-              <i className="ti ti-circle-check" aria-hidden="true" />
+            <div className={batchValidationMessage ? 'readyMessage templateReadyMessage warning' : 'readyMessage templateReadyMessage'}>
+              <i className={batchValidationMessage ? 'ti ti-alert-triangle' : 'ti ti-circle-check'} aria-hidden="true" />
               <div>
-                <strong>Всё готово</strong>
-                <span>Нажмите «{confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.</span>
+                <strong>{batchValidationMessage ? 'Нужно исправить' : 'Всё готово'}</strong>
+                <span>{batchValidationMessage || `Нажмите «${confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.`}</span>
               </div>
             </div>
 
@@ -251,7 +269,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={props.busy || (!hasBatch && !props.templateText.trim())}>
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={props.busy || (hasBatch ? Boolean(batchValidationMessage) : !props.templateText.trim())}>
             {props.busy ? 'Создаём кнопки…' : confirmLabel}
           </button>
         </div>

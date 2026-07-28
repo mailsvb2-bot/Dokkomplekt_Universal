@@ -200,9 +200,13 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 
 .templateBatch { display: grid; gap: 7px; margin: 12px 0 14px; max-height: 320px; overflow: auto; }
 .templateBatchHead { font-size: 12px; color: var(--text-2); font-weight: 600; }
-.templateBatchRow { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(160px, 1.2fr); gap: 8px; align-items: center; padding: 7px 8px; border: .5px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.templateBatchRow { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(160px, 1.2fr) 32px; gap: 8px; align-items: center; padding: 7px 8px; border: .5px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .templateBatchRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
 .templateBatchRow input { min-width: 0; height: 30px; border: .5px solid var(--field-line); border-radius: var(--radius); background: var(--field); padding: 0 9px; font-size: 12px; }
+.templateRemove { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--btn-line); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 19px; line-height: 1; }
+.templateRemove:hover { border-color: color-mix(in srgb, var(--danger) 45%, var(--btn-line)); color: var(--danger); }
+.templateReadyMessage.warning { background: color-mix(in srgb, var(--warn) 10%, var(--panel2)); }
+.templateReadyMessage.warning > i { color: var(--warn); }
 
 .advancedTools{display:contents}.advancedCard textarea{min-height:78px;resize:vertical}.compactList>div,.candidateList label,.inlineButtons{display:flex;gap:8px;align-items:center}.compactList>div{justify-content:space-between}.candidateList{display:grid;gap:6px;max-height:180px;overflow:auto}.inlineButtons{flex-wrap:wrap}.fileBtn{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border:1px dashed var(--border);border-radius:10px;cursor:pointer}.linkBtn,.iconBtn{background:transparent;border:0;color:inherit;cursor:pointer}.iconBtn{font-size:20px}
 
@@ -457,18 +461,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .packageCount { display: grid; place-items: center; min-width: 42px; height: 29px; border-radius: 20px; background: var(--accent-bg); color: var(--accent-tx); font-size: 11px; font-weight: 750; }
 .packageHint { margin: 10px 0 14px; color: var(--text-2); font-size: 11px; line-height: 1.4; }
 .packageList { display: grid; gap: 8px; max-height: 430px; overflow: auto; padding-right: 2px; }
-.packageItem { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: center; min-height: 56px; padding: 7px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel2); transition: border-color .16s, background .16s, transform .16s; }
-.packageItem:hover { border-color: var(--accent-line); }
-.packageItem.selected { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--panel2)); }
+.packageItem { appearance: none; width: 100%; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; min-height: 56px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel2); color: inherit; text-align: left; transition: border-color .16s, background .16s, transform .16s, box-shadow .16s; }
+.packageItem:hover { border-color: var(--accent-line); transform: translateY(-1px); }
+.packageItem:focus-visible { outline: 3px solid var(--accent-bg); border-color: var(--accent); }
+.packageItem.selected { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel2)); }
 .packageItem.active { box-shadow: inset 3px 0 0 var(--accent); }
-.packageCheck { position: relative; display: grid; place-items: center; width: 27px; height: 27px; cursor: pointer; }
-.packageCheck input { position: absolute; opacity: 0; }
-.packageCheck span { display: grid; place-items: center; width: 21px; height: 21px; border: 1px solid var(--field-line); border-radius: 7px; color: transparent; background: var(--panel2); font-size: 12px; }
-.packageCheck input:checked + span { border-color: var(--accent); background: var(--accent); color: white; }
-.packageOpen { display: grid; grid-template-columns: auto minmax(0,1fr); column-gap: 8px; align-items: center; min-width: 0; border: 0; background: transparent; padding: 3px; text-align: left; }
-.packageOpen > i { grid-row: 1 / 3; color: var(--accent); font-size: 18px; }
-.packageOpen > span { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.packageOpen > small { color: var(--muted); font-size: 9px; }
+.packageTileIcon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-bg); color: var(--accent); font-size: 18px; }
+.packageTileText { min-width: 0; display: grid; gap: 3px; }
+.packageTileText strong { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.packageTileText small { color: var(--muted); font-size: 9px; }
+.packageTileState { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--field-line); border-radius: 8px; color: var(--muted); background: var(--panel2); font-size: 12px; }
+.packageItem.selected .packageTileState { border-color: var(--accent); background: var(--accent); color: white; }
 .packageSelectionActions { display: flex; justify-content: space-between; margin-top: 9px; }
 .packageGenerate { min-height: 44px; margin-top: 12px; font-size: 13px; font-weight: 700; }
 .packageSettings { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }

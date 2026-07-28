@@ -1690,7 +1690,7 @@ fn preflight_external_archive(path: &Path) -> Result<Vec<ExternalArchiveEntry>, 
     }
     let mut total = 0_u64;
     let mut seen = BTreeSet::new();
-    for entry in entries {
+    for entry in &entries {
         let relative = validate_archive_relative_path(&entry.path)?;
         let key = relative.to_string_lossy().replace('\\', "/").to_lowercase();
         if !seen.insert(key) {
@@ -2053,7 +2053,7 @@ pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, 
         response = Some(candidate);
         break;
     }
-    let mut response = response.ok_or_else(|| "HTTPS-источник не получен.".to_string())?;
+    let response = response.ok_or_else(|| "HTTPS-источник не получен.".to_string())?;
     if !response.status().is_success() {
         return Err(format!("Сайт вернул HTTP {}.", response.status()));
     }

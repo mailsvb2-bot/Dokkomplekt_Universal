@@ -79,8 +79,11 @@ replace_once(
 
 replace_once(
     "await click(/Создать комплекты/);",
-    "await click(/Создать комплекты/);\n    await waitFor(() => expect(calls.some((c) => c.command === 'render_mail_merge')).toBe(true));",
-    "wait for mail merge rendering",
+    """await waitFor(() => expect(calls.some((c) => c.command === 'preview_mail_merge')).toBe(true));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Создать комплекты' }) as HTMLButtonElement).disabled).toBe(false));
+    await click(/Создать комплекты/);
+    await waitFor(() => expect(calls.some((c) => c.command === 'render_mail_merge')).toBe(true));""",
+    "wait for enabled mail merge rendering",
 )
 
 test_path.write_text(payload, encoding="utf-8")

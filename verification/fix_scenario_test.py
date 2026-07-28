@@ -78,6 +78,16 @@ replace_once(
 )
 
 replace_once(
+    """    await waitFor(() => expect(calls.some((c) => c.command === 'prepare_mail_merge_file')).toBe(true));""",
+    """    await waitFor(() => expect(calls.some((c) => c.command === 'prepare_mail_merge_file')).toBe(true));
+    const mailMergeTile = screen.getByRole('button', { name: 'Счёт на оплату' });
+    expect(mailMergeTile.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(mailMergeTile);
+    await waitFor(() => expect(mailMergeTile.getAttribute('aria-pressed')).toBe('true'));""",
+    "reselect document for mail merge",
+)
+
+replace_once(
     "await click(/Создать комплекты/);",
     """await waitFor(() => expect(calls.some((c) => c.command === 'preview_mail_merge')).toBe(true));
     await waitFor(() => expect((screen.getByRole('button', { name: 'Создать комплекты' }) as HTMLButtonElement).disabled).toBe(false));

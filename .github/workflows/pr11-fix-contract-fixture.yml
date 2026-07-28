@@ -1,0 +1,51 @@
+name: PR11 Fix Contract Fixture
+
+on:
+  push:
+    paths:
+      - .github/workflows/pr11-fix-contract-fixture.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-remove:
+    if: github.ref == 'refs/heads/agent/complete-tauri-response-contracts'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/complete-tauri-response-contracts
+          fetch-depth: 0
+      - name: Align the print fixture with the real Rust DTO
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/lib/api.contract.test.ts')
+          text = path.read_text(encoding='utf-8')
+          old = "return { queued_files: ['out.docx'], failed_files: [] } as never;"
+          new = "return { queued_files: ['out.docx'], queued_copies: 3, failed_files: [] } as never;"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one stale print fixture, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          Path('.github/workflows/pr11-fix-contract-fixture.yml').unlink()
+
+          import importlib.util
+          module_path = Path('scripts/build_source_archive.py').resolve()
+          spec = importlib.util.spec_from_file_location('build_source_archive', module_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit('cannot load source archive module')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.write_source_manifest(module.source_files())
+          PY
+      - name: Commit the exact fixture repair and remove this workflow
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Align contract fixtures with Rust DTOs"
+          git push origin HEAD:agent/complete-tauri-response-contracts

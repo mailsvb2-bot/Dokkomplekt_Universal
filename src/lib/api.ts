@@ -685,7 +685,6 @@ export const rustCommandNames = [
   'get_quality_telemetry',
   'get_process_blueprints',
   'select_process_blueprint',
-  'import_template_file'
 ] as const;
 
 

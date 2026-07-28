@@ -34,6 +34,20 @@ jobs:
           patch -p1 --forward < /tmp/async-action-hardening.patch
           rm verification/ci/async-action-hardening.part-*
           rm .github/workflows/apply-async-action-hardening.yml
+          python - <<'PY'
+          from pathlib import Path
+          for relative in (
+              'src/hooks/useActionRunner.ts',
+              'src/hooks/useActionRunner.test.tsx',
+              'src/components/AutomationControlCenter.tsx',
+              'src/components/AdvancedToolsPanel.tsx',
+              'src/components/BusinessRegistryPanel.tsx',
+              'src/components/BusinessRegistryPanel.test.tsx',
+              'src/components/OrganizationKnowledgePanel.tsx',
+          ):
+              path = Path(relative)
+              path.write_text(path.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+          PY
       - name: Rebuild checked-in source manifest
         shell: bash
         run: |

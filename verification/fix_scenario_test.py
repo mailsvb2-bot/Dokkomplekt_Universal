@@ -77,6 +77,13 @@ replace_once(
     "distinct template payload expectation",
 )
 
+replace_once(
+    """    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);""",
+    """    fireEvent.change(screen.getByPlaceholderText(/Наименование;document\\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
+    await waitFor(() => expect(calls.some((c) => c.command === 'render_mail_merge')).toBe(true));""",
+    "wait for mail merge rendering",
+)
+
 test_path.write_text(payload, encoding="utf-8")
 
 subprocess.run(["npm", "ci"], cwd=ROOT, check=True)

@@ -25,23 +25,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply focused one-click contract fixes
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          if [ ! -f verification/fix_one_click_contracts.py ]; then
-            exit 0
-          fi
-          python verification/fix_one_click_contracts.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "test: align contracts with one-click workflow"
-          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

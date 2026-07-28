@@ -7,12 +7,12 @@
 use dokkomplekt_core::{
     render_docx_xml_template, render_text_template, RenderResult, SemanticCase,
 };
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
-use quick_xml::events::Event;
-use quick_xml::Reader;
 use thiserror::Error;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -429,9 +429,7 @@ pub fn validate_safe_template_file(path: &Path) -> DocxResult<()> {
     validate_safe_template_archive(archive)
 }
 
-fn validate_safe_template_archive<R: Read + Seek>(
-    mut archive: ZipArchive<R>,
-) -> DocxResult<()> {
+fn validate_safe_template_archive<R: Read + Seek>(mut archive: ZipArchive<R>) -> DocxResult<()> {
     let mut findings = Vec::<String>::new();
     let mut total_uncompressed = 0_u64;
     for index in 0..archive.len() {
@@ -464,13 +462,10 @@ fn validate_safe_template_archive<R: Read + Seek>(
                     let mut external = false;
                     let mut relationship_type = String::new();
                     for attribute in element.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attribute.key.as_ref())
-                            .to_ascii_lowercase();
-                        let value = String::from_utf8_lossy(attribute.value.as_ref())
-                            .to_string();
-                        if key.ends_with("targetmode")
-                            && value.eq_ignore_ascii_case("external")
-                        {
+                        let key =
+                            String::from_utf8_lossy(attribute.key.as_ref()).to_ascii_lowercase();
+                        let value = String::from_utf8_lossy(attribute.value.as_ref()).to_string();
+                        if key.ends_with("targetmode") && value.eq_ignore_ascii_case("external") {
                             external = true;
                         }
                         if key.ends_with("type") {
@@ -1546,9 +1541,12 @@ mod tests {
     fn build_test_docx(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut writer = ZipWriter::new(cursor);
-        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for (name, bytes) in entries {
-            writer.start_file(*name, options).expect("start test ZIP entry");
+            writer
+                .start_file(*name, options)
+                .expect("start test ZIP entry");
             writer.write_all(bytes).expect("write test ZIP entry");
         }
         writer.finish().expect("finish test DOCX").into_inner()
@@ -1983,10 +1981,15 @@ mod tests {
     #[test]
     fn macro_template_is_rejected_before_render() {
         let bytes = build_test_docx(&[
-            ("word/document.xml", "<w:document><w:body/></w:document>".as_bytes()),
+            (
+                "word/document.xml",
+                "<w:document><w:body/></w:document>".as_bytes(),
+            ),
             ("word/vbaProject.bin", b"MZ-not-a-real-macro"),
         ]);
-        let error = validate_safe_template_bytes(&bytes).unwrap_err().to_string();
+        let error = validate_safe_template_bytes(&bytes)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("vbaProject.bin"), "{error}");
     }
 
@@ -1994,10 +1997,15 @@ mod tests {
     fn external_relationship_is_rejected() {
         let relationships = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" Target="https://example.invalid/template.dotm" TargetMode="External"/></Relationships>"#;
         let bytes = build_test_docx(&[
-            ("word/document.xml", "<w:document><w:body/></w:document>".as_bytes()),
+            (
+                "word/document.xml",
+                "<w:document><w:body/></w:document>".as_bytes(),
+            ),
             ("word/_rels/document.xml.rels", relationships),
         ]);
-        let error = validate_safe_template_bytes(&bytes).unwrap_err().to_string();
+        let error = validate_safe_template_bytes(&bytes)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("external/active relationship"), "{error}");
     }
 

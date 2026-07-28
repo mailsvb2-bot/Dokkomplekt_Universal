@@ -1637,7 +1637,9 @@ struct ExternalArchiveEntry {
 }
 
 fn parse_7z_technical_listing(output: &str) -> Result<Vec<ExternalArchiveEntry>, String> {
-    let listing = output.split_once("----------").map_or(output, |(_, body)| body);
+    let listing = output
+        .split_once("----------")
+        .map_or(output, |(_, body)| body);
     let mut entries = Vec::new();
     let mut current = ExternalArchiveEntry::default();
     let flush = |current: &mut ExternalArchiveEntry, entries: &mut Vec<ExternalArchiveEntry>| {
@@ -1677,10 +1679,7 @@ fn parse_7z_technical_listing(output: &str) -> Result<Vec<ExternalArchiveEntry>,
 }
 
 fn preflight_external_archive(path: &Path) -> Result<Vec<ExternalArchiveEntry>, String> {
-    let output = run_command(
-        "7z",
-        &["l", "-slt", "-ba", path.to_string_lossy().as_ref()],
-    )?;
+    let output = run_command("7z", &["l", "-slt", "-ba", path.to_string_lossy().as_ref()])?;
     let listing = String::from_utf8_lossy(&output.stdout);
     let entries = parse_7z_technical_listing(&listing)?;
     if entries.is_empty() {
@@ -1761,7 +1760,9 @@ fn extract_external_archive_entry_bounded(
         let mut total = 0_u64;
         let mut buffer = [0_u8; 64 * 1024];
         loop {
-            let count = stdout.read(&mut buffer).map_err(|error| error.to_string())?;
+            let count = stdout
+                .read(&mut buffer)
+                .map_err(|error| error.to_string())?;
             if count == 0 {
                 break;
             }
@@ -1821,9 +1822,9 @@ fn extract_external_archive_entry_bounded(
     if !status.success() || exceeded.load(Ordering::SeqCst) || extracted.is_err() {
         let _ = std::fs::remove_file(target);
         let detail = String::from_utf8_lossy(&stderr_bytes);
-        return Err(extracted.err().unwrap_or_else(|| {
-            format!("7z не распаковал файл безопасно: {}", detail.trim())
-        }));
+        return Err(extracted
+            .err()
+            .unwrap_or_else(|| format!("7z не распаковал файл безопасно: {}", detail.trim())));
     }
     extracted
 }
@@ -1869,11 +1870,8 @@ fn normalize_external_archive(
                 .ok_or_else(|| "Переполнение размера архива.".to_string())?;
             extracted.push(target);
         }
-        let (verified, verified_total) = walk_files_bounded(
-            &extraction,
-            MAX_ARCHIVE_ENTRIES,
-            MAX_ARCHIVE_UNPACKED_BYTES,
-        )?;
+        let (verified, verified_total) =
+            walk_files_bounded(&extraction, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNPACKED_BYTES)?;
         if verified_total != actual_total || verified.len() != extracted.len() {
             return Err("Состав распакованного архива изменился во время проверки.".into());
         }
@@ -2027,7 +2025,8 @@ fn pinned_web_client(validated: &ValidatedWebUrl) -> Result<reqwest::blocking::C
 }
 
 pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, String> {
-    let mut current = reqwest::Url::parse(url).map_err(|error| format!("Некорректный URL: {error}"))?;
+    let mut current =
+        reqwest::Url::parse(url).map_err(|error| format!("Некорректный URL: {error}"))?;
     let mut response = None;
     for redirect_count in 0..=5 {
         let validated = validate_web_url(&current)?;
@@ -2914,11 +2913,15 @@ fn walk_files_bounded(
                     .checked_add(metadata.len())
                     .ok_or_else(|| "Переполнение размера архива.".to_string())?;
                 if total > byte_limit {
-                    return Err(format!("После распаковки превышен предел {byte_limit} байт."));
+                    return Err(format!(
+                        "После распаковки превышен предел {byte_limit} байт."
+                    ));
                 }
                 files.push(path);
                 if files.len() > limit {
-                    return Err(format!("После распаковки обнаружено больше {limit} файлов."));
+                    return Err(format!(
+                        "После распаковки обнаружено больше {limit} файлов."
+                    ));
                 }
             } else {
                 return Err("Распакованный архив содержит специальный файл.".into());
@@ -3092,8 +3095,20 @@ mod tests {
     #[test]
     fn archive_paths_are_sanitized() {
         assert_eq!(safe_file_name("../../secret.pdf"), "secret.pdf");
-        for unsafe_path in ["../secret.txt", "/etc/passwd", "C:/secret.txt", "safe/file.txt:ads", "safe//file.txt", "safe/*.txt", "CON.txt", "folder. /file.txt"] {
-            assert!(validate_archive_relative_path(unsafe_path).is_err(), "{unsafe_path}");
+        for unsafe_path in [
+            "../secret.txt",
+            "/etc/passwd",
+            "C:/secret.txt",
+            "safe/file.txt:ads",
+            "safe//file.txt",
+            "safe/*.txt",
+            "CON.txt",
+            "folder. /file.txt",
+        ] {
+            assert!(
+                validate_archive_relative_path(unsafe_path).is_err(),
+                "{unsafe_path}"
+            );
         }
         assert_eq!(
             validate_archive_relative_path("safe/folder/file.txt").unwrap(),

@@ -1569,7 +1569,8 @@ fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(),
     {
         return Err(format!(
             "Автосохранение заблокировано: локальная база {} не была безопасно прочитана. {}",
-            block.db_path.display(), block.message
+            block.db_path.display(),
+            block.message
         ));
     }
     let path = default_state_db_path(app)?;
@@ -1588,14 +1589,8 @@ fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(),
         .map_err(|_| "license state lock failed")?
         .clone();
     let mut repo = repository_for(&path)?;
-    repo.save_case_pack_and_state_value(
-        "current",
-        &case,
-        &pack,
-        "license_document",
-        &license,
-    )
-    .map_err(|error| error.to_string())?;
+    repo.save_case_pack_and_state_value("current", &case, &pack, "license_document", &license)
+        .map_err(|error| error.to_string())?;
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(path);
     Ok(())
 }

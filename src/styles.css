@@ -522,3 +522,25 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .newCaseBtn { min-height: 32px; padding: 6px 10px; font-size: 10px; box-shadow: none; }
 @media (max-width: 720px) { .workflowHeroActions { width: 100%; justify-items: stretch; } .newCaseBtn { justify-self: end; } }
 .ti-settings::before{content:"⚙"}.ti-file-check::before{content:"✓"}.ti-dots::before{content:"⋯"}.ti-sparkles::before{content:"✦"}.ti-adjustments::before,.ti-adjustments-horizontal::before{content:"≡"}.ti-chevron-down::before{content:"⌄"}.ti-file-plus::before{content:"＋"}
+
+
+/* First launch follows the proven Dokkomplekt rule: one clear action,
+   then the working document flow appears after buttons are created. */
+.firstRunMode .clientGrid {
+  grid-template-columns: minmax(320px, 760px);
+  justify-content: center;
+}
+
+.firstRunMode .clientWorkspace,
+.firstRunMode .headerSettings {
+  display: none;
+}
+
+.firstRunMode .packagePanel {
+  width: 100%;
+  max-width: 760px;
+}
+
+.templateSetupStatus {
+  margin-top: 16px;
+}

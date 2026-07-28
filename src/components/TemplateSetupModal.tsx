@@ -12,6 +12,8 @@ interface PendingTemplateView {
 }
 
 interface TemplateSetupModalProps {
+  busy: boolean;
+  status: string;
   templateText: string;
   buttonLabel: string;
   previewTitle: string;
@@ -241,11 +243,16 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           <option value="amount.total" /><option value="period.start_date" /><option value="period.end_date" /><option value="related.number" />
         </datalist>
 
+        <div className="readyMessage templateSetupStatus" role="status" aria-live="polite">
+          <i className={props.busy ? 'ti ti-loader-2' : 'ti ti-info-circle'} aria-hidden="true" />
+          <div><span>{props.status}</span></div>
+        </div>
+
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>
-            {confirmLabel}
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={props.busy || (!hasBatch && !props.templateText.trim())}>
+            {props.busy ? 'Создаём кнопки…' : confirmLabel}
           </button>
         </div>
       </div>

@@ -696,6 +696,7 @@ export function App() {
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
+    setStatus('Выберите шаблоны Word. Проверьте названия и нажмите «Создать кнопки».');
     setSetupOpen(true);
   }
 
@@ -1206,7 +1207,7 @@ export function App() {
 
 
   return (
-    <div className="appRoot">
+    <div className={documents.length ? 'appRoot' : 'appRoot firstRunMode'}>
       <div className="window">
         <header className="hdr clientHeader">
           <div className="brand">
@@ -1358,6 +1359,8 @@ export function App() {
 
       {setupOpen && (
         <TemplateSetupModal
+          busy={busy}
+          status={status}
           templateText={templateText}
           buttonLabel={buttonLabel}
           previewTitle={previewTitle}

@@ -94,6 +94,29 @@ class MedicalProfileParityContractTest(unittest.TestCase):
         self.assertIn('"reception" => vec![', pipeline)
 
 
+class SimpleButtonCreationContractTest(unittest.TestCase):
+    def test_real_tauri_command_accepts_ordinary_docx(self) -> None:
+        backend = text("src-tauri/src/subsystems/document_commands.rs")
+        start = backend.index("fn confirm_template_setup(")
+        end = backend.index("struct RenameDocumentButtonRequest", start)
+        command = backend[start:end]
+        self.assertNotIn("any(|row| row.is_static_copy)", command)
+        self.assertIn("create_pack_from_confirmations", command)
+
+    def test_first_run_is_focused_and_modal_reports_backend_errors(self) -> None:
+        app = text("src/App.tsx")
+        modal = text("src/components/TemplateSetupModal.tsx")
+        self.assertIn("appRoot firstRunMode", app)
+        self.assertIn("status={status}", app)
+        self.assertIn('role="status"', modal)
+        self.assertIn("Создаём кнопки…", modal)
+
+    def test_frontend_command_registry_includes_template_import(self) -> None:
+        api = text("src/lib/api.ts")
+        registry = api[api.index("export const rustCommandNames"):]
+        self.assertIn("'import_template_file'", registry)
+
+
 class VersionContractTest(unittest.TestCase):
     def test_version_is_18_0_3_everywhere_primary(self) -> None:
         expected = text("VERSION").strip()

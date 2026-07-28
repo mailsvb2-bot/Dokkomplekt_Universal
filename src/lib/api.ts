@@ -576,6 +576,7 @@ export const rustCommandNames = [
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',
+  'import_template_file',
   'import_learning_example_file',
   'learn_template_from_examples_command',
   'apply_template_learning_map',

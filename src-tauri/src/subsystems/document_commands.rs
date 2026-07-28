@@ -10,9 +10,9 @@ fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, 
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let has_user_buttons = !pack.documents.is_empty();
     let message = if has_user_buttons {
-        "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации."
+        "Рабочий комплект загружен. Добавьте исходный документ и выберите нужные кнопки."
     } else {
-        "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию."
+        "Нажмите «Создать свои кнопки», выберите DOCX/DOCM и подтвердите названия."
     };
     Ok(FirstRunStateResponse {
         has_user_buttons,
@@ -383,9 +383,9 @@ fn confirm_template_setup(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    if req.rows.iter().any(|row| row.is_static_copy) {
-        return Err("Шаблон не содержит размеченных полей {{field.id}}. Он не добавлен, чтобы примерный текст и чужие смыслы не переносились в новые документы.".into());
-    }
+    // An ordinary DOCX/DOCM is a valid user-owned document button.
+    // Without placeholders it is intentionally kept as a static copy;
+    // scanner markup remains an optional enhancement, not an onboarding gate.
     let incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &req.rows).pack;
     let result = {
         let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;

@@ -122,7 +122,9 @@ class SimpleButtonCreationContractTest(unittest.TestCase):
         rail = text("src/components/DocumentRail.tsx")
         modal = text("src/components/TemplateSetupModal.tsx")
         package_area = rail[rail.index('className="packageList'):rail.index('className="packageSelectionActions')]
-        self.assertGreaterEqual(app.count("setSelectedDocIds([])"), 3)
+        self.assertIn("setSelectedDocIds(res.pack.documents.map((document) => document.id))", app)
+        self.assertIn("setSelectedDocIds(pack.documents.map((document) => document.id))", app)
+        self.assertIn("onGenerateSelected={generateSelectedDocuments}", app)
         self.assertIn("aria-pressed={selected}", rail)
         self.assertNotIn('type="checkbox"', package_area)
         self.assertIn("{hasDocuments && (", rail)

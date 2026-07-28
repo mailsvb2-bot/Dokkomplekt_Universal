@@ -300,6 +300,7 @@ export function Workspace(props: WorkspaceProps) {
           <label><span>Рабочая папка</span><input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="Созданные документы" /></label>
           <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
           <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
+          <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>
           {props.intakeResult && <div className={`automationResult ${props.intakeResult.status}`}><strong>{props.intakeResult.status === 'processed' ? 'Комплект создан' : props.intakeResult.status === 'attention' ? 'Нужно уточнение' : 'Информация'}</strong><span>{props.intakeResult.message}</span></div>}
         </div>
       </details>

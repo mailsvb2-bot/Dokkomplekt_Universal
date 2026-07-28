@@ -5,22 +5,22 @@
 
 [1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal[39m
 
- [32m✓[39m src/lib/api.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 20[2mms[22m[39m
- [32m✓[39m src/lib/scannerSuggestions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 38[2mms[22m[39m
- [32m✓[39m src/lib/updateSecurity.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 582[2mms[22m[39m
- [32m✓[39m src/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 2625[2mms[22m[39m
-     [33m[2m✓[22m[39m adds a document through the simple Rust-backed setup path [33m 785[2mms[22m[39m
-     [33m[2m✓[22m[39m creates a button for an ordinary DOCX without placeholders [33m 584[2mms[22m[39m
-     [33m[2m✓[22m[39m keeps document buttons unselected and toggles the whole tile with one click [33m 454[2mms[22m[39m
- [32m✓[39m src/lib/api.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
- [32m✓[39m src/components/AdvancedToolsPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 240[2mms[22m[39m
- [32m✓[39m src/components/GuidedScannerModal.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 138[2mms[22m[39m
- [32m✓[39m src/components/BusinessRegistryPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[33m 330[2mms[22m[39m
-     [33m[2m✓[22m[39m imports, finds, confirms and exports a counterparty through Rust commands [33m 320[2mms[22m[39m
- [31m❯[39m src/App.scenarios.test.tsx [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 5576[2mms[22m[39m
-[31m     [31m×[31m каждый пользовательский сценарий вызывает соответствующую Rust-команду[39m[33m 5464[2mms[22m[39m
-     [32m✓[39m не предлагает загрузку, когда OCR уже найден в системе[32m 53[2mms[22m[39m
-     [32m✓[39m для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан[32m 55[2mms[22m[39m
+ [32m✓[39m src/lib/api.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/lib/scannerSuggestions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/App.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 1977[2mms[22m[39m
+     [33m[2m✓[22m[39m adds a document through the simple Rust-backed setup path [33m 520[2mms[22m[39m
+     [33m[2m✓[22m[39m creates a button for an ordinary DOCX without placeholders [33m 402[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps document buttons unselected and toggles the whole tile with one click [33m 340[2mms[22m[39m
+ [32m✓[39m src/lib/updateSecurity.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 684[2mms[22m[39m
+     [33m[2m✓[22m[39m shows a visible Check updates button [33m 348[2mms[22m[39m
+ [32m✓[39m src/lib/api.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/components/AdvancedToolsPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 196[2mms[22m[39m
+ [32m✓[39m src/components/BusinessRegistryPanel.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 258[2mms[22m[39m
+ [32m✓[39m src/components/GuidedScannerModal.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 125[2mms[22m[39m
+ [31m❯[39m src/App.scenarios.test.tsx [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 4884[2mms[22m[39m
+[31m     [31m×[31m каждый пользовательский сценарий вызывает соответствующую Rust-команду[39m[33m 4767[2mms[22m[39m
+     [32m✓[39m не предлагает загрузку, когда OCR уже найден в системе[32m 56[2mms[22m[39m
+     [32m✓[39m для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан[32m 58[2mms[22m[39m
 
 [31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
 
@@ -33,21 +33,21 @@
 [32m- true[39m
 [31m+ false[39m
 
-[36m [2m❯[22m src/App.scenarios.test.tsx:[2m372:169[22m[39m
-    [90m370|[39m     await waitFor(() => expect(calls.some((c) => c.command === 'import…
-    [90m371|[39m     await waitFor(() => expect(calls.some((c) => c.command === 'analyz…
-    [90m372|[39m     expect(calls.filter((call) => call.command === 'analyze_template_f…
-    [90m   |[39m                                                                                                                                                                         [31m^[39m
-    [90m373|[39m     fireEvent.click(await within(dialog).findByRole('button', { name: …
-    [90m374|[39m     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Д…
+[36m [2m❯[22m src/App.scenarios.test.tsx:[2m376:107[22m[39m
+    [90m374|[39m       [33m.[39m[34mmap[39m((call) [33m=>[39m [33mJSON[39m[33m.[39m[34mstringify[39m(call[33m.[39mpayload))[33m;[39m
+    [90m375|[39m     expect(analyzedTemplatePayloads.some((value) => value.includes('/a…
+    [90m376|[39m     expect(analyzedTemplatePayloads.some((value) => value.includes('/a…
+    [90m   |[39m                                                                                                           [31m^[39m
+    [90m377|[39m     fireEvent.click(await within(dialog).findByRole('button', { name: …
+    [90m378|[39m     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Д…
 
 [31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
 
 
 [2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m8 passed[39m[22m[90m (9)[39m
 [2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m39 passed[39m[22m[90m (40)[39m
-[2m   Start at [22m 10:25:32
-[2m   Duration [22m 7.17s[2m (transform 1.19s, setup 0ms, import 3.20s, tests 9.56s, environment 5.87s)[22m
+[2m   Start at [22m 10:27:26
+[2m   Duration [22m 6.48s[2m (transform 1.09s, setup 0ms, import 2.62s, tests 8.20s, environment 5.56s)[22m
 
 
-::error file=/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/src/App.scenarios.test.tsx,title=src/App.scenarios.test.tsx > Полный прогон пользовательских сценариев и тем > каждый пользовательский сценарий вызывает соответствующую Rust-команду,line=372,column=169::AssertionError: expected false to be true // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- true%0A+ false%0A%0A ❯ src/App.scenarios.test.tsx:372:169%0A%0A
+::error file=/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/src/App.scenarios.test.tsx,title=src/App.scenarios.test.tsx > Полный прогон пользовательских сценариев и тем > каждый пользовательский сценарий вызывает соответствующую Rust-команду,line=376,column=107::AssertionError: expected false to be true // Object.is equality%0A%0A- Expected%0A+ Received%0A%0A- true%0A+ false%0A%0A ❯ src/App.scenarios.test.tsx:376:107%0A%0A

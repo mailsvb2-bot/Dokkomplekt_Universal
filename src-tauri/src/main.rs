@@ -39,8 +39,9 @@ use dokkomplekt_core::{
 use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
     create_docx_from_text, extract_docx_text, extract_docx_text_from_bytes, inject_docx_images,
-    render_docx_file_with_watermark, TemplateLearningMapField, TemplateLearningMapReport,
-    TemplateMarkupReplacement, TemplateMarkupReport, TemplateRegressionReport,
+    render_docx_file_with_watermark, validate_safe_template_bytes, TemplateLearningMapField,
+    TemplateLearningMapReport, TemplateMarkupReplacement, TemplateMarkupReport,
+    TemplateRegressionReport,
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,
@@ -587,11 +588,18 @@ impl Drop for CaseRunTracker<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct PersistenceBlock {
+    db_path: PathBuf,
+    message: String,
+}
+
 struct AppState {
     semantic_case: Mutex<SemanticCase>,
     pack: Mutex<DocumentPack>,
     intake_dedup: Mutex<IntakeDeduplicator>,
     db_path: Mutex<Option<PathBuf>>,
+    persistence_block: Mutex<Option<PersistenceBlock>>,
     watcher: Mutex<Option<WatcherHandle>>,
     instance_lock: Mutex<Option<PathBuf>>,
     license_document: Mutex<Option<LicenseDocument>>,
@@ -606,6 +614,7 @@ impl Default for AppState {
             pack: Mutex::new(empty_first_run_pack("default", "Пользовательские шаблоны")),
             intake_dedup: Mutex::new(IntakeDeduplicator::new(Duration::from_secs(3))),
             db_path: Mutex::new(None),
+            persistence_block: Mutex::new(None),
             watcher: Mutex::new(None),
             instance_lock: Mutex::new(None),
             license_document: Mutex::new(None),
@@ -1444,35 +1453,150 @@ fn template_text_for_document(
     extract_docx_text(&resolve_user_path(app, &document.template_path)?).map_err(|e| e.to_string())
 }
 
+pub(crate) fn commit_atomic_temp_file(temp: &Path, destination: &Path) -> Result<(), String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "У файла назначения нет родительской папки.".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    if let Ok(metadata) = std::fs::symlink_metadata(destination) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!(
+                "Небезопасный файл назначения не заменён: {}",
+                destination.display()
+            ));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let source = temp
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let moved = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                target.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved == 0 {
+            return Err(format!(
+                "Не удалось атомарно заменить {}: {}",
+                destination.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::fs::rename(temp, destination).map_err(|error| {
+            format!(
+                "Не удалось атомарно заменить {}: {error}",
+                destination.display()
+            )
+        })?;
+        if let Ok(directory) = std::fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn atomic_write_file(destination: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "У файла назначения нет родительской папки.".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        destination
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("dokkomplekt"),
+        Uuid::new_v4()
+    ));
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = output.write_all(bytes).and_then(|_| output.sync_all()) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    drop(output);
+    let result = commit_atomic_temp_file(&temporary, destination);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let repo = repository_for(db_path)?;
     let case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    repo.save_case("current", &case)
+    let mut repo = repository_for(db_path)?;
+    repo.save_case_and_pack("current", &case, &pack)
         .map_err(|e| e.to_string())?;
-    repo.save_pack(&pack).map_err(|e| e.to_string())?;
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(db_path.to_path_buf());
     Ok(())
 }
 
 fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
+    if let Some(block) = state
+        .persistence_block
+        .lock()
+        .map_err(|_| "persistence state lock failed")?
+        .clone()
+    {
+        return Err(format!(
+            "Автосохранение заблокировано: локальная база {} не была безопасно прочитана. {}",
+            block.db_path.display(), block.message
+        ));
+    }
     let path = default_state_db_path(app)?;
-    persist_state_to(&path, state)?;
-    let repo = repository_for(&path)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let case = state
+        .semantic_case
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .clone();
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let license = state
         .license_document
         .lock()
         .map_err(|_| "license state lock failed")?
         .clone();
-    repo.save_state_value("license_document", &license)
-        .map_err(|error| error.to_string())?;
+    let mut repo = repository_for(&path)?;
+    repo.save_case_pack_and_state_value(
+        "current",
+        &case,
+        &pack,
+        "license_document",
+        &license,
+    )
+    .map_err(|error| error.to_string())?;
+    *state.db_path.lock().map_err(|_| "state lock failed")? = Some(path);
     Ok(())
 }
 
@@ -1938,7 +2062,22 @@ fn main() {
             // and semantic values. Persistence is no longer a hidden utility action.
             if let Ok(db_path) = default_state_db_path(&handle) {
                 if db_path.exists() {
-                    let _ = load_state_from(&db_path, &state, true);
+                    if let Err(error) = load_state_from(&db_path, &state, true) {
+                        let message = format!(
+                            "Сохранённое состояние не прочитано и не будет перезаписано: {error}"
+                        );
+                        *state
+                            .persistence_block
+                            .lock()
+                            .map_err(|_| std::io::Error::other("persistence state lock failed"))? =
+                            Some(PersistenceBlock {
+                                db_path: db_path.clone(),
+                                message: message.clone(),
+                            });
+                        if background_watch {
+                            return Err(std::io::Error::other(message).into());
+                        }
+                    }
                 }
             }
             if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() {

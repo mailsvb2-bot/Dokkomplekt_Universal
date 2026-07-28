@@ -80,6 +80,9 @@ export interface FirstRunStateResponse {
   pack: DocumentPack;
   has_user_buttons: boolean;
   message: string;
+  persistence_blocked?: boolean;
+  recovery_message?: string | null;
+  recovery_db_path?: string | null;
 }
 
 export interface ValueEvidence {

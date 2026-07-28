@@ -74,6 +74,26 @@ describe('App', () => {
     __resetInvokeForTests();
   });
 
+  it('blocks the UI instead of overwriting an unreadable local database', async () => {
+    localStorage.setItem('dokkomplekt.created-documents-folder-prompt.v1', 'done');
+    __setInvokeForTests(async (name: string) => {
+      if (name === 'first_run_state') return {
+        pack: { pack_id: 'default', name: 'Набор', documents: [] },
+        has_user_buttons: false,
+        message: '',
+        persistence_blocked: true,
+        recovery_message: 'Сохранённое состояние не прочитано и не будет перезаписано.',
+        recovery_db_path: 'C:/Users/Test/AppData/state.sqlite3',
+      } as never;
+      if (name === 'get_intake_capabilities') return [] as never;
+      return false as never;
+    });
+    render(<App />);
+    expect(await screen.findByRole('alertdialog', { name: 'Защитная остановка' })).toBeTruthy();
+    expect(screen.getByText(/не будет перезаписано/)).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Первичная настройка' })).toBeNull();
+  });
+
   it('offers and creates the desktop work folder on a clean profile', async () => {
     localStorage.removeItem('dokkomplekt.created-documents-folder-prompt.v1');
     const calls = installTemplateMock(false);

@@ -107,6 +107,7 @@ export function App() {
   const [licenseText, setLicenseText] = useState('');
   const [utilityOpen, setUtilityOpen] = useState(false);
   const [folderSetupOpen, setFolderSetupOpen] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
 
   const [watchFolder, setWatchFolder] = useState('Созданные документы');
   const [intakeSource, setIntakeSource] = useState('');
@@ -135,7 +136,13 @@ export function App() {
       try {
         const res = await firstRunState();
         if (!alive) return;
-        if (res?.pack?.documents?.length) {
+        if (res?.persistence_blocked) {
+          const detail = [res.recovery_message, res.recovery_db_path ? `Файл: ${res.recovery_db_path}` : '']
+            .filter(Boolean)
+            .join(' ');
+          setRecoveryMessage(detail || 'Локальная база не была безопасно прочитана. Автосохранение заблокировано.');
+          setStatus('Защитная остановка: сохранённое состояние не перезаписывается.');
+        } else if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
           setSelectedDocIds(res.pack.documents.map((document) => document.id));
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
@@ -144,10 +151,17 @@ export function App() {
         } else if (res?.message) {
           setStatus(res.message);
         }
-        try {
-          if (localStorage.getItem(WORK_FOLDER_PROMPT_KEY) !== 'done') setFolderSetupOpen(true);
-        } catch { /* private mode */ }
-      } catch { /* no backend in browser/tests — start empty */ }
+        if (!res?.persistence_blocked) {
+          try {
+            if (localStorage.getItem(WORK_FOLDER_PROMPT_KEY) !== 'done') setFolderSetupOpen(true);
+          } catch { /* private mode */ }
+        }
+      } catch (error) {
+        if ('__TAURI_INTERNALS__' in window) {
+          setRecoveryMessage(`Не удалось безопасно загрузить локальное состояние: ${String(error)}`);
+          setStatus('Защитная остановка: состояние не загружено.');
+        }
+      }
     })();
     return () => { alive = false; };
   }, []);
@@ -1398,6 +1412,17 @@ export function App() {
           {status}
         </footer>
       </div>
+
+      {recoveryMessage && (
+        <div className="backdrop" role="alertdialog" aria-modal="true" aria-label="Защитная остановка">
+          <div className="modal firstRunFolderModal recoveryBlockModal">
+            <div className="firstRunFolderIcon"><i className="ti ti-shield-x" aria-hidden="true" /></div>
+            <h2>Сохранённые данные защищены от перезаписи</h2>
+            <p>{recoveryMessage}</p>
+            <p>Закройте программу и сохраните резервную копию указанного файла базы. После восстановления корректной базы приложение снова разрешит работу.</p>
+          </div>
+        </div>
+      )}
 
       {folderSetupOpen && (
         <div className="backdrop" role="dialog" aria-modal="true" aria-label="Первичная настройка">

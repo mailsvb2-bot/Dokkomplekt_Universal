@@ -7,10 +7,12 @@ use quick_xml::Reader;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Cursor, Read as _};
-use std::net::{IpAddr, ToSocketAddrs};
+use std::io::{Cursor, Read as _, Write as _};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -1511,6 +1513,59 @@ fn normalize_msg(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
     Ok(result)
 }
 
+fn validate_archive_relative_path(raw: &str) -> Result<PathBuf, String> {
+    let normalized = raw.replace('\\', "/");
+    let normalized = normalized.trim_end_matches('/');
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.starts_with("//")
+        || normalized.contains('\0')
+        || normalized
+            .as_bytes()
+            .get(1)
+            .is_some_and(|value| *value == b':')
+    {
+        return Err("Архив содержит абсолютный или служебный путь.".into());
+    }
+    let path = Path::new(&normalized);
+    let invalid_component = normalized.split('/').any(|component| {
+        let trimmed = component.trim_end_matches([' ', '.']);
+        let base = trimmed
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let reserved = matches!(base.as_str(), "con" | "prn" | "aux" | "nul")
+            || (base.len() == 4
+                && (base.starts_with("com") || base.starts_with("lpt"))
+                && base.as_bytes()[3].is_ascii_digit()
+                && base.as_bytes()[3] != b'0');
+        component.is_empty()
+            || component == "."
+            || component == ".."
+            || component != trimmed
+            || component.chars().any(|character| {
+                matches!(character, ':' | '<' | '>' | '"' | '|' | '?' | '*')
+                    || character.is_control()
+            })
+            || reserved
+    });
+    if path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) || invalid_component
+    {
+        return Err("Архив содержит небезопасный путь (path traversal/ADS/reparse alias).".into());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn archive_entry_is_symlink(mode: Option<u32>) -> bool {
+    mode.is_some_and(|value| value & 0o170000 == 0o120000)
+}
+
 fn normalize_zip(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| format!("ZIP повреждён: {error}"))?;
@@ -1519,39 +1574,258 @@ fn normalize_zip(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
     }
     let extraction = workspace.join(format!("archive-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&extraction).map_err(|error| error.to_string())?;
-    let mut total = 0_u64;
-    let mut extracted = Vec::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        if entry.is_dir() {
+    let result = (|| {
+        let mut total = 0_u64;
+        let mut extracted = Vec::new();
+        let mut seen = BTreeSet::<String>::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+            if archive_entry_is_symlink(entry.unix_mode()) {
+                return Err("ZIP содержит символическую ссылку; такие архивы запрещены.".into());
+            }
+            let relative = validate_archive_relative_path(entry.name())?;
+            let key = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+            if !seen.insert(key) {
+                return Err("ZIP содержит повторяющиеся или конфликтующие пути.".into());
+            }
+            let target = extraction.join(&relative);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+                continue;
+            }
+            total = total
+                .checked_add(entry.size())
+                .ok_or_else(|| "Переполнение размера архива.".to_string())?;
+            if total > MAX_ARCHIVE_UNPACKED_BYTES {
+                return Err("Распакованный архив превышает 512 МБ.".into());
+            }
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(|error| format!("Небезопасный или повторяющийся путь ZIP: {error}"))?;
+            let remaining = MAX_ARCHIVE_UNPACKED_BYTES
+                .checked_sub(total.saturating_sub(entry.size()))
+                .ok_or_else(|| "Распакованный архив превышает 512 МБ.".to_string())?;
+            let copied = std::io::copy(&mut (&mut entry).take(remaining + 1), &mut output)
+                .map_err(|error| error.to_string())?;
+            if copied > remaining {
+                return Err("Фактический распакованный размер ZIP превышает 512 МБ.".into());
+            }
+            if copied != entry.size() {
+                return Err("Размер распакованного ZIP-файла не совпал с каталогом архива.".into());
+            }
+            extracted.push(target);
+        }
+        normalize_extracted_files(path, &extraction, extracted, workspace, depth)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&extraction);
+    }
+    result
+}
+
+#[derive(Debug, Clone, Default)]
+struct ExternalArchiveEntry {
+    path: String,
+    size: u64,
+    folder: bool,
+    link_like: bool,
+}
+
+fn parse_7z_technical_listing(output: &str) -> Result<Vec<ExternalArchiveEntry>, String> {
+    let listing = output.split_once("----------").map_or(output, |(_, body)| body);
+    let mut entries = Vec::new();
+    let mut current = ExternalArchiveEntry::default();
+    let flush = |current: &mut ExternalArchiveEntry, entries: &mut Vec<ExternalArchiveEntry>| {
+        if !current.path.trim().is_empty() {
+            entries.push(std::mem::take(current));
+        }
+    };
+    for raw in listing.lines().chain(std::iter::once("")) {
+        let line = raw.trim();
+        if line.is_empty() {
+            flush(&mut current, &mut entries);
             continue;
         }
-        total = total
-            .checked_add(entry.size())
-            .ok_or_else(|| "Переполнение размера архива.".to_string())?;
-        if total > MAX_ARCHIVE_UNPACKED_BYTES {
-            return Err("Распакованный архив превышает 512 МБ.".into());
-        }
-        let Some(relative) = entry.enclosed_name() else {
-            return Err("Архив содержит небезопасный путь (zip-slip).".into());
+        let Some((key, value)) = line.split_once(" = ") else {
+            continue;
         };
-        if relative.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        }) {
-            return Err("Архив содержит небезопасный путь.".into());
+        match key.trim().to_ascii_lowercase().as_str() {
+            "path" => current.path = value.trim().to_string(),
+            "size" => {
+                current.size = value
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| "7z вернул некорректный размер файла.".to_string())?;
+            }
+            "folder" => current.folder = value.trim() == "+",
+            "symbolic link" | "hard link" | "reparse" => {
+                current.link_like = !value.trim().is_empty() && value.trim() != "-";
+            }
+            "attributes" => {
+                let lower = value.to_ascii_lowercase();
+                current.link_like |= lower.starts_with('l') || lower.contains(" reparse");
+            }
+            _ => {}
         }
-        let target = extraction.join(relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let mut output = File::create(&target).map_err(|error| error.to_string())?;
-        std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
-        extracted.push(target);
     }
-    normalize_extracted_files(path, &extraction, extracted, workspace, depth)
+    Ok(entries)
+}
+
+fn preflight_external_archive(path: &Path) -> Result<Vec<ExternalArchiveEntry>, String> {
+    let output = run_command(
+        "7z",
+        &["l", "-slt", "-ba", path.to_string_lossy().as_ref()],
+    )?;
+    let listing = String::from_utf8_lossy(&output.stdout);
+    let entries = parse_7z_technical_listing(&listing)?;
+    if entries.is_empty() {
+        return Err("7z не вернул проверяемый каталог архива.".into());
+    }
+    if entries.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(format!("В архиве больше {MAX_ARCHIVE_ENTRIES} объектов."));
+    }
+    let mut total = 0_u64;
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let relative = validate_archive_relative_path(&entry.path)?;
+        let key = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+        if !seen.insert(key) {
+            return Err("Архив содержит повторяющиеся или конфликтующие пути.".into());
+        }
+        if entry.link_like {
+            return Err("Архив содержит ссылку/reparse point и не будет распакован.".into());
+        }
+        if !entry.folder {
+            total = total
+                .checked_add(entry.size)
+                .ok_or_else(|| "Переполнение размера архива.".to_string())?;
+            if total > MAX_ARCHIVE_UNPACKED_BYTES {
+                return Err("Заявленный распакованный размер архива превышает 512 МБ.".into());
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn extract_external_archive_entry_bounded(
+    archive_path: &Path,
+    entry_path: &str,
+    target: &Path,
+    max_bytes: u64,
+) -> Result<u64, String> {
+    let executable = resolve_tool("7z");
+    let mut command = Command::new(executable);
+    command
+        .args([
+            "x",
+            "-so",
+            "-y",
+            "-spd",
+            "--",
+            archive_path.to_string_lossy().as_ref(),
+            entry_path,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Не найден или не запускается «7z»: {error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Не удалось перехватить stdout процесса «7z».".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Не удалось перехватить stderr процесса «7z».".to_string())?;
+    let exceeded = Arc::new(AtomicBool::new(false));
+    let reader_exceeded = Arc::clone(&exceeded);
+    let target_path = target.to_path_buf();
+    let stdout_reader = std::thread::spawn(move || -> Result<u64, String> {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target_path)
+            .map_err(|error| error.to_string())?;
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = stdout.read(&mut buffer).map_err(|error| error.to_string())?;
+            if count == 0 {
+                break;
+            }
+            total = total
+                .checked_add(count as u64)
+                .ok_or_else(|| "Переполнение размера распакованного файла.".to_string())?;
+            if total > max_bytes {
+                reader_exceeded.store(true, Ordering::SeqCst);
+                return Err("Распакованный файл превышает безопасный предел.".into());
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|error| error.to_string())?;
+        }
+        output.sync_all().map_err(|error| error.to_string())?;
+        Ok(total)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut buffer = [0_u8; 16 * 1024];
+        while let Ok(count) = stderr.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            let remaining = 1024 * 1024usize - kept.len().min(1024 * 1024);
+            kept.extend_from_slice(&buffer[..count.min(remaining)]);
+        }
+        kept
+    });
+    let started = Instant::now();
+    let status = loop {
+        if exceeded.load(Ordering::SeqCst) {
+            let _ = child.kill();
+        }
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if started.elapsed() > COMMAND_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            let _ = std::fs::remove_file(target);
+            return Err(format!(
+                "«7z» не завершил распаковку одного файла за {} секунд.",
+                COMMAND_TIMEOUT.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let extracted = stdout_reader
+        .join()
+        .map_err(|_| "Поток безопасной распаковки 7z аварийно завершился.".to_string())?;
+    let stderr_bytes = stderr_reader
+        .join()
+        .map_err(|_| "Поток stderr 7z аварийно завершился.".to_string())?;
+    if !status.success() || exceeded.load(Ordering::SeqCst) || extracted.is_err() {
+        let _ = std::fs::remove_file(target);
+        let detail = String::from_utf8_lossy(&stderr_bytes);
+        return Err(extracted.err().unwrap_or_else(|| {
+            format!("7z не распаковал файл безопасно: {}", detail.trim())
+        }));
+    }
+    extracted
 }
 
 fn normalize_external_archive(
@@ -1559,29 +1833,56 @@ fn normalize_external_archive(
     workspace: &Path,
     depth: usize,
 ) -> Result<NormalizedSource, String> {
+    let entries = preflight_external_archive(path)?;
     let extraction = workspace.join(format!("archive-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&extraction).map_err(|error| error.to_string())?;
-    run_command(
-        "7z",
-        &[
-            "x",
-            "-y",
-            &format!("-o{}", extraction.display()),
-            path.to_string_lossy().as_ref(),
-        ],
-    )?;
-    let extracted = walk_files(&extraction, MAX_ARCHIVE_ENTRIES)?;
-    let total = extracted.iter().try_fold(0_u64, |sum, item| {
-        let size = std::fs::metadata(item)
-            .map_err(|error| error.to_string())?
-            .len();
-        sum.checked_add(size)
-            .ok_or_else(|| "Переполнение размера архива.".to_string())
-    })?;
-    if total > MAX_ARCHIVE_UNPACKED_BYTES {
-        return Err("Распакованный архив превышает 512 МБ.".into());
+    let result = (|| {
+        let mut extracted = Vec::new();
+        let mut actual_total = 0_u64;
+        for entry in entries {
+            let relative = validate_archive_relative_path(&entry.path)?;
+            let target = extraction.join(relative);
+            if entry.folder {
+                std::fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            let remaining = MAX_ARCHIVE_UNPACKED_BYTES
+                .checked_sub(actual_total)
+                .ok_or_else(|| "Распакованный архив превышает 512 МБ.".to_string())?;
+            let actual = extract_external_archive_entry_bounded(
+                path,
+                &entry.path,
+                &target,
+                remaining.min(entry.size.saturating_add(1)),
+            )?;
+            if actual != entry.size {
+                return Err(format!(
+                    "7z сообщил один размер файла, но распаковал другой: {} ({} != {}).",
+                    entry.path, actual, entry.size
+                ));
+            }
+            actual_total = actual_total
+                .checked_add(actual)
+                .ok_or_else(|| "Переполнение размера архива.".to_string())?;
+            extracted.push(target);
+        }
+        let (verified, verified_total) = walk_files_bounded(
+            &extraction,
+            MAX_ARCHIVE_ENTRIES,
+            MAX_ARCHIVE_UNPACKED_BYTES,
+        )?;
+        if verified_total != actual_total || verified.len() != extracted.len() {
+            return Err("Состав распакованного архива изменился во время проверки.".into());
+        }
+        normalize_extracted_files(path, &extraction, verified, workspace, depth)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&extraction);
     }
-    normalize_extracted_files(path, &extraction, extracted, workspace, depth)
+    result
 }
 
 fn prefix_layout_source(items: &mut [NormalizedLayoutItem], prefix: &str) {
@@ -1668,28 +1969,92 @@ fn normalize_office_via_libreoffice(
     Ok(result)
 }
 
-pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, String> {
-    let parsed = reqwest::Url::parse(url).map_err(|error| format!("Некорректный URL: {error}"))?;
-    validate_web_url(&parsed)?;
+#[derive(Debug, Clone)]
+struct ValidatedWebUrl {
+    url: reqwest::Url,
+    host: String,
+    addresses: Vec<SocketAddr>,
+}
+
+fn validate_web_url(url: &reqwest::Url) -> Result<ValidatedWebUrl, String> {
+    if url.scheme() != "https" {
+        return Err("Для сайтов и информационных систем разрешён только HTTPS.".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("URL со встроенными учётными данными запрещён.".into());
+    }
+    if url.fragment().is_some() {
+        return Err("Фрагмент URL (#...) не используется для загрузки источника.".into());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "URL не содержит имя узла.".to_string())?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if matches!(host.as_str(), "localhost" | "localhost.localdomain")
+        || host.ends_with(".localhost")
+    {
+        return Err("Доступ к локальным адресам запрещён.".into());
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    let mut addresses = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("Не удалось разрешить адрес: {error}"))?
+        .collect::<Vec<_>>();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
+        return Err("Доступ к локальным, служебным и приватным сетям запрещён.".into());
+    }
+    Ok(ValidatedWebUrl {
+        url: url.clone(),
+        host,
+        addresses,
+    })
+}
+
+fn pinned_web_client(validated: &ValidatedWebUrl) -> Result<reqwest::blocking::Client, String> {
     crate::ensure_rustls_crypto_provider();
-    let client = reqwest::blocking::Client::builder()
+    reqwest::blocking::Client::builder()
+        .https_only(true)
+        .no_proxy()
         .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 {
-                return attempt.error("слишком много перенаправлений");
-            }
-            match validate_web_url(attempt.url()) {
-                Ok(()) => attempt.follow(),
-                Err(_) => attempt.stop(),
-            }
-        }))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(&validated.host, &validated.addresses)
         .user_agent(concat!("Dokkomplekt-Universal/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|error| error.to_string())?;
-    let response = client
-        .get(parsed.clone())
-        .send()
-        .map_err(|error| format!("Не удалось получить источник: {error}"))?;
+        .map_err(|error| error.to_string())
+}
+
+pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, String> {
+    let mut current = reqwest::Url::parse(url).map_err(|error| format!("Некорректный URL: {error}"))?;
+    let mut response = None;
+    for redirect_count in 0..=5 {
+        let validated = validate_web_url(&current)?;
+        let client = pinned_web_client(&validated)?;
+        let candidate = client
+            .get(validated.url.clone())
+            .send()
+            .map_err(|error| format!("Не удалось получить источник: {error}"))?;
+        if candidate.status().is_redirection() {
+            if redirect_count >= 5 {
+                return Err("Слишком много HTTPS-перенаправлений.".into());
+            }
+            let location = candidate
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| "Перенаправление не содержит корректный Location.".to_string())?;
+            current = validated
+                .url
+                .join(location)
+                .map_err(|error| format!("Некорректное перенаправление: {error}"))?;
+            continue;
+        }
+        response = Some(candidate);
+        break;
+    }
+    let mut response = response.ok_or_else(|| "HTTPS-источник не получен.".to_string())?;
     if !response.status().is_success() {
         return Err(format!("Сайт вернул HTTP {}.", response.status()));
     }
@@ -1711,7 +2076,11 @@ pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, 
     {
         return Err("Ответ сайта превышает 100 МБ.".into());
     }
-    let bytes = response.bytes().map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_UPLOAD_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Не удалось безопасно прочитать HTTPS-ответ: {error}"))?;
     if bytes.len() > MAX_UPLOAD_BYTES {
         return Err("Ответ сайта превышает 100 МБ.".into());
     }
@@ -1744,16 +2113,6 @@ pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, 
         content_type,
         warnings,
     })
-}
-
-fn validate_web_url(url: &reqwest::Url) -> Result<(), String> {
-    if url.scheme() != "https" {
-        return Err("Для сайтов и информационных систем разрешён только HTTPS.".into());
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err("URL со встроенными учётными данными запрещён.".into());
-    }
-    ensure_public_destination(url)
 }
 
 fn is_textual_content_type(content_type: &str) -> bool {
@@ -1809,40 +2168,43 @@ fn web_extension(url: &reqwest::Url, content_type: &str) -> Option<&'static str>
     })
 }
 
-fn ensure_public_destination(url: &reqwest::Url) -> Result<(), String> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| "URL не содержит имя узла.".to_string())?;
-    let port = url.port_or_known_default().unwrap_or(443);
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|error| format!("Не удалось разрешить адрес: {error}"))?
-        .collect::<Vec<_>>();
-    if addresses.is_empty() {
-        return Err("Не удалось разрешить адрес сайта.".into());
-    }
-    if addresses.iter().any(|address| !is_public_ip(address.ip())) {
-        return Err("Доступ к локальным, служебным и приватным сетям запрещён.".into());
-    }
-    Ok(())
-}
-
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            let shared = octets[0] == 100 && (64..=127).contains(&octets[1]);
+            let benchmark = octets[0] == 198 && matches!(octets[1], 18 | 19);
+            let protocol_assignment = octets[0] == 192 && octets[1] == 0 && octets[2] == 0;
+            let deprecated_relay = octets[0] == 192 && octets[1] == 88 && octets[2] == 99;
             !(ip.is_private()
                 || ip.is_loopback()
                 || ip.is_link_local()
                 || ip.is_broadcast()
                 || ip.is_documentation()
                 || ip.is_unspecified()
-                || ip.octets()[0] == 0)
+                || ip.is_multicast()
+                || shared
+                || benchmark
+                || protocol_assignment
+                || deprecated_relay
+                || octets[0] == 0
+                || octets[0] >= 240)
         }
         IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+            let site_local = segments[0] & 0xffc0 == 0xfec0;
+            let mapped_forbidden = ip
+                .to_ipv4_mapped()
+                .is_some_and(|mapped| !is_public_ip(IpAddr::V4(mapped)));
             !(ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_unique_local()
-                || ip.is_unicast_link_local())
+                || ip.is_unicast_link_local()
+                || ip.is_multicast()
+                || documentation
+                || site_local
+                || mapped_forbidden)
         }
     }
 }
@@ -2509,28 +2871,61 @@ fn safe_file_name(input: &str) -> String {
         .collect::<String>()
 }
 
-fn walk_files(root: &Path, limit: usize) -> Result<Vec<PathBuf>, String> {
+fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn walk_files_bounded(
+    root: &Path,
+    limit: usize,
+    byte_limit: u64,
+) -> Result<(Vec<PathBuf>, u64), String> {
+    let canonical_root = root.canonicalize().map_err(|error| error.to_string())?;
     let mut pending = vec![root.to_path_buf()];
     let mut files = Vec::new();
+    let mut total = 0_u64;
     while let Some(folder) = pending.pop() {
-        for entry in std::fs::read_dir(&folder)
-            .map_err(|error| error.to_string())?
-            .flatten()
-        {
+        for entry in std::fs::read_dir(&folder).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
             let path = entry.path();
-            if path.is_dir() {
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if metadata_is_link_like(&metadata) {
+                return Err("Распакованный архив содержит ссылку/reparse point.".into());
+            }
+            let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+            if !canonical.starts_with(&canonical_root) {
+                return Err("Распакованный архив вышел за пределы безопасной папки.".into());
+            }
+            if metadata.is_dir() {
                 pending.push(path);
-            } else {
+            } else if metadata.is_file() {
+                total = total
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| "Переполнение размера архива.".to_string())?;
+                if total > byte_limit {
+                    return Err(format!("После распаковки превышен предел {byte_limit} байт."));
+                }
                 files.push(path);
                 if files.len() > limit {
-                    return Err(format!(
-                        "После распаковки обнаружено больше {limit} файлов."
-                    ));
+                    return Err(format!("После распаковки обнаружено больше {limit} файлов."));
                 }
+            } else {
+                return Err("Распакованный архив содержит специальный файл.".into());
             }
         }
     }
-    Ok(files)
+    Ok((files, total))
 }
 
 #[cfg(test)]
@@ -2588,9 +2983,22 @@ mod tests {
 
     #[test]
     fn private_networks_are_rejected() {
-        assert!(!is_public_ip("127.0.0.1".parse().unwrap()));
-        assert!(!is_public_ip("10.1.2.3".parse().unwrap()));
+        for address in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "100.64.0.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "::1",
+            "ff02::1",
+            "2001:db8::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(!is_public_ip(address.parse().unwrap()), "{address}");
+        }
         assert!(is_public_ip("1.1.1.1".parse().unwrap()));
+        assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 
     #[test]
@@ -2684,5 +3092,38 @@ mod tests {
     #[test]
     fn archive_paths_are_sanitized() {
         assert_eq!(safe_file_name("../../secret.pdf"), "secret.pdf");
+        for unsafe_path in ["../secret.txt", "/etc/passwd", "C:/secret.txt", "safe/file.txt:ads", "safe//file.txt", "safe/*.txt", "CON.txt", "folder. /file.txt"] {
+            assert!(validate_archive_relative_path(unsafe_path).is_err(), "{unsafe_path}");
+        }
+        assert_eq!(
+            validate_archive_relative_path("safe/folder/file.txt").unwrap(),
+            PathBuf::from("safe/folder/file.txt")
+        );
+        assert_eq!(
+            validate_archive_relative_path("safe/folder/").unwrap(),
+            PathBuf::from("safe/folder")
+        );
+    }
+
+    #[test]
+    fn external_archive_listing_is_preflighted_before_extraction() {
+        let listing = "Path = archive.7z
+Type = 7z
+
+----------
+Path = safe/file.txt
+Size = 12
+Folder = -
+Attributes = A
+
+Path = link
+Size = 0
+Folder = -
+Symbolic Link = ../../secret
+";
+        let entries = parse_7z_technical_listing(listing).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].size, 12);
+        assert!(entries[1].link_like);
     }
 }

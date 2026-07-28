@@ -132,6 +132,26 @@ class SimpleButtonCreationContractTest(unittest.TestCase):
         self.assertIn("Названия кнопок должны отличаться", modal)
 
 
+
+    def test_catastrophic_inputs_and_state_fail_closed(self) -> None:
+        intake = text("src-tauri/src/universal_intake.rs")
+        main = text("src-tauri/src/main.rs")
+        watcher = text("src-tauri/src/subsystems/watcher_commands.rs")
+        automation = text("src-tauri/src/subsystems/automation_runtime.rs")
+        docx = text("crates/dokkomplekt-docx/src/lib.rs")
+        storage = text("crates/dokkomplekt-storage/src/lib.rs")
+        self.assertIn("resolve_to_addrs(&validated.host, &validated.addresses)", intake)
+        self.assertIn(".take(MAX_UPLOAD_BYTES as u64 + 1)", intake)
+        self.assertIn("preflight_external_archive(path)?", intake)
+        self.assertIn("walk_files_bounded", intake)
+        self.assertIn("validate_safe_template_bytes(&bytes)", automation)
+        self.assertIn("UnsafeActiveContent", docx)
+        self.assertIn("persistence_block", main)
+        self.assertNotIn("let _ = load_state_from(&db_path, &state, true)", main)
+        self.assertIn("save_case_pack_and_state_value", storage)
+        self.assertIn("worker_panic; retry_blocked=true", watcher)
+        self.assertIn("atomic_write_file", watcher)
+
 class VersionContractTest(unittest.TestCase):
     def test_version_is_18_0_3_everywhere_primary(self) -> None:
         expected = text("VERSION").strip()

@@ -402,6 +402,63 @@ impl LocalRepository {
         Ok(())
     }
 
+    /// Persist the case and document pack as one SQLite transaction. A process
+    /// interruption can no longer leave a new case paired with an old pack (or
+    /// vice versa).
+    pub fn save_case_and_pack(
+        &mut self,
+        case_id: &str,
+        case: &SemanticCase,
+        pack: &DocumentPack,
+    ) -> StorageResult<()> {
+        let case_json = serde_json::to_string_pretty(case)?;
+        let stored_case = self.encode_sensitive(&case_json)?;
+        let pack_json = serde_json::to_string_pretty(pack)?;
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![case_id, stored_case],
+        )?;
+        transaction.execute(
+            "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![pack.pack_id.as_str(), pack_json],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Persist the complete default runtime snapshot atomically, including a
+    /// commercial state value such as the signed license document.
+    pub fn save_case_pack_and_state_value<T: serde::Serialize + ?Sized>(
+        &mut self,
+        case_id: &str,
+        case: &SemanticCase,
+        pack: &DocumentPack,
+        state_key: &str,
+        state_value: &T,
+    ) -> StorageResult<()> {
+        let case_json = serde_json::to_string_pretty(case)?;
+        let stored_case = self.encode_sensitive(&case_json)?;
+        let pack_json = serde_json::to_string_pretty(pack)?;
+        let state_json = serde_json::to_string(state_value)?;
+        let stored_state = self.encode_sensitive(&state_json)?;
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![case_id, stored_case],
+        )?;
+        transaction.execute(
+            "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![pack.pack_id.as_str(), pack_json],
+        )?;
+        transaction.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![state_key, stored_state],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn append_corpus_entry(&self, entry: &CorpusEntry) -> StorageResult<()> {
         let json = serde_json::to_string(entry)?;
         let domain_json = serde_json::to_string(&entry.domain)?;

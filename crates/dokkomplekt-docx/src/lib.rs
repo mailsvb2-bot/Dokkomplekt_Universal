@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use thiserror::Error;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -45,6 +47,8 @@ pub enum DocxError {
     RelationshipPart(String),
     #[error("template learning map cannot be applied safely: {0}")]
     TemplateLearningMap(String),
+    #[error("unsafe active or externally linked content in DOCX template: {0}")]
+    UnsafeActiveContent(String),
 }
 
 pub type DocxResult<T> = Result<T, DocxError>;
@@ -410,6 +414,97 @@ fn extract_docx_text_from_archive<R: Read + Seek>(
     Ok(parts.join("\n"))
 }
 
+/// Reject macros, embedded executables/objects, ActiveX/custom UI and every
+/// external OOXML relationship before a user template is persisted or rendered.
+/// Copying a downloaded DOCM into app-data removes Windows Mark-of-the-Web, so
+/// retaining active content would turn an untrusted upload into a trusted local
+/// document.
+pub fn validate_safe_template_bytes(bytes: &[u8]) -> DocxResult<()> {
+    let archive = ZipArchive::new(Cursor::new(bytes))?;
+    validate_safe_template_archive(archive)
+}
+
+pub fn validate_safe_template_file(path: &Path) -> DocxResult<()> {
+    let archive = ZipArchive::new(File::open(path)?)?;
+    validate_safe_template_archive(archive)
+}
+
+fn validate_safe_template_archive<R: Read + Seek>(
+    mut archive: ZipArchive<R>,
+) -> DocxResult<()> {
+    let mut findings = Vec::<String>::new();
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().replace('\\', "/");
+        let lower = name.to_ascii_lowercase();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        if lower == "word/vbaproject.bin"
+            || lower.starts_with("word/activex/")
+            || lower.starts_with("word/embeddings/")
+            || lower.starts_with("word/ctrlprops/")
+            || lower.starts_with("customui/")
+        {
+            findings.push(name);
+            continue;
+        }
+        if !lower.ends_with(".rels") {
+            continue;
+        }
+        ensure_text_part_size(&name, entry.size())?;
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml)?;
+        let mut reader = Reader::from_str(&xml);
+        reader.config_mut().trim_text(true);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(element)) | Ok(Event::Start(element))
+                    if element.name().as_ref().ends_with(b"Relationship") =>
+                {
+                    let mut external = false;
+                    let mut relationship_type = String::new();
+                    for attribute in element.attributes().flatten() {
+                        let key = String::from_utf8_lossy(attribute.key.as_ref())
+                            .to_ascii_lowercase();
+                        let value = String::from_utf8_lossy(attribute.value.as_ref())
+                            .to_string();
+                        if key.ends_with("targetmode")
+                            && value.eq_ignore_ascii_case("external")
+                        {
+                            external = true;
+                        }
+                        if key.ends_with("type") {
+                            relationship_type = value.to_ascii_lowercase();
+                        }
+                    }
+                    let harmless_hyperlink = relationship_type.ends_with("/hyperlink");
+                    if (external && !harmless_hyperlink)
+                        || relationship_type.contains("oleobject")
+                        || relationship_type.contains("attachedtemplate")
+                        || relationship_type.contains("control")
+                    {
+                        findings.push(format!("{name}: external/active relationship"));
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Ok(_) => {}
+                Err(error) => {
+                    return Err(DocxError::UnsafeActiveContent(format!(
+                        "relationship XML {name:?} cannot be verified: {error}"
+                    )))
+                }
+            }
+        }
+    }
+    findings.sort();
+    findings.dedup();
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(DocxError::UnsafeActiveContent(findings.join(", ")))
+    }
+}
+
 pub fn render_docx_file(
     template_path: &Path,
     output_path: &Path,
@@ -426,6 +521,7 @@ pub fn render_docx_file_with_watermark(
     strict: bool,
     watermark: Option<&str>,
 ) -> DocxResult<RenderResult> {
+    validate_safe_template_file(template_path)?;
     let input = File::open(template_path)?;
     let mut archive = ZipArchive::new(input)?;
     let mut rendered_parts = BTreeMap::<String, Vec<u8>>::new();
@@ -1447,6 +1543,17 @@ mod tests {
     use dokkomplekt_core::{SemanticValue, ValueSource};
     use std::collections::BTreeMap;
 
+    fn build_test_docx(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in entries {
+            writer.start_file(*name, options).expect("start test ZIP entry");
+            writer.write_all(bytes).expect("write test ZIP entry");
+        }
+        writer.finish().expect("finish test DOCX").into_inner()
+    }
+
     fn case_with(pairs: &[(&str, &str)]) -> SemanticCase {
         let mut values = BTreeMap::new();
         for (k, v) in pairs {
@@ -1871,6 +1978,27 @@ mod tests {
         assert_eq!(rendered.output_text.matches("</w:tr>").count(), 4);
         assert!(rendered.output_text.contains(">A<"));
         assert!(rendered.output_text.contains(">B<"));
+    }
+
+    #[test]
+    fn macro_template_is_rejected_before_render() {
+        let bytes = build_test_docx(&[
+            ("word/document.xml", "<w:document><w:body/></w:document>".as_bytes()),
+            ("word/vbaProject.bin", b"MZ-not-a-real-macro"),
+        ]);
+        let error = validate_safe_template_bytes(&bytes).unwrap_err().to_string();
+        assert!(error.contains("vbaProject.bin"), "{error}");
+    }
+
+    #[test]
+    fn external_relationship_is_rejected() {
+        let relationships = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" Target="https://example.invalid/template.dotm" TargetMode="External"/></Relationships>"#;
+        let bytes = build_test_docx(&[
+            ("word/document.xml", "<w:document><w:body/></w:document>".as_bytes()),
+            ("word/_rels/document.xml.rels", relationships),
+        ]);
+        let error = validate_safe_template_bytes(&bytes).unwrap_err().to_string();
+        assert!(error.contains("external/active relationship"), "{error}");
     }
 
     #[test]

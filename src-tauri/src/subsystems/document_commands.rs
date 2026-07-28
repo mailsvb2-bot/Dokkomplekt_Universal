@@ -3,6 +3,9 @@ struct FirstRunStateResponse {
     pack: DocumentPack,
     has_user_buttons: bool,
     message: String,
+    persistence_blocked: bool,
+    recovery_message: Option<String>,
+    recovery_db_path: Option<String>,
 }
 
 #[tauri::command]
@@ -14,10 +17,20 @@ fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, 
     } else {
         "Нажмите «Создать свои кнопки», выберите DOCX/DOCM и подтвердите названия."
     };
+    let persistence_block = state
+        .persistence_block
+        .lock()
+        .map_err(|_| "persistence state lock failed")?
+        .clone();
     Ok(FirstRunStateResponse {
         has_user_buttons,
         pack,
         message: message.into(),
+        persistence_blocked: persistence_block.is_some(),
+        recovery_message: persistence_block.as_ref().map(|block| block.message.clone()),
+        recovery_db_path: persistence_block
+            .as_ref()
+            .map(|block| block.db_path.display().to_string()),
     })
 }
 
@@ -2272,6 +2285,16 @@ fn load_state_from(
         }
     }
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(db_path.to_path_buf());
+    let mut block = state
+        .persistence_block
+        .lock()
+        .map_err(|_| "persistence state lock failed")?;
+    if block
+        .as_ref()
+        .is_some_and(|current| current.db_path == db_path)
+    {
+        *block = None;
+    }
     Ok(())
 }
 

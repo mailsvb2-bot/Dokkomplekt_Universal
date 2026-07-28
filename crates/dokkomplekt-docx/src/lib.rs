@@ -1825,12 +1825,11 @@ mod tests {
     }
 
     #[test]
-    fn macro_binary_parts_are_preserved_byte_for_byte_when_rendering_docm() {
-        let dir = std::env::temp_dir().join("dokkomplekt-docm-preservation-test");
+    fn macro_binary_parts_are_rejected_before_rendering_docm() {
+        let dir = std::env::temp_dir().join("dokkomplekt-docm-rejection-test");
         let tpl = dir.join("macro-template.docm");
         let out = dir.join("macro-rendered.docm");
         std::fs::create_dir_all(&dir).expect("create test dir");
-        let macro_bytes = b"synthetic-vba-project\0\x01\x02\xff";
         {
             let file = File::create(&tpl).expect("create docm");
             let mut writer = ZipWriter::new(file);
@@ -1848,20 +1847,22 @@ mod tests {
             writer
                 .start_file("word/vbaProject.bin", options)
                 .expect("macro part");
-            writer.write_all(macro_bytes).expect("macro bytes");
+            writer
+                .write_all(b"synthetic-vba-project")
+                .expect("macro bytes");
             writer.finish().expect("finish docm");
         }
 
-        render_docx_file(&tpl, &out, &case_with(&[("org.name", "Ромашка")]), true)
-            .expect("render docm");
-        let file = File::open(&out).expect("open result");
-        let mut archive = ZipArchive::new(file).expect("open result archive");
-        let mut macro_part = archive
-            .by_name("word/vbaProject.bin")
-            .expect("macro part preserved");
-        let mut actual = Vec::new();
-        std::io::Read::read_to_end(&mut macro_part, &mut actual).expect("read macro part");
-        assert_eq!(actual, macro_bytes);
+        let error = render_docx_file(&tpl, &out, &case_with(&[("org.name", "Ромашка")]), true)
+            .expect_err("active content must be rejected");
+        assert!(matches!(
+            error,
+            DocxError::UnsafeActiveContent(ref part) if part == "word/vbaProject.bin"
+        ));
+        assert!(
+            !out.exists(),
+            "rejected DOCM must not create an output file"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

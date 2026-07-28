@@ -49,7 +49,7 @@ replace_once(
       case 'confirm_template_setup':
         return { pack_id: 'default', name: 'Пакет', documents: [{ ...accDoc, id: 'tpl', button_label: 'Договор' }] } as never;""",
     """      case 'prepare_template_setup': { const candidates=(payload as {req?:{candidates?:Array<{template_path:string}>}})?.req?.candidates ?? []; return candidates.map((candidate,index)=>{ const fileName=candidate.template_path.split('/').pop() ?? `Шаблон-${index+1}.docx`; const title=fileName.replace(/\\.(docx|docm)$/i, ''); return { document_id: `tpl-${index+1}`, template_path: candidate.template_path, detected_title: title, suggested_button_label: title, editable_button_label: title, role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }; }) as never; }
-      case 'confirm_template_setup': { const rows=(payload as {req?:{rows?:Array<{document_id:string;button_label:string;template_path:string}>}})?.req?.rows ?? []; return { pack_id: 'default', name: 'Пакет', documents: rows.map((row)=>({ ...accDoc, id: row.document_id, button_label: row.button_label, template_path: row.template_path })) } as never; }""",
+      case 'confirm_template_setup': { const rows=(payload as {req?:{rows?:Array<{document_id:string;editable_button_label:string;template_path:string}>}})?.req?.rows ?? []; return { pack_id: 'default', name: 'Пакет', documents: rows.map((row)=>({ ...accDoc, id: row.document_id, button_label: row.editable_button_label, template_path: row.template_path })) } as never; }""",
     "distinct prepared template mock",
 )
 

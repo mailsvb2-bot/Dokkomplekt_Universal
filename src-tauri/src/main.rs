@@ -1842,6 +1842,32 @@ include!("subsystems/process_blueprints.rs");
 
 include!("subsystems/automation_runtime.rs");
 
+#[derive(Debug, Serialize)]
+struct CreatedDocumentsFolderResponse {
+    folder: String,
+    created: bool,
+    already_existed: bool,
+}
+
+#[tauri::command]
+fn ensure_created_documents_folder(
+    app: tauri::AppHandle,
+) -> Result<CreatedDocumentsFolderResponse, String> {
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .map_err(|error| format!("Не удалось определить рабочий стол: {error}"))?;
+    let folder = desktop.join("Созданные документы");
+    let already_existed = folder.is_dir();
+    std::fs::create_dir_all(&folder)
+        .map_err(|error| format!("Не удалось создать папку {}: {error}", folder.display()))?;
+    Ok(CreatedDocumentsFolderResponse {
+        folder: folder.to_string_lossy().into_owned(),
+        created: !already_existed,
+        already_existed,
+    })
+}
+
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     let background_watch = args.iter().any(|arg| arg == "--background-watch");
@@ -2002,6 +2028,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             first_run_state,
+            ensure_created_documents_folder,
             analyze_template,
             analyze_template_file,
             prepare_template_setup,

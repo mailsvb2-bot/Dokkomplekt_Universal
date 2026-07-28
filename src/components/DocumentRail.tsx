@@ -46,7 +46,7 @@ export function DocumentRail(props: DocumentRailProps) {
 
           <div className="packageList simpleDocumentButtons compactDocumentButtons">
             {props.documents.map((document) => {
-              const selected = selectedCount === 0 || props.selectedDocumentIds.includes(document.id);
+              const selected = props.selectedDocumentIds.includes(document.id);
               const active = props.activeDocumentId === document.id;
               return (
                 <button

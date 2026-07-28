@@ -547,3 +547,28 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .templateSetupStatus {
   margin-top: 16px;
 }
+
+/* one-click-first-run-v1 */
+.simpleWorkspace { display: flex; flex-direction: column; gap: 18px; }
+.simpleHero { align-items: center; }
+.simpleHero h1 { max-width: 760px; font-size: clamp(30px, 4vw, 52px); line-height: 1.05; }
+.simpleHero p { max-width: 760px; font-size: 17px; }
+.simpleSourceStage { padding: clamp(24px, 4vw, 48px); }
+.simpleDropHero { min-height: 360px; justify-content: center; }
+.simpleDropHero h2 { margin: 8px 0 0; font-size: clamp(24px, 3vw, 38px); }
+.simpleSourceAccepted { margin-bottom: 24px; }
+.oneClickPanel { display: grid; justify-items: center; gap: 10px; padding: 24px 0 4px; border-top: 1px solid var(--line); }
+.oneClickCreate { width: min(100%, 620px); min-height: 82px; font-size: clamp(22px, 3vw, 32px); font-weight: 800; border-radius: 20px; box-shadow: 0 14px 36px color-mix(in srgb, var(--accent) 26%, transparent); }
+.oneClickPanel p { margin: 0; color: var(--muted); text-align: center; }
+.simpleOptional { margin-top: 2px; }
+.simpleOptional > summary { color: var(--muted); font-weight: 650; }
+.simplePackagePanel { align-self: start; }
+.simplePackageNotice { display: grid; gap: 5px; padding: 14px 16px; margin-bottom: 12px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.simplePackageNotice span { color: var(--muted); font-size: 13px; line-height: 1.4; }
+.compactDocumentButtons .packageItem { min-height: 68px; }
+.firstRunFolderModal { max-width: 520px; text-align: center; padding: 34px; }
+.firstRunFolderIcon { width: 76px; height: 76px; display: grid; place-items: center; margin: 0 auto 16px; border-radius: 22px; background: color-mix(in srgb, var(--accent) 18%, var(--panel)); font-size: 38px; color: var(--accent); }
+.firstRunFolderModal h2 { margin: 0 0 14px; font-size: 30px; }
+.firstRunFolderModal p { margin: 8px 0; color: var(--muted); font-size: 16px; line-height: 1.5; }
+.firstRunFolderCreate { width: 100%; min-height: 62px; margin: 22px 0 8px; font-size: 20px; font-weight: 800; }
+@media (max-width: 900px) { .simpleHero { align-items: flex-start; } .oneClickCreate { min-height: 70px; } }

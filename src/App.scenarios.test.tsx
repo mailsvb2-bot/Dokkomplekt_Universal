@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App';
 import { __resetInvokeForTests, __setInvokeForTests, rustCommandNames } from './lib/api';
@@ -19,6 +19,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
   __setInvokeForTests(async (command, payload) => {
     calls.push({ command, payload });
     switch (command) {
+      case 'ensure_created_documents_folder': return { folder: 'C:/Users/Test/Desktop/Созданные документы', created: true, already_existed: false } as never;
       case 'first_run_state':
       case 'load_state':
         return { pack, has_user_buttons: true, message: 'ok' } as never;
@@ -160,7 +161,8 @@ async function click(name: RegExp | string) {
 }
 
 describe('Полный прогон пользовательских сценариев и тем', () => {
-  afterEach(() => { __resetInvokeForTests(); vi.restoreAllMocks(); });
+  beforeEach(() => { localStorage.clear(); localStorage.setItem('dokkomplekt.created-documents-folder-prompt.v1', 'done'); });
+  afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
 
   it('каждый пользовательский сценарий вызывает соответствующую Rust-команду', async () => {
     const calls: Call[] = [];
@@ -357,9 +359,7 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.change(xlsxInput as Element, { target: { files: [new File([new Uint8Array([0x50,0x4b,0x03,0x04])], 'Реестр.xlsx')] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'prepare_mail_merge_file')).toBe(true));
     const mailMergeTile = screen.getByRole('button', { name: 'Счёт на оплату' });
-    expect(mailMergeTile.getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(mailMergeTile);
-    await waitFor(() => expect(mailMergeTile.getAttribute('aria-pressed')).toBe('true'));
+    expect(mailMergeTile.getAttribute('aria-pressed')).toBe('true');
     fireEvent.change(screen.getByPlaceholderText(/Наименование;document\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await waitFor(() => expect(calls.some((c) => c.command === 'preview_mail_merge')).toBe(true));
     await waitFor(() => expect((screen.getByRole('button', { name: 'Создать комплекты' }) as HTMLButtonElement).disabled).toBe(false));
     await click(/Создать комплекты/);
@@ -434,7 +434,7 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan', 'get_learned_kit_decision', 'route_intake', 'retry_case_run', 'delete_learned_scanner_rule', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'list_template_approvals', 'approve_document_template', 'revoke_document_template_approval', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint']);
+    const internalOrProfileOnly = new Set(['ensure_created_documents_folder', 'icd10_suggest', 'get_diary_plan', 'get_learned_kit_decision', 'route_intake', 'retry_case_run', 'delete_learned_scanner_rule', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'list_template_approvals', 'approve_document_template', 'revoke_document_template_approval', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);

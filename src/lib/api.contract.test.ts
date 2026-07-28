@@ -22,6 +22,7 @@ import {
   applyBusinessRegistryRecord,
   exportOneCCounterparties,
   firstRunState,
+  ensureCreatedDocumentsFolder,
   deleteLearnedScannerRule,
   getDiaryPlan,
   getIntakeCapabilities,
@@ -95,6 +96,7 @@ type Call = { command: string; payload?: Record<string, unknown> };
 
 export const registeredBackendCommands = [
   'first_run_state',
+  'ensure_created_documents_folder',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',
@@ -241,6 +243,8 @@ function installContractMock(calls: Call[]) {
   __setInvokeForTests(async (command, payload) => {
     calls.push({ command, payload });
     switch (command) {
+      case 'ensure_created_documents_folder':
+        return { folder: 'C:/Users/Test/Desktop/Созданные документы', created: true, already_existed: false } as never;
       case 'first_run_state':
       case 'load_state':
         return { pack, has_user_buttons: true, message: 'ok' } as never;
@@ -415,6 +419,7 @@ describe('Tauri command DTO contracts', () => {
     const calls: Call[] = [];
     installContractMock(calls);
     await firstRunState();
+    await ensureCreatedDocumentsFolder();
     await resetCase();
     await parseSource('Первичный документ', 2026);
     await parseSourceFile('source.pdf', 'JVBERi0=', 2026);
@@ -445,6 +450,7 @@ describe('Tauri command DTO contracts', () => {
     await rollbackTemplateVersion('tpl-v1');
     expect(calls).toMatchObject([
       { command: 'first_run_state', payload: undefined },
+      { command: 'ensure_created_documents_folder', payload: undefined },
       { command: 'reset_case', payload: undefined },
       { command: 'parse_source', payload: { req: { source_text: 'Первичный документ', default_year: 2026 } } },
       { command: 'parse_source_file', payload: { req: { file_name: 'source.pdf', bytes_base64: 'JVBERi0=', default_year: 2026 } } },

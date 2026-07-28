@@ -34,6 +34,16 @@ export async function firstRunState(): Promise<FirstRunStateResponse> {
   return callRust('first_run_state');
 }
 
+export interface CreatedDocumentsFolderResponse {
+  folder: string;
+  created: boolean;
+  already_existed: boolean;
+}
+
+export async function ensureCreatedDocumentsFolder(): Promise<CreatedDocumentsFolderResponse> {
+  return callRust('ensure_created_documents_folder');
+}
+
 export async function getProcessBlueprints(): Promise<ProcessBlueprintState> {
   return callRust('get_process_blueprints');
 }
@@ -573,6 +583,7 @@ export async function renderMailMerge(documentIds: string[], delimitedText: stri
 
 export const rustCommandNames = [
   'first_run_state',
+  'ensure_created_documents_folder',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',

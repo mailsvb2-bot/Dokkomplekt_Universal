@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentOutput, CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, GuidedScannerMarkupAction, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, WorkflowPlan } from './lib/types';
 import {
-  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
+  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, ensureCreatedDocumentsFolder, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocx, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, validateProductAccess, verifyRustLicenseText,
@@ -24,6 +24,7 @@ const STATE_DB = 'dokkomplekt-user-state.sqlite';
 const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
 const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
+const WORK_FOLDER_PROMPT_KEY = 'dokkomplekt.created-documents-folder-prompt.v1';
 
 type PendingTemplate = {
   document_id: string;
@@ -105,6 +106,7 @@ export function App() {
 
   const [licenseText, setLicenseText] = useState('');
   const [utilityOpen, setUtilityOpen] = useState(false);
+  const [folderSetupOpen, setFolderSetupOpen] = useState(false);
 
   const [watchFolder, setWatchFolder] = useState('Созданные документы');
   const [intakeSource, setIntakeSource] = useState('');
@@ -135,13 +137,16 @@ export function App() {
         if (!alive) return;
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
-          setSelectedDocIds([]);
+          setSelectedDocIds(res.pack.documents.map((document) => document.id));
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
           setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');
         } else if (res?.message) {
           setStatus(res.message);
         }
+        try {
+          if (localStorage.getItem(WORK_FOLDER_PROMPT_KEY) !== 'done') setFolderSetupOpen(true);
+        } catch { /* private mode */ }
       } catch { /* no backend in browser/tests — start empty */ }
     })();
     return () => { alive = false; };
@@ -1072,13 +1077,13 @@ export function App() {
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
     if (!pack) return;
     setDocuments(pack.documents);
-    setSelectedDocIds([]);
+    setSelectedDocIds(pack.documents.map((document) => document.id));
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setSetupOpen(false);
-    setStatus(`Кнопки созданы: ${confirmedRows.length}. Нажмите нужные кнопки, затем добавьте исходный документ.`);
+    setStatus(`Кнопки созданы: ${confirmedRows.length}. Весь комплект уже выбран — добавьте исходный документ.`);
   }
 
   async function chooseIcd(hit: Icd10Suggestion) {
@@ -1165,7 +1170,7 @@ export function App() {
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));
-    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds([]); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов). Выберите нужные кнопки.`); }
+    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(res.pack.documents.map((document) => document.id)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов). Весь комплект выбран.`); }
   }
   async function checkAccess() {
     const res = await run('validate_product_access', () => validateProductAccess(null));
@@ -1184,6 +1189,24 @@ export function App() {
     } else {
       setStatus(`${result.message}: ${result.current_version}.`);
     }
+  }
+
+  async function createDefaultWorkFolder() {
+    const res = await run('ensure_created_documents_folder', () => ensureCreatedDocumentsFolder());
+    if (!res) return;
+    setWatchFolder(res.folder);
+    setOutputRoot(res.folder);
+    setFolderSetupOpen(false);
+    try { localStorage.setItem(WORK_FOLDER_PROMPT_KEY, 'done'); } catch { /* private mode */ }
+    setStatus(`Рабочая папка готова: ${res.folder}.`);
+    const watcher = await run('install_background_watcher', () => installBackgroundWatcher(res.folder, DEFAULT_YEAR, sickLeave, folderParts, autoPrint, printCopies));
+    if (watcher) setStatus('Папка «Созданные документы» готова и подключена. Теперь достаточно положить в неё исходный файл.');
+  }
+
+  function dismissDefaultWorkFolder() {
+    setFolderSetupOpen(false);
+    try { localStorage.setItem(WORK_FOLDER_PROMPT_KEY, 'done'); } catch { /* private mode */ }
+    setStatus('Папку можно создать позже в разделе автоматической обработки.');
   }
 
   async function installWatcher() {
@@ -1296,6 +1319,7 @@ export function App() {
             onPreview={previewNow}
             onSaveFields={saveFields}
             onGenerate={generateDocx}
+            onGenerateSelected={generateSelectedDocuments}
           />
           <DocumentRail
             documents={visibleDocs}
@@ -1374,6 +1398,21 @@ export function App() {
           {status}
         </footer>
       </div>
+
+      {folderSetupOpen && (
+        <div className="backdrop" role="dialog" aria-modal="true" aria-label="Первичная настройка">
+          <div className="modal firstRunFolderModal">
+            <div className="firstRunFolderIcon"><i className="ti ti-folder-plus" aria-hidden="true" /></div>
+            <h2>Создать рабочую папку?</h2>
+            <p>На рабочем столе появится папка <strong>«Созданные документы»</strong>.</p>
+            <p>Положите туда исходный файл — программа подготовит весь комплект в отдельной подпапке.</p>
+            <button className="primaryBtn firstRunFolderCreate" onClick={() => void createDefaultWorkFolder()} disabled={busy}>
+              {busy ? 'Создаю папку…' : 'Создать папку'}
+            </button>
+            <button className="textBtn" onClick={dismissDefaultWorkFolder} disabled={busy}>Не сейчас</button>
+          </div>
+        </div>
+      )}
 
       {setupOpen && (
         <TemplateSetupModal

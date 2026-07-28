@@ -75,7 +75,10 @@ interface WorkspaceProps {
   onPreview(): void;
   onSaveFields(): void;
   onGenerate(): void;
+  onGenerateSelected(): void;
 }
+
+const SOURCE_ACCEPT = '.docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar';
 
 function sourceKindLabel(kind?: string): string {
   switch (kind) {
@@ -100,11 +103,7 @@ function highlightedSource(text: string, evidence: string | undefined): ReactNod
   if (!needle) return text;
   const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
   if (index < 0) return text;
-  return <>
-    {text.slice(0, index)}
-    <mark>{text.slice(index, index + needle.length)}</mark>
-    {text.slice(index + needle.length)}
-  </>;
+  return <>{text.slice(0, index)}<mark>{text.slice(index, index + needle.length)}</mark>{text.slice(index + needle.length)}</>;
 }
 
 export function Workspace(props: WorkspaceProps) {
@@ -118,21 +117,16 @@ export function Workspace(props: WorkspaceProps) {
   const reviewCount = props.semantic?.fields.filter(field => field.confidence < .95).length ?? 0;
 
   return (
-    <main className="clientWorkspace">
-      <section className="workflowHero" aria-labelledby="workflow-title">
+    <main className="clientWorkspace simpleWorkspace">
+      <section className="workflowHero simpleHero" aria-labelledby="workflow-title">
         <div>
-          <span className="workflowEyebrow">Новый комплект</span>
-          <h1 id="workflow-title">Из исходника — готовые документы</h1>
-          <p>Добавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.</p>
+          <span className="workflowEyebrow">Доккомплект</span>
+          <h1 id="workflow-title">Один исходник — весь комплект</h1>
+          <p>Добавьте документ и нажмите одну кнопку. Программа сама проверит данные и спросит только то, без чего действительно нельзя продолжить.</p>
         </div>
-        <div className="workflowHeroActions">
-          <button className="softBtn newCaseBtn" onClick={props.onResetCase} disabled={props.busy}><i className="ti ti-file-plus" aria-hidden="true" /> Новый комплект</button>
-          <ol className="workflowSteps" aria-label="Этапы работы">
-            <li className={sourceReady ? 'done' : 'current'}><span>1</span><strong>Источник</strong></li>
-            <li className={sourceReady && !props.lastOutput ? 'current' : props.lastOutput ? 'done' : ''}><span>2</span><strong>Проверка</strong></li>
-            <li className={props.lastOutput ? 'current done' : ''}><span>3</span><strong>Результат</strong></li>
-          </ol>
-        </div>
+        <button className="softBtn newCaseBtn" onClick={props.onResetCase} disabled={props.busy}>
+          <i className="ti ti-file-plus" aria-hidden="true" /> Новый комплект
+        </button>
       </section>
 
       {props.lastOutput && (
@@ -180,7 +174,7 @@ export function Workspace(props: WorkspaceProps) {
       )}
 
       <section
-        className={`sourceStage ${sourceReady ? 'ready' : ''}`}
+        className={`sourceStage simpleSourceStage ${sourceReady ? 'ready' : ''}`}
         onDragOver={(event: DragEvent<HTMLElement>) => event.preventDefault()}
         onDrop={(event: DragEvent<HTMLElement>) => {
           event.preventDefault();
@@ -188,43 +182,44 @@ export function Workspace(props: WorkspaceProps) {
           if (file) props.onDropSourceFile(file);
         }}
       >
-        <div className="stageHeading">
-          <span className="stageNumber">1</span>
-          <div>
-            <h2>{sourceReady ? 'Источник принят' : 'Добавьте исходный файл'}</h2>
-            <p>{sourceReady ? 'Данные уже извлечены. При необходимости замените файл или проверьте распознанное.' : 'Перетащите файл сюда или выберите его на компьютере.'}</p>
-          </div>
-        </div>
-
         {!sourceReady ? (
-          <div className="dropHero">
+          <div className="dropHero simpleDropHero">
             <div className="dropIcon"><i className="ti ti-file-upload" aria-hidden="true" /></div>
-            <strong>Перетащите документ в эту область</strong>
-            <span>Word, PDF, изображение, таблица, письмо, архив и другие поддерживаемые форматы</span>
+            <h2>Перетащите сюда исходный документ</h2>
+            <span>или выберите его на компьютере</span>
             <label className="primaryBtn fileBtn largeAction">
-              Выбрать файл
-              <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
+              Выбрать исходный файл
+              <input type="file" accept={SOURCE_ACCEPT} onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
             </label>
           </div>
         ) : (
-          <div className="sourceAccepted">
-            <div className="sourceFileIcon"><i className="ti ti-file-check" aria-hidden="true" /></div>
-            <div className="sourceFileInfo">
-              <strong>{props.sourceFileName || props.parsed?.title || 'Вставленный текст'}</strong>
-              <span>{sourceKindLabel(props.parsed?.sourceKind)}{props.parsed ? ` · найдено значений: ${props.parsed.count}` : ''}</span>
-              {props.parsed?.warnings.length ? <em>Нужно проверить замечаний: {props.parsed.warnings.length}</em> : <em className="okText">Источник прочитан без критических замечаний</em>}
-            </div>
-            <div className="sourceActions">
-              <label className="softBtn fileBtn">
-                Заменить файл
-                <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
+          <>
+            <div className="sourceAccepted simpleSourceAccepted">
+              <div className="sourceFileIcon"><i className="ti ti-file-check" aria-hidden="true" /></div>
+              <div className="sourceFileInfo">
+                <strong>{props.sourceFileName || props.parsed?.title || 'Вставленный текст'}</strong>
+                <span>{sourceKindLabel(props.parsed?.sourceKind)}{props.parsed ? ` · найдено значений: ${props.parsed.count}` : ''}</span>
+                {props.parsed?.warnings.length
+                  ? <em>Программа уточнит спорные данные перед созданием</em>
+                  : <em className="okText">Исходник принят</em>}
+              </div>
+              <label className="textBtn fileBtn">
+                Заменить
+                <input type="file" accept={SOURCE_ACCEPT} onChange={props.onPickSourceFile} style={{ display: 'none' }} />
               </label>
-              <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Начать заново</button>
             </div>
-          </div>
+
+            <div className="oneClickPanel">
+              <button className="primaryBtn oneClickCreate" onClick={props.onGenerateSelected} disabled={props.busy}>
+                <i className="ti ti-sparkles" aria-hidden="true" />
+                {props.busy ? 'Создаю комплект…' : 'Создать комплект'}
+              </button>
+              <p>Все выбранные кнопки документов будут сформированы и сохранены автоматически.</p>
+            </div>
+          </>
         )}
 
-        <details className="alternativeSource">
+        <details className="alternativeSource simpleOptional">
           <summary>Другой способ добавить источник</summary>
           <div className="alternativeGrid">
             <div className="alternativeCard">
@@ -239,32 +234,25 @@ export function Workspace(props: WorkspaceProps) {
               <strong>Текст</strong>
               <p>Вставить содержимое вручную, если файла нет.</p>
               <textarea
-      value={props.sourceText}
-      onChange={(event) => props.setSourceText(event.target.value)}
-      onSelect={(event) => {
-        const target = event.currentTarget;
-        const start = target.selectionStart ?? 0;
-        const end = target.selectionEnd ?? start;
-        if (end > start) props.setScannerText(target.value.slice(start, end));
-      }}
-      placeholder="Вставьте текст источника"
-    />
+                value={props.sourceText}
+                onChange={(event) => props.setSourceText(event.target.value)}
+                onSelect={(event) => {
+                  const target = event.currentTarget;
+                  const start = target.selectionStart ?? 0;
+                  const end = target.selectionEnd ?? start;
+                  if (end > start) props.setScannerText(target.value.slice(start, end));
+                }}
+                placeholder="Вставьте текст источника"
+              />
               <button className="softBtn" onClick={props.onParseSource} disabled={props.busy || !props.sourceText.trim()}>Использовать текст</button>
             </div>
           </div>
         </details>
       </section>
 
-      {sourceReady && (
-        <section className="reviewStage">
-          <div className="stageHeading">
-            <span className="stageNumber">2</span>
-            <div>
-              <h2>{prompts.length ? 'Уточните недостающие данные' : 'Источник готов к созданию комплекта'}</h2>
-              <p>{prompts.length ? 'Показываем только то, чего не удалось надёжно найти в источнике.' : 'Обязательных уточнений сейчас нет. Выберите состав комплекта справа и запустите создание.'}</p>
-            </div>
-          </div>
-
+      {(props.plan || props.preview) && (
+        <details className="reviewStage simpleOptional" open>
+          <summary>Проверка отдельного документа</summary>
           {prompts.length ? (
             <div className="clientFields">
               {prompts.map((prompt: PromptSpec) => (
@@ -288,42 +276,40 @@ export function Workspace(props: WorkspaceProps) {
           ) : (
             <div className="readyMessage">
               <i className="ti ti-circle-check" aria-hidden="true" />
-              <div><strong>Можно создавать документы</strong><span>{props.semantic ? `Распознано значений: ${props.semantic.fields.length}${reviewCount ? ` · рекомендуем проверить: ${reviewCount}` : ''}` : 'Данные источника будут проверены ещё раз перед сохранением.'}</span></div>
+              <div><strong>Данные готовы</strong><span>{props.semantic ? `Распознано значений: ${props.semantic.fields.length}${reviewCount ? ` · рекомендуем проверить: ${reviewCount}` : ''}` : 'Проверка будет выполнена перед сохранением.'}</span></div>
               <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy}>Проверить данные</button>
             </div>
           )}
-
           {props.preview && (
-            <details className="clientPreview" open>
-              <summary>Предпросмотр документа{props.preview.missing ? ` · не заполнено: ${props.preview.missing}` : ''}</summary>
+            <div className="clientPreview">
+              <strong>Предпросмотр{props.preview.missing ? ` · не заполнено: ${props.preview.missing}` : ''}</strong>
               <pre>{props.preview.text || '—'}</pre>
               <button className="primaryBtn" onClick={props.onGenerate} disabled={props.busy}>Создать только этот документ</button>
-            </details>
+            </div>
           )}
-        </section>
+        </details>
       )}
 
-      <details className="automationCard">
+      <details className="automationCard simpleOptional">
         <summary>
           <span className="automationIcon"><i className="ti ti-bolt" aria-hidden="true" /></span>
-          <span><strong>Автоматическая обработка папки</strong><small>Программа может сама замечать новые файлы и создавать комплект без ручного запуска.</small></span>
+          <span><strong>Автоматическая обработка папки</strong><small>Для работы без ручного запуска.</small></span>
           <i className="ti ti-chevron-down" aria-hidden="true" />
         </summary>
         <div className="automationBody">
           <label><span>Рабочая папка</span><input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="Созданные документы" /></label>
           <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
           <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
-          <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>
           {props.intakeResult && <div className={`automationResult ${props.intakeResult.status}`}><strong>{props.intakeResult.status === 'processed' ? 'Комплект создан' : props.intakeResult.status === 'attention' ? 'Нужно уточнение' : 'Информация'}</strong><span>{props.intakeResult.message}</span></div>}
         </div>
       </details>
 
-      <details className="advancedCard">
+      <details className="advancedCard simpleOptional">
         <summary><i className="ti ti-adjustments" aria-hidden="true" /> Расширенные инструменты</summary>
         <div className="advancedBody">
           <section>
             <h3>Точность распознавания</h3>
-            <p>Проверьте найденные значения, источник каждого результата и при необходимости обучите правило на выделении.</p>
+            <p>Открывайте этот раздел только когда программа ошиблась или не нашла значение.</p>
             <div className="advancedActions">
               <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy}>Обновить распознанные данные</button>
               <button className="softBtn" onClick={props.onStartGuidedSourceScanner} disabled={props.busy || !props.sourceFilePath || !/\.doc[xm]$/i.test(props.sourceFilePath)}>Показать значение в Word</button>

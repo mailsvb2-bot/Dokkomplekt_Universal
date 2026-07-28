@@ -15,16 +15,18 @@ concurrency:
 
 jobs:
   verify-source-manifest:
-    name: Source manifest matches tree
+    name: Source manifest and clean archive match tree
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.97.1
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true
@@ -32,14 +34,34 @@ jobs:
           python scripts/verify_source_manifest.py \
             --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt \
             --json-report verification/ci/source-manifest-report.json
-      - name: Upload source-manifest evidence
+      - name: Build and verify deterministic clean source ZIP
+        run: |
+          python scripts/build_source_archive.py \
+            --output verification/ci/Dokkomplekt_Universal-source.zip \
+            --top-level Dokkomplekt_Universal \
+            --manifest-json verification/ci/source-archive-report.json
+          rm -rf verification/ci/extracted
+          unzip -q verification/ci/Dokkomplekt_Universal-source.zip -d verification/ci/extracted
+          cargo metadata --locked --no-deps \
+            --manifest-path verification/ci/extracted/Dokkomplekt_Universal/Cargo.toml \
+            > verification/ci/source-archive-cargo-metadata.json
+      - name: Create portable Git history bundle
+        run: |
+          git bundle create verification/ci/Dokkomplekt_Universal-history.bundle --all
+          git bundle verify verification/ci/Dokkomplekt_Universal-history.bundle
+      - name: Upload source provenance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: source-manifest-candidate
+          name: source-provenance-evidence
           path: |
             verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
             verification/ci/source-manifest-report.json
+            verification/ci/Dokkomplekt_Universal-source.zip
+            verification/ci/Dokkomplekt_Universal-source.zip.sha256
+            verification/ci/source-archive-report.json
+            verification/ci/source-archive-cargo-metadata.json
+            verification/ci/Dokkomplekt_Universal-history.bundle
           if-no-files-found: error
       - name: Synchronize manifest on same-repository pull request
         if: >-

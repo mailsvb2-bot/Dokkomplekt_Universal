@@ -54,6 +54,12 @@ replace_once(
 )
 
 replace_once(
+    """    await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));""",
+    """    await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(2));""",
+    "wait for both template analyses",
+)
+
+replace_once(
     """    expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);""",
     """    const analyzedTemplatePayloads = calls
       .filter((call) => call.command === 'analyze_template_file')

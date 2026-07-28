@@ -8,13 +8,13 @@ import importlib.util
 from pathlib import Path
 import re
 import subprocess
-import textwrap
 import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 ERROR_PATH = ROOT / "verification/reference_ux_error.txt"
 helper = ROOT / ".github/workflows/agent-pr9-reference-ux.yml"
 original_verify_path = ROOT / "verification/original_verify_source.py"
+YAML_CODE_INDENT = "          "
 
 
 def record_failure() -> None:
@@ -35,7 +35,11 @@ try:
     lines = helper.read_text(encoding="utf-8").splitlines()
     start = next(index for index, line in enumerate(lines) if line.strip() == "python - <<'PY'")
     end = next(index for index in range(start + 1, len(lines)) if lines[index].strip() == "PY")
-    program = textwrap.dedent("\n".join(lines[start + 1:end]))
+    program_lines = [
+        line[len(YAML_CODE_INDENT):] if line.startswith(YAML_CODE_INDENT) else line
+        for line in lines[start + 1:end]
+    ]
+    program = "\n".join(program_lines)
     exec(compile(program, str(helper), "exec"), {"__name__": "__reference_ux_patch__"})
 
     build_path = ROOT / "scripts/build_source_archive.py"

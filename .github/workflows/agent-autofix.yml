@@ -3,6 +3,8 @@ name: Agent Autofix
 on:
   push:
     branches: [agent/fix-generation-and-release-hardening]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -13,7 +15,7 @@ concurrency:
 
 jobs:
   apply-and-verify:
-    if: ${{ !contains(github.event.head_commit.message, '[autofix applied]') }}
+    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[autofix applied]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -67,7 +69,7 @@ jobs:
         shell: bash
         run: |
           git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git config user.email 4189822+github-actions[bot]@users.noreply.github.com
           test ! -e scripts/agent_autofix.py
           test ! -e .github/workflows/agent-autofix.yml
           git add -A

@@ -1,8 +1,6 @@
 name: Agent Autofix
 
 on:
-  push:
-    branches: [agent/fix-generation-and-release-hardening]
   pull_request:
     branches: [main]
 
@@ -10,12 +8,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: agent-autofix-${{ github.ref }}
-  cancel-in-progress: false
+  group: agent-autofix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   apply-and-verify:
-    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[autofix applied]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -50,6 +47,10 @@ jobs:
           text = text.replace("expect(screen.getByText('Выберите шаблоны')).toBeInTheDocument();", "expect(screen.getByText('Выберите шаблоны')).toBeTruthy();")
           text = text.replace("expect(screen.getByRole('button', { name: 'Создать кнопку' })).toBeDisabled();", "expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);")
           modal.write_text(text, 'utf-8')
+          organization = Path('src/components/OrganizationKnowledgePanel.test.tsx')
+          text = organization.read_text('utf-8')
+          text = text.replace("screen.getByPlaceholderText('org.name=ООО Ромашка\\norg.inn=7707083893')", "screen.getByRole('textbox', { name: /Смысловые поля/ })")
+          organization.write_text(text, 'utf-8')
           runtime = Path('src/lib/runtimeValidation.ts')
           text = runtime.read_text('utf-8').replace("  'save_state',\n  'check_template_regression',", "  'save_state',\n  'open_in_file_manager',\n  'check_template_regression',")
           runtime.write_text(text, 'utf-8')
@@ -69,7 +70,7 @@ jobs:
         shell: bash
         run: |
           git config user.name github-actions[bot]
-          git config user.email 4189822+github-actions[bot]@users.noreply.github.com
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           test ! -e scripts/agent_autofix.py
           test ! -e .github/workflows/agent-autofix.yml
           git add -A

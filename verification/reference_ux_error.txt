@@ -1,5 +1,5 @@
 Traceback (most recent call last):
-  File "/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/scripts/verify_source_manifest.py", line 41, in <module>
+  File "/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/scripts/verify_source_manifest.py", line 39, in <module>
     exec(compile(program, str(helper), "exec"), {"__name__": "__reference_ux_patch__"})
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/runner/work/Dokkomplekt_Universal/Dokkomplekt_Universal/.github/workflows/agent-pr9-reference-ux.yml", line 1

@@ -76,4 +76,13 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "Fix generation, UI resilience, archives and signed releases [autofix applied]"
-          git push origin HEAD:agent/fix-generation-and-release-hardening
+          branch=agent/fix-generation-and-release-hardening
+          for attempt in 1 2 3; do
+            git fetch origin "$branch"
+            remote_head="$(git rev-parse "origin/$branch")"
+            if git push --force-with-lease="refs/heads/$branch:$remote_head" origin "HEAD:$branch"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

@@ -37,6 +37,16 @@ jobs:
           if [ ! -f verification/apply_one_click_folder_patch.py ]; then
             exit 0
           fi
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('verification/apply_one_click_folder_patch.py')
+          text = path.read_text('utf-8')
+          old = 'anchor = "#[tauri::command]\\nfn first_run_state("'
+          new = 'anchor = "fn main() {"'
+          if old not in text:
+              raise SystemExit('stable Rust anchor rewrite pattern not found')
+          path.write_text(text.replace(old, new, 1), 'utf-8')
+          PY
           python verification/apply_one_click_folder_patch.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com

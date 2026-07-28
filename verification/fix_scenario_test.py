@@ -13,18 +13,59 @@ self_path = Path(__file__)
 error_path = ROOT / "verification/scenario_test_error.txt"
 
 payload = test_path.read_text(encoding="utf-8")
-old = """    fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
+
+
+def replace_once(old: str, new: str, label: str) -> None:
+    global payload
+    count = payload.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected one occurrence, found {count}")
+    payload = payload.replace(old, new, 1)
+
+
+replace_once(
+    """    fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
-    await click(/Создать документы \\(1\\)/);"""
-new = """    fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
+    await click(/Создать документы \\(1\\)/);""",
+    """    fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
     const invoiceTile = screen.getByRole('button', { name: 'Счёт на оплату' });
     expect(invoiceTile.getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(invoiceTile);
     await waitFor(() => expect(invoiceTile.getAttribute('aria-pressed')).toBe('true'));
-    await click(/Создать документы \\(1\\)/);"""
-if payload.count(old) != 1:
-    raise RuntimeError(f"expected one obsolete checkbox scenario, found {payload.count(old)}")
-test_path.write_text(payload.replace(old, new, 1), encoding="utf-8")
+    await click(/Создать документы \\(1\\)/);""",
+    "whole-tile selection scenario",
+)
+
+replace_once(
+    """      case 'import_template_file':
+        return { template_path: '/app-data/user-templates/tpl.docx', extracted_text: 'Договор\\n{{org.inn}}' } as never;""",
+    """      case 'import_template_file': { const req=(payload as {req?:{file_name?:string}})?.req; const fileName=req?.file_name ?? 'Договор.docx'; const title=fileName.replace(/\\.(docx|docm)$/i, ''); return { template_path: `/app-data/user-templates/${fileName}`, extracted_text: `${title}\\n{{org.inn}}` } as never; }""",
+    "distinct imported template mock",
+)
+
+replace_once(
+    """      case 'prepare_template_setup':
+        return [{ document_id: 'tpl', template_path: 't.docx', detected_title: 'Договор', suggested_button_label: 'Договор', editable_button_label: 'Договор', role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }] as never;
+      case 'confirm_template_setup':
+        return { pack_id: 'default', name: 'Пакет', documents: [{ ...accDoc, id: 'tpl', button_label: 'Договор' }] } as never;""",
+    """      case 'prepare_template_setup': { const candidates=(payload as {req?:{candidates?:Array<{template_path:string}>}})?.req?.candidates ?? []; return candidates.map((candidate,index)=>{ const fileName=candidate.template_path.split('/').pop() ?? `Шаблон-${index+1}.docx`; const title=fileName.replace(/\\.(docx|docm)$/i, ''); return { document_id: `tpl-${index+1}`, template_path: candidate.template_path, detected_title: title, suggested_button_label: title, editable_button_label: title, role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }; }) as never; }
+      case 'confirm_template_setup': { const rows=(payload as {req?:{rows?:Array<{document_id:string;button_label:string;template_path:string}>}})?.req?.rows ?? []; return { pack_id: 'default', name: 'Пакет', documents: rows.map((row)=>({ ...accDoc, id: row.document_id, button_label: row.button_label, template_path: row.template_path })) } as never; }""",
+    "distinct prepared template mock",
+)
+
+replace_once(
+    """    expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
+      { template_path: '/app-data/user-templates/tpl.docx' },
+      { template_path: '/app-data/user-templates/tpl.docx' },
+    ] } });""",
+    """    expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
+      { template_path: '/app-data/user-templates/Договор.docx' },
+      { template_path: '/app-data/user-templates/Акт.docm' },
+    ] } });""",
+    "distinct template payload expectation",
+)
+
+test_path.write_text(payload, encoding="utf-8")
 
 subprocess.run(["npm", "ci"], cwd=ROOT, check=True)
 subprocess.run(["npm", "run", "typecheck"], cwd=ROOT, check=True)

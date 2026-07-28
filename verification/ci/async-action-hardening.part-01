@@ -1,0 +1,94 @@
+--- a/src/hooks/useActionRunner.ts
++++ b/src/hooks/useActionRunner.ts
+@@ -1,6 +1,6 @@
+-import { useCallback, useState } from 'react';
++import { useCallback, useRef, useState } from 'react';
+ 
+-function message(error: unknown): string {
++export function actionErrorMessage(error: unknown): string {
+   if (error instanceof Error) return error.message;
+   if (typeof error === 'string') return error;
+   try {
+@@ -10,20 +10,39 @@
+   }
+ }
+ 
+-export function useActionRunner(onStatus: (message: string) => void) {
++export type ActionErrorFormatter = (label: string, detail: string) => string;
++
++const defaultErrorFormatter: ActionErrorFormatter = (_label, detail) =>
++  `Не удалось выполнить действие: ${detail}`;
++
++export function labelledActionError(label: string, detail: string): string {
++  return `Ошибка «${label}»: ${detail}`;
++}
++
++export function plainActionError(_label: string, detail: string): string {
++  return detail;
++}
++
++export function useActionRunner(
++  onStatus: (message: string) => void,
++  formatError: ActionErrorFormatter = defaultErrorFormatter,
++) {
+   const [busy, setBusy] = useState(false);
++  const pendingCount = useRef(0);
+ 
+-  const run = useCallback(async <T,>(_label: string, action: () => Promise<T>): Promise<T | undefined> => {
+-    setBusy(true);
++  const run = useCallback(async <T,>(label: string, action: () => Promise<T>): Promise<T | undefined> => {
++    pendingCount.current += 1;
++    if (pendingCount.current === 1) setBusy(true);
+     try {
+       return await action();
+     } catch (error) {
+-      onStatus(`Не удалось выполнить действие: ${message(error)}`);
++      onStatus(formatError(label, actionErrorMessage(error)));
+       return undefined;
+     } finally {
+-      setBusy(false);
++      pendingCount.current = Math.max(0, pendingCount.current - 1);
++      if (pendingCount.current === 0) setBusy(false);
+     }
+-  }, [onStatus]);
++  }, [formatError, onStatus]);
+ 
+   return { busy, run };
+ }
+--- a/src/components/AutomationControlCenter.tsx
++++ b/src/components/AutomationControlCenter.tsx
+@@ -1,6 +1,7 @@
+ import { useEffect, useState } from 'react';
+ import { listen } from '@tauri-apps/api/event';
+ import type { AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, CaseRunRecord, LocalSemanticModelConfig, LocalSemanticModelStatus, CorpusStatus, CalibratedThresholdStatus, ReferenceDataStatus, QueueStatus, PrinterInventory, PrivacyPreferences, SidecarToolStatus, ComponentProgress, ComponentStatus, QualityTelemetryReport } from '../lib/types';
++import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
+ import { confirmRiskExceptionAndRetry, confirmBundleExceptionAndRetry, getAutomationMetrics, getDailyAutomationDashboard, getQualityTelemetry, getQueueStatus, getCorpusStatus, exportCorpus, getCalibratedThresholdStatus, importCalibratedThresholdsFile, getPrinterInventory, listCaseRuns, retryCaseRun, getPrivacyPreferences, getSemanticModelConfig, getReferenceDataStatus, getSidecarStatus, getComponentStatuses, installComponent, refreshComponentCatalog, removeComponent, listAuditEvents, listAutomationExceptions, resolveAutomationException, runWorkspaceHygiene, testSemanticModel, updatePrintPreferences, updatePrivacyPreferences, updateReferenceData, importReferenceDataFile, updateSemanticModelConfig } from '../lib/api';
+ 
+ interface Props { onStatus(message: string): void; }
+@@ -56,7 +57,7 @@
+   const [componentProgress, setComponentProgress] = useState<ComponentProgress | null>(null);
+   const [printers, setPrinters] = useState<PrinterInventory>(DEFAULT_PRINTERS);
+   const [includeResolved, setIncludeResolved] = useState(false);
+-  const [busy, setBusy] = useState(false);
++  const { busy, run: execute } = useActionRunner(onStatus, labelledActionError);
+   const [minutesPerDocument, setMinutesPerDocument] = useState(() => { const stored = Number(globalThis.localStorage?.getItem('dokkomplekt.roi.minutesPerDocument') ?? 7); return Number.isFinite(stored) && stored >= 0 ? stored : 7; });
+ 
+   useEffect(() => { void refresh(false); }, []);
+@@ -68,13 +69,6 @@
+     return () => stop?.();
+   }, []);
+ 
+-  async function execute<T>(label: string, action: () => Promise<T>): Promise<T | undefined> {
+-    setBusy(true);
+-    try { return await action(); }
+-    catch (error) { onStatus(`Ошибка «${label}»: ${message(error)}`); return undefined; }
+-    finally { setBusy(false); }
+-  }
+-
+   async function refresh(showResolved = includeResolved) {
+     const result = await execute('центр автоматизации', async () => Promise.all([
+       getPrivacyPreferences(),
+@@ -204,27 +198,31 @@
+   }
+ 
+   async function reloadComponentCatalog() {

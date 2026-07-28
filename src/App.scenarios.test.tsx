@@ -277,7 +277,7 @@ describe('Полный прогон пользовательских сцена�
     expect(invoiceTile.getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(invoiceTile);
     await waitFor(() => expect(invoiceTile.getAttribute('aria-pressed')).toBe('true'));
-    await click(/Создать документы \(1\)/);
+    await click(/^Создать комплект$/);
     const batchPrompt = await screen.findByRole('dialog', { name: /Уточнить данные комплекта/ });
     fireEvent.click(within(batchPrompt).getByRole('button', { name: /Применить и создать/ }));
     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
@@ -446,7 +446,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'system-scan.png', { type: 'image/png' });
-    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
+    const zone = screen.getByText(/Перетащите сюда исходный документ/).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.some(call => call.command === 'install_component')).toBe(false);
@@ -460,7 +460,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'scan.png', { type: 'image/png' });
-    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
+    const zone = screen.getByText(/Перетащите сюда исходный документ/).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'install_component')).toBe(true));
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));

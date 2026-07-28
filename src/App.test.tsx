@@ -74,6 +74,8 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: 'Создать свои кнопки' })).toBeTruthy();
     expect(screen.queryByText('Встроенный пример')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Дополнительные настройки' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Настройки' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Дополнительные инструменты' })).toBeNull();
   });
 
   it('adds a document through the simple Rust-backed setup path', async () => {

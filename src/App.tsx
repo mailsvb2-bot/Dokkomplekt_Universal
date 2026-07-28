@@ -124,6 +124,10 @@ export function App() {
   const [guidedScanner, setGuidedScanner] = useState<GuidedScannerState | null>(null);
 
   useEffect(() => {
+    if (!documents.length && utilityOpen) setUtilityOpen(false);
+  }, [documents.length, utilityOpen]);
+
+  useEffect(() => {
     let alive = true;
     (async () => {
       try {
@@ -1230,9 +1234,11 @@ export function App() {
             </div>
           </div>
           <div className="hdrRight">
-            <button className="headerSettings" onClick={() => setUtilityOpen((value) => !value)} aria-expanded={utilityOpen}>
-              <i className="ti ti-settings" aria-hidden="true" /> Настройки
-            </button>
+            {documents.length > 0 && (
+              <button className="headerSettings" onClick={() => setUtilityOpen((value) => !value)} aria-expanded={utilityOpen}>
+                <i className="ti ti-settings" aria-hidden="true" /> Настройки
+              </button>
+            )}
             <ThemeSwitcher theme={theme} onChange={setTheme} />
           </div>
         </header>
@@ -1315,7 +1321,7 @@ export function App() {
           />
         </div>
 
-        {utilityOpen && (
+        {documents.length > 0 && utilityOpen && (
           <UtilityPanel
             documents={documents}
             selectedDocumentIds={selectedDocIds}

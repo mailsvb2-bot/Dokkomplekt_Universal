@@ -124,8 +124,12 @@ pub fn is_temporary_source(path: &Path) -> bool {
 }
 
 pub fn validate_source_file_size(path: &Path) -> Result<u64, String> {
-    let metadata = std::fs::metadata(path)
-        .map_err(|error| format!("Не удалось проверить размер источника {}: {error}", path.display()))?;
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        format!(
+            "Не удалось проверить размер источника {}: {error}",
+            path.display()
+        )
+    })?;
     if !metadata.is_file() {
         return Err(format!("Источник не является файлом: {}", path.display()));
     }
@@ -146,31 +150,49 @@ fn read_file_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>, 
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Не удалось прочитать {label}: {error}"))?;
     if bytes.len() > limit {
-        return Err(format!("{label} превышает безопасный предел {} МБ.", limit / (1024 * 1024)));
+        return Err(format!(
+            "{label} превышает безопасный предел {} МБ.",
+            limit / (1024 * 1024)
+        ));
     }
     Ok(bytes)
 }
 
-fn read_text_limited(reader: &mut impl std::io::Read, limit: usize, label: &str) -> Result<String, String> {
+fn read_text_limited(
+    reader: &mut impl std::io::Read,
+    limit: usize,
+    label: &str,
+) -> Result<String, String> {
     let mut bytes = Vec::new();
     reader
         .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Не удалось прочитать {label}: {error}"))?;
     if bytes.len() > limit {
-        return Err(format!("{label} превышает безопасный распакованный предел {} МБ.", limit / (1024 * 1024)));
+        return Err(format!(
+            "{label} превышает безопасный распакованный предел {} МБ.",
+            limit / (1024 * 1024)
+        ));
     }
-    String::from_utf8(bytes).map_err(|error| format!("{label} не является корректным UTF-8 XML: {error}"))
+    String::from_utf8(bytes)
+        .map_err(|error| format!("{label} не является корректным UTF-8 XML: {error}"))
 }
 
-fn validate_xlsx_archive<R: std::io::Read + std::io::Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
+fn validate_xlsx_archive<R: std::io::Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<(), String> {
     if archive.len() > MAX_XLSX_ENTRIES {
-        return Err(format!("XLSX содержит слишком много частей: {} > {MAX_XLSX_ENTRIES}", archive.len()));
+        return Err(format!(
+            "XLSX содержит слишком много частей: {} > {MAX_XLSX_ENTRIES}",
+            archive.len()
+        ));
     }
     let mut total = 0_u64;
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        total = total.checked_add(entry.size()).ok_or_else(|| "Размер XLSX переполнен.".to_string())?;
+        total = total
+            .checked_add(entry.size())
+            .ok_or_else(|| "Размер XLSX переполнен.".to_string())?;
         if total > MAX_XLSX_UNPACKED_BYTES {
             return Err(format!(
                 "Распакованное содержимое XLSX превышает безопасный предел {} МБ.",
@@ -1120,9 +1142,15 @@ fn normalize_xlsx(path: &Path) -> Result<NormalizedSource, String> {
             .by_name(&sheet_path)
             .map_err(|error| format!("Не удалось прочитать лист «{display_name}»: {error}"))?;
         if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
-            return Err(format!("Лист «{display_name}» превышает безопасный распакованный предел."));
+            return Err(format!(
+                "Лист «{display_name}» превышает безопасный распакованный предел."
+            ));
         }
-        let xml = read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, &format!("лист «{display_name}»"))?;
+        let xml = read_text_limited(
+            &mut entry,
+            MAX_CONTAINER_XML_BYTES,
+            &format!("лист «{display_name}»"),
+        )?;
         formula_count += xml.matches("<f").count();
         let sheet = xlsx_sheet_to_text(&xml, &shared)?;
         if !sheet.trim().is_empty() {
@@ -1285,9 +1313,15 @@ fn xlsx_bytes_first_sheet_to_tsv(bytes: &[u8]) -> Result<String, String> {
             .by_name(&sheet_path)
             .map_err(|error| format!("Не удалось прочитать лист «{display_name}»: {error}"))?;
         if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
-            return Err(format!("Лист «{display_name}» превышает безопасный распакованный предел."));
+            return Err(format!(
+                "Лист «{display_name}» превышает безопасный распакованный предел."
+            ));
         }
-        let xml = read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, &format!("лист «{display_name}»"))?;
+        let xml = read_text_limited(
+            &mut entry,
+            MAX_CONTAINER_XML_BYTES,
+            &format!("лист «{display_name}»"),
+        )?;
         let text = xlsx_sheet_to_text(&xml, &shared)?;
         if !text.trim().is_empty() {
             return Ok(text);
@@ -1320,7 +1354,9 @@ fn read_xlsx_shared_strings<R: std::io::Read + std::io::Seek>(
             Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"si" => {
                 in_si = false;
                 if values.len() >= MAX_XLSX_SHARED_STRINGS {
-                    return Err(format!("XLSX содержит больше {MAX_XLSX_SHARED_STRINGS} строковых значений."));
+                    return Err(format!(
+                        "XLSX содержит больше {MAX_XLSX_SHARED_STRINGS} строковых значений."
+                    ));
                 }
                 values.push(current.clone());
             }
@@ -1414,7 +1450,9 @@ fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
                     current_value.clone()
                 };
                 if current_column >= MAX_XLSX_COLUMNS {
-                    return Err(format!("Колонка XLSX превышает предел XFD ({MAX_XLSX_COLUMNS})."));
+                    return Err(format!(
+                        "Колонка XLSX превышает предел XFD ({MAX_XLSX_COLUMNS})."
+                    ));
                 }
                 if current_row.len() <= current_column {
                     current_row.resize(current_column + 1, String::new());

@@ -532,7 +532,10 @@ fn ensure_real_directory_below(root: &Path, directory: &Path) -> Result<PathBuf,
     for component in relative.components() {
         current.push(component.as_os_str());
         let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            format!("Не удалось проверить архивный каталог {}: {error}", current.display())
+            format!(
+                "Не удалось проверить архивный каталог {}: {error}",
+                current.display()
+            )
         })?;
         if metadata_is_link_or_reparse(&metadata) {
             return Err(format!(
@@ -541,11 +544,17 @@ fn ensure_real_directory_below(root: &Path, directory: &Path) -> Result<PathBuf,
             ));
         }
         if !metadata.is_dir() {
-            return Err(format!("Архивный путь не является каталогом: {}", current.display()));
+            return Err(format!(
+                "Архивный путь не является каталогом: {}",
+                current.display()
+            ));
         }
     }
     let canonical = directory.canonicalize().map_err(|error| {
-        format!("Не удалось канонизировать архивный каталог {}: {error}", directory.display())
+        format!(
+            "Не удалось канонизировать архивный каталог {}: {error}",
+            directory.display()
+        )
     })?;
     if !canonical.starts_with(&root_canonical) {
         return Err(format!(
@@ -568,7 +577,9 @@ fn cleanup_expired_archive_files(
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                report.warnings.push(format!("Не удалось прочитать элемент архива: {error}"));
+                report
+                    .warnings
+                    .push(format!("Не удалось прочитать элемент архива: {error}"));
                 continue;
             }
         };
@@ -608,13 +619,7 @@ fn cleanup_expired_archive_files(
             }
         };
         if metadata.is_dir() {
-            cleanup_expired_archive_files(
-                &path,
-                archive_root_canonical,
-                now,
-                retention,
-                report,
-            )?;
+            cleanup_expired_archive_files(&path, archive_root_canonical, now, retention, report)?;
             let _ = fs::remove_dir(&canonical);
             continue;
         }

@@ -2232,5 +2232,4 @@ mod tests {
         assert!(repo.quick_integrity_check().is_ok());
         let _ = std::fs::remove_file(path);
     }
-
 }

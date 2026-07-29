@@ -36,12 +36,29 @@ describe('TemplateSetupModal', () => {
       document_id: 'd1',
       file_name: 'Акт.docx',
       button_label: 'Акт',
-      extracted_text: 'Акт',
+      extracted_text: 'Акт № {{document.number}}',
       popup_fields: [],
     }]} />);
     expect(screen.getByText('2. Проверьте названия кнопок')).toBeTruthy();
     expect(screen.getByText('3. Всё готово')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it('blocks an unmarked example before its text can be copied as new-document data', () => {
+    const onConfirm = vi.fn();
+    render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{
+      document_id: 'd1',
+      file_name: 'Пример.docx',
+      button_label: 'Пример',
+      extracted_text: 'Пример документа с Ивановым Иваном Ивановичем',
+      popup_fields: [],
+    }]} />);
+    expect(screen.getByText('3. Нужна разметка')).toBeTruthy();
+    expect(screen.getByText(/Текст примера не будет скопирован/)).toBeTruthy();
+    const confirm = screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });

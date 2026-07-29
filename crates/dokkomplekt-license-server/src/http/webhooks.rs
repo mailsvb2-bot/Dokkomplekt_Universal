@@ -1,16 +1,10 @@
 use crate::provider_yookassa::YooKassaProvider;
-use crate::providers::{PaymentProvider as PaymentProviderApi, ProviderPaymentStatus};
+use crate::providers::ProviderPaymentStatus;
 use crate::state::AppState;
 use crate::storage::{
     PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::post,
-    Json, Router,
-};
+use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -75,17 +69,10 @@ async fn provider_callback(
 
 async fn yookassa_callback(
     State(state): State<AppState>,
-    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ProviderCallbackResponse>, StatusCode> {
-    let supplied_secret = headers
-        .get("x-dokkomplekt-callback-secret")
-        .and_then(|value| value.to_str().ok());
-    if !callback_secret_matches(
-        state.config.provider_callback_secret.as_deref(),
-        supplied_secret,
-    ) {
-        return Err(StatusCode::UNAUTHORIZED);
+    if body.len() > 64 * 1024 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let provider = YooKassaProvider {
         public_base_url: state.config.public_base_url.clone(),
@@ -93,9 +80,10 @@ async fn yookassa_callback(
         shop_id: state.config.yookassa_shop_id.clone().unwrap_or_default(),
         secret_key: state.config.yookassa_secret_key.clone().unwrap_or_default(),
     };
-    let event = provider
-        .parse_callback(&body)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let event = tokio::task::spawn_blocking(move || provider.verify_callback(&body))
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let status = match event.status {
         ProviderPaymentStatus::Pending => PaymentEventStatus::Pending,
         ProviderPaymentStatus::Succeeded => PaymentEventStatus::Succeeded,

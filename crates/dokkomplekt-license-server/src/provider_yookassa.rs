@@ -2,10 +2,10 @@
 
 //! YooKassa integration.
 //!
-//! Webhook notifications are parsed and validated here (pure, unit-tested):
-//! event type -> payment status, `metadata.order_id` -> internal order UUID,
-//! `amount.value` in RUB with kopeck-precision checks. IP allow-listing of
-//! YooKassa callback sources is expected at the reverse proxy.
+//! Webhook notifications are treated only as a prompt to verify a payment.
+//! The authoritative status, amount, currency and `metadata.order_id` are fetched
+//! from YooKassa's authenticated API before any local order is changed. Optional
+//! IP allow-listing at the reverse proxy remains defence in depth, not correctness.
 //!
 //! Outbound payment creation uses YooKassa's official HTTPS REST endpoint with
 //! HTTP Basic authentication and an idempotence key derived from the internal
@@ -120,16 +120,116 @@ fn parse_rub_amount(value: &str) -> Result<u64, ProviderError> {
     Ok(rub)
 }
 
-impl PaymentProvider for YooKassaProvider {
-    fn create_payment(
-        &self,
-        request: CreatePaymentRequest,
-    ) -> Result<CreatePaymentResponse, ProviderError> {
+fn payment_status(value: &str) -> Result<ProviderPaymentStatus, ProviderError> {
+    match value.trim() {
+        "pending" | "waiting_for_capture" => Ok(ProviderPaymentStatus::Pending),
+        "succeeded" => Ok(ProviderPaymentStatus::Succeeded),
+        "canceled" => Ok(ProviderPaymentStatus::Cancelled),
+        other => Err(ProviderError::BadRequest(format!(
+            "unsupported YooKassa payment status: {other}"
+        ))),
+    }
+}
+
+impl YooKassaProvider {
+    fn authenticated_client(&self) -> Result<reqwest::blocking::Client, ProviderError> {
         if self.shop_id.trim().is_empty() || self.secret_key.trim().is_empty() {
             return Err(ProviderError::Transport(
                 "YooKassa credentials are not configured".into(),
             ));
         }
+        crate::ensure_rustls_crypto_provider();
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|error| ProviderError::Transport(error.to_string()))
+    }
+
+    /// Authenticate an official webhook by resolving its payment through the
+    /// YooKassa API. The callback body alone is never trusted to mark an order paid.
+    pub fn verify_callback(&self, raw_body: &[u8]) -> Result<ProviderEvent, ProviderError> {
+        let candidate = self.parse_callback(raw_body)?;
+        let payment_id = candidate
+            .provider_payment_id
+            .as_deref()
+            .ok_or_else(|| ProviderError::BadRequest("payment id is missing".into()))?;
+        if payment_id.is_empty()
+            || payment_id.len() > 128
+            || !payment_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            return Err(ProviderError::BadRequest(
+                "invalid YooKassa payment id".into(),
+            ));
+        }
+        let endpoint = format!(
+            "{}/v3/payments/{}",
+            self.api_base_url.trim_end_matches('/'),
+            payment_id
+        );
+        let response = self
+            .authenticated_client()?
+            .get(endpoint)
+            .basic_auth(self.shop_id.trim(), Some(self.secret_key.trim()))
+            .send()
+            .map_err(|error| ProviderError::Transport(error.to_string()))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .map_err(|error| ProviderError::Transport(error.to_string()))?;
+        if !status.is_success() {
+            let body = String::from_utf8_lossy(&bytes);
+            return Err(ProviderError::Transport(format!(
+                "YooKassa verification returned HTTP {status}: {}",
+                body.chars().take(512).collect::<String>()
+            )));
+        }
+        let verified: YooKassaPayment = serde_json::from_slice(&bytes).map_err(|error| {
+            ProviderError::BadRequest(format!("bad YooKassa verification response: {error}"))
+        })?;
+        if verified.id != payment_id {
+            return Err(ProviderError::BadRequest(
+                "YooKassa verification returned another payment".into(),
+            ));
+        }
+        if verified.amount.currency != "RUB" {
+            return Err(ProviderError::BadRequest(format!(
+                "unsupported currency: {}",
+                verified.amount.currency
+            )));
+        }
+        let order_id_raw = verified
+            .metadata
+            .order_id
+            .as_deref()
+            .ok_or_else(|| ProviderError::BadRequest("metadata.order_id is missing".into()))?;
+        let order_id = Uuid::parse_str(order_id_raw).map_err(|_| {
+            ProviderError::BadRequest(format!("metadata.order_id is not a UUID: {order_id_raw}"))
+        })?;
+        let amount_rub = parse_rub_amount(&verified.amount.value)?;
+        if order_id != candidate.order_id || amount_rub != candidate.amount_rub {
+            return Err(ProviderError::BadRequest(
+                "webhook data does not match the authenticated YooKassa payment".into(),
+            ));
+        }
+        let status = payment_status(&verified.status)?;
+        Ok(ProviderEvent {
+            provider: ProviderKind::YooKassa,
+            provider_event_id: format!("verified:{}:{}", verified.id, verified.status),
+            provider_payment_id: Some(verified.id),
+            order_id,
+            status,
+            amount_rub,
+        })
+    }
+}
+
+impl PaymentProvider for YooKassaProvider {
+    fn create_payment(
+        &self,
+        request: CreatePaymentRequest,
+    ) -> Result<CreatePaymentResponse, ProviderError> {
         let return_url = request.return_url.clone().unwrap_or_else(|| {
             format!(
                 "{}/payment/return/{}",
@@ -153,12 +253,8 @@ impl PaymentProvider for YooKassaProvider {
             },
         };
         let endpoint = format!("{}/v3/payments", self.api_base_url.trim_end_matches('/'));
-        crate::ensure_rustls_crypto_provider();
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .build()
-            .map_err(|error| ProviderError::Transport(error.to_string()))?;
-        let response = client
+        let response = self
+            .authenticated_client()?
             .post(endpoint)
             .basic_auth(self.shop_id.trim(), Some(self.secret_key.trim()))
             .header("Idempotence-Key", request.order_id.to_string())
@@ -381,6 +477,66 @@ mod tests {
         assert_eq!(
             created.confirmation_url,
             "https://pay.example/confirm/payment-123"
+        );
+        server.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn callback_is_accepted_only_after_authenticated_payment_lookup() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8(request).expect("UTF-8 request");
+            assert!(request_text.starts_with("GET /v3/payments/payment-verified HTTP/1.1\r\n"));
+            let expected_auth = format!("Authorization: Basic {}", STANDARD.encode("shop:secret"));
+            assert!(request_text
+                .to_ascii_lowercase()
+                .contains(&expected_auth.to_ascii_lowercase()));
+            let body = r#"{"id":"payment-verified","status":"succeeded","amount":{"value":"1490.00","currency":"RUB"},"metadata":{"order_id":"11111111-2222-3333-4444-555555555555"}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+        });
+        let provider = YooKassaProvider {
+            public_base_url: "https://product.example".into(),
+            api_base_url: format!("http://{address}"),
+            shop_id: "shop".into(),
+            secret_key: "secret".into(),
+        };
+        let body = br#"{"type":"notification","event":"payment.succeeded","object":{"id":"payment-verified","status":"succeeded","amount":{"value":"1490.00","currency":"RUB"},"metadata":{"order_id":"11111111-2222-3333-4444-555555555555"}}}"#;
+        let event = provider
+            .verify_callback(body)
+            .expect("authenticated lookup must verify callback");
+        assert_eq!(event.status, ProviderPaymentStatus::Succeeded);
+        assert_eq!(event.amount_rub, 1490);
+        assert_eq!(
+            event.provider_event_id,
+            "verified:payment-verified:succeeded"
         );
         server.join().expect("mock server thread");
     }

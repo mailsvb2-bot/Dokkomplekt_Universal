@@ -201,6 +201,8 @@ fn unreadable_note_file_name(source_stem: &str) -> String {
 }
 
 const NOTE_SOURCE_SHA256_PREFIX: &str = "source_sha256=";
+const NOTE_SOURCE_SIZE_PREFIX: &str = "source_size_bytes=";
+const NOTE_SOURCE_MTIME_PREFIX: &str = "source_modified_unix_ms=";
 const NOTE_ERROR_CATEGORY_PREFIX: &str = "error_category=";
 const NOTE_RETRY_MODE_PREFIX: &str = "retry_mode=";
 const NOTE_RETRY_AFTER_PREFIX: &str = "retry_after_unix_ms=";
@@ -232,6 +234,10 @@ fn classify_processing_error(error: &str) -> (&'static str, UnreadableRetryPolic
         "unsupported format",
         "не удалось распознать формат",
         "path traversal",
+        "превышает допустимый размер",
+        "слишком большой",
+        "too large",
+        "payload too large",
     ];
     if permanent_source_markers
         .iter()
@@ -326,6 +332,37 @@ fn note_with_source_fingerprint(
     format!("{}\n---\n[dokkomplekt]\n{metadata}", body.trim_end())
 }
 
+fn note_with_source_metadata(
+    body: &str,
+    size_bytes: u64,
+    modified_unix_ms: u128,
+    error_category: Option<&str>,
+    retry_policy: Option<UnreadableRetryPolicy>,
+    created_at: std::time::SystemTime,
+) -> String {
+    let mut metadata = format!(
+        "{NOTE_SOURCE_SIZE_PREFIX}{size_bytes}\n{NOTE_SOURCE_MTIME_PREFIX}{modified_unix_ms}\n"
+    );
+    if let Some(category) = error_category {
+        metadata.push_str(&format!("{NOTE_ERROR_CATEGORY_PREFIX}{category}\n"));
+    }
+    if let Some(policy) = retry_policy {
+        match policy {
+            UnreadableRetryPolicy::ContentChange => {
+                metadata.push_str(&format!("{NOTE_RETRY_MODE_PREFIX}content_change\n"));
+            }
+            UnreadableRetryPolicy::Timed(delay) => {
+                metadata.push_str(&format!("{NOTE_RETRY_MODE_PREFIX}timed\n"));
+                metadata.push_str(&format!(
+                    "{NOTE_RETRY_AFTER_PREFIX}{}\n",
+                    unix_time_ms(created_at + delay)
+                ));
+            }
+        }
+    }
+    format!("{}\n---\n[dokkomplekt]\n{metadata}", body.trim_end())
+}
+
 fn note_matches_source_content(note_path: &Path, source: &Path) -> bool {
     if !note_path.is_file() {
         return false;
@@ -333,16 +370,33 @@ fn note_matches_source_content(note_path: &Path, source: &Path) -> bool {
     let Ok(note) = std::fs::read_to_string(note_path) else {
         return false;
     };
-    let Some(expected) = note
+    if let Some(expected) = note
         .lines()
         .find_map(|line| line.trim().strip_prefix(NOTE_SOURCE_SHA256_PREFIX))
         .filter(|digest| digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit()))
-    else {
+    {
+        return file_content_signature(source)
+            .map(|(_, _, actual)| actual.eq_ignore_ascii_case(expected))
+            .unwrap_or(false);
+    }
+    let expected_size = note
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(NOTE_SOURCE_SIZE_PREFIX))
+        .and_then(|value| value.parse::<u64>().ok());
+    let expected_modified = note
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(NOTE_SOURCE_MTIME_PREFIX))
+        .and_then(|value| value.parse::<u128>().ok());
+    let Ok(metadata) = std::fs::metadata(source) else {
         return false;
     };
-    file_content_signature(source)
-        .map(|(_, _, actual)| actual.eq_ignore_ascii_case(expected))
-        .unwrap_or(false)
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_millis())
+        .unwrap_or_default();
+    expected_size == Some(metadata.len()) && expected_modified == Some(modified)
 }
 
 fn unreadable_note_blocks_retry(
@@ -474,17 +528,33 @@ fn write_unreadable_source_note(
             safe_error.as_str()
         }
     );
-    let (_, _, source_sha256) = file_content_signature(source)?;
-    std::fs::write(
-        &note_path,
+    let metadata = std::fs::metadata(source).map_err(|error| error.to_string())?;
+    let note_body = if metadata.len() <= universal_intake::MAX_SOURCE_FILE_BYTES {
+        let (_, _, source_sha256) = file_content_signature(source)?;
         note_with_source_fingerprint(
             &body,
             &source_sha256,
             Some(category),
             Some(retry_policy),
             now,
-        ),
-    )
+        )
+    } else {
+        let modified_unix_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|value| value.as_millis())
+            .unwrap_or_default();
+        note_with_source_metadata(
+            &body,
+            metadata.len(),
+            modified_unix_ms,
+            Some(category),
+            Some(retry_policy),
+            now,
+        )
+    };
+    std::fs::write(&note_path, note_body)
     .map_err(|write_error| {
         format!("Не удалось записать понятное сообщение об ошибке: {write_error}")
     })?;
@@ -800,6 +870,12 @@ fn start_watcher_thread(
                     stability_observations.remove(&path);
                     continue;
                 }
+                    if let Err(error) = universal_intake::validate_source_file_size(&path) {
+                        let _ = write_unreadable_source_note(&path, &error, now);
+                        pending_paths.remove(&path);
+                        stability_observations.remove(&path);
+                        continue;
+                    }
                     // Require two identical full reads on separate polls. A fixed
                     // mtime delay is insufficient when a network copy preserves time.
                     if !observe_file_stability(&path, &mut stability_observations, now)

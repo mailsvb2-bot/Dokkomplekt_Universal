@@ -7,7 +7,12 @@ fn validate_printable_file(path: &Path) -> Result<(), String> {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if matches!(extension.as_str(), "doc" | "docx" | "docm" | "pdf" | "rtf") {
+    if matches!(extension.as_str(), "docx" | "docm") {
+        validate_safe_template_file(path).map_err(|error| {
+            format!("Печать заблокирована: документ содержит активное или внешнее OOXML-содержимое: {error}")
+        })?;
+        Ok(())
+    } else if matches!(extension.as_str(), "doc" | "pdf" | "rtf") {
         Ok(())
     } else {
         Err(format!(
@@ -111,6 +116,7 @@ $word = $null
 $printServer = $null
 $printQueue = $null
 $previousTicket = $null
+$previousAutomationSecurity = $null
 try {{
   # For hardware duplex, temporarily set the current user's queue ticket and
   # restore it after Word synchronously submits the job. This avoids relying on
@@ -134,6 +140,10 @@ try {{
   # Printing uses an isolated hidden Word instance so an already-open user
   # session is never hidden, reconfigured or closed.
   $word = New-Object -ComObject Word.Application
+  $previousAutomationSecurity = $word.AutomationSecurity
+  # msoAutomationSecurityForceDisable. Word automation otherwise inherits the
+  # user's macro policy and can execute active content while printing.
+  $word.AutomationSecurity = 3
   $word.Visible = $false
   $word.DisplayAlerts = 0
   if (-not [string]::IsNullOrWhiteSpace($printer)) {{ $word.ActivePrinter = $printer }}
@@ -150,6 +160,9 @@ try {{
   }}
 }} finally {{
   if ($null -ne $word) {{
+    if ($null -ne $previousAutomationSecurity) {{
+      try {{ $word.AutomationSecurity = $previousAutomationSecurity }} catch {{ }}
+    }}
     $word.Quit()
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($word)
   }}

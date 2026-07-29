@@ -497,6 +497,82 @@ impl LocalRepository {
         }
     }
 
+    /// Atomically persists the user case and document pack. No caller can observe
+    /// a new case paired with an old pack after a crash or power loss.
+    pub fn save_case_and_pack_atomic(
+        &self,
+        case_id: &str,
+        pack_id: &str,
+        case: &SemanticCase,
+        pack: &DocumentPack,
+    ) -> StorageResult<()> {
+        let case_json = serde_json::to_string_pretty(case)?;
+        let case_stored = self.encode_sensitive(&case_json)?;
+        let pack_json = serde_json::to_string_pretty(pack)?;
+        let pack_stored = self.encode_sensitive(&pack_json)?;
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
+            "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![case_id, case_stored],
+        )?;
+        transaction.execute(
+            "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![pack_id, pack_stored],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Atomically persists the complete desktop state, including the commercial
+    /// state value. All serialization/encryption is completed before SQLite is
+    /// locked so a fallible conversion can never leave a partial snapshot.
+    pub fn save_desktop_snapshot<T: serde::Serialize + ?Sized>(
+        &self,
+        case_id: &str,
+        pack_id: &str,
+        case: &SemanticCase,
+        pack: &DocumentPack,
+        state_key: &str,
+        state_value: &T,
+    ) -> StorageResult<()> {
+        let case_json = serde_json::to_string_pretty(case)?;
+        let case_stored = self.encode_sensitive(&case_json)?;
+        let pack_json = serde_json::to_string_pretty(pack)?;
+        let pack_stored = self.encode_sensitive(&pack_json)?;
+        let state_json = serde_json::to_string(state_value)?;
+        let state_stored = self.encode_sensitive(&state_json)?;
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
+            "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![case_id, case_stored],
+        )?;
+        transaction.execute(
+            "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![pack_id, pack_stored],
+        )?;
+        transaction.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![state_key, state_stored],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Fails closed when SQLite reports corruption instead of allowing the
+    /// desktop process to continue with a partially loaded in-memory snapshot.
+    pub fn quick_integrity_check(&self) -> StorageResult<()> {
+        let result: String = self
+            .conn
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
+        if result.trim().eq_ignore_ascii_case("ok") {
+            Ok(())
+        } else {
+            Err(StorageError::Crypto(format!(
+                "SQLite quick_check failed: {result}"
+            )))
+        }
+    }
+
     pub fn delete_state_value(&self, key: &str) -> StorageResult<()> {
         self.conn
             .execute("DELETE FROM app_state WHERE state_key=?1", params![key])?;
@@ -2125,6 +2201,46 @@ mod tests {
         assert_eq!(repo.next_counter("contract.number", 2027).unwrap().value, 1);
         repo.delete_clause_block("requisites").unwrap();
         assert!(repo.list_clause_blocks().unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn desktop_snapshot_round_trips_case_pack_and_commercial_state_atomically() {
+        let path = temp_db("desktop-snapshot");
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let mut case = SemanticCase::default();
+        case.values.insert(
+            "subject.name".into(),
+            dokkomplekt_core::SemanticValue::new(
+                "subject.name",
+                "Иванов Иван Иванович",
+                dokkomplekt_core::ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        let pack = DocumentPack {
+            pack_id: "atomic-pack".into(),
+            ..DocumentPack::default()
+        };
+        let commercial = serde_json::json!({"plan":"doctor_pro","active":true});
+
+        repo.save_desktop_snapshot(
+            "current",
+            "default",
+            &case,
+            &pack,
+            "license_document",
+            &commercial,
+        )
+        .unwrap();
+
+        assert_eq!(repo.load_case("current").unwrap(), Some(case));
+        assert_eq!(repo.load_pack("default").unwrap(), Some(pack));
+        assert_eq!(
+            repo.load_state_value::<serde_json::Value>("license_document")
+                .unwrap(),
+            Some(commercial)
+        );
+        assert!(repo.quick_integrity_check().is_ok());
         let _ = std::fs::remove_file(path);
     }
 }

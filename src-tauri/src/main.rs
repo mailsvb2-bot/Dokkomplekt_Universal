@@ -39,8 +39,9 @@ use dokkomplekt_core::{
 use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
     create_docx_from_text, extract_docx_text, extract_docx_text_from_bytes, inject_docx_images,
-    render_docx_file_with_watermark, TemplateLearningMapField, TemplateLearningMapReport,
-    TemplateMarkupReplacement, TemplateMarkupReport, TemplateRegressionReport,
+    render_docx_file_with_watermark, validate_safe_template_file, TemplateLearningMapField,
+    TemplateLearningMapReport, TemplateMarkupReplacement, TemplateMarkupReport,
+    TemplateRegressionReport,
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,
@@ -597,6 +598,8 @@ struct AppState {
     license_document: Mutex<Option<LicenseDocument>>,
     word_scanner: Mutex<Option<WordScannerSessionState>>,
     semantic_runtime: Mutex<Option<semantic_runtime::ManagedSemanticRuntime>>,
+    persistence_blocked: AtomicBool,
+    persistence_error: Mutex<Option<String>>,
 }
 
 impl Default for AppState {
@@ -611,6 +614,8 @@ impl Default for AppState {
             license_document: Mutex::new(None),
             word_scanner: Mutex::new(None),
             semantic_runtime: Mutex::new(None),
+            persistence_blocked: AtomicBool::new(false),
+            persistence_error: Mutex::new(None),
         }
     }
 }
@@ -1447,35 +1452,67 @@ fn template_text_for_document(
     extract_docx_text(&resolve_user_path(app, &document.template_path)?).map_err(|e| e.to_string())
 }
 
+fn ensure_persistence_available(state: &AppState) -> Result<(), String> {
+    if state.persistence_blocked.load(Ordering::SeqCst) {
+        let reason = state
+            .persistence_error
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .unwrap_or_else(|| "неизвестная ошибка восстановления состояния".into());
+        return Err(format!(
+            "Сохранение заблокировано для защиты данных: {reason}. Загрузите исправную резервную базу состояния."
+        ));
+    }
+    Ok(())
+}
+
 fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
+    ensure_persistence_available(state)?;
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let repo = repository_for(db_path)?;
     let case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    repo.save_case("current", &case)
-        .map_err(|e| e.to_string())?;
-    repo.save_pack(&pack).map_err(|e| e.to_string())?;
+    repository_for(db_path)?
+        .save_case_and_pack_atomic("current", "default", &case, &pack)
+        .map_err(|error| error.to_string())?;
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(db_path.to_path_buf());
     Ok(())
 }
 
 fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
+    ensure_persistence_available(state)?;
     let path = default_state_db_path(app)?;
-    persist_state_to(&path, state)?;
-    let repo = repository_for(&path)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let case = state
+        .semantic_case
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .clone();
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let license = state
         .license_document
         .lock()
         .map_err(|_| "license state lock failed")?
         .clone();
-    repo.save_state_value("license_document", &license)
+    repository_for(&path)?
+        .save_desktop_snapshot(
+            "current",
+            "default",
+            &case,
+            &pack,
+            "license_document",
+            &license,
+        )
         .map_err(|error| error.to_string())?;
+    *state.db_path.lock().map_err(|_| "state lock failed")? = Some(path);
     Ok(())
 }
 
@@ -1915,7 +1952,19 @@ fn main() {
             // and semantic values. Persistence is no longer a hidden utility action.
             if let Ok(db_path) = default_state_db_path(&handle) {
                 if db_path.exists() {
-                    let _ = load_state_from(&db_path, &state, true);
+                    if let Err(error) = load_state_from(&db_path, &state, true) {
+                        state.persistence_blocked.store(true, Ordering::SeqCst);
+                        if let Ok(mut slot) = state.persistence_error.lock() {
+                            *slot = Some(error.clone());
+                        }
+                        let marker = db_path.with_extension("recovery-required.txt");
+                        let message = format!(
+                            "Доккомплект не изменял повреждённую базу состояния.\nПуть: {}\nОшибка: {}\nЗагрузите исправную резервную базу через интерфейс.\n",
+                            db_path.display(), error
+                        );
+                        let _ = std::fs::write(&marker, message);
+                        let _ = handle.emit("state-recovery-required", &error);
+                    }
                 }
             }
             if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() {
@@ -2311,10 +2360,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("temp dir");
         let docx = root.join("contract.docx");
+        let malformed_docx = root.join("malformed.docx");
         let executable = root.join("payload.exe");
-        std::fs::write(&docx, b"docx-placeholder").expect("docx");
+        dokkomplekt_docx::create_docx_from_text(&docx, "Безопасный документ")
+            .expect("create valid docx");
+        std::fs::write(&malformed_docx, b"not-a-zip").expect("malformed docx");
         std::fs::write(&executable, b"not-printable").expect("exe");
         assert!(validate_printable_file(&docx).is_ok());
+        assert!(validate_printable_file(&malformed_docx).is_err());
         assert!(validate_printable_file(&executable).is_err());
         assert!(validate_printable_file(&root.join("missing.pdf")).is_err());
         let _ = std::fs::remove_dir_all(root);

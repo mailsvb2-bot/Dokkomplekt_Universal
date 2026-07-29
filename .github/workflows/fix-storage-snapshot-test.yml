@@ -1,0 +1,54 @@
+name: Fix Storage Snapshot Test
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'agent/fundamental-seven-critical-fixes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Correct API invocation and verify storage contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/dokkomplekt-storage/src/lib.rs')
+          text = path.read_text(encoding='utf-8')
+          old = 'repo.save_desktop_snapshot(&case, &pack, "license_document", &commercial)'
+          new = 'repo.save_desktop_snapshot("current", &case, &pack, "license_document", &commercial)'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one stale invocation, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p dokkomplekt-storage desktop_snapshot_round_trips_case_pack_and_commercial_state_atomically
+          rm .github/workflows/fix-storage-snapshot-test.yml
+          mkdir -p verification/ci
+          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.json || true
+          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git config user.name mailsvb2-bot
+          git config user.email 254540704+mailsvb2-bot@users.noreply.github.com
+          git add -A
+          git commit -m "Correct transactional snapshot regression test"
+          git push --force origin HEAD:refs/heads/agent/fundamental-seven-critical-fixes

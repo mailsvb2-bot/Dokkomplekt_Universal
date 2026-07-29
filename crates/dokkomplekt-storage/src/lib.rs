@@ -502,6 +502,7 @@ impl LocalRepository {
     pub fn save_case_and_pack_atomic(
         &self,
         case_id: &str,
+        pack_id: &str,
         case: &SemanticCase,
         pack: &DocumentPack,
     ) -> StorageResult<()> {
@@ -516,7 +517,7 @@ impl LocalRepository {
         )?;
         transaction.execute(
             "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
-            params![pack.pack_id.as_str(), pack_stored],
+            params![pack_id, pack_stored],
         )?;
         transaction.commit()?;
         Ok(())
@@ -528,6 +529,7 @@ impl LocalRepository {
     pub fn save_desktop_snapshot<T: serde::Serialize + ?Sized>(
         &self,
         case_id: &str,
+        pack_id: &str,
         case: &SemanticCase,
         pack: &DocumentPack,
         state_key: &str,
@@ -546,7 +548,7 @@ impl LocalRepository {
         )?;
         transaction.execute(
             "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
-            params![pack.pack_id.as_str(), pack_stored],
+            params![pack_id, pack_stored],
         )?;
         transaction.execute(
             "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
@@ -2219,8 +2221,15 @@ mod tests {
         pack.pack_id = "atomic-pack".into();
         let commercial = serde_json::json!({"plan":"doctor_pro","active":true});
 
-        repo.save_desktop_snapshot(&case, &pack, "license_document", &commercial)
-            .unwrap();
+        repo.save_desktop_snapshot(
+            "current",
+            "default",
+            &case,
+            &pack,
+            "license_document",
+            &commercial,
+        )
+        .unwrap();
 
         assert_eq!(repo.load_case("current").unwrap(), Some(case));
         assert_eq!(repo.load_pack("default").unwrap(), Some(pack));

@@ -2360,10 +2360,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("temp dir");
         let docx = root.join("contract.docx");
+        let malformed_docx = root.join("malformed.docx");
         let executable = root.join("payload.exe");
-        std::fs::write(&docx, b"docx-placeholder").expect("docx");
+        dokkomplekt_docx::create_docx_from_text(&docx, "Безопасный документ")
+            .expect("create valid docx");
+        std::fs::write(&malformed_docx, b"not-a-zip").expect("malformed docx");
         std::fs::write(&executable, b"not-printable").expect("exe");
         assert!(validate_printable_file(&docx).is_ok());
+        assert!(validate_printable_file(&malformed_docx).is_err());
         assert!(validate_printable_file(&executable).is_err());
         assert!(validate_printable_file(&root.join("missing.pdf")).is_err());
         let _ = std::fs::remove_dir_all(root);

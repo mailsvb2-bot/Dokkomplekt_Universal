@@ -33,6 +33,9 @@ interface TemplateSetupModalProps {
 
 export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const hasBatch = props.pendingTemplates.length > 0;
+  const unmarkedTemplateCount = props.pendingTemplates.filter((item) => !hasConfirmedPlaceholder(item.extracted_text)).length;
+  const batchReady = hasBatch && unmarkedTemplateCount === 0;
+  const manualReady = hasConfirmedPlaceholder(props.templateText);
   const [scannerField, setScannerField] = useState('');
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
@@ -51,6 +54,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
       setActivePendingId(props.pendingTemplates[0].document_id);
     }
   }, [activePendingId, props.pendingTemplates]);
+
+  useEffect(() => {
+    for (const item of props.pendingTemplates) {
+      const normalized = normalizeTemplateButtonLabel(item.button_label);
+      if (normalized !== item.button_label) {
+        props.onPendingTemplateLabelChange(item.document_id, normalized);
+      }
+    }
+  }, [props.pendingTemplates, props.onPendingTemplateLabelChange]);
 
   function rememberScannerQuestion(documentId: string | null, fieldId: string) {
     if (!fieldId.trim()) return;
@@ -106,12 +118,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <p className="hint">
           Выберите свои DOCX или DOCM. Название каждого документа станет кнопкой на главном экране.
         </p>
+        <p className="hint">
+          Шаблон задаёт форму и расположение полей. Данные нового документа берутся из исходного файла и подтверждённых ответов, а не копируются из текста обучающего шаблона.
+        </p>
 
         {!hasBatch ? (
           <div className="emptyPackage templateFirstStep">
             <div><i className="ti ti-file-upload" /></div>
-            <h3>Выберите шаблоны</h3>
-            <p>Можно выбрать сразу несколько файлов. Размечать их перед созданием кнопок не обязательно.</p>
+            <h3>1. Выберите шаблоны</h3>
+            <p>Можно выбрать сразу несколько файлов. Если программа не найдёт места для заполнения, она попросит показать их в Word.</p>
             <label className="primaryBtn fileBtn largeAction">
               Выбрать DOCX/DOCM
               <input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} data-testid="template-file-input" style={{ display: 'none' }} />
@@ -140,6 +155,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                 </tbody>
               </table>
               <button className="softBtn" onClick={props.onAnalyze}>Анализировать</button>
+              {props.templateText.trim() && !manualReady ? (
+                <div className="readyMessage templateReadyMessage warning">
+                  <i className="ti ti-alert-triangle" aria-hidden="true" />
+                  <div>
+                    <strong>Нужно указать места заполнения</strong>
+                    <span>Выделите примерное значение ниже и замените его смысловым полем. Иначе текст примера мог бы попасть в новый документ.</span>
+                  </div>
+                </div>
+              ) : null}
               <details className="manualScannerDetails">
                 <summary>Дополнительная разметка</summary>
                 <ScannerToolbar
@@ -156,7 +180,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         ) : (
           <>
             <div className="templateBatch" aria-label="Подготовленные шаблоны">
-              <div className="templateBatchHead">Так будут называться кнопки</div>
+              <div className="templateBatchHead">2. Проверьте названия кнопок</div>
               {props.pendingTemplates.map((item) => (
                 <div className={activePending?.document_id === item.document_id ? 'templateBatchRow selected' : 'templateBatchRow'} key={item.document_id}>
                   <button
@@ -176,11 +200,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
               ))}
             </div>
 
-            <div className="readyMessage templateReadyMessage">
-              <i className="ti ti-circle-check" aria-hidden="true" />
+            <div className={`readyMessage templateReadyMessage ${batchReady ? '' : 'warning'}`}>
+              <i className={batchReady ? 'ti ti-circle-check' : 'ti ti-alert-triangle'} aria-hidden="true" />
               <div>
-                <strong>Всё готово</strong>
-                <span>Нажмите «{confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.</span>
+                <strong>{batchReady ? '3. Всё готово' : '3. Нужна разметка'}</strong>
+                <span>
+                  {batchReady
+                    ? `Нажмите «${confirmLabel}». Шаблон задаёт форму, а значения будут взяты только из исходного документа и подтверждённых ответов.`
+                    : `В ${unmarkedTemplateCount} шаблон(ах) не найдено подтверждённых мест заполнения. Откройте дополнительную настройку и покажите хотя бы одно место в Word. Текст примера не будет скопирован как данные нового документа.`}
+                </span>
               </div>
             </div>
 
@@ -191,7 +219,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                   <div className="guidedTemplateLaunch">
                     <div>
                       <strong>Показать места для автоматического заполнения</strong>
-                      <small>Это необязательно. Кнопка документа создаётся и без разметки.</small>
+                      <small>Для неразмеченного шаблона покажите хотя бы одно место заполнения.</small>
                     </div>
                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>
                       <i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место
@@ -244,13 +272,26 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>
             {confirmLabel}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function normalizeTemplateButtonLabel(value: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed
+    .replace(/\s+(?:№|N|#)\s*$/i, '')
+    .replace(/\s*[:;]\s*$/, '')
+    .trim();
+  return normalized || trimmed;
+}
+
+function hasConfirmedPlaceholder(text: string): boolean {
+  return /\{\{\s*[a-zA-Z0-9_.-]+\s*\}\}/.test(text);
 }
 
 function ScannerToolbar(props: {

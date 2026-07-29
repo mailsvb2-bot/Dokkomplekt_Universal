@@ -14,8 +14,8 @@ async function installTauriMock(page: Page) {
       category: 'Accounting',
       role_id: 'generic',
       required_fields: [],
-      placeholders: [],
-      is_static_copy: true,
+      placeholders: ['document.number'],
+      is_static_copy: false,
       popup_fields: [],
     };
     const calls: Array<{ command: string; payload?: unknown }> = [];
@@ -31,7 +31,7 @@ async function installTauriMock(page: Page) {
           case 'update_background_watcher_preferences':
             return true;
           case 'import_template_file':
-            return { template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату' };
+            return { template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' };
           case 'analyze_template_file':
             return { document: { ...invoiceDoc, popup_fields: [] } };
           case 'prepare_template_setup': {
@@ -44,8 +44,8 @@ async function installTauriMock(page: Page) {
               suggested_button_label: 'Счёт на оплату',
               editable_button_label: 'Счёт на оплату',
               role_id: 'generic',
-              is_static_copy: true,
-              analysis: { is_static: true },
+              is_static_copy: false,
+              analysis: { is_static: false },
               popup_fields: [],
             }];
           }
@@ -68,7 +68,7 @@ test('first run shows one clear create-buttons action', async ({ page }) => {
   await expect(page.getByText('Встроенный пример')).toHaveCount(0);
 });
 
-test('ordinary DOCX becomes a button without mandatory markup', async ({ page }) => {
+test('marked DOCX becomes a button without copying example facts', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Создать свои кнопки' }).click();

@@ -18,7 +18,17 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
+pub const MAX_SOURCE_FILE_BYTES: u64 = MAX_UPLOAD_BYTES as u64;
 const MAX_NORMALIZED_TEXT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CONTAINER_XML_BYTES: usize = 32 * 1024 * 1024;
+const MAX_XLSX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_XLSX_ENTRIES: usize = 4_096;
+const MAX_XLSX_SHEETS: usize = 256;
+const MAX_XLSX_SHARED_STRINGS: usize = 250_000;
+const MAX_XLSX_CELLS: usize = 1_000_000;
+const MAX_XLSX_ROWS: usize = 250_000;
+const MAX_XLSX_COLUMNS: usize = 16_384;
+const MAX_XLSX_CELL_BYTES: usize = 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 256;
 const MAX_ARCHIVE_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_DEPTH: usize = 3;
@@ -111,6 +121,68 @@ pub fn is_temporary_source(path: &Path) -> bool {
         || name.ends_with(".tmp")
         || name.contains(".dokkomplekt-processing")
         || name.contains(".dokkomplekt-processed")
+}
+
+pub fn validate_source_file_size(path: &Path) -> Result<u64, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("Не удалось проверить размер источника {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("Источник не является файлом: {}", path.display()));
+    }
+    if metadata.len() > MAX_SOURCE_FILE_BYTES {
+        return Err(format!(
+            "Источник превышает безопасный предел {} МБ: {}",
+            MAX_SOURCE_FILE_BYTES / (1024 * 1024),
+            path.display()
+        ));
+    }
+    Ok(metadata.len())
+}
+
+fn read_file_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Не удалось прочитать {label}: {error}"))?;
+    if bytes.len() > limit {
+        return Err(format!("{label} превышает безопасный предел {} МБ.", limit / (1024 * 1024)));
+    }
+    Ok(bytes)
+}
+
+fn read_text_limited(reader: &mut impl std::io::Read, limit: usize, label: &str) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Не удалось прочитать {label}: {error}"))?;
+    if bytes.len() > limit {
+        return Err(format!("{label} превышает безопасный распакованный предел {} МБ.", limit / (1024 * 1024)));
+    }
+    String::from_utf8(bytes).map_err(|error| format!("{label} не является корректным UTF-8 XML: {error}"))
+}
+
+fn validate_xlsx_archive<R: std::io::Read + std::io::Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
+    if archive.len() > MAX_XLSX_ENTRIES {
+        return Err(format!("XLSX содержит слишком много частей: {} > {MAX_XLSX_ENTRIES}", archive.len()));
+    }
+    let mut total = 0_u64;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        total = total.checked_add(entry.size()).ok_or_else(|| "Размер XLSX переполнен.".to_string())?;
+        if total > MAX_XLSX_UNPACKED_BYTES {
+            return Err(format!(
+                "Распакованное содержимое XLSX превышает безопасный предел {} МБ.",
+                MAX_XLSX_UNPACKED_BYTES / (1024 * 1024)
+            ));
+        }
+        let name = entry.name().to_ascii_lowercase();
+        if name.ends_with(".xml") && entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+            return Err(format!("XML-часть XLSX слишком велика: {}", entry.name()));
+        }
+    }
+    Ok(())
 }
 
 pub fn decode_uploaded_payload(file_name: &str, encoded: &str) -> Result<Vec<u8>, String> {
@@ -295,6 +367,7 @@ pub fn normalize_path(
     if is_temporary_source(path) {
         return Err("Временный или служебный файл не обрабатывается.".into());
     }
+    validate_source_file_size(path)?;
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -1036,6 +1109,7 @@ fn layout_text(items: &[NormalizedLayoutItem]) -> String {
 fn normalize_xlsx(path: &Path) -> Result<NormalizedSource, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| format!("XLSX повреждён: {error}"))?;
+    validate_xlsx_archive(&mut archive)?;
     let shared = read_xlsx_shared_strings(&mut archive)?;
     let sheets = read_xlsx_sheet_entries(&mut archive)?;
     let mut output = String::new();
@@ -1045,10 +1119,10 @@ fn normalize_xlsx(path: &Path) -> Result<NormalizedSource, String> {
         let mut entry = archive
             .by_name(&sheet_path)
             .map_err(|error| format!("Не удалось прочитать лист «{display_name}»: {error}"))?;
-        let mut xml = String::new();
-        entry
-            .read_to_string(&mut xml)
-            .map_err(|error| error.to_string())?;
+        if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+            return Err(format!("Лист «{display_name}» превышает безопасный распакованный предел."));
+        }
+        let xml = read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, &format!("лист «{display_name}»"))?;
         formula_count += xml.matches("<f").count();
         let sheet = xlsx_sheet_to_text(&xml, &shared)?;
         if !sheet.trim().is_empty() {
@@ -1089,21 +1163,19 @@ fn read_xlsx_sheet_entries<R: std::io::Read + std::io::Seek>(
         let mut entry = archive
             .by_name("xl/workbook.xml")
             .map_err(|error| format!("XLSX не содержит workbook.xml: {error}"))?;
-        let mut xml = String::new();
-        entry
-            .read_to_string(&mut xml)
-            .map_err(|error| error.to_string())?;
-        xml
+        if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+            return Err("workbook.xml превышает безопасный предел.".into());
+        }
+        read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, "workbook.xml")?
     };
     let relationships_xml = {
         let mut entry = archive
             .by_name("xl/_rels/workbook.xml.rels")
             .map_err(|error| format!("XLSX не содержит workbook relationships: {error}"))?;
-        let mut xml = String::new();
-        entry
-            .read_to_string(&mut xml)
-            .map_err(|error| error.to_string())?;
-        xml
+        if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+            return Err("workbook.xml.rels превышает безопасный предел.".into());
+        }
+        read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, "workbook.xml.rels")?
     };
     let mut relationships = BTreeMap::<String, String>::new();
     let mut rel_reader = Reader::from_str(&relationships_xml);
@@ -1158,6 +1230,9 @@ fn read_xlsx_sheet_entries<R: std::io::Read + std::io::Seek>(
                 }
                 if let (Some(name), Some(relationship_id)) = (name, relationship_id) {
                     if let Some(path) = relationships.get(&relationship_id) {
+                        if sheets.len() >= MAX_XLSX_SHEETS {
+                            return Err(format!("XLSX содержит больше {MAX_XLSX_SHEETS} листов."));
+                        }
                         sheets.push((name, path.clone()));
                     }
                 }
@@ -1202,16 +1277,17 @@ fn xlsx_bytes_first_sheet_to_tsv(bytes: &[u8]) -> Result<String, String> {
     }
     let mut archive =
         ZipArchive::new(Cursor::new(bytes)).map_err(|error| format!("XLSX повреждён: {error}"))?;
+    validate_xlsx_archive(&mut archive)?;
     let shared = read_xlsx_shared_strings(&mut archive)?;
     let sheets = read_xlsx_sheet_entries(&mut archive)?;
     for (display_name, sheet_path) in sheets {
         let mut entry = archive
             .by_name(&sheet_path)
             .map_err(|error| format!("Не удалось прочитать лист «{display_name}»: {error}"))?;
-        let mut xml = String::new();
-        entry
-            .read_to_string(&mut xml)
-            .map_err(|error| error.to_string())?;
+        if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+            return Err(format!("Лист «{display_name}» превышает безопасный распакованный предел."));
+        }
+        let xml = read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, &format!("лист «{display_name}»"))?;
         let text = xlsx_sheet_to_text(&xml, &shared)?;
         if !text.trim().is_empty() {
             return Ok(text);
@@ -1226,10 +1302,10 @@ fn read_xlsx_shared_strings<R: std::io::Read + std::io::Seek>(
     let Ok(mut entry) = archive.by_name("xl/sharedStrings.xml") else {
         return Ok(Vec::new());
     };
-    let mut xml = String::new();
-    entry
-        .read_to_string(&mut xml)
-        .map_err(|error| error.to_string())?;
+    if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+        return Err("sharedStrings.xml превышает безопасный распакованный предел.".into());
+    }
+    let xml = read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, "sharedStrings.xml")?;
     let mut reader = Reader::from_str(&xml);
     reader.config_mut().trim_text(false);
     let mut values = Vec::new();
@@ -1243,13 +1319,22 @@ fn read_xlsx_shared_strings<R: std::io::Read + std::io::Seek>(
             }
             Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"si" => {
                 in_si = false;
+                if values.len() >= MAX_XLSX_SHARED_STRINGS {
+                    return Err(format!("XLSX содержит больше {MAX_XLSX_SHARED_STRINGS} строковых значений."));
+                }
                 values.push(current.clone());
             }
             Ok(Event::Text(event)) if in_si => {
                 current.push_str(&decode_xml_text(&event)?);
+                if current.len() > MAX_XLSX_CELL_BYTES {
+                    return Err("Одна строка XLSX превышает безопасный предел 1 МБ.".into());
+                }
             }
             Ok(Event::GeneralRef(event)) if in_si => {
                 current.push_str(&decode_xml_reference(&event)?);
+                if current.len() > MAX_XLSX_CELL_BYTES {
+                    return Err("Одна строка XLSX превышает безопасный предел 1 МБ.".into());
+                }
             }
             Ok(Event::Eof) => break,
             Err(error) => return Err(format!("sharedStrings.xml повреждён: {error}")),
@@ -1269,16 +1354,22 @@ fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
     let mut current_row = Vec::<String>::new();
     let mut in_value = false;
     let mut in_inline_text = false;
+    let mut cell_count = 0usize;
+    let mut row_count = 0usize;
     loop {
         match reader.read_event() {
             Ok(Event::Start(event)) if local_name(event.name().as_ref()) == b"c" => {
-                current_column = event
+                let reference = event
                     .attributes()
                     .flatten()
                     .find(|attribute| local_name(attribute.key.as_ref()) == b"r")
-                    .and_then(|attribute| String::from_utf8(attribute.value.into_owned()).ok())
-                    .and_then(|reference| xlsx_column_index(&reference))
-                    .unwrap_or(current_row.len());
+                    .and_then(|attribute| String::from_utf8(attribute.value.into_owned()).ok());
+                current_column = match reference {
+                    Some(reference) => xlsx_column_index(&reference).ok_or_else(|| {
+                        format!("Некорректная или чрезмерная ссылка ячейки XLSX: {reference}")
+                    })?,
+                    None => current_row.len(),
+                };
                 current_type = event
                     .attributes()
                     .flatten()
@@ -1286,6 +1377,10 @@ fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
                     .and_then(|attribute| String::from_utf8(attribute.value.into_owned()).ok())
                     .unwrap_or_default();
                 current_value.clear();
+                cell_count = cell_count.saturating_add(1);
+                if cell_count > MAX_XLSX_CELLS {
+                    return Err(format!("XLSX содержит больше {MAX_XLSX_CELLS} ячеек."));
+                }
             }
             Ok(Event::Start(event)) if local_name(event.name().as_ref()) == b"v" => in_value = true,
             Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"v" => in_value = false,
@@ -1297,9 +1392,15 @@ fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
             }
             Ok(Event::Text(event)) if in_value || in_inline_text => {
                 current_value.push_str(&decode_xml_text(&event)?);
+                if current_value.len() > MAX_XLSX_CELL_BYTES {
+                    return Err("Одна ячейка XLSX превышает безопасный предел 1 МБ.".into());
+                }
             }
             Ok(Event::GeneralRef(event)) if in_value || in_inline_text => {
                 current_value.push_str(&decode_xml_reference(&event)?);
+                if current_value.len() > MAX_XLSX_CELL_BYTES {
+                    return Err("Одна ячейка XLSX превышает безопасный предел 1 МБ.".into());
+                }
             }
             Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"c" => {
                 let value = if current_type == "s" {
@@ -1312,17 +1413,27 @@ fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
                 } else {
                     current_value.clone()
                 };
+                if current_column >= MAX_XLSX_COLUMNS {
+                    return Err(format!("Колонка XLSX превышает предел XFD ({MAX_XLSX_COLUMNS})."));
+                }
                 if current_row.len() <= current_column {
                     current_row.resize(current_column + 1, String::new());
                 }
                 current_row[current_column] = value.trim().to_string();
             }
             Ok(Event::End(event)) if local_name(event.name().as_ref()) == b"row" => {
+                row_count = row_count.saturating_add(1);
+                if row_count > MAX_XLSX_ROWS {
+                    return Err(format!("XLSX содержит больше {MAX_XLSX_ROWS} строк."));
+                }
                 while current_row.last().is_some_and(|value| value.is_empty()) {
                     current_row.pop();
                 }
                 output.push_str(&current_row.join("\t"));
                 output.push('\n');
+                if output.len() > MAX_NORMALIZED_TEXT_BYTES {
+                    return Err("Текст одного листа XLSX превышает безопасный предел 32 МБ.".into());
+                }
                 current_row.clear();
             }
             Ok(Event::Eof) => break,
@@ -1335,16 +1446,23 @@ fn xlsx_sheet_to_text(xml: &str, shared: &[String]) -> Result<String, String> {
 
 fn xlsx_column_index(reference: &str) -> Option<usize> {
     let mut value = 0usize;
-    let mut found = false;
+    let mut letters = 0usize;
     for character in reference.chars() {
         if !character.is_ascii_alphabetic() {
             break;
         }
-        found = true;
+        letters += 1;
+        if letters > 3 {
+            return None;
+        }
         let digit = usize::from(character.to_ascii_uppercase() as u8 - b'A' + 1);
         value = value.checked_mul(26)?.checked_add(digit)?;
     }
-    found.then(|| value.saturating_sub(1))
+    if letters == 0 || value == 0 || value > MAX_XLSX_COLUMNS {
+        None
+    } else {
+        Some(value - 1)
+    }
 }
 
 fn normalize_odt(path: &Path) -> Result<NormalizedSource, String> {
@@ -1353,10 +1471,10 @@ fn normalize_odt(path: &Path) -> Result<NormalizedSource, String> {
     let mut entry = archive
         .by_name("content.xml")
         .map_err(|_| "В ODT отсутствует content.xml".to_string())?;
-    let mut xml = String::new();
-    entry
-        .read_to_string(&mut xml)
-        .map_err(|error| error.to_string())?;
+    if entry.size() > MAX_CONTAINER_XML_BYTES as u64 {
+        return Err("content.xml ODT превышает безопасный распакованный предел.".into());
+    }
+    let xml = read_text_limited(&mut entry, MAX_CONTAINER_XML_BYTES, "content.xml ODT")?;
     Ok(NormalizedSource {
         text: generic_xml_to_text(&xml)?,
         source_kind: "odt".into(),
@@ -1367,7 +1485,7 @@ fn normalize_odt(path: &Path) -> Result<NormalizedSource, String> {
 }
 
 fn normalize_rtf(path: &Path) -> Result<NormalizedSource, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let bytes = read_file_limited(path, MAX_UPLOAD_BYTES, "RTF")?;
     Ok(NormalizedSource {
         text: rtf_to_text(&bytes),
         source_kind: "rtf".into(),
@@ -1378,7 +1496,7 @@ fn normalize_rtf(path: &Path) -> Result<NormalizedSource, String> {
 }
 
 fn normalize_plain_text(path: &Path, extension: &str) -> Result<NormalizedSource, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let bytes = read_file_limited(path, MAX_UPLOAD_BYTES, "текстовый источник")?;
     let text = decode_text_bytes(&bytes);
     let normalized = if extension == "json" {
         serde_json::from_str::<serde_json::Value>(&text)
@@ -1399,7 +1517,7 @@ fn normalize_plain_text(path: &Path, extension: &str) -> Result<NormalizedSource
 }
 
 fn normalize_html(path: &Path) -> Result<NormalizedSource, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let bytes = read_file_limited(path, MAX_UPLOAD_BYTES, "HTML")?;
     Ok(NormalizedSource {
         text: html_to_text(&decode_text_bytes(&bytes)),
         source_kind: "html".into(),
@@ -1410,7 +1528,7 @@ fn normalize_html(path: &Path) -> Result<NormalizedSource, String> {
 }
 
 fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
-    let raw = decode_text_bytes(&std::fs::read(path).map_err(|error| error.to_string())?);
+    let raw = decode_text_bytes(&read_file_limited(path, MAX_UPLOAD_BYTES, "EML")?);
     let mut text = String::new();
     let mut warnings = Vec::new();
     let mut attachment_layout = Vec::new();
@@ -3118,6 +3236,16 @@ mod tests {
             validate_archive_relative_path("safe/folder/").unwrap(),
             PathBuf::from("safe/folder")
         );
+    }
+
+    #[test]
+    fn xlsx_rejects_columns_beyond_xfd_before_allocating_a_row() {
+        assert_eq!(xlsx_column_index("XFD1"), Some(16_383));
+        assert_eq!(xlsx_column_index("XFE1"), None);
+        assert_eq!(xlsx_column_index("AAAAAAA1"), None);
+        let malicious = r#"<worksheet><sheetData><row><c r="AAAAAAA1"><v>1</v></c></row></sheetData></worksheet>"#;
+        let error = xlsx_sheet_to_text(malicious, &[]).unwrap_err();
+        assert!(error.contains("чрезмерная ссылка"), "{error}");
     }
 
     #[test]

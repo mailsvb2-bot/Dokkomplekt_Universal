@@ -10,6 +10,32 @@ def b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 
 
+def public_build_env() -> dict[str, str]:
+    return {
+        "DOKKOMPLEKT_GATE_PUBKEY_B64": b64(b"g" * 32),
+        "DOKKOMPLEKT_LICENSE_PUBKEY_B64": b64(b"l" * 32),
+        "DOKKOMPLEKT_UPDATE_PUBKEY_B64": b64(b"u" * 32),
+        "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64": b64(b"t" * 32),
+        "DOKKOMPLEKT_REFDATA_PUBKEY_B64": b64(b"r" * 32),
+        "DOKKOMPLEKT_UPDATE_MANIFEST_URL": "https://updates.example.com/update.json",
+        "DOKKOMPLEKT_REFDATA_URL": "https://updates.example.com/reference-data.json",
+        "DOKKOMPLEKT_COMPONENTS_CATALOG_URL": "https://downloads.example.com/catalog.json",
+        "DOKKOMPLEKT_COMPONENTS_BASE_URL": "https://downloads.example.com/components",
+    }
+
+
+def test_production_build_requires_real_compile_time_trust_anchors() -> None:
+    assert check("production-build", public_build_env())["ok"] is True
+    broken = public_build_env()
+    broken.pop("DOKKOMPLEKT_LICENSE_PUBKEY_B64")
+    broken["DOKKOMPLEKT_UPDATE_MANIFEST_URL"] = "https://updates.invalid/manifest.json"
+    report = check("production-build", broken)
+    assert report["ok"] is False
+    errors = "\n".join(report["errors"])
+    assert "DOKKOMPLEKT_LICENSE_PUBKEY_B64: missing" in errors
+    assert "DOKKOMPLEKT_UPDATE_MANIFEST_URL: must be a real HTTPS URL" in errors
+
+
 def test_runtime_preflight_rejects_missing_or_fake_delivery_configuration(tmp_path: Path) -> None:
     report = check(
         "windows-runtime",
@@ -30,12 +56,13 @@ def test_runtime_preflight_accepts_complete_runner_owned_configuration(tmp_path:
     manifest = tmp_path / "sidecars.json"
     manifest.write_text("{}", encoding="utf-8")
     env = {
+        **public_build_env(),
         "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"pfx"),
         "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD": "secret",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64": b64(b"private"),
         "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64": b64(b"public"),
-        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": b64(b"update-private"),
-        "DOKKOMPLEKT_UPDATE_PUBKEY_B64": b64(b"update-public"),
+        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": b64(b"p" * 32),
+        "DOKKOMPLEKT_UPDATE_PUBKEY_B64": b64(b"u" * 32),
         "DOKKOMPLEKT_COMPONENTS_CATALOG_URL": "https://downloads.example.com/catalog.json",
         "DOKKOMPLEKT_COMPONENTS_BASE_URL": "https://downloads.example.com/components",
         "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH": str(manifest.resolve()),

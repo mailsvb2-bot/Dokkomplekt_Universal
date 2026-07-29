@@ -9,15 +9,25 @@ struct FirstRunStateResponse {
 fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, String> {
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let has_user_buttons = !pack.documents.is_empty();
-    let message = if has_user_buttons {
-        "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации."
+    let message = if state.persistence_blocked.load(Ordering::SeqCst) {
+        let reason = state
+            .persistence_error
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .unwrap_or_else(|| "неизвестная ошибка базы состояния".into());
+        format!(
+            "Восстановление состояния заблокировано для защиты данных: {reason}. Загрузите исправную резервную базу; текущие данные не будут перезаписаны."
+        )
+    } else if has_user_buttons {
+        "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
     } else {
-        "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию."
+        "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию.".into()
     };
     Ok(FirstRunStateResponse {
         has_user_buttons,
         pack,
-        message: message.into(),
+        message,
     })
 }
 
@@ -1367,6 +1377,11 @@ fn start_word_scanner(
         if !matches!(extension.to_ascii_lowercase().as_str(), "docx" | "docm") {
             return Err("Сканер мышью открывает только DOCX и DOCM.".into());
         }
+        validate_safe_template_file(&original).map_err(|error| {
+            format!(
+                "Word-сканер заблокировал активное или внешнее содержимое документа: {error}"
+            )
+        })?;
         let previous = state
             .word_scanner
             .lock()
@@ -2247,31 +2262,56 @@ fn load_state_from(
     load_commercial_state: bool,
 ) -> Result<(), String> {
     let repo = repository_for(db_path)?;
-    if let Some(case) = repo.load_case("current").map_err(|e| e.to_string())? {
-        *state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")? = case;
+    repo.quick_integrity_check().map_err(|error| error.to_string())?;
+
+    // Decode and validate every row before touching the live in-memory state.
+    // A damaged late row can therefore never leave a mixed old/new snapshot.
+    let loaded_case = repo.load_case("current").map_err(|error| error.to_string())?;
+    let loaded_pack = repo.load_pack("default").map_err(|error| error.to_string())?;
+    let loaded_license = if load_commercial_state {
+        repo.load_state_value::<Option<LicenseDocument>>("license_document")
+            .map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    if let Some(Some(document)) = loaded_license.as_ref() {
+        verify_license_document_now(document, &trusted_license_key()?)
+            .map_err(|error| format!("Сохранённая лицензия недействительна: {error}"))?;
     }
-    if let Some(pack) = repo.load_pack("default").map_err(|e| e.to_string())? {
-        *state.pack.lock().map_err(|_| "state lock failed")? = pack;
-    }
-    if load_commercial_state {
-        if let Some(license) = repo
-            .load_state_value::<Option<LicenseDocument>>("license_document")
-            .map_err(|e| e.to_string())?
-        {
-            if let Some(document) = license.as_ref() {
-                verify_license_document_now(document, &trusted_license_key()?)
-                    .map_err(|error| format!("Сохранённая лицензия недействительна: {error}"))?;
-            }
-            *state
+
+    let mut case_guard = state
+        .semantic_case
+        .lock()
+        .map_err(|_| "state lock failed")?;
+    let mut pack_guard = state.pack.lock().map_err(|_| "state lock failed")?;
+    let mut license_guard = if load_commercial_state {
+        Some(
+            state
                 .license_document
                 .lock()
-                .map_err(|_| "license state lock failed")? = license;
-        }
+                .map_err(|_| "license state lock failed")?,
+        )
+    } else {
+        None
+    };
+    if let Some(case) = loaded_case {
+        *case_guard = case;
     }
+    if let Some(pack) = loaded_pack {
+        *pack_guard = pack;
+    }
+    if let (Some(guard), Some(license)) = (license_guard.as_mut(), loaded_license) {
+        **guard = license;
+    }
+    drop(license_guard);
+    drop(pack_guard);
+    drop(case_guard);
+
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(db_path.to_path_buf());
+    state.persistence_blocked.store(false, Ordering::SeqCst);
+    if let Ok(mut slot) = state.persistence_error.lock() {
+        *slot = None;
+    }
     Ok(())
 }
 

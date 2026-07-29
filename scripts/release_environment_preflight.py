@@ -8,15 +8,23 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-RUNTIME_REQUIRED = (
+PRODUCTION_BUILD_REQUIRED = (
+    "DOKKOMPLEKT_GATE_PUBKEY_B64",
+    "DOKKOMPLEKT_LICENSE_PUBKEY_B64",
+    "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
+    "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64",
+    "DOKKOMPLEKT_REFDATA_PUBKEY_B64",
+    "DOKKOMPLEKT_UPDATE_MANIFEST_URL",
+    "DOKKOMPLEKT_REFDATA_URL",
+    "DOKKOMPLEKT_COMPONENTS_CATALOG_URL",
+    "DOKKOMPLEKT_COMPONENTS_BASE_URL",
+)
+RUNTIME_REQUIRED = PRODUCTION_BUILD_REQUIRED + (
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
     "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
     "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64",
     "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
-    "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
-    "DOKKOMPLEKT_COMPONENTS_CATALOG_URL",
-    "DOKKOMPLEKT_COMPONENTS_BASE_URL",
     "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH",
 )
 HARDWARE_REQUIRED = (
@@ -24,20 +32,38 @@ HARDWARE_REQUIRED = (
     "DOKKOMPLEKT_REBOOT_EVIDENCE_PATH",
 )
 BASE64_VARS = {
+    "DOKKOMPLEKT_GATE_PUBKEY_B64",
+    "DOKKOMPLEKT_LICENSE_PUBKEY_B64",
+    "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
+    "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64",
+    "DOKKOMPLEKT_REFDATA_PUBKEY_B64",
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
     "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
     "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64",
     "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
-    "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
 }
+ED25519_PUBLIC_VARS = {
+    "DOKKOMPLEKT_GATE_PUBKEY_B64",
+    "DOKKOMPLEKT_LICENSE_PUBKEY_B64",
+    "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
+    "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64",
+    "DOKKOMPLEKT_REFDATA_PUBKEY_B64",
+}
+ED25519_PRIVATE_SEED_VARS = {"DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64"}
 URL_VARS = {
+    "DOKKOMPLEKT_UPDATE_MANIFEST_URL",
+    "DOKKOMPLEKT_REFDATA_URL",
     "DOKKOMPLEKT_COMPONENTS_CATALOG_URL",
     "DOKKOMPLEKT_COMPONENTS_BASE_URL",
 }
 
 
 def check(mode: str, env: dict[str, str]) -> dict[str, object]:
-    required = RUNTIME_REQUIRED if mode == "windows-runtime" else HARDWARE_REQUIRED
+    required = {
+        "production-build": PRODUCTION_BUILD_REQUIRED,
+        "windows-runtime": RUNTIME_REQUIRED,
+        "windows-hardware": HARDWARE_REQUIRED,
+    }[mode]
     errors: list[str] = []
     checked: list[str] = []
     for name in required:
@@ -51,11 +77,16 @@ def check(mode: str, env: dict[str, str]) -> dict[str, object]:
                 decoded = base64.b64decode(value, validate=True)
                 if not decoded:
                     errors.append(f"{name}: decoded value is empty")
+                elif name in ED25519_PUBLIC_VARS and len(decoded) != 32:
+                    errors.append(f"{name}: Ed25519 public key must be 32 bytes")
+                elif name in ED25519_PRIVATE_SEED_VARS and len(decoded) != 32:
+                    errors.append(f"{name}: Ed25519 private seed must be 32 bytes")
             except Exception:
                 errors.append(f"{name}: invalid base64")
         if name in URL_VARS:
             parsed = urlparse(value)
-            if parsed.scheme != "https" or not parsed.netloc or parsed.hostname == "invalid" or value.endswith(".invalid"):
+            hostname = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or not parsed.netloc or hostname == "invalid" or hostname.endswith(".invalid"):
                 errors.append(f"{name}: must be a real HTTPS URL")
         if name == "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH":
             path = Path(value)
@@ -83,7 +114,11 @@ def check(mode: str, env: dict[str, str]) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("windows-runtime", "windows-hardware"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("production-build", "windows-runtime", "windows-hardware"),
+        required=True,
+    )
     parser.add_argument("--json-report", type=Path)
     args = parser.parse_args()
     report = check(args.mode, dict(os.environ))

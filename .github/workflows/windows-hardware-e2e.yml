@@ -20,21 +20,34 @@ jobs:
       DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
       DOKKOMPLEKT_TEST_DUPLEX: ${{ vars.DOKKOMPLEKT_TEST_DUPLEX }}
       DOKKOMPLEKT_TEST_TRAY: ${{ vars.DOKKOMPLEKT_TEST_TRAY }}
-      DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-      DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
+      DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
+      DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
+      DOKKOMPLEKT_LICENSE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}
+      DOKKOMPLEKT_UPDATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_UPDATE_PUBKEY_B64 }}
+      DOKKOMPLEKT_THRESHOLD_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_THRESHOLD_PUBKEY_B64 }}
+      DOKKOMPLEKT_REFDATA_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_REFDATA_PUBKEY_B64 }}
+      DOKKOMPLEKT_UPDATE_MANIFEST_URL: ${{ vars.DOKKOMPLEKT_UPDATE_MANIFEST_URL }}
+      DOKKOMPLEKT_REFDATA_URL: ${{ vars.DOKKOMPLEKT_REFDATA_URL }}
+      DOKKOMPLEKT_COMPONENTS_CATALOG_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_CATALOG_URL }}
+      DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
       DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
+          toolchain: 1.97.1
           components: rustfmt, clippy
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
+      - name: Validate production and hardware trust boundaries
+        run: |
+          python scripts/release_environment_preflight.py --mode production-build --json-report verification/release/production-build-preflight.json
+          python scripts/release_environment_preflight.py --mode windows-hardware --json-report verification/release/hardware-preflight.json
       - run: npm ci
       - run: cargo install cargo-audit --locked --version 0.22.2
       - run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
@@ -44,15 +57,21 @@ jobs:
       - run: npx tauri build --no-bundle
       - name: Sign and verify application binary
         shell: pwsh
+        env:
+          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
+          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
       - run: npx tauri bundle --bundles nsis
       - name: Sign and verify NSIS installer
         shell: pwsh
+        env:
+          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
+          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
       - name: Execute opt-in hardware E2E
         shell: pwsh
         run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
           name: Dokkomplekt-Windows-Hardware-E2E-Signed
           path: |

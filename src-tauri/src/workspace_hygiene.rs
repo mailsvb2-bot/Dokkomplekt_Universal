@@ -89,9 +89,9 @@ pub fn archive_processed_source(
     }
 
     let month_folder = archive_month_folder(parent, policy);
-    fs::create_dir_all(&month_folder).map_err(|error| {
+    create_real_directory_below(parent, &month_folder).map_err(|error| {
         format!(
-            "Не удалось создать папку архива {}: {error}",
+            "Не удалось создать безопасную папку архива {}: {error}",
             month_folder.display()
         )
     })?;
@@ -148,11 +148,8 @@ pub fn cleanup_workspace_folder(
                 value >= Duration::from_secs(u64::from(policy.service_note_retention_days) * 86_400)
             })
         {
-            if let Err(error) = fs::create_dir_all(&service_archive) {
-                report.warnings.push(format!(
-                    "Не удалось создать архив служебных файлов {}: {error}",
-                    service_archive.display()
-                ));
+            if let Err(error) = create_real_directory_below(folder, &service_archive) {
+                report.warnings.push(error);
                 continue;
             }
             match move_to_unique_folder(&path, &service_archive) {
@@ -234,7 +231,16 @@ pub fn cleanup_workspace_folder(
     if policy.archived_source_retention_days > 0 && archive_root.exists() {
         let retention =
             Duration::from_secs(u64::from(policy.archived_source_retention_days) * 86_400);
-        cleanup_expired_archive_files(&archive_root, now, retention, &mut report)?;
+        match ensure_real_directory_below(folder, &archive_root) {
+            Ok(archive_root_canonical) => cleanup_expired_archive_files(
+                &archive_root,
+                &archive_root_canonical,
+                now,
+                retention,
+                &mut report,
+            )?,
+            Err(error) => report.warnings.push(error),
+        }
     }
     Ok(report)
 }
@@ -427,30 +433,199 @@ fn file_age(path: &Path, now: SystemTime) -> Option<Duration> {
     now.duration_since(modified).ok()
 }
 
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn create_real_directory_below(root: &Path, directory: &Path) -> Result<PathBuf, String> {
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|error| format!("Не удалось проверить корень {}: {error}", root.display()))?;
+    let relative = directory.strip_prefix(root).map_err(|_| {
+        format!(
+            "Архивный путь находится вне рабочей папки: {}",
+            directory.display()
+        )
+    })?;
+    let mut current = root_canonical.clone();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata_is_link_or_reparse(&metadata) {
+                    return Err(format!(
+                        "Архивный каталог-ссылка/reparse point заблокирован: {}",
+                        current.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "Архивный путь не является каталогом: {}",
+                        current.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(|create_error| {
+                    format!(
+                        "Не удалось создать архивный каталог {}: {create_error}",
+                        current.display()
+                    )
+                })?;
+                let metadata = fs::symlink_metadata(&current).map_err(|metadata_error| {
+                    format!(
+                        "Не удалось проверить созданный архивный каталог {}: {metadata_error}",
+                        current.display()
+                    )
+                })?;
+                if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+                    return Err(format!(
+                        "Созданный архивный путь небезопасен: {}",
+                        current.display()
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось проверить архивный каталог {}: {error}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    let canonical = directory.canonicalize().map_err(|error| {
+        format!(
+            "Не удалось канонизировать архивный каталог {}: {error}",
+            directory.display()
+        )
+    })?;
+    if !canonical.starts_with(&root_canonical) {
+        return Err(format!(
+            "Архивный каталог вышел за пределы рабочей папки: {}",
+            directory.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+fn ensure_real_directory_below(root: &Path, directory: &Path) -> Result<PathBuf, String> {
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|error| format!("Не удалось проверить корень {}: {error}", root.display()))?;
+    let mut current = root_canonical.clone();
+    let relative = directory.strip_prefix(root).map_err(|_| {
+        format!(
+            "Архивный путь находится вне рабочей папки: {}",
+            directory.display()
+        )
+    })?;
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            format!("Не удалось проверить архивный каталог {}: {error}", current.display())
+        })?;
+        if metadata_is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "Архивный каталог-ссылка/reparse point заблокирован: {}",
+                current.display()
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err(format!("Архивный путь не является каталогом: {}", current.display()));
+        }
+    }
+    let canonical = directory.canonicalize().map_err(|error| {
+        format!("Не удалось канонизировать архивный каталог {}: {error}", directory.display())
+    })?;
+    if !canonical.starts_with(&root_canonical) {
+        return Err(format!(
+            "Архивный каталог вышел за пределы рабочей папки: {}",
+            directory.display()
+        ));
+    }
+    Ok(canonical)
+}
+
 fn cleanup_expired_archive_files(
     folder: &Path,
+    archive_root_canonical: &Path,
     now: SystemTime,
     retention: Duration,
     report: &mut WorkspaceHygieneReport,
 ) -> Result<(), String> {
-    for entry in fs::read_dir(folder)
-        .map_err(|error| error.to_string())?
-        .flatten()
-    {
+    let entries = fs::read_dir(folder).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                report.warnings.push(format!("Не удалось прочитать элемент архива: {error}"));
+                continue;
+            }
+        };
         let path = entry.path();
-        if path.is_dir() {
-            cleanup_expired_archive_files(&path, now, retention, report)?;
-            let _ = fs::remove_dir(&path);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                report.warnings.push(format!(
+                    "Не удалось проверить архивный элемент {}: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        if metadata_is_link_or_reparse(&metadata) {
+            report.warnings.push(format!(
+                "Очистка пропустила ссылку/reparse point внутри архива: {}",
+                path.display()
+            ));
             continue;
         }
-        if path.is_file() && file_age(&path, now).is_some_and(|age| age >= retention) {
-            match fs::remove_file(&path) {
+        let canonical = match path.canonicalize() {
+            Ok(value) if value.starts_with(archive_root_canonical) => value,
+            Ok(_) => {
+                report.warnings.push(format!(
+                    "Очистка заблокировала путь вне корня архива: {}",
+                    path.display()
+                ));
+                continue;
+            }
+            Err(error) => {
+                report.warnings.push(format!(
+                    "Не удалось канонизировать архивный элемент {}: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        if metadata.is_dir() {
+            cleanup_expired_archive_files(
+                &path,
+                archive_root_canonical,
+                now,
+                retention,
+                report,
+            )?;
+            let _ = fs::remove_dir(&canonical);
+            continue;
+        }
+        if metadata.is_file() && file_age(&canonical, now).is_some_and(|age| age >= retention) {
+            match fs::remove_file(&canonical) {
                 Ok(()) => report
                     .removed_expired_archived_files
-                    .push(path.display().to_string()),
+                    .push(canonical.display().to_string()),
                 Err(error) => report.warnings.push(format!(
                     "Не удалось удалить архивный файл {}: {error}",
-                    path.display()
+                    canonical.display()
                 )),
             }
         }
@@ -533,6 +708,30 @@ mod tests {
         assert!(!source.exists());
         assert!(!legacy.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_never_follows_symlink_outside_archive_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("symlink-boundary");
+        let outside = temp_root("symlink-outside");
+        let victim = outside.join("victim.txt");
+        fs::write(&victim, b"must survive").unwrap();
+        let archive = root.join("_обработано");
+        fs::create_dir_all(&archive).unwrap();
+        symlink(&outside, archive.join("escape")).unwrap();
+        let now = UNIX_EPOCH + Duration::from_secs(4_000_000_000);
+        let report = cleanup_workspace_folder(&root, &WorkspaceRetentionPolicy::default(), now)
+            .expect("cleanup must fail closed without following link");
+        assert!(victim.exists());
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("ссылку/reparse point")));
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

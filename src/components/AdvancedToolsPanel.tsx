@@ -34,6 +34,7 @@ import {
   suggestTemplateMarkup,
   updateDocumentTemplate,
 } from '../lib/api';
+import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
 import { STARTER_PACKS, type StarterPackAsset } from '../data/starterPacks';
 
 interface Props {
@@ -53,7 +54,7 @@ export function AdvancedToolsPanel({
   onStatus,
   onDocumentsChanged,
 }: Props) {
-  const [busy, setBusy] = useState(false);
+  const { busy, run: execute } = useActionRunner(onStatus, labelledActionError);
   const [blocks, setBlocks] = useState<ClauseBlockRecord[]>([]);
   const [templateVersions, setTemplateVersions] = useState<TemplateVersionRecord[]>([]);
   const [blockId, setBlockId] = useState('');
@@ -101,18 +102,6 @@ export function AdvancedToolsPanel({
       .then(setTemplateVersions)
       .catch(() => setTemplateVersions([]));
   }, [versionedDocument?.id]);
-
-  async function execute<T>(label: string, action: () => Promise<T>): Promise<T | undefined> {
-    setBusy(true);
-    try {
-      return await action();
-    } catch (error) {
-      onStatus(`Ошибка «${label}»: ${message(error)}`);
-      return undefined;
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function chooseProcess(processId: string) {
     const result = await execute('выбор рабочего процесса', () => selectProcessBlueprint(processId));
@@ -241,15 +230,15 @@ export function AdvancedToolsPanel({
       onStatus('Критические изменения требуют отдельного явного подтверждения.');
       return;
     }
-    const result = await execute('публикация версии шаблона', () =>
+    const pack = await execute('публикация версии шаблона', () =>
       updateDocumentTemplate(versionedDocument.id, replacementPath, acknowledge));
-    if (!result) return;
-    onDocumentsChanged(result.documents);
-    const versions = await listTemplateVersions(versionedDocument.id);
-    setTemplateVersions(versions);
+    if (!pack) return;
+    onDocumentsChanged(pack.documents);
     setReplacementPath('');
     setReplacementRegression(null);
     onStatus(`Новая версия «${versionedDocument.button_label}» опубликована после структурной проверки.`);
+    const versions = await execute('история шаблона', () => listTemplateVersions(versionedDocument.id));
+    if (versions) setTemplateVersions(versions);
   }
 
   async function saveBlock() {
@@ -271,9 +260,10 @@ export function AdvancedToolsPanel({
   }
 
   async function loadDataFile(file: File) {
-    const bytes = await readBytes(file);
-    const encoded = toBase64(bytes);
-    const result = await execute('проверка таблицы', () => prepareMailMergeFile(file.name, encoded));
+    const result = await execute('проверка таблицы', async () => {
+      const bytes = await readBytes(file);
+      return prepareMailMergeFile(file.name, toBase64(bytes));
+    });
     if (result) {
       setTableText(result.delimited_text);
       setTable(result.table);
@@ -298,19 +288,20 @@ export function AdvancedToolsPanel({
       onStatus('Мастер принимает DOCX и DOCM.');
       return;
     }
-    const bytes = await readBytes(file);
-    const encoded = toBase64(bytes);
-    const imported = await execute('загрузка шаблона', () =>
-      importTemplateFile(`wizard_${Date.now()}`, { fileName: file.name, bytesBase64: encoded }));
-    if (!imported) return;
-    const candidates = await execute('авторазметка', () => suggestTemplateMarkup(file.name, encoded, YEAR));
-    if (!candidates) return;
-    setMarkupPath(imported.template_path);
-    setMarkupCandidates(candidates);
-    setSelectedCandidates(candidates.filter((candidate) => candidate.selected_by_default).map(candidateKey));
+    const result = await execute('загрузка и авторазметка шаблона', async () => {
+      const bytes = await readBytes(file);
+      const encoded = toBase64(bytes);
+      const imported = await importTemplateFile(`wizard_${Date.now()}`, { fileName: file.name, bytesBase64: encoded });
+      const candidates = await suggestTemplateMarkup(file.name, encoded, YEAR);
+      return { imported, candidates };
+    });
+    if (!result) return;
+    setMarkupPath(result.imported.template_path);
+    setMarkupCandidates(result.candidates);
+    setSelectedCandidates(result.candidates.filter((candidate) => candidate.selected_by_default).map(candidateKey));
     setOnboardingStep(2);
     setDryReport('');
-    onStatus(`Найдено ${candidates.length} кандидатов. Замена выполняется только после подтверждения.`);
+    onStatus(`Найдено ${result.candidates.length} кандидатов. Замена выполняется только после подтверждения.`);
   }
 
   function toggle(candidate: TemplateMarkupCandidate, checked: boolean) {
@@ -321,11 +312,12 @@ export function AdvancedToolsPanel({
   }
 
   async function rollbackVersion(item: TemplateVersionRecord) {
-    const result = await execute('rollback шаблона', () => rollbackTemplateVersion(item.version_id));
-    if (!result) return;
+    const pack = await execute('rollback шаблона', () => rollbackTemplateVersion(item.version_id));
+    if (!pack) return;
+    onDocumentsChanged(pack.documents);
+    onStatus(`Шаблон «${versionedDocument?.button_label || item.document_id}» возвращён к версии ${item.version_number}. Создана новая опубликованная версия с контрольным SHA-256.`);
     const versions = await execute('история шаблона', () => listTemplateVersions(item.document_id));
     if (versions) setTemplateVersions(versions);
-    onStatus(`Шаблон «${versionedDocument?.button_label || item.document_id}» возвращён к версии ${item.version_number}. Создана новая опубликованная версия с контрольным SHA-256.`);
   }
 
   async function applyMarkup() {
@@ -368,8 +360,7 @@ export function AdvancedToolsPanel({
       return;
     }
     setInstallingPackId(pack.id);
-    setBusy(true);
-    try {
+    const documentPack = await execute(`установка starter-пака ${pack.name}`, async () => {
       const verifiedAssets: Array<{ template: StarterPackAsset['templates'][number]; bytes: ArrayBuffer }> = [];
       for (const template of pack.templates) {
         const response = await fetch(template.url, { cache: 'no-store' });
@@ -399,19 +390,17 @@ export function AdvancedToolsPanel({
         throw new Error('один из starter-шаблонов не содержит канонических полей');
       }
       const labels = new Map(pack.templates.map((item) => [item.documentId, item.label]));
-      const documentPack = await confirmTemplateSetup(rows.map((row) => ({
+      return confirmTemplateSetup(rows.map((row) => ({
         ...row,
         editable_button_label: labels.get(row.document_id) ?? row.editable_button_label,
       })));
-      onDocumentsChanged(documentPack.documents);
-      onStatus(`Starter-пак «${pack.name}» установлен: ${pack.templates.length} шаблонов. Формы работают только как черновики до проверки организацией.`);
-    } catch (error) {
-      onStatus(`Ошибка установки starter-пака «${pack.name}»: ${message(error)}`);
-    } finally {
-      setBusy(false);
-      setInstallingPackId('');
-    }
+    });
+    setInstallingPackId('');
+    if (!documentPack) return;
+    onDocumentsChanged(documentPack.documents);
+    onStatus(`Starter-пак «${pack.name}» установлен: ${pack.templates.length} шаблонов. Формы работают только как черновики до проверки организацией.`);
   }
+
 
   return (
     <div className="advancedTools">
@@ -612,9 +601,6 @@ function markedOutputPath(path: string) {
   return match ? `${path.slice(0, -match[0].length)}.marked${match[0]}` : `${path}.marked.docx`;
 }
 
-function message(error: unknown) {
-  return error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error);
-}
 
 function readBytes(file: File): Promise<ArrayBuffer> {
   if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();

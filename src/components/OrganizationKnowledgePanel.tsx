@@ -6,6 +6,7 @@ import {
   listOrganizationKnowledge,
   upsertOrganizationKnowledge,
 } from '../lib/api';
+import { actionErrorMessage, labelledActionError, useActionRunner } from '../hooks/useActionRunner';
 
 interface Props {
   onStatus(message: string): void;
@@ -34,25 +35,13 @@ export function OrganizationKnowledgePanel({ onStatus, onCaseChanged }: Props) {
   const [validUntil, setValidUntil] = useState('');
   const [note, setNote] = useState('');
   const [active, setActive] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const { busy, run: execute } = useActionRunner(onStatus, labelledActionError);
 
   useEffect(() => {
     listOrganizationKnowledge(undefined, true).then((items) => setRecords(Array.isArray(items) ? items : [])).catch(() => undefined);
   }, []);
 
   const visible = useMemo(() => records.filter((record) => record.category === category), [category, records]);
-
-  async function execute<T>(name: string, action: () => Promise<T>): Promise<T | undefined> {
-    setBusy(true);
-    try {
-      return await action();
-    } catch (error) {
-      onStatus(`Ошибка «${name}»: ${message(error)}`);
-      return undefined;
-    } finally {
-      setBusy(false);
-    }
-  }
 
   function parseFields(): Record<string, string> {
     const fields: Record<string, string> = {};
@@ -74,7 +63,7 @@ export function OrganizationKnowledgePanel({ onStatus, onCaseChanged }: Props) {
     try {
       fields = parseFields();
     } catch (error) {
-      onStatus(message(error));
+      onStatus(actionErrorMessage(error));
       return;
     }
     const result = await execute('сохранение организационных знаний', () => upsertOrganizationKnowledge({
@@ -153,8 +142,4 @@ export function OrganizationKnowledgePanel({ onStatus, onCaseChanged }: Props) {
       </div>
     </section>
   );
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

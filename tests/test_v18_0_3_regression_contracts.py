@@ -94,6 +94,64 @@ class MedicalProfileParityContractTest(unittest.TestCase):
         self.assertIn('"reception" => vec![', pipeline)
 
 
+class SimpleButtonCreationContractTest(unittest.TestCase):
+    def test_real_tauri_command_accepts_ordinary_docx(self) -> None:
+        backend = text("src-tauri/src/subsystems/document_commands.rs")
+        start = backend.index("fn confirm_template_setup(")
+        end = backend.index("struct RenameDocumentButtonRequest", start)
+        command = backend[start:end]
+        self.assertNotIn("any(|row| row.is_static_copy)", command)
+        self.assertIn("create_pack_from_confirmations", command)
+
+    def test_first_run_is_focused_and_modal_reports_backend_errors(self) -> None:
+        app = text("src/App.tsx")
+        modal = text("src/components/TemplateSetupModal.tsx")
+        self.assertIn("appRoot firstRunMode", app)
+        self.assertIn("status={status}", app)
+        self.assertIn('role="status"', modal)
+        self.assertIn("Создаём кнопки…", modal)
+
+    def test_frontend_command_registry_includes_template_import(self) -> None:
+        api = text("src/lib/api.ts")
+        registry = api[api.index("export const rustCommandNames"):]
+        self.assertIn("'import_template_file'", registry)
+
+
+    def test_reference_projects_keep_first_run_and_selection_simple(self) -> None:
+        app = text("src/App.tsx")
+        rail = text("src/components/DocumentRail.tsx")
+        modal = text("src/components/TemplateSetupModal.tsx")
+        package_area = rail[rail.index('className="packageList'):rail.index('className="packageSelectionActions')]
+        self.assertIn("setSelectedDocIds(res.pack.documents.map((document) => document.id))", app)
+        self.assertIn("setSelectedDocIds(pack.documents.map((document) => document.id))", app)
+        self.assertIn("onGenerateSelected={generateSelectedDocuments}", app)
+        self.assertIn("aria-pressed={selected}", rail)
+        self.assertNotIn('type="checkbox"', package_area)
+        self.assertIn("{hasDocuments && (", rail)
+        self.assertIn("onRemovePendingTemplate", modal)
+        self.assertIn("Названия кнопок должны отличаться", modal)
+
+
+
+    def test_catastrophic_inputs_and_state_fail_closed(self) -> None:
+        intake = text("src-tauri/src/universal_intake.rs")
+        main = text("src-tauri/src/main.rs")
+        watcher = text("src-tauri/src/subsystems/watcher_commands.rs")
+        automation = text("src-tauri/src/subsystems/automation_runtime.rs")
+        docx = text("crates/dokkomplekt-docx/src/lib.rs")
+        storage = text("crates/dokkomplekt-storage/src/lib.rs")
+        self.assertIn("resolve_to_addrs(&validated.host, &validated.addresses)", intake)
+        self.assertIn(".take(MAX_UPLOAD_BYTES as u64 + 1)", intake)
+        self.assertIn("preflight_external_archive(path)?", intake)
+        self.assertIn("walk_files_bounded", intake)
+        self.assertIn("validate_safe_template_bytes(&bytes)", automation)
+        self.assertIn("UnsafeActiveContent", docx)
+        self.assertIn("persistence_block", main)
+        self.assertNotIn("let _ = load_state_from(&db_path, &state, true)", main)
+        self.assertIn("save_case_pack_and_state_value", storage)
+        self.assertIn("worker_panic; retry_blocked=true", watcher)
+        self.assertIn("atomic_write_file", watcher)
+
 class VersionContractTest(unittest.TestCase):
     def test_version_is_18_0_3_everywhere_primary(self) -> None:
         expected = text("VERSION").strip()

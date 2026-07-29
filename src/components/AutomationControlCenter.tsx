@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, CaseRunRecord, LocalSemanticModelConfig, LocalSemanticModelStatus, CorpusStatus, CalibratedThresholdStatus, ReferenceDataStatus, QueueStatus, PrinterInventory, PrivacyPreferences, SidecarToolStatus, ComponentProgress, ComponentStatus, QualityTelemetryReport } from '../lib/types';
+import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
 import { confirmRiskExceptionAndRetry, confirmBundleExceptionAndRetry, getAutomationMetrics, getDailyAutomationDashboard, getQualityTelemetry, getQueueStatus, getCorpusStatus, exportCorpus, getCalibratedThresholdStatus, importCalibratedThresholdsFile, getPrinterInventory, listCaseRuns, retryCaseRun, getPrivacyPreferences, getSemanticModelConfig, getReferenceDataStatus, getSidecarStatus, getComponentStatuses, installComponent, refreshComponentCatalog, removeComponent, listAuditEvents, listAutomationExceptions, resolveAutomationException, runWorkspaceHygiene, testSemanticModel, updatePrintPreferences, updatePrivacyPreferences, updateReferenceData, importReferenceDataFile, updateSemanticModelConfig } from '../lib/api';
 
 interface Props { onStatus(message: string): void; }
@@ -56,7 +57,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
   const [componentProgress, setComponentProgress] = useState<ComponentProgress | null>(null);
   const [printers, setPrinters] = useState<PrinterInventory>(DEFAULT_PRINTERS);
   const [includeResolved, setIncludeResolved] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const { busy, run: execute } = useActionRunner(onStatus, labelledActionError);
   const [minutesPerDocument, setMinutesPerDocument] = useState(() => { const stored = Number(globalThis.localStorage?.getItem('dokkomplekt.roi.minutesPerDocument') ?? 7); return Number.isFinite(stored) && stored >= 0 ? stored : 7; });
 
   useEffect(() => { void refresh(false); }, []);
@@ -67,13 +68,6 @@ export function AutomationControlCenter({ onStatus }: Props) {
       .catch(() => undefined);
     return () => stop?.();
   }, []);
-
-  async function execute<T>(label: string, action: () => Promise<T>): Promise<T | undefined> {
-    setBusy(true);
-    try { return await action(); }
-    catch (error) { onStatus(`Ошибка «${label}»: ${message(error)}`); return undefined; }
-    finally { setBusy(false); }
-  }
 
   async function refresh(showResolved = includeResolved) {
     const result = await execute('центр автоматизации', async () => Promise.all([
@@ -204,27 +198,31 @@ export function AutomationControlCenter({ onStatus }: Props) {
   }
 
   async function reloadComponentCatalog() {
-    const result = await execute('каталог компонентов', refreshComponentCatalog);
-    if (result) { setComponents(result); setSidecars(await getSidecarStatus()); onStatus('Подписанный каталог компонентов обновлён.'); }
+    const components = await execute('каталог компонентов', refreshComponentCatalog);
+    if (!components) return;
+    setComponents(components);
+    onStatus('Подписанный каталог компонентов обновлён.');
+    const sidecars = await execute('состояние локальных компонентов', getSidecarStatus);
+    if (sidecars) setSidecars(sidecars);
   }
 
   async function downloadComponent(item: ComponentStatus) {
-    const result = await execute(`компонент ${item.label}`, () => installComponent(item.id));
-    if (result) {
-      setComponents(current => current.map(component => component.id === result.id ? result : component));
-      setSidecars(await getSidecarStatus());
-      onStatus(`${result.label}: компонент установлен и доступен офлайн.`);
-    }
+    const component = await execute(`компонент ${item.label}`, () => installComponent(item.id));
+    if (!component) return;
+    setComponents(current => current.map(currentItem => currentItem.id === component.id ? component : currentItem));
+    onStatus(`${component.label}: компонент установлен и доступен офлайн.`);
+    const sidecars = await execute('состояние локальных компонентов', getSidecarStatus);
+    if (sidecars) setSidecars(sidecars);
   }
 
   async function deleteComponent(item: ComponentStatus) {
     if (!globalThis.confirm?.(`Удалить компонент «${item.label}»? Функции снова станут недоступны офлайн.`)) return;
-    const result = await execute(`удаление ${item.label}`, () => removeComponent(item.id));
-    if (result) {
-      setComponents(current => current.map(component => component.id === result.id ? result : component));
-      setSidecars(await getSidecarStatus());
-      onStatus(`${result.label}: компонент удалён.`);
-    }
+    const component = await execute(`удаление ${item.label}`, () => removeComponent(item.id));
+    if (!component) return;
+    setComponents(current => current.map(currentItem => currentItem.id === component.id ? component : currentItem));
+    onStatus(`${component.label}: компонент удалён.`);
+    const sidecars = await execute('состояние локальных компонентов', getSidecarStatus);
+    if (sidecars) setSidecars(sidecars);
   }
 
   async function importSignedThresholds(file: File) {
@@ -236,13 +234,15 @@ export function AutomationControlCenter({ onStatus }: Props) {
       onStatus('Размер подписанного пакета порогов должен быть от 1 байта до 1 МБ.');
       return;
     }
-    const bytes = await readFileBytes(file);
-    let binary = '';
-    const chunk = 0x8000;
-    for (let offset = 0; offset < bytes.length; offset += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
-    }
-    const status = await execute('импорт подписанных порогов автопечати', () => importCalibratedThresholdsFile(file.name, btoa(binary)));
+    const status = await execute('импорт подписанных порогов автопечати', async () => {
+      const bytes = await readFileBytes(file);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+      }
+      return importCalibratedThresholdsFile(file.name, btoa(binary));
+    });
     if (!status) return;
     setCalibratedThresholds(current => [...current.filter(item => item.domain !== status.domain), status].sort((a, b) => a.domain.localeCompare(b.domain)));
     onStatus(`Настройки автопечати для набора «${status.domain}» проверены. Используются только подписанные контрольные показатели.`);
@@ -264,13 +264,15 @@ export function AutomationControlCenter({ onStatus }: Props) {
       onStatus('Размер подписанного календарного пакета должен быть от 1 байта до 4 МБ.');
       return;
     }
-    const bytes = await readFileBytes(file);
-    let binary = '';
-    const chunk = 0x8000;
-    for (let offset = 0; offset < bytes.length; offset += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
-    }
-    const status = await execute('импорт подписанного производственного календаря', () => importReferenceDataFile(file.name, btoa(binary)));
+    const status = await execute('импорт подписанного производственного календаря', async () => {
+      const bytes = await readFileBytes(file);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+      }
+      return importReferenceDataFile(file.name, btoa(binary));
+    });
     if (!status) return;
     setReferenceData(status);
     onStatus(status.message);
@@ -487,7 +489,6 @@ function formatMinutes(value:number){const minutes=Math.round(value);if(minutes<
 function exceptionCategoryLabel(category:string){if(category==='risk_gate')return 'Проверка данных';if(category==='bundle_decision')return 'Состав комплекта';return 'Требует внимания';}
 
 function calendarHorizon(years:number[]){const current=new Date().getFullYear(),last=years.length?Math.max(...years):0,gap=last-current;if(gap>=2)return{urgent:false,message:`Календарь подтверждён до ${last} года и проверяется при запуске.`};if(gap>=1)return{urgent:false,message:`Календарь подтверждён только до ${last} года. Подготовьте подписанный пакет следующего года заранее.`};return{urgent:true,message:`Нет подтверждённого календаря после ${last||'текущего года'}. Расчёты будущих рабочих сроков будут остановлены до обновления календаря.`}}
-function message(error: unknown) { return error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error); }
 function safeSource(source: string) { const parts = source.replaceAll('\\', '/').split('/'); return parts.at(-1) || 'источник не указан'; }
 
 function parseExceptionDetails(value: string): Record<string, unknown> | null {

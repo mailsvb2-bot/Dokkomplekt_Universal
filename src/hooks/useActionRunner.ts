@@ -1,6 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
-function message(error: unknown): string {
+export function actionErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
   try {
@@ -10,20 +10,39 @@ function message(error: unknown): string {
   }
 }
 
-export function useActionRunner(onStatus: (message: string) => void) {
-  const [busy, setBusy] = useState(false);
+export type ActionErrorFormatter = (label: string, detail: string) => string;
 
-  const run = useCallback(async <T,>(_label: string, action: () => Promise<T>): Promise<T | undefined> => {
-    setBusy(true);
+const defaultErrorFormatter: ActionErrorFormatter = (_label, detail) =>
+  `Не удалось выполнить действие: ${detail}`;
+
+export function labelledActionError(label: string, detail: string): string {
+  return `Ошибка «${label}»: ${detail}`;
+}
+
+export function plainActionError(_label: string, detail: string): string {
+  return detail;
+}
+
+export function useActionRunner(
+  onStatus: (message: string) => void,
+  formatError: ActionErrorFormatter = defaultErrorFormatter,
+) {
+  const [busy, setBusy] = useState(false);
+  const pendingCount = useRef(0);
+
+  const run = useCallback(async <T,>(label: string, action: () => Promise<T>): Promise<T | undefined> => {
+    pendingCount.current += 1;
+    if (pendingCount.current === 1) setBusy(true);
     try {
       return await action();
     } catch (error) {
-      onStatus(`Не удалось выполнить действие: ${message(error)}`);
+      onStatus(formatError(label, actionErrorMessage(error)));
       return undefined;
     } finally {
-      setBusy(false);
+      pendingCount.current = Math.max(0, pendingCount.current - 1);
+      if (pendingCount.current === 0) setBusy(false);
     }
-  }, [onStatus]);
+  }, [formatError, onStatus]);
 
   return { busy, run };
 }

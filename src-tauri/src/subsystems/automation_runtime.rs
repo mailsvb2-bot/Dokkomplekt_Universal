@@ -2235,7 +2235,14 @@ fn import_template_file(
     match (&req.bytes_base64, &req.template_text) {
         (Some(bytes_b64), _) => {
             let bytes = decode_word_payload(req.file_name.as_deref(), bytes_b64)?;
-            // Validate in memory before persisting the upload.
+            // Validate in memory before persisting the upload. Active content
+            // and external relationships are rejected before Mark-of-the-Web can
+            // be lost by copying the file into app-data.
+            validate_safe_template_bytes(&bytes).map_err(|error| {
+                format!(
+                    "Шаблон содержит макросы, встроенные объекты или внешние связи и заблокирован: {error}. Сохраните безопасную копию как DOCX без активного содержимого."
+                )
+            })?;
             extract_docx_text_from_bytes(&bytes)
                 .map_err(|e| format!("Файл не распознан как DOCX: {e}"))?;
             std::fs::write(&target, bytes).map_err(|e| e.to_string())?;

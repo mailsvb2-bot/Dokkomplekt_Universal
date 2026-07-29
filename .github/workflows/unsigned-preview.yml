@@ -1,0 +1,106 @@
+name: Build Free Unsigned Windows Preview
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/unsigned-preview.yml'
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'tests/installer/windows_installer_contract.ps1'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/unsigned-preview.yml'
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'tests/installer/windows_installer_contract.ps1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-preview-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-unsigned-preview:
+    name: Windows NSIS unsigned preview
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Validate frontend
+        run: |
+          npm run typecheck
+          npm run test
+          npm run build
+      - name: Build thin unsigned NSIS preview
+        run: npx tauri build --bundles nsis --config src-tauri/tauri.thin.conf.json
+      - name: Enforce unsigned-preview boundary
+        shell: pwsh
+        run: |
+          $app = Resolve-Path 'target/release/dokkomplekt-tauri.exe'
+          $installer = Get-ChildItem 'target/release/bundle/nsis' -File -Filter '*.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw 'NSIS installer was not created.' }
+          foreach ($target in @($app.Path, $installer.FullName)) {
+            $signature = Get-AuthenticodeSignature -FilePath $target
+            if ($signature.Status -ne 'NotSigned') {
+              throw "Unsigned preview unexpectedly has signature status $($signature.Status): $target"
+            }
+            Write-Host "UNSIGNED PREVIEW CONFIRMED: $target"
+          }
+      - name: Install, launch and uninstall smoke test
+        shell: pwsh
+        env:
+          DOKKOMPLEKT_REQUIRE_AUTHENTICODE: '0'
+        run: tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper
+      - name: Stage clearly labelled preview artifact
+        shell: pwsh
+        run: |
+          $config = Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
+          $installer = Get-ChildItem 'target/release/bundle/nsis' -File -Filter '*.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw 'NSIS installer was not found for staging.' }
+          New-Item -ItemType Directory -Force 'release-preview' | Out-Null
+          $previewName = "Dokkomplekt_Universal_$($config.version)_UNSIGNED_PREVIEW_setup.exe"
+          Copy-Item $installer.FullName (Join-Path 'release-preview' $previewName) -Force
+          @'
+          DOKKOMPLEKT UNIVERSAL — UNSIGNED PREVIEW
+
+          This installer is free to build and test, but it is not digitally signed.
+          Windows may show "Unknown publisher" or a SmartScreen warning.
+          This artifact is not the signed production release.
+
+          Установщик бесплатный и пригоден для тестирования, но не имеет доверенной цифровой подписи.
+          Windows может показать «Неизвестный издатель» или предупреждение SmartScreen.
+          Это не подписанный production-релиз.
+          '@ | Set-Content 'release-preview/README-UNSIGNED-PREVIEW.txt' -Encoding UTF8
+          $hash = Get-FileHash (Join-Path 'release-preview' $previewName) -Algorithm SHA256
+          "$($hash.Hash.ToLowerInvariant())  $previewName" | Set-Content 'release-preview/SHA256SUMS.txt' -Encoding ASCII
+          "## Free unsigned Windows preview`n`n- Installer: ``$previewName```n- Signature: **NotSigned** (expected)`n- Installer smoke: passed before upload`n- SHA-256: ``$($hash.Hash.ToLowerInvariant())``" | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Upload unsigned preview
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: Dokkomplekt-Windows-UNSIGNED-PREVIEW-${{ github.run_number }}
+          path: release-preview/**
+          if-no-files-found: error
+          retention-days: 14

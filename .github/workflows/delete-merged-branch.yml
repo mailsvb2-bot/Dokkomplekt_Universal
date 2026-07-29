@@ -1,0 +1,45 @@
+name: Delete Merged Working Branch
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-merged-working-branch:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - name: Delete conventional merged branch atomically
+        shell: bash
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          MERGED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$BRANCH" =~ ^(agent|fix|chore)/[A-Za-z0-9._/-]+$ ]]; then
+            echo "Branch is outside the guarded working-branch namespaces; leaving it untouched: $BRANCH"
+            exit 0
+          fi
+          remote_line="$(git ls-remote --heads origin "refs/heads/$BRANCH")"
+          if [[ -z "$remote_line" ]]; then
+            echo "Branch is already absent: $BRANCH"
+            exit 0
+          fi
+          remote_sha="${remote_line%%[[:space:]]*}"
+          if [[ "$remote_sha" != "$MERGED_HEAD_SHA" ]]; then
+            echo "Branch moved after merge; refusing to delete unmerged work: $BRANCH ($remote_sha != $MERGED_HEAD_SHA)"
+            exit 0
+          fi
+          git push \
+            --force-with-lease="refs/heads/$BRANCH:$MERGED_HEAD_SHA" \
+            origin ":refs/heads/$BRANCH"

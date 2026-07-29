@@ -40,7 +40,7 @@ describe('TemplateSetupModal', () => {
       popup_fields: [],
     }]} />);
     expect(screen.getByText('2. Проверьте названия кнопок')).toBeTruthy();
-    expect(screen.getByText('3. Создайте кнопки')).toBeTruthy();
+    expect(screen.getByText('3. Всё готово')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
     expect(onConfirm).toHaveBeenCalledOnce();
   });

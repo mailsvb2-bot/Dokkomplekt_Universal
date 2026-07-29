@@ -37,7 +37,7 @@ export function DocumentRail(props: DocumentRailProps) {
       .map((document) => document.id);
 
     previousDocumentIds.current = currentDocumentIds;
-    newlyAddedSelectedIds.forEach(props.onToggleSelected);
+    for (const documentId of newlyAddedSelectedIds) props.onToggleSelected(documentId);
   }, [props.documents, props.onToggleSelected, props.selectedDocumentIds]);
 
   return (

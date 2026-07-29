@@ -14,8 +14,16 @@ const document: DocumentTemplateSpec = {
   is_static_copy: false,
 };
 
-function renderRail(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {}) {
-  const props: Parameters<typeof DocumentRail>[0] = {
+const diaryDocument: DocumentTemplateSpec = {
+  ...document,
+  id: 'diaries',
+  button_label: 'Дневники наблюдения',
+  template_path: 'Дневники наблюдения.docx',
+  role_id: 'medical.diaries',
+};
+
+function buildProps(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {}): Parameters<typeof DocumentRail>[0] {
+  return {
     documents: [document],
     activeDocumentId: document.id,
     selectedDocumentIds: [document.id],
@@ -38,8 +46,12 @@ function renderRail(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
     onToggleUtilities: vi.fn(),
     ...overrides,
   };
-  render(<DocumentRail {...props} />);
-  return props;
+}
+
+function renderRail(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {}) {
+  const props = buildProps(overrides);
+  const view = render(<DocumentRail {...props} />);
+  return { props, ...view };
 }
 
 describe('DocumentRail', () => {
@@ -52,7 +64,7 @@ describe('DocumentRail', () => {
   });
 
   it('uses the simple complete-package wording and keeps add-buttons visible', () => {
-    const props = renderRail();
+    const { props } = renderRail();
     fireEvent.click(screen.getByRole('button', { name: 'Создать документы (1)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Добавить шаблоны' }));
     expect(props.onGenerateSelected).toHaveBeenCalledOnce();
@@ -60,10 +72,43 @@ describe('DocumentRail', () => {
     expect(screen.getByText('в комплекте')).toBeTruthy();
   });
 
-  it('clears App auto-selection when a fresh saved pack arrives', async () => {
-    const onClearSelected = vi.fn();
-    renderRail({ onClearSelected });
-    await waitFor(() => expect(onClearSelected).toHaveBeenCalledOnce());
+  it('deselects only newly added templates that arrived auto-selected', async () => {
+    const onToggleSelected = vi.fn();
+    const initialProps = buildProps({
+      documents: [document],
+      selectedDocumentIds: [],
+      onToggleSelected,
+    });
+    const { rerender } = render(<DocumentRail {...initialProps} />);
+
+    const nextProps = buildProps({
+      documents: [document, diaryDocument],
+      selectedDocumentIds: [document.id, diaryDocument.id],
+      onToggleSelected,
+      printCopies: { [document.id]: 1, [diaryDocument.id]: 1 },
+    });
+    rerender(<DocumentRail {...nextProps} />);
+
+    await waitFor(() => expect(onToggleSelected).toHaveBeenCalledOnce());
+    expect(onToggleSelected).toHaveBeenCalledWith(diaryDocument.id);
+    expect(onToggleSelected).not.toHaveBeenCalledWith(document.id);
+  });
+
+  it('does not reset selection when the same document ids are refreshed', async () => {
+    const onToggleSelected = vi.fn();
+    const firstProps = buildProps({ onToggleSelected });
+    const { rerender } = render(<DocumentRail {...firstProps} />);
+    await waitFor(() => expect(onToggleSelected).toHaveBeenCalledOnce());
+    onToggleSelected.mockClear();
+
+    const refreshedProps = buildProps({
+      documents: [{ ...document }],
+      selectedDocumentIds: [document.id],
+      onToggleSelected,
+    });
+    rerender(<DocumentRail {...refreshedProps} />);
+
+    await waitFor(() => expect(onToggleSelected).not.toHaveBeenCalled());
   });
 
   it('disables generation until at least one document is selected', () => {

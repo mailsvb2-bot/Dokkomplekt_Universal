@@ -25,7 +25,8 @@ const base = {
 describe('TemplateSetupModal', () => {
   it('keeps the first step simple and disables confirmation without input', () => {
     render(<TemplateSetupModal {...base} />);
-    expect(screen.getByText('Выберите шаблоны')).toBeTruthy();
+    expect(screen.getByText('1. Выберите шаблоны')).toBeTruthy();
+    expect(screen.getByText(/Шаблон задаёт форму и расположение полей/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -38,6 +39,8 @@ describe('TemplateSetupModal', () => {
       extracted_text: 'Акт',
       popup_fields: [],
     }]} />);
+    expect(screen.getByText('2. Проверьте названия кнопок')).toBeTruthy();
+    expect(screen.getByText('3. Создайте кнопки')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
     expect(onConfirm).toHaveBeenCalledOnce();
   });

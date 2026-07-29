@@ -106,11 +106,14 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <p className="hint">
           Выберите свои DOCX или DOCM. Название каждого документа станет кнопкой на главном экране.
         </p>
+        <p className="hint">
+          Шаблон задаёт форму и расположение полей. Данные нового документа берутся из исходного файла и подтверждённых ответов, а не копируются из текста обучающего шаблона.
+        </p>
 
         {!hasBatch ? (
           <div className="emptyPackage templateFirstStep">
             <div><i className="ti ti-file-upload" /></div>
-            <h3>Выберите шаблоны</h3>
+            <h3>1. Выберите шаблоны</h3>
             <p>Можно выбрать сразу несколько файлов. Размечать их перед созданием кнопок не обязательно.</p>
             <label className="primaryBtn fileBtn largeAction">
               Выбрать DOCX/DOCM
@@ -156,7 +159,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         ) : (
           <>
             <div className="templateBatch" aria-label="Подготовленные шаблоны">
-              <div className="templateBatchHead">Так будут называться кнопки</div>
+              <div className="templateBatchHead">2. Проверьте названия кнопок</div>
               {props.pendingTemplates.map((item) => (
                 <div className={activePending?.document_id === item.document_id ? 'templateBatchRow selected' : 'templateBatchRow'} key={item.document_id}>
                   <button
@@ -179,7 +182,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             <div className="readyMessage templateReadyMessage">
               <i className="ti ti-circle-check" aria-hidden="true" />
               <div>
-                <strong>Всё готово</strong>
+                <strong>3. Создайте кнопки</strong>
                 <span>Нажмите «{confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.</span>
               </div>
             </div>

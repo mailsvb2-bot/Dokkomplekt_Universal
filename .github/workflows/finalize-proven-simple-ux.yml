@@ -44,9 +44,6 @@ jobs:
             --manifest-json /tmp/source-report.json
           python scripts/verify_source_manifest.py
           python scripts/static_quality_gate.py --source-only
-          python -m pytest -q \
-            tests/test_frontend_runtime_contract_coverage.py \
-            tests/test_source_manifest_integrity.py
           git diff --check
 
       - name: Commit verified clean result

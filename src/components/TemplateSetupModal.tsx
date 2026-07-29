@@ -33,6 +33,8 @@ interface TemplateSetupModalProps {
 
 export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const hasBatch = props.pendingTemplates.length > 0;
+  const unmarkedTemplateCount = props.pendingTemplates.filter((item) => !hasConfirmedPlaceholder(item.extracted_text)).length;
+  const batchReady = hasBatch && unmarkedTemplateCount === 0;
   const [scannerField, setScannerField] = useState('');
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
@@ -114,7 +116,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           <div className="emptyPackage templateFirstStep">
             <div><i className="ti ti-file-upload" /></div>
             <h3>1. Выберите шаблоны</h3>
-            <p>Можно выбрать сразу несколько файлов. Размечать их перед созданием кнопок не обязательно.</p>
+            <p>Можно выбрать сразу несколько файлов. Если программа не найдёт места для заполнения, она попросит показать их в Word.</p>
             <label className="primaryBtn fileBtn largeAction">
               Выбрать DOCX/DOCM
               <input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} data-testid="template-file-input" style={{ display: 'none' }} />
@@ -179,11 +181,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
               ))}
             </div>
 
-            <div className="readyMessage templateReadyMessage">
-              <i className="ti ti-circle-check" aria-hidden="true" />
+            <div className={`readyMessage templateReadyMessage ${batchReady ? '' : 'warning'}`}>
+              <i className={batchReady ? 'ti ti-circle-check' : 'ti ti-alert-triangle'} aria-hidden="true" />
               <div>
-                <strong>3. Всё готово</strong>
-                <span>Нажмите «{confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.</span>
+                <strong>{batchReady ? '3. Всё готово' : '3. Нужна разметка'}</strong>
+                <span>
+                  {batchReady
+                    ? `Нажмите «${confirmLabel}». Шаблон задаёт форму, а значения будут взяты только из исходного документа и подтверждённых ответов.`
+                    : `В ${unmarkedTemplateCount} шаблон(ах) не найдено подтверждённых мест заполнения. Откройте дополнительную настройку и покажите хотя бы одно место в Word. Текст примера не будет скопирован как данные нового документа.`}
+                </span>
               </div>
             </div>
 
@@ -194,7 +200,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                   <div className="guidedTemplateLaunch">
                     <div>
                       <strong>Показать места для автоматического заполнения</strong>
-                      <small>Это необязательно. Кнопка документа создаётся и без разметки.</small>
+                      <small>Для неразмеченного шаблона покажите хотя бы одно место заполнения.</small>
                     </div>
                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>
                       <i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место
@@ -247,13 +253,17 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={!hasBatch && !props.templateText.trim()}>
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !props.templateText.trim()}>
             {confirmLabel}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function hasConfirmedPlaceholder(text: string): boolean {
+  return /\{\{\s*[a-zA-Z0-9_.-]+\s*\}\}/.test(text);
 }
 
 function ScannerToolbar(props: {

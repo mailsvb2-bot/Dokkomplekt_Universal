@@ -1,16 +1,10 @@
 use crate::provider_yookassa::YooKassaProvider;
-use crate::providers::{PaymentProvider as PaymentProviderApi, ProviderPaymentStatus};
+use crate::providers::ProviderPaymentStatus;
 use crate::state::AppState;
 use crate::storage::{
     PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;

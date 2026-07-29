@@ -155,9 +155,9 @@ impl YooKassaProvider {
             .ok_or_else(|| ProviderError::BadRequest("payment id is missing".into()))?;
         if payment_id.is_empty()
             || payment_id.len() > 128
-            || !payment_id
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+            || !payment_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
         {
             return Err(ProviderError::BadRequest(
                 "invalid YooKassa payment id".into(),
@@ -534,7 +534,10 @@ mod tests {
             .expect("authenticated lookup must verify callback");
         assert_eq!(event.status, ProviderPaymentStatus::Succeeded);
         assert_eq!(event.amount_rub, 1490);
-        assert_eq!(event.provider_event_id, "verified:payment-verified:succeeded");
+        assert_eq!(
+            event.provider_event_id,
+            "verified:payment-verified:succeeded"
+        );
         server.join().expect("mock server thread");
     }
 

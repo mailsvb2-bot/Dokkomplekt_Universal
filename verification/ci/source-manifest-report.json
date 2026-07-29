@@ -5,9 +5,10 @@
   "manifest_file_count": 457,
   "missing_entries": [],
   "orphaned_entries": [
-    ".github/workflows/fix-print-validation-test.yml"
+    ".github/workflows/fix-commercial-rust-format.yml"
   ],
   "hash_mismatches": [
-    "src-tauri/src/main.rs"
+    "crates/dokkomplekt-license-server/src/http/webhooks.rs",
+    "crates/dokkomplekt-license-server/src/provider_yookassa.rs"
   ]
 }

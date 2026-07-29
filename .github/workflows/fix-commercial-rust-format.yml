@@ -31,6 +31,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/dokkomplekt-license-server/src/http/webhooks.rs')
+          text = path.read_text(encoding='utf-8')
+          old = 'use crate::providers::{PaymentProvider as PaymentProviderApi, ProviderPaymentStatus};'
+          new = 'use crate::providers::ProviderPaymentStatus;'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one stale import, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
           cargo fmt --all --manifest-path crates/dokkomplekt-license-server/Cargo.toml
           cargo fmt --all --manifest-path crates/dokkomplekt-license-server/Cargo.toml -- --check
           python scripts/check_commercial_rust_crates.py
@@ -43,5 +53,5 @@ jobs:
           git config user.email 254540704+mailsvb2-bot@users.noreply.github.com
           git add -A
           git diff --cached --quiet && exit 0
-          git commit -m "Format isolated commercial Rust crates"
+          git commit -m "Format and lint isolated commercial Rust crates"
           git push --force origin HEAD:refs/heads/agent/fundamental-seven-critical-fixes

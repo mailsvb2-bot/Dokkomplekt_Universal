@@ -41,4 +41,4 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Format critical trust-boundary fixes"
-          git push origin HEAD:refs/heads/agent/fundamental-seven-critical-fixes
+          git push --force origin HEAD:refs/heads/agent/fundamental-seven-critical-fixes

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TemplateSetupModal } from './TemplateSetupModal';
 
@@ -37,6 +37,18 @@ describe('TemplateSetupModal', () => {
 
     rerender(<TemplateSetupModal {...base} templateText="Документ № {{document.number}}" />);
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('cleans a dangling number mark from the suggested button label', async () => {
+    const onPendingTemplateLabelChange = vi.fn();
+    render(<TemplateSetupModal {...base} onPendingTemplateLabelChange={onPendingTemplateLabelChange} pendingTemplates={[{
+      document_id: 'd1',
+      file_name: 'Счёт на оплату.docx',
+      button_label: 'Счёт на оплату №',
+      extracted_text: 'Счёт на оплату № {{document.number}}',
+      popup_fields: [],
+    }]} />);
+    await waitFor(() => expect(onPendingTemplateLabelChange).toHaveBeenCalledWith('d1', 'Счёт на оплату'));
   });
 
   it('creates every prepared template as a button', () => {

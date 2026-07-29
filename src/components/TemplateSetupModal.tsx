@@ -182,7 +182,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             <div className="readyMessage templateReadyMessage">
               <i className="ti ti-circle-check" aria-hidden="true" />
               <div>
-                <strong>3. Создайте кнопки</strong>
+                <strong>3. Всё готово</strong>
                 <span>Нажмите «{confirmLabel}». Обычные шаблоны без специальных полей тоже будут добавлены и смогут копироваться без изменений.</span>
               </div>
             </div>

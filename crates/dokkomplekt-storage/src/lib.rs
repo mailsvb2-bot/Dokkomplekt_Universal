@@ -2217,8 +2217,10 @@ mod tests {
                 1.0,
             ),
         );
-        let mut pack = DocumentPack::default();
-        pack.pack_id = "atomic-pack".into();
+        let pack = DocumentPack {
+            pack_id: "atomic-pack".into(),
+            ..DocumentPack::default()
+        };
         let commercial = serde_json::json!({"plan":"doctor_pro","active":true});
 
         repo.save_desktop_snapshot(

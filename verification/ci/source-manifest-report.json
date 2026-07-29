@@ -2,13 +2,11 @@
   "schema": "dokkomplekt.source-manifest-verification.v1",
   "matches": false,
   "expected_file_count": 456,
-  "manifest_file_count": 457,
+  "manifest_file_count": 456,
   "missing_entries": [],
-  "orphaned_entries": [
-    ".github/workflows/fix-storage-snapshot-test.yml"
-  ],
+  "orphaned_entries": [],
   "hash_mismatches": [
     "crates/dokkomplekt-storage/src/lib.rs",
-    "src-tauri/src/main.rs"
+    "src-tauri/src/universal_intake.rs"
   ]
 }

@@ -144,7 +144,7 @@ pub fn validate_source_file_size(path: &Path) -> Result<u64, String> {
 }
 
 fn read_file_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>, String> {
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let file = File::open(path).map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)

@@ -35,6 +35,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const hasBatch = props.pendingTemplates.length > 0;
   const unmarkedTemplateCount = props.pendingTemplates.filter((item) => !hasConfirmedPlaceholder(item.extracted_text)).length;
   const batchReady = hasBatch && unmarkedTemplateCount === 0;
+  const manualReady = hasConfirmedPlaceholder(props.templateText);
   const [scannerField, setScannerField] = useState('');
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
@@ -145,6 +146,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                 </tbody>
               </table>
               <button className="softBtn" onClick={props.onAnalyze}>Анализировать</button>
+              {props.templateText.trim() && !manualReady ? (
+                <div className="readyMessage templateReadyMessage warning">
+                  <i className="ti ti-alert-triangle" aria-hidden="true" />
+                  <div>
+                    <strong>Нужно указать места заполнения</strong>
+                    <span>Выделите примерное значение ниже и замените его смысловым полем. Иначе текст примера мог бы попасть в новый документ.</span>
+                  </div>
+                </div>
+              ) : null}
               <details className="manualScannerDetails">
                 <summary>Дополнительная разметка</summary>
                 <ScannerToolbar
@@ -253,7 +263,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !props.templateText.trim()}>
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>
             {confirmLabel}
           </button>
         </div>

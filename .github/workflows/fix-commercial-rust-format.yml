@@ -1,0 +1,45 @@
+name: Fix Commercial Rust Format
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'agent/fundamental-seven-critical-fixes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt,clippy
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Format and verify isolated commercial Rust crates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cargo fmt --all --manifest-path crates/dokkomplekt-license-server/Cargo.toml
+          cargo fmt --all --manifest-path crates/dokkomplekt-license-server/Cargo.toml -- --check
+          python scripts/check_commercial_rust_crates.py
+          rm .github/workflows/fix-commercial-rust-format.yml
+          mkdir -p verification/ci
+          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.json || true
+          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git config user.name mailsvb2-bot
+          git config user.email 254540704+mailsvb2-bot@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Format isolated commercial Rust crates"
+          git push --force origin HEAD:refs/heads/agent/fundamental-seven-critical-fixes

@@ -55,6 +55,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
     }
   }, [activePendingId, props.pendingTemplates]);
 
+  useEffect(() => {
+    for (const item of props.pendingTemplates) {
+      const normalized = normalizeTemplateButtonLabel(item.button_label);
+      if (normalized !== item.button_label) {
+        props.onPendingTemplateLabelChange(item.document_id, normalized);
+      }
+    }
+  }, [props.pendingTemplates, props.onPendingTemplateLabelChange]);
+
   function rememberScannerQuestion(documentId: string | null, fieldId: string) {
     if (!fieldId.trim()) return;
     if (documentId) {
@@ -270,6 +279,15 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
       </div>
     </div>
   );
+}
+
+function normalizeTemplateButtonLabel(value: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed
+    .replace(/\s+(?:№|N|#)\s*$/i, '')
+    .replace(/\s*[:;]\s*$/, '')
+    .trim();
+  return normalized || trimmed;
 }
 
 function hasConfirmedPlaceholder(text: string): boolean {

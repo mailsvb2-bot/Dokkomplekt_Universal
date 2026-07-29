@@ -30,6 +30,15 @@ describe('TemplateSetupModal', () => {
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('does not create a manual text template until a field is marked', () => {
+    const { rerender } = render(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
+    expect(screen.getByText('Нужно указать места заполнения')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
+
+    rerender(<TemplateSetupModal {...base} templateText="Документ № {{document.number}}" />);
+    expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('creates every prepared template as a button', () => {
     const onConfirm = vi.fn();
     render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{

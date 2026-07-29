@@ -1,0 +1,46 @@
+name: One-time branch prune
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    if: github.event.head_commit.message == 'chore: prune merged branches'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete reviewed branches and verify only main remains
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          branches=(
+            "agent/adopt-proven-simple-ux"
+            "agent/fundamental-seven-critical-fixes"
+            "agent/fix-all-critical-errors"
+            "agent/release-preflight-clean"
+            "agent/release-environment-preflight"
+            "agent/harden-async-action-runner"
+            "agent/complete-tauri-response-contracts"
+            "agent/fix-generation-and-release-hardening"
+            "agent/fix-simple-button-creation"
+            "fix/simple-working-buttons"
+            "ui/client-first-neutral"
+          )
+
+          for branch in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
+              git push "$remote" --delete "$branch"
+            fi
+          done
+
+          mapfile -t remaining < <(git ls-remote --heads "$remote" | awk '{print $2}' | sort)
+          printf 'Remaining branches:\n%s\n' "${remaining[*]}"
+          test "${#remaining[@]}" -eq 1
+          test "${remaining[0]}" = "refs/heads/main"

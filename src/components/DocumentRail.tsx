@@ -27,15 +27,18 @@ interface DocumentRailProps {
 export function DocumentRail(props: DocumentRailProps) {
   const hasDocuments = props.documents.length > 0;
   const selectedCount = props.selectedDocumentIds.length;
-  const previousDocuments = useRef<DocumentTemplateSpec[] | null>(null);
+  const previousDocumentIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (previousDocuments.current === props.documents) return;
-    previousDocuments.current = props.documents;
-    if (props.documents.length > 0 && selectedCount === props.documents.length) {
-      props.onClearSelected();
-    }
-  }, [props.documents, props.onClearSelected, selectedCount]);
+    const currentDocumentIds = new Set(props.documents.map((document) => document.id));
+    const newlyAddedSelectedIds = props.documents
+      .filter((document) => !previousDocumentIds.current.has(document.id))
+      .filter((document) => props.selectedDocumentIds.includes(document.id))
+      .map((document) => document.id);
+
+    previousDocumentIds.current = currentDocumentIds;
+    newlyAddedSelectedIds.forEach(props.onToggleSelected);
+  }, [props.documents, props.onToggleSelected, props.selectedDocumentIds]);
 
   return (
     <aside className="packagePanel" aria-label="Документы для создания">

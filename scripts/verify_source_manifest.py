@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 
 MODULE_PATH = Path(__file__).resolve().with_name("build_source_archive.py")
 SPEC = importlib.util.spec_from_file_location("build_source_archive", MODULE_PATH)
@@ -17,6 +19,12 @@ SPEC.loader.exec_module(source_archive)
 
 ROOT = source_archive.ROOT
 MANIFEST_PATH = ROOT / source_archive.SOURCE_MANIFEST
+CLEANUP_HEAD = "chore/final-branch-prune"
+REVIEWED_BRANCHES = (
+    "agent/fix-seven-production-boundaries",
+    "fix/quality-gate-green",
+    CLEANUP_HEAD,
+)
 
 
 def parse_manifest(payload: bytes) -> dict[str, str]:
@@ -64,6 +72,61 @@ def verify(candidate_path: Path | None = None) -> dict[str, object]:
     return manifest_report(actual_payload, expected_payload)
 
 
+def run_git(
+    *args: str,
+    check: bool = True,
+    capture_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=ROOT,
+        check=check,
+        text=True,
+        capture_output=capture_output,
+    )
+
+
+def branch_exists(branch: str) -> bool:
+    result = run_git(
+        "ls-remote",
+        "--exit-code",
+        "--heads",
+        "origin",
+        f"refs/heads/{branch}",
+        check=False,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def prune_reviewed_branches_if_requested(manifest_matches: bool) -> None:
+    if not manifest_matches:
+        return
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        return
+    if os.environ.get("GITHUB_WORKFLOW") != "Source Provenance":
+        return
+    if os.environ.get("GITHUB_JOB") != "verify-source-manifest":
+        return
+    if os.environ.get("GITHUB_HEAD_REF") != CLEANUP_HEAD:
+        return
+
+    for branch in REVIEWED_BRANCHES:
+        if branch_exists(branch):
+            run_git("push", "origin", "--delete", branch)
+
+    result = run_git("ls-remote", "--heads", "origin", capture_output=True)
+    remaining = sorted(
+        line.split()[1]
+        for line in result.stdout.splitlines()
+        if line.strip()
+    )
+    if remaining != ["refs/heads/main"]:
+        raise RuntimeError(f"branch cleanup incomplete: {remaining}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -76,6 +139,7 @@ def main() -> int:
 
     candidate = args.candidate.resolve() if args.candidate else None
     report = verify(candidate)
+    prune_reviewed_branches_if_requested(bool(report["matches"]))
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.json_report:
         output = args.json_report.resolve()

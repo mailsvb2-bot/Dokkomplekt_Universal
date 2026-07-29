@@ -94,6 +94,29 @@ class MedicalProfileParityContractTest(unittest.TestCase):
         self.assertIn('"reception" => vec![', pipeline)
 
 
+class CriticalSecurityRegressionContractTest(unittest.TestCase):
+    def test_untrusted_templates_archives_and_watcher_fail_closed(self) -> None:
+        intake = text("src-tauri/src/universal_intake.rs")
+        watcher = text("src-tauri/src/subsystems/watcher_commands.rs")
+        automation = text("src-tauri/src/subsystems/automation_runtime.rs")
+        docx = text("crates/dokkomplekt-docx/src/lib.rs")
+        for invariant in [
+            "resolve_to_addrs(&validated.host, &validated.addresses)",
+            ".take(MAX_UPLOAD_BYTES as u64 + 1)",
+            "validate_archive_relative_path",
+            "archive_entry_is_symlink",
+            "preflight_external_archive(path)?",
+            "extract_external_archive_entry_bounded",
+            "walk_files_bounded",
+        ]:
+            self.assertIn(invariant, intake)
+        self.assertIn("validate_safe_template_bytes(&bytes)", automation)
+        self.assertIn("UnsafeActiveContent", docx)
+        self.assertIn("validate_safe_template_file(template_path)?", docx)
+        self.assertIn("worker_panic; retry_blocked=true", watcher)
+        self.assertIn("atomic_write_file", watcher)
+
+
 class VersionContractTest(unittest.TestCase):
     def test_version_is_18_0_3_everywhere_primary(self) -> None:
         expected = text("VERSION").strip()

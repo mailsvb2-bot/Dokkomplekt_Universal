@@ -220,6 +220,9 @@ fn unix_time_ms(value: std::time::SystemTime) -> u128 {
 
 fn classify_processing_error(error: &str) -> (&'static str, UnreadableRetryPolicy) {
     let normalized = error.to_lowercase();
+    if normalized.contains("internal watcher panic") {
+        return ("internal_failure", UnreadableRetryPolicy::ContentChange);
+    }
     let permanent_source_markers = [
         "поврежд",
         "invalid zip",
@@ -851,9 +854,10 @@ fn start_watcher_thread(
                     let worker_log_path = log_path.clone();
                     let worker_in_flight = Arc::clone(&in_flight);
                     std::thread::spawn(move || {
-                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let processing_app = worker_app.clone();
+                        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             process_watcher_source(
-                                worker_app,
+                                processing_app,
                                 worker_path.clone(),
                                 worker_folder,
                                 default_year,
@@ -862,9 +866,51 @@ fn start_watcher_thread(
                                 auto_print,
                                 worker_copies,
                                 worker_control_path,
-                                worker_log_path,
+                                worker_log_path.clone(),
                             );
                         }));
+                        if panic_result.is_err() {
+                            increment_metric(&worker_app, "failed_sources", 1);
+                            let error = "internal watcher panic: обработка аварийно остановлена до безопасной публикации";
+                            let now = std::time::SystemTime::now();
+                            let note = write_unreadable_source_note(&worker_path, error, now).ok();
+                            let details = serde_json::json!({
+                                "category": "internal_failure",
+                                "source_content_not_logged": true,
+                                "retry_requires_source_change": true,
+                            });
+                            let _ = create_automation_exception(
+                                &worker_app,
+                                "internal_failure",
+                                &worker_path.display().to_string(),
+                                "Внутренняя ошибка фонового обработчика. Исходник сохранён и не будет зациклен.",
+                                &details,
+                            );
+                            let _ = append_audit_event(
+                                &worker_app,
+                                "watcher_worker_panic_blocked",
+                                "",
+                                &details,
+                            );
+                            let response = CreatedDocumentsIntakeResponse {
+                                status: "error".into(),
+                                patient_folder: None,
+                                created_files: Vec::new(),
+                                created_documents: Vec::new(),
+                                missing: Vec::new(),
+                                attention_file: note.as_ref().map(|path| path.display().to_string()),
+                                print_triage: None,
+                                message: "Фоновая обработка аварийно остановлена. Исходник не удалён; рядом создан файл «НЕ ПРОЧИТАН», повторный цикл заблокирован до изменения источника.".into(),
+                            };
+                            let _ = worker_app.emit("document-batch-ready", response);
+                            if let Ok(mut log) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&worker_log_path)
+                            {
+                                let _ = writeln!(log, "[watcher] worker_panic; retry_blocked=true");
+                            }
+                        }
                         if let Ok(mut active) = worker_in_flight.lock() {
                             active.remove(&worker_path);
                         }
@@ -922,11 +968,10 @@ fn install_background_watcher(
         max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
     };
     let config_path = watcher_config_path(&app)?;
-    std::fs::write(
+    atomic_write_file(
         &config_path,
-        serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+        &serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?,
+    )?;
 
     // 1) The watcher actually starts, right now, in-process.
     let max_parallel_cases = runtime.max_parallel_cases;
@@ -978,11 +1023,10 @@ fn update_background_watcher_preferences(
         .map_err(|error| format!("Настройки фонового агента повреждены: {error}"))?;
     runtime.auto_print = req.auto_print;
     runtime.print_copies_by_document = req.print_copies_by_document;
-    std::fs::write(
+    atomic_write_file(
         &config_path,
-        serde_json::to_vec_pretty(&runtime).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+        &serde_json::to_vec_pretty(&runtime).map_err(|error| error.to_string())?,
+    )?;
     Ok(true)
 }
 

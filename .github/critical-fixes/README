@@ -1,0 +1,1 @@
+This directory is an authenticated one-use transport for a locally verified patch. The apply workflow verifies the patch SHA-256, applies it to the current main lineage, runs the complete Python contract wall, regenerates the source manifest, and removes this directory and itself before committing product changes.

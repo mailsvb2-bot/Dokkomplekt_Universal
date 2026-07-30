@@ -1,4 +1,5 @@
 use super::{
+    order_status_after_payment, validate_access_recovery_input, validate_order_status_transition,
     ActivationIssueOutcome, AuditEventRecord, LicenseIssueOutcome, LicenseRecord, LicenseStore,
     PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, StoreError,
 };
@@ -64,7 +65,7 @@ impl PostgresStore {
         let mut client = self.client()?;
         let mut tx = client.transaction().map_err(pg_err)?;
         let row = tx.query_opt(
-            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
             &[&record.order_id],
         ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
         let order = order_from_row(row)?;
@@ -128,35 +129,118 @@ impl LicenseStore for PostgresStore {
         let amount = amount_to_i64(record.amount_rub)?;
         let status = order_status_to_str(&record.status);
         let machine_hash = record.machine_hash.as_deref();
+        let access_token_hash = record.access_token_hash.as_deref();
         client.execute(
-            "INSERT INTO license_orders (id, plan, amount_rub, status, machine_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-            &[&record.id, &record.plan, &amount, &status, &machine_hash, &record.created_at],
-        ).map_err(pg_err)?;
+            "INSERT INTO license_orders (id, plan, amount_rub, status, machine_hash, access_token_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[
+                &record.id,
+                &record.plan,
+                &amount,
+                &status,
+                &machine_hash,
+                &access_token_hash,
+                &record.created_at,
+            ],
+        )
+        .map_err(pg_err)?;
         Ok(())
     }
 
     fn get_order(&self, order_id: Uuid) -> Result<Option<OrderRecord>, StoreError> {
         let mut client = self.client()?;
         client.query_opt(
-            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1",
+            "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1",
             &[&order_id],
         ).map_err(pg_err)?.map(order_from_row).transpose()
     }
 
-    fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError> {
+    fn recover_legacy_order_access(
+        &self,
+        order_id: Uuid,
+        machine_hash: &str,
+        access_token_hash: &str,
+        bind_missing_machine: bool,
+    ) -> Result<OrderRecord, StoreError> {
+        let machine_hash = validate_access_recovery_input(machine_hash, access_token_hash)?;
         let mut client = self.client()?;
-        let status = order_status_to_str(&status);
-        let changed = client
+        let mut tx = client.transaction().map_err(pg_err)?;
+        let row = tx
+            .query_opt(
+                "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+                &[&order_id],
+            )
+            .map_err(pg_err)?
+            .ok_or(StoreError::NotFound)?;
+        let mut order = order_from_row(row)?;
+        if order.access_token_hash.is_some() || matches!(order.status, OrderStatus::Cancelled) {
+            return Err(StoreError::Conflict);
+        }
+        let bound_missing_machine = match order.machine_hash.as_deref().map(str::trim) {
+            Some(expected) if expected == machine_hash => false,
+            Some(_) => return Err(StoreError::Conflict),
+            None if bind_missing_machine => true,
+            None => {
+                return Err(StoreError::Invalid(
+                    "legacy_order_has_no_machine_binding".to_string(),
+                ))
+            }
+        };
+        let stored_machine_hash = if bound_missing_machine {
+            machine_hash.clone()
+        } else {
+            order
+                .machine_hash
+                .clone()
+                .unwrap_or_else(|| machine_hash.clone())
+        };
+        let updated = tx
             .execute(
-                "UPDATE license_orders SET status = $2 WHERE id = $1",
-                &[&order_id, &status],
+                "UPDATE license_orders SET machine_hash = $2, access_token_hash = $3 WHERE id = $1 AND access_token_hash IS NULL",
+                &[&order_id, &stored_machine_hash, &access_token_hash.trim()],
             )
             .map_err(pg_err)?;
-        if changed == 0 {
-            Err(StoreError::NotFound)
-        } else {
-            Ok(())
+        if updated != 1 {
+            return Err(StoreError::Conflict);
         }
+        insert_audit_event(
+            &mut tx,
+            &AuditEventRecord {
+                id: Uuid::new_v4(),
+                entity_id: order_id,
+                event_type: "order_access_recovered".to_string(),
+                happened_at: OffsetDateTime::now_utc(),
+                details_json: serde_json::json!({
+                    "bound_missing_machine": bound_missing_machine,
+                })
+                .to_string(),
+            },
+        )?;
+        tx.commit().map_err(pg_err)?;
+        order.machine_hash = Some(stored_machine_hash);
+        order.access_token_hash = Some(access_token_hash.trim().to_string());
+        Ok(order)
+    }
+
+    fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError> {
+        let mut client = self.client()?;
+        let mut tx = client.transaction().map_err(pg_err)?;
+        let current: String = tx
+            .query_opt(
+                "SELECT status FROM license_orders WHERE id = $1 FOR UPDATE",
+                &[&order_id],
+            )
+            .map_err(pg_err)?
+            .ok_or(StoreError::NotFound)?
+            .get(0);
+        let current = order_status_from_str(&current)?;
+        validate_order_status_transition(&current, &status)?;
+        let status = order_status_to_str(&status);
+        tx.execute(
+            "UPDATE license_orders SET status = $2 WHERE id = $1",
+            &[&order_id, &status],
+        )
+        .map_err(pg_err)?;
+        tx.commit().map_err(pg_err)
     }
 
     fn create_activation(&self, record: ActivationRecord) -> Result<(), StoreError> {
@@ -176,7 +260,7 @@ impl LicenseStore for PostgresStore {
         let mut client = self.client()?;
         let mut tx = client.transaction().map_err(pg_err)?;
         let row = tx.query_opt(
-            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
             &[&record.order_id],
         ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
         let order = order_from_row(row)?;
@@ -214,6 +298,14 @@ impl LicenseStore for PostgresStore {
             )
             .map_err(pg_err)?
             .get(0);
+        if active_count == 0
+            && order
+                .machine_hash
+                .as_deref()
+                .is_some_and(|expected| expected != record.machine_hash)
+        {
+            return Err(StoreError::Conflict);
+        }
         if active_count < 0 || active_count as u32 >= max_machines {
             return Err(StoreError::Conflict);
         }
@@ -289,18 +381,19 @@ impl LicenseStore for PostgresStore {
             return Ok(PaymentEventWriteOutcome::Duplicate);
         }
         let row = tx.query_opt(
-            "SELECT id, plan, amount_rub, status, machine_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
             &[&record.order_id],
         ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
         let order = order_from_row(row)?;
         if order.amount_rub != record.amount_rub {
             return Err(StoreError::Invalid("amount_mismatch".to_string()));
         }
-        if matches!(record.status, PaymentEventStatus::Succeeded) {
-            let paid = order_status_to_str(&OrderStatus::Paid);
+        let next_status = order_status_after_payment(&order.status, &record.status)?;
+        if next_status != order.status {
+            let next_status = order_status_to_str(&next_status);
             tx.execute(
                 "UPDATE license_orders SET status = $2 WHERE id = $1",
-                &[&record.order_id, &paid],
+                &[&record.order_id, &next_status],
             )
             .map_err(pg_err)?;
         }
@@ -345,37 +438,43 @@ fn apply_migrations(client: &mut Client) -> anyhow::Result<()> {
 fn apply_migrations_locked(client: &mut Client) -> anyhow::Result<()> {
     client.batch_execute(MIGRATION_LEDGER_SCHEMA)?;
     client.batch_execute(MIGRATION_LEDGER_CHECKSUM_COLUMN)?;
-    let checksum = schema_checksum();
+    apply_migration(client, SCHEMA_V1_VERSION, SCHEMA_V1)?;
+    apply_migration(client, SCHEMA_V2_VERSION, SCHEMA_V2)?;
+    Ok(())
+}
+
+fn apply_migration(client: &mut Client, version: &str, sql: &str) -> anyhow::Result<()> {
+    let checksum = schema_checksum(sql);
     let existing = client.query_opt(
         "SELECT checksum FROM schema_migrations WHERE version = $1",
-        &[&SCHEMA_VERSION],
+        &[&version],
     )?;
     if let Some(row) = existing {
         let stored_checksum: Option<String> = row.get(0);
         match stored_checksum.as_deref() {
             Some(value) if value == checksum => return Ok(()),
             Some(value) => anyhow::bail!(
-                "migration checksum mismatch for {SCHEMA_VERSION}: stored {value}, expected {checksum}"
+                "migration checksum mismatch for {version}: stored {value}, expected {checksum}"
             ),
             None => {
                 client.execute(
                     "UPDATE schema_migrations SET checksum = $2 WHERE version = $1",
-                    &[&SCHEMA_VERSION, &checksum],
+                    &[&version, &checksum],
                 )?;
                 return Ok(());
             }
         }
     }
-    client.batch_execute(SCHEMA_V1)?;
+    client.batch_execute(sql)?;
     client.execute(
         "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES ($1, $2, NOW())",
-        &[&SCHEMA_VERSION, &checksum],
+        &[&version, &checksum],
     )?;
     Ok(())
 }
 
-fn schema_checksum() -> String {
-    let digest = Sha256::digest(SCHEMA_V1.as_bytes());
+fn schema_checksum(sql: &str) -> String {
+    let digest = Sha256::digest(sql.as_bytes());
     hex::encode(digest)
 }
 
@@ -440,6 +539,7 @@ fn order_from_row(row: Row) -> Result<OrderRecord, StoreError> {
         amount_rub: amount_from_i64(amount)?,
         status: order_status_from_str(&status)?,
         machine_hash: row.get("machine_hash"),
+        access_token_hash: row.get("access_token_hash"),
         created_at: row.get("created_at"),
     })
 }
@@ -527,12 +627,14 @@ const POSTGRES_POOL_SIZE_ENV: &str = "DKK_LICENSE_POSTGRES_POOL_SIZE";
 const DEFAULT_POSTGRES_POOL_SIZE: usize = 4;
 const MIN_POSTGRES_POOL_SIZE: usize = 1;
 const MAX_POSTGRES_POOL_SIZE: usize = 16;
-const SCHEMA_VERSION: &str = "0001_license_schema";
+const SCHEMA_V1_VERSION: &str = "0001_license_schema";
+const SCHEMA_V2_VERSION: &str = "0002_order_access_token";
 const MIGRATION_LOCK_ID: i64 = 4_207_301_001;
 const MIGRATION_LEDGER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL);";
 const MIGRATION_LEDGER_CHECKSUM_COLUMN: &str =
     "ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT;";
 const SCHEMA_V1: &str = include_str!("../../migrations/0001_license_schema.sql");
+const SCHEMA_V2: &str = include_str!("../../migrations/0002_order_access_token.sql");
 
 #[cfg(test)]
 mod tests {
@@ -560,8 +662,110 @@ mod tests {
 
     #[test]
     fn migration_checksum_is_hex_sha256() {
-        let checksum = schema_checksum();
+        let checksum = schema_checksum(SCHEMA_V1);
         assert_eq!(checksum.len(), 64);
         assert!(checksum.chars().all(|value| value.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn postgres_legacy_recovery_is_serialized_when_configured() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let store = PostgresStore::connect(&database_url).unwrap();
+        let order_id = Uuid::new_v4();
+        store
+            .create_order(OrderRecord {
+                id: order_id,
+                plan: "doctor_pro".to_string(),
+                amount_rub: 3_900,
+                status: OrderStatus::Paid,
+                machine_hash: Some("legacy-machine".to_string()),
+                access_token_hash: None,
+                created_at: OffsetDateTime::now_utc(),
+            })
+            .unwrap();
+
+        let workers = 12;
+        let barrier = Arc::new(Barrier::new(workers));
+        let successes = (0..workers)
+            .map(|index| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .recover_legacy_order_access(
+                            order_id,
+                            "legacy-machine",
+                            &format!("{index:064x}"),
+                            false,
+                        )
+                        .is_ok()
+                })
+            })
+            .map(|handle| handle.join().unwrap())
+            .filter(|success| *success)
+            .count();
+        assert_eq!(successes, 1);
+        assert!(store
+            .get_order(order_id)
+            .unwrap()
+            .unwrap()
+            .access_token_hash
+            .is_some());
+    }
+
+    #[test]
+    fn postgres_slot_limit_is_serialized_across_real_connections_when_configured() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let store = PostgresStore::connect(&database_url).unwrap();
+        let order_id = Uuid::new_v4();
+        store
+            .create_order(OrderRecord {
+                id: order_id,
+                plan: "doctor_pro".to_string(),
+                amount_rub: 3_900,
+                status: OrderStatus::Paid,
+                machine_hash: None,
+                access_token_hash: Some("a".repeat(64)),
+                created_at: OffsetDateTime::now_utc(),
+            })
+            .unwrap();
+
+        let workers = 12;
+        let barrier = Arc::new(Barrier::new(workers));
+        let mut handles = Vec::new();
+        for index in 0..workers {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                store.create_activation_for_order(
+                    ActivationRecord {
+                        id: Uuid::new_v4(),
+                        order_id,
+                        machine_hash: format!("contender-{index}"),
+                        created_at: OffsetDateTime::now_utc(),
+                    },
+                    1,
+                )
+            }));
+        }
+        let successes = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .filter(Result::is_ok)
+            .count();
+        assert_eq!(successes, 1);
+        assert_eq!(store.activations_for_order(order_id).unwrap().len(), 1);
     }
 }

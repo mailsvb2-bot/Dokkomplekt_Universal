@@ -26,15 +26,15 @@ use dokkomplekt_core::{
     run_universal_constructor_pipeline, sanitize_path_component, segment_case_fragments,
     set_user_value, suggest_icd10, suggest_template_markup, template_counter_requests,
     template_image_requests, validate_case_relations, validate_field_value, validate_popup_fields,
-    CaseFragment, ConfiguredDocument, CorpusEntry, CorpusEntryMetrics, CorpusEntryRequest,
-    CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation, DocumentTemplateSpec,
-    DomainKind, ExtractedField, FolderNamePart, IntakeDecision, IntakeDeduplicator,
-    KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable, ParsedSourceReport,
-    PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport, ProductPlanId, ScannerMark,
-    SemanticCase, SeriesPlanRequest, TemplateCandidate, TemplateConfirmationRow,
-    TemplateLearningInput, TemplateLearningReport, TemplateMarkupCandidate, UniversalPipelineFlags,
-    UniversalPipelineInput, ValueSource, WorkflowFlags, EXPIRED_DEMO_WATERMARK_TEXT,
-    TRIAL_WATERMARK_TEXT,
+    CaseFragment, ConfiguredDocument, CorpusAcceptanceSource, CorpusEntry, CorpusEntryMetrics,
+    CorpusEntryRequest, CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation,
+    DocumentTemplateSpec, DomainKind, ExtractedField, FolderNamePart, IntakeDecision,
+    IntakeDeduplicator, KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable,
+    ParsedSourceReport, PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport,
+    ProductPlanId, ScannerMark, SemanticCase, SeriesPlanRequest, TemplateCandidate,
+    TemplateConfirmationRow, TemplateLearningInput, TemplateLearningReport,
+    TemplateMarkupCandidate, UniversalPipelineFlags, UniversalPipelineInput, ValueSource,
+    WorkflowFlags, EXPIRED_DEMO_WATERMARK_TEXT, TRIAL_WATERMARK_TEXT,
 };
 use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
@@ -407,7 +407,7 @@ impl Default for PrivacyPreferences {
             copy_source_to_output: false,
             write_trust_report: true,
             include_values_in_trust_report: false,
-            temp_retention_hours: 4,
+            temp_retention_hours: 0,
             archive_processed_sources: retention.archive_processed_sources,
             archive_folder_name: retention.archive_folder_name,
             service_note_retention_days: retention.service_note_retention_days,
@@ -441,13 +441,34 @@ fn persist_privacy_preferences(
     app: &tauri::AppHandle,
     preferences: &PrivacyPreferences,
 ) -> Result<(), String> {
-    if !(1..=24 * 30).contains(&preferences.temp_retention_hours) {
-        return Err("Срок хранения временных источников должен быть от 1 до 720 часов.".into());
+    if preferences.temp_retention_hours > 24 * 30 {
+        return Err("Срок хранения временных источников должен быть от 0 до 720 часов.".into());
     }
     preferences.retention_policy().validate()?;
     repository_for(&default_state_db_path(app)?)?
         .save_state_value(PRIVACY_PREFERENCES_STATE_KEY, preferences)
         .map_err(|error| error.to_string())
+}
+
+fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app).unwrap_or_default();
+    universal_intake::cleanup_workspace(
+        &data_dir.join("intake-work"),
+        Duration::from_secs(u64::from(privacy.temp_retention_hours) * 60 * 60),
+    )
+}
+
+fn start_periodic_intake_cleanup(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(5 * 60));
+        if let Err(error) = cleanup_intake_workspace(&app) {
+            eprintln!("Периодическая очистка временных источников пропущена: {error}");
+        }
+    });
 }
 
 fn create_automation_exception(
@@ -597,6 +618,8 @@ struct AppState {
     instance_lock: Mutex<Option<PathBuf>>,
     license_document: Mutex<Option<LicenseDocument>>,
     word_scanner: Mutex<Option<WordScannerSessionState>>,
+    word_scanner_source_session: Mutex<Option<universal_intake::UploadedSourceSession>>,
+    retained_uploaded_source: Mutex<Option<universal_intake::RetainedUploadedSource>>,
     semantic_runtime: Mutex<Option<semantic_runtime::ManagedSemanticRuntime>>,
     persistence_blocked: AtomicBool,
     persistence_error: Mutex<Option<String>>,
@@ -613,6 +636,8 @@ impl Default for AppState {
             instance_lock: Mutex::new(None),
             license_document: Mutex::new(None),
             word_scanner: Mutex::new(None),
+            word_scanner_source_session: Mutex::new(None),
+            retained_uploaded_source: Mutex::new(None),
             semantic_runtime: Mutex::new(None),
             persistence_blocked: AtomicBool::new(false),
             persistence_error: Mutex::new(None),
@@ -634,6 +659,12 @@ impl Drop for AppState {
                     let _ = std::fs::remove_file(session.opened_path);
                 }
             }
+        }
+        if let Ok(slot) = self.word_scanner_source_session.get_mut() {
+            let _ = slot.take();
+        }
+        if let Ok(slot) = self.retained_uploaded_source.get_mut() {
+            let _ = slot.take();
         }
     }
 }
@@ -1913,11 +1944,9 @@ fn main() {
                         }
                     });
                 }
-                let privacy = load_privacy_preferences(&handle).unwrap_or_default();
-                let _ = universal_intake::cleanup_workspace(
-                    &data_dir.join("intake-work"),
-                    Duration::from_secs(u64::from(privacy.temp_retention_hours) * 60 * 60),
-                );
+                let _ = cleanup_intake_workspace(&handle);
+                let _ = std::fs::remove_dir_all(data_dir.join("word-scanner-work"));
+                start_periodic_intake_cleanup(handle.clone());
                 if let Ok(db_path) = default_state_db_path(&handle) {
                     if let Ok(mut repo) = repository_for(&db_path) {
                         let _ = repo.recover_stale_usage_reservations(24 * 60);

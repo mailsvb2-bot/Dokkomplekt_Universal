@@ -4,8 +4,16 @@ use crate::state::AppState;
 use crate::storage::{
     PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
-use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router};
+use crate::traffic_guard::{ClientIp, RateLimitScope};
+use axum::{
+    body::Bytes,
+    extract::{Extension, State},
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -34,11 +42,20 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn provider_callback(
+    Extension(client_ip): Extension<ClientIp>,
     State(state): State<AppState>,
     Json(event): Json<ProviderCallbackRequest>,
 ) -> Result<Json<ProviderCallbackResponse>, StatusCode> {
+    enforce_callback_rate_limit(&state, client_ip)?;
     let event_id = event.provider_event_id.trim();
-    if event_id.is_empty() || event.amount_rub == 0 {
+    if event_id.is_empty()
+        || event_id.len() > 256
+        || event_id.chars().any(char::is_control)
+        || event.amount_rub == 0
+        || event.provider_payment_id.as_deref().is_some_and(|value| {
+            value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+        })
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     if !callback_secret_matches(
@@ -68,22 +85,32 @@ async fn provider_callback(
 }
 
 async fn yookassa_callback(
+    Extension(client_ip): Extension<ClientIp>,
     State(state): State<AppState>,
     body: Bytes,
 ) -> Result<Json<ProviderCallbackResponse>, StatusCode> {
+    enforce_callback_rate_limit(&state, client_ip)?;
     if body.len() > 64 * 1024 {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
+    let permit = state
+        .provider_gate
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
     let provider = YooKassaProvider {
         public_base_url: state.config.public_base_url.clone(),
         api_base_url: state.config.yookassa_api_base_url.clone(),
         shop_id: state.config.yookassa_shop_id.clone().unwrap_or_default(),
         secret_key: state.config.yookassa_secret_key.clone().unwrap_or_default(),
     };
-    let event = tokio::task::spawn_blocking(move || provider.verify_callback(&body))
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let event = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        provider.verify_callback(&body)
+    })
+    .await
+    .map_err(|_| StatusCode::BAD_GATEWAY)?
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let status = match event.status {
         ProviderPaymentStatus::Pending => PaymentEventStatus::Pending,
         ProviderPaymentStatus::Succeeded => PaymentEventStatus::Succeeded,
@@ -102,6 +129,19 @@ async fn yookassa_callback(
     .await
 }
 
+fn enforce_callback_rate_limit(state: &AppState, client_ip: ClientIp) -> Result<(), StatusCode> {
+    state
+        .traffic_guard
+        .check(
+            client_ip.0,
+            RateLimitScope::ProviderCallback,
+            state.config.provider_callback_limit_per_minute,
+            Duration::from_secs(60),
+        )
+        .then_some(())
+        .ok_or(StatusCode::TOO_MANY_REQUESTS)
+}
+
 async fn record_verified_event(
     state: &AppState,
     order_id: Uuid,
@@ -111,7 +151,11 @@ async fn record_verified_event(
     status: PaymentEventStatus,
     amount_rub: u64,
 ) -> Result<Json<ProviderCallbackResponse>, StatusCode> {
-    if provider_event_id.trim().is_empty() || amount_rub == 0 {
+    if provider_event_id.trim().is_empty()
+        || provider_event_id.len() > 256
+        || provider_event_id.chars().any(char::is_control)
+        || amount_rub == 0
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     let order = state

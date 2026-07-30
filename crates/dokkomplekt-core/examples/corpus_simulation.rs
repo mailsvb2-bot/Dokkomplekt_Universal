@@ -22,7 +22,8 @@
 //!       --output hr.json --target-auto-error-rate 0.005
 
 use dokkomplekt_core::{
-    build_corpus_entry, CorpusEntryRequest, DomainKind, SemanticCase, SemanticValue, ValueSource,
+    build_corpus_entry, CorpusAcceptanceSource, CorpusEntryRequest, DomainKind, SemanticCase,
+    SemanticValue, ValueSource,
 };
 
 /// Детерминированный SplitMix64 — воспроизводимость без внешних зависимостей.
@@ -211,9 +212,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 model_case: &extracted_case,
                 deterministic_case: &extracted_case,
                 final_case: &final_case,
+                field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
                 proposed_kit_documents: prof.kit.iter().map(|s| s.to_string()).collect(),
                 kit_proposal_source: Some("routing".into()),
                 kit_documents: prof.kit.iter().map(|s| s.to_string()).collect(),
+                kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
                 created_at: "2026-07-24T00:00:00Z".into(),
             };
             // Ошибки пробрасываются типизированно, а не через panic: этот пример

@@ -4,7 +4,7 @@
 //! confident. Promotion requires repeated specialist-confirmed exact matches
 //! for the same domain/source cluster and a measured minimum accuracy.
 
-use crate::corpus_recorder::CorpusEntry;
+use crate::corpus_recorder::{CorpusAcceptanceSource, CorpusEntry};
 use crate::DomainKind;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -63,7 +63,9 @@ pub fn learn_kit_rules(
         let Some(cluster_id) = cluster_by_entry_id.get(&entry.entry_id) else {
             continue;
         };
-        if entry.kit_documents.is_empty() {
+        if entry.kit_documents.is_empty()
+            || entry.kit_acceptance_source != CorpusAcceptanceSource::SpecialistConfirmed
+        {
             continue;
         }
         grouped
@@ -184,7 +186,7 @@ fn normalize_kit(values: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::corpus_recorder::CorpusEntry;
+    use crate::corpus_recorder::{CorpusAcceptanceSource, CorpusEntry};
 
     fn entry(index: usize, proposed: &[&str], actual: &[&str]) -> CorpusEntry {
         CorpusEntry {
@@ -198,9 +200,11 @@ mod tests {
             model_proposals: vec![],
             deterministic: vec![],
             final_accepted: vec![],
+            field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             proposed_kit_documents: proposed.iter().map(|value| value.to_string()).collect(),
             kit_proposal_source: Some("router".into()),
             kit_documents: actual.iter().map(|value| value.to_string()).collect(),
+            kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             created_at: format!("2026-07-{index:02}T00:00:00Z"),
         }
     }
@@ -259,5 +263,21 @@ mod tests {
         let rules = learn_kit_rules(&entries, &clusters, KitPromotionPolicy::default());
         assert!(!rules[0].promoted);
         assert_eq!(rules[0].consecutive_clean_confirmations, 0);
+    }
+
+    #[test]
+    fn zero_touch_and_legacy_entries_can_never_promote_a_rule() {
+        let mut entries = (1..=8)
+            .map(|index| entry(index, &["contract", "order"], &["contract", "order"]))
+            .collect::<Vec<_>>();
+        for item in &mut entries {
+            item.kit_acceptance_source = CorpusAcceptanceSource::ZeroTouchShadow;
+        }
+        assert!(learn_kit_rules_from_entries(&entries, KitPromotionPolicy::default()).is_empty());
+
+        for item in &mut entries {
+            item.kit_acceptance_source = CorpusAcceptanceSource::LegacyUnverified;
+        }
+        assert!(learn_kit_rules_from_entries(&entries, KitPromotionPolicy::default()).is_empty());
     }
 }

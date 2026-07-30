@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use crate::traffic_guard::TrustedProxyConfig;
+use std::net::{IpAddr, SocketAddr};
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -12,9 +13,18 @@ pub struct ServerConfig {
     pub database_url: Option<String>,
     pub provider_callback_secret: Option<String>,
     pub license_issue_secret: Option<String>,
+    pub order_recovery_secret: Option<String>,
     pub yookassa_shop_id: Option<String>,
     pub yookassa_secret_key: Option<String>,
     pub yookassa_api_base_url: String,
+    pub global_concurrency_limit: usize,
+    pub provider_concurrency_limit: usize,
+    pub request_timeout_seconds: u64,
+    pub order_create_limit_per_hour: u32,
+    pub order_access_limit_per_minute: u32,
+    pub provider_callback_limit_per_minute: u32,
+    pub order_recovery_limit_per_minute: u32,
+    pub trusted_proxies: TrustedProxyConfig,
 }
 
 impl ServerConfig {
@@ -54,10 +64,38 @@ impl ServerConfig {
         }
         let provider_callback_secret = non_empty_env("DOKKOMPLEKT_PROVIDER_CALLBACK_SECRET");
         let license_issue_secret = non_empty_env("DOKKOMPLEKT_LICENSE_ISSUE_SECRET");
+        let order_recovery_secret = non_empty_env("DOKKOMPLEKT_ORDER_RECOVERY_SECRET");
         let yookassa_shop_id = non_empty_env("DOKKOMPLEKT_YOOKASSA_SHOP_ID");
         let yookassa_secret_key = non_empty_env("DOKKOMPLEKT_YOOKASSA_SECRET_KEY");
-        let yookassa_api_base_url = std::env::var("DOKKOMPLEKT_YOOKASSA_API_BASE_URL")
-            .unwrap_or_else(|_| "https://api.yookassa.ru".to_string());
+        let yookassa_api_base_url = validate_yookassa_api_base_url(
+            &std::env::var("DOKKOMPLEKT_YOOKASSA_API_BASE_URL")
+                .unwrap_or_else(|_| "https://api.yookassa.ru".to_string()),
+            strict_runtime && payment_provider == "yookassa",
+        )?;
+        let global_concurrency_limit =
+            bounded_usize_env("DOKKOMPLEKT_GLOBAL_CONCURRENCY_LIMIT", 128, 8, 1_024);
+        let provider_concurrency_limit =
+            bounded_usize_env("DOKKOMPLEKT_PROVIDER_CONCURRENCY_LIMIT", 8, 1, 64);
+        let request_timeout_seconds =
+            bounded_u64_env("DOKKOMPLEKT_REQUEST_TIMEOUT_SECONDS", 30, 5, 120);
+        let order_create_limit_per_hour =
+            bounded_u32_env("DOKKOMPLEKT_ORDER_CREATE_LIMIT_PER_HOUR", 20, 1, 1_000);
+        let order_access_limit_per_minute =
+            bounded_u32_env("DOKKOMPLEKT_ORDER_ACCESS_LIMIT_PER_MINUTE", 120, 1, 10_000);
+        let provider_callback_limit_per_minute = bounded_u32_env(
+            "DOKKOMPLEKT_PROVIDER_CALLBACK_LIMIT_PER_MINUTE",
+            120,
+            1,
+            10_000,
+        );
+        let order_recovery_limit_per_minute =
+            bounded_u32_env("DOKKOMPLEKT_ORDER_RECOVERY_LIMIT_PER_MINUTE", 30, 1, 1_000);
+        let trusted_proxy_cidrs = non_empty_env("DOKKOMPLEKT_TRUSTED_PROXY_CIDRS");
+        let require_forwarded_for =
+            boolean_env("DOKKOMPLEKT_TRUSTED_PROXY_REQUIRE_X_FORWARDED_FOR", true)?;
+        let trusted_proxies =
+            TrustedProxyConfig::parse(trusted_proxy_cidrs.as_deref(), require_forwarded_for)
+                .map_err(anyhow::Error::msg)?;
         if payment_provider == "yookassa"
             && (yookassa_shop_id.is_none() || yookassa_secret_key.is_none())
         {
@@ -80,6 +118,16 @@ impl ServerConfig {
                 "DOKKOMPLEKT_LICENSE_ISSUE_SECRET is required for license server runtime"
             );
         }
+        if strict_runtime && order_recovery_secret.is_none() {
+            anyhow::bail!(
+                "DOKKOMPLEKT_ORDER_RECOVERY_SECRET is required for legacy-order recovery"
+            );
+        }
+        validate_distinct_server_secrets([
+            provider_callback_secret.as_deref(),
+            license_issue_secret.as_deref(),
+            order_recovery_secret.as_deref(),
+        ])?;
         let storage_mode = match database_url
             .as_ref()
             .map(|value| value.trim())
@@ -99,11 +147,109 @@ impl ServerConfig {
             database_url,
             provider_callback_secret,
             license_issue_secret,
+            order_recovery_secret,
             yookassa_shop_id,
             yookassa_secret_key,
             yookassa_api_base_url,
+            global_concurrency_limit,
+            provider_concurrency_limit,
+            request_timeout_seconds,
+            order_create_limit_per_hour,
+            order_access_limit_per_minute,
+            provider_callback_limit_per_minute,
+            order_recovery_limit_per_minute,
+            trusted_proxies,
         })
     }
+}
+
+fn boolean_env(name: &str, default: bool) -> anyhow::Result<bool> {
+    match std::env::var(name) {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => anyhow::bail!("{name} must be a boolean"),
+        },
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_distinct_server_secrets<const N: usize>(
+    secrets: [Option<&str>; N],
+) -> anyhow::Result<()> {
+    let values = secrets
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    for (index, left) in values.iter().enumerate() {
+        if values[index + 1..].iter().any(|right| left == right) {
+            anyhow::bail!("license-server control secrets must be distinct");
+        }
+    }
+    Ok(())
+}
+
+fn bounded_usize_env(name: &str, default: usize, minimum: usize, maximum: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(minimum, maximum)
+}
+
+fn bounded_u64_env(name: &str, default: u64, minimum: u64, maximum: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default)
+        .clamp(minimum, maximum)
+}
+
+fn bounded_u32_env(name: &str, default: u32, minimum: u32, maximum: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(default)
+        .clamp(minimum, maximum)
+}
+
+pub(crate) fn validate_yookassa_api_base_url(
+    raw_value: &str,
+    production: bool,
+) -> anyhow::Result<String> {
+    let mut url = reqwest::Url::parse(raw_value.trim())?;
+    if url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!("YooKassa API URL must not contain credentials, query or fragment");
+    }
+    if !matches!(url.path(), "" | "/") {
+        anyhow::bail!("YooKassa API URL must point to the API origin, not to a nested path");
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("YooKassa API URL has no host"))?;
+    let official = url.scheme() == "https"
+        && host.eq_ignore_ascii_case("api.yookassa.ru")
+        && url.port_or_known_default() == Some(443);
+    let loopback = !production
+        && matches!(url.scheme(), "http" | "https")
+        && (host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback()));
+    if !official && !loopback {
+        anyhow::bail!(
+            "YooKassa credentials may be sent only to https://api.yookassa.ru; development overrides must use loopback"
+        );
+    }
+    url.set_path("");
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -253,7 +399,7 @@ pub fn normalize_payment_provider(value: &str) -> Option<String> {
 mod tests {
     use super::{
         database_endpoint, normalize_payment_provider, validate_database_transport,
-        DatabaseEndpoint,
+        validate_distinct_server_secrets, validate_yookassa_api_base_url, DatabaseEndpoint,
     };
 
     #[test]
@@ -317,5 +463,37 @@ mod tests {
             true
         )
         .is_ok());
+    }
+
+    #[test]
+    fn independent_control_secrets_cannot_be_reused() {
+        assert!(validate_distinct_server_secrets([
+            Some("callback-secret"),
+            Some("issue-secret"),
+            Some("recovery-secret"),
+        ])
+        .is_ok());
+        assert!(validate_distinct_server_secrets([
+            Some("same-secret"),
+            Some("issue-secret"),
+            Some("same-secret"),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn yookassa_origin_is_pinned_in_production_and_loopback_only_in_development() {
+        assert_eq!(
+            validate_yookassa_api_base_url("https://api.yookassa.ru/", true).unwrap(),
+            "https://api.yookassa.ru"
+        );
+        assert!(validate_yookassa_api_base_url("http://api.yookassa.ru", true).is_err());
+        assert!(validate_yookassa_api_base_url("https://evil.example", true).is_err());
+        assert!(
+            validate_yookassa_api_base_url("https://api.yookassa.ru@evil.example", true).is_err()
+        );
+        assert!(validate_yookassa_api_base_url("https://api.yookassa.ru/v3", true).is_err());
+        assert!(validate_yookassa_api_base_url("http://127.0.0.1:18080", false).is_ok());
+        assert!(validate_yookassa_api_base_url("http://192.0.2.10:18080", false).is_err());
     }
 }

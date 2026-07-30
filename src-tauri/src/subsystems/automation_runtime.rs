@@ -1135,6 +1135,11 @@ fn perform_created_documents_intake(
                     model_case: &model_case_for_corpus,
                     deterministic_case: &deterministic_case_for_corpus,
                     final_case: &planning_case.case,
+                    field_acceptance_source: if req.confirmed_fields.is_empty() {
+                        CorpusAcceptanceSource::ZeroTouchShadow
+                    } else {
+                        CorpusAcceptanceSource::SpecialistConfirmed
+                    },
                     proposed_kit_documents: routing_recommendation
                         .recommended_document_ids
                         .clone(),
@@ -1147,6 +1152,11 @@ fn perform_created_documents_intake(
                         .iter()
                         .map(|output| output.document_id.clone())
                         .collect(),
+                    kit_acceptance_source: if req.confirmed_document_ids.is_empty() {
+                        CorpusAcceptanceSource::ZeroTouchShadow
+                    } else {
+                        CorpusAcceptanceSource::SpecialistConfirmed
+                    },
                     created_at,
                 });
                 match entry.and_then(|entry| {
@@ -1156,7 +1166,13 @@ fn perform_created_documents_intake(
                         .map_err(|error| error.to_string())?;
                     append_audit_event(
                         app,
-                        "ground_truth_corpus_recorded",
+                        if entry.field_acceptance_source == CorpusAcceptanceSource::SpecialistConfirmed
+                            || entry.kit_acceptance_source == CorpusAcceptanceSource::SpecialistConfirmed
+                        {
+                            "specialist_confirmed_corpus_recorded"
+                        } else {
+                            "zero_touch_shadow_corpus_recorded"
+                        },
                         &source_sha256,
                         &serde_json::json!({
                             "entry_id": entry.entry_id,

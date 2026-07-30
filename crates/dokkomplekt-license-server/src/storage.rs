@@ -83,6 +83,13 @@ pub struct AuditEventRecord {
 pub trait LicenseStore: Send + Sync + 'static {
     fn create_order(&self, record: OrderRecord) -> Result<(), StoreError>;
     fn get_order(&self, order_id: Uuid) -> Result<Option<OrderRecord>, StoreError>;
+    fn recover_legacy_order_access(
+        &self,
+        order_id: Uuid,
+        machine_hash: &str,
+        access_token_hash: &str,
+        bind_missing_machine: bool,
+    ) -> Result<OrderRecord, StoreError>;
     fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError>;
     fn create_activation(&self, record: ActivationRecord) -> Result<(), StoreError>;
     fn create_activation_for_order(
@@ -180,6 +187,36 @@ impl StoreBackend {
                 tokio::task::spawn_blocking(move || store.get_order(order_id))
                     .await
                     .map_err(|_| StoreError::Poisoned)?
+            }
+        }
+    }
+
+    pub async fn recover_legacy_order_access_async(
+        &self,
+        order_id: Uuid,
+        machine_hash: String,
+        access_token_hash: String,
+        bind_missing_machine: bool,
+    ) -> Result<OrderRecord, StoreError> {
+        match self {
+            Self::Memory(store) => store.recover_legacy_order_access(
+                order_id,
+                &machine_hash,
+                &access_token_hash,
+                bind_missing_machine,
+            ),
+            Self::Postgres(store) => {
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || {
+                    store.recover_legacy_order_access(
+                        order_id,
+                        &machine_hash,
+                        &access_token_hash,
+                        bind_missing_machine,
+                    )
+                })
+                .await
+                .map_err(|_| StoreError::Poisoned)?
             }
         }
     }
@@ -291,6 +328,29 @@ impl LicenseStore for StoreBackend {
         }
     }
 
+    fn recover_legacy_order_access(
+        &self,
+        order_id: Uuid,
+        machine_hash: &str,
+        access_token_hash: &str,
+        bind_missing_machine: bool,
+    ) -> Result<OrderRecord, StoreError> {
+        match self {
+            Self::Memory(store) => store.recover_legacy_order_access(
+                order_id,
+                machine_hash,
+                access_token_hash,
+                bind_missing_machine,
+            ),
+            Self::Postgres(store) => store.recover_legacy_order_access(
+                order_id,
+                machine_hash,
+                access_token_hash,
+                bind_missing_machine,
+            ),
+        }
+    }
+
     fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError> {
         match self {
             Self::Memory(store) => store.update_order_status(order_id, status),
@@ -353,6 +413,69 @@ impl LicenseStore for StoreBackend {
             Self::Postgres(store) => store.audit(record),
         }
     }
+}
+
+pub(crate) fn validate_access_recovery_input(
+    machine_hash: &str,
+    access_token_hash: &str,
+) -> Result<String, StoreError> {
+    let machine_hash = machine_hash.trim();
+    if machine_hash.is_empty()
+        || machine_hash.len() > 256
+        || machine_hash.chars().any(char::is_control)
+    {
+        return Err(StoreError::Invalid("invalid_machine_hash".to_string()));
+    }
+    let access_token_hash = access_token_hash.trim();
+    if access_token_hash.len() != 64
+        || !access_token_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(StoreError::Invalid("invalid_access_token_hash".to_string()));
+    }
+    Ok(machine_hash.to_string())
+}
+
+pub(crate) fn order_status_after_payment(
+    current: &OrderStatus,
+    payment: &PaymentEventStatus,
+) -> Result<OrderStatus, StoreError> {
+    match payment {
+        PaymentEventStatus::Succeeded => match current {
+            OrderStatus::Draft | OrderStatus::WaitingPayment => Ok(OrderStatus::Paid),
+            OrderStatus::Paid => Ok(OrderStatus::Paid),
+            OrderStatus::LicenseIssued => Ok(OrderStatus::LicenseIssued),
+            OrderStatus::Cancelled => Err(StoreError::Invalid(
+                "payment_succeeded_after_cancellation".to_string(),
+            )),
+        },
+        PaymentEventStatus::Pending => Ok(current.clone()),
+        PaymentEventStatus::Cancelled | PaymentEventStatus::Rejected => match current {
+            OrderStatus::Draft | OrderStatus::WaitingPayment => Ok(OrderStatus::Cancelled),
+            OrderStatus::Paid => Ok(OrderStatus::Paid),
+            OrderStatus::LicenseIssued => Ok(OrderStatus::LicenseIssued),
+            OrderStatus::Cancelled => Ok(OrderStatus::Cancelled),
+        },
+    }
+}
+
+pub(crate) fn validate_order_status_transition(
+    current: &OrderStatus,
+    requested: &OrderStatus,
+) -> Result<(), StoreError> {
+    let allowed = current == requested
+        || matches!(
+            (current, requested),
+            (OrderStatus::Draft, OrderStatus::WaitingPayment)
+                | (OrderStatus::Draft, OrderStatus::Cancelled)
+                | (OrderStatus::WaitingPayment, OrderStatus::Paid)
+                | (OrderStatus::WaitingPayment, OrderStatus::Cancelled)
+                | (OrderStatus::Paid, OrderStatus::LicenseIssued)
+        );
+    allowed
+        .then_some(())
+        .ok_or_else(|| StoreError::Invalid("non_monotonic_order_status_transition".to_string()))
 }
 
 fn issue_license_for_memory(
@@ -442,6 +565,7 @@ mod tests {
             amount_rub: 3900,
             status,
             machine_hash: None,
+            access_token_hash: Some("a".repeat(64)),
             created_at: OffsetDateTime::now_utc(),
         }
     }

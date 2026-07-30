@@ -1,20 +1,31 @@
 use crate::config::ServerConfig;
 use crate::storage::{AuditEventRecord, LicenseRecord, PaymentEventRecord, StoreBackend};
+use crate::traffic_guard::TrafficGuard;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use time::OffsetDateTime;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: ServerConfig,
     pub store: StoreBackend,
+    pub traffic_guard: TrafficGuard,
+    pub provider_gate: Arc<Semaphore>,
 }
 
 impl AppState {
     pub fn try_new(config: ServerConfig) -> anyhow::Result<Self> {
         let store = StoreBackend::from_config(&config)?;
-        Ok(Self { config, store })
+        let provider_gate = Arc::new(Semaphore::new(config.provider_concurrency_limit));
+        Ok(Self {
+            config,
+            store,
+            traffic_guard: TrafficGuard::default(),
+            provider_gate,
+        })
     }
 }
 
@@ -34,6 +45,7 @@ pub struct OrderRecord {
     pub amount_rub: u64,
     pub status: OrderStatus,
     pub machine_hash: Option<String>,
+    pub access_token_hash: Option<String>,
     pub created_at: OffsetDateTime,
 }
 

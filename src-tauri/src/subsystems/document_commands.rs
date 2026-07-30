@@ -582,6 +582,11 @@ fn replace_case_from_new_source(target: &mut SemanticCase, mut parsed: SemanticC
 
 #[tauri::command]
 fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<SemanticCase, String> {
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     let result = {
         let mut case = state
             .semantic_case
@@ -603,6 +608,11 @@ fn parse_source(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceResponse, String> {
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     let (mut parsed, mut report) = parse_source_text(&req.source_text, req.default_year);
     let learned = apply_learned_scanner_rules(&app, &req.source_text, &mut parsed)?;
     if !learned.is_empty() {
@@ -655,19 +665,23 @@ fn parse_source_file(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceFileResponse, String> {
-    let bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
+    let mut bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
     let workspace = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("intake-work");
-    let normalized =
+    let mut upload_session =
         universal_intake::normalize_uploaded_bytes(&req.file_name, &bytes, &workspace)?;
-    let source_path = normalized
-        .processed_files
-        .first()
-        .cloned()
-        .ok_or_else(|| "Нормализованный источник не содержит рабочего файла.".to_string())?;
+    let normalized = upload_session.take_source()?;
+    let retained_source = universal_intake::RetainedUploadedSource::new(&req.file_name, &bytes)?;
+    bytes.fill(0);
+    let source_path = retained_source.virtual_path();
     let source_text = normalized.text;
     let source_kind = normalized.source_kind;
     let layout_items = normalized.layout_items;
@@ -694,7 +708,7 @@ fn parse_source_file(
         let routing = recommend_document_bundle(&source_text, &semantic_case, &pack);
         ParseSourceFileResponse {
             source_text,
-            source_path: source_path.display().to_string(),
+            source_path,
             source_kind,
             layout_items,
             semantic_case,
@@ -703,6 +717,11 @@ fn parse_source_file(
         }
     };
     persist_default_state(&app, &state)?;
+    drop(upload_session);
+    *state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")? = Some(retained_source);
     Ok(response)
 }
 
@@ -763,6 +782,11 @@ fn parse_web_source(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseWebSourceResponse, String> {
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     let workspace = app
         .path()
         .app_data_dir()
@@ -1363,7 +1387,29 @@ fn start_word_scanner(
     }
     #[cfg(target_os = "windows")]
     {
-        let original = resolve_user_path(&app, &req.path)?;
+        let mut sensitive_source_session = None;
+        let original = if req.path.starts_with("dokkomplekt-upload://current/") {
+            let workspace = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())?
+                .join("word-scanner-work");
+            let materialized = {
+                let retained = state
+                    .retained_uploaded_source
+                    .lock()
+                    .map_err(|_| "uploaded source state lock failed")?;
+                retained
+                    .as_ref()
+                    .ok_or_else(|| "Загруженный источник уже очищен. Выберите файл заново.".to_string())?
+                    .materialize(&workspace)?
+            };
+            let path = materialized.original_path()?;
+            sensitive_source_session = Some(materialized);
+            path
+        } else {
+            resolve_user_path(&app, &req.path)?
+        };
         if !original.is_file() {
             return Err(format!(
                 "Документ для сканера не найден: {}",
@@ -1393,7 +1439,13 @@ fn start_word_scanner(
                 let _ = std::fs::remove_file(previous.opened_path);
             }
         }
-        let opened = if req.make_working_copy {
+        state
+            .word_scanner_source_session
+            .lock()
+            .map_err(|_| "scanner source lock failed")?
+            .take();
+        let materialized_source = sensitive_source_session.is_some();
+        let opened = if req.make_working_copy && !materialized_source {
             let copy = scanner_copy_path(&app, &original)?;
             std::fs::copy(&original, &copy)
                 .map_err(|error| format!("Не удалось создать безопасную копию шаблона: {error}"))?;
@@ -1406,7 +1458,7 @@ fn start_word_scanner(
             shell_execute_path(&opened, "open").and_then(|_| activate_word_document(&opened, 20))
         {
             let _ = close_word_document(&opened, word_was_running, false);
-            if req.make_working_copy {
+            if req.make_working_copy || materialized_source {
                 let _ = std::fs::remove_file(&opened);
             }
             return Err(format!(
@@ -1417,9 +1469,9 @@ fn start_word_scanner(
         let response = WordScannerSessionResponse {
             session_id: session_id.clone(),
             mode: req.mode.clone(),
-            original_path: original.display().to_string(),
+            original_path: req.path.clone(),
             opened_path: opened.display().to_string(),
-            working_copy: req.make_working_copy,
+            working_copy: req.make_working_copy || materialized_source,
             word_was_running,
             automation_available: true,
             message: "Word открыт. Выделите значение мышью или поставьте курсор внутрь слова, затем вернитесь в Доккомплект.".into(),
@@ -1431,10 +1483,14 @@ fn start_word_scanner(
             session_id,
             mode: req.mode,
             opened_path: opened,
-            working_copy: req.make_working_copy,
+            working_copy: req.make_working_copy || materialized_source,
             word_was_running,
             last_capture: None,
         });
+        *state
+            .word_scanner_source_session
+            .lock()
+            .map_err(|_| "scanner source lock failed")? = sensitive_source_session;
         Ok(response)
     }
 }
@@ -1582,6 +1638,11 @@ $result | ConvertTo-Json -Compress
                 .word_scanner
                 .lock()
                 .map_err(|_| "scanner lock failed")? = None;
+            state
+                .word_scanner_source_session
+                .lock()
+                .map_err(|_| "scanner source lock failed")?
+                .take();
         } else {
             let mut guard = state
                 .word_scanner
@@ -1706,6 +1767,11 @@ if ({quit_flag} -and $word.Documents.Count -eq 0) {{ $word.Quit() }}
             .word_scanner
             .lock()
             .map_err(|_| "scanner lock failed")? = None;
+        state
+            .word_scanner_source_session
+            .lock()
+            .map_err(|_| "scanner source lock failed")?
+            .take();
         Ok(WordScannerApplyResponse {
             session_id: session.session_id,
             output_path: session.opened_path.display().to_string(),
@@ -1754,6 +1820,11 @@ fn close_word_scanner(
     if req.discard_working_copy && session.working_copy {
         let _ = std::fs::remove_file(session.opened_path);
     }
+    state
+        .word_scanner_source_session
+        .lock()
+        .map_err(|_| "scanner source lock failed")?
+        .take();
     Ok(true)
 }
 

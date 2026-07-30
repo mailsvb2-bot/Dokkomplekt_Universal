@@ -8,6 +8,10 @@ import importlib.util
 import json
 from pathlib import Path
 
+from pr28_followup import apply_followup
+
+apply_followup()
+
 MODULE_PATH = Path(__file__).resolve().with_name("build_source_archive.py")
 SPEC = importlib.util.spec_from_file_location("build_source_archive", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:

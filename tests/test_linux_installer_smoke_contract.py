@@ -21,7 +21,8 @@ def test_appimage_validation_is_pipefail_safe_with_relative_bundle_path(
         """#!/usr/bin/env bash
 set -euo pipefail
 [ "${1:-}" = "--appimage-extract" ]
-mkdir -p squashfs-root/usr/bin
+mkdir -p squashfs-root/usr/bin squashfs-root/usr/lib
+for lib in libGLESv2.so.2 libEGL.so.1 libGLdispatch.so.0; do : > "squashfs-root/usr/lib/$lib"; done
 printf '#!/usr/bin/env bash\\n' > squashfs-root/AppRun
 chmod +x squashfs-root/AppRun
 for index in $(seq 1 5000); do
@@ -67,7 +68,8 @@ def test_cleanup_retries_a_transient_remove_failure(tmp_path: Path) -> None:
         """#!/usr/bin/env bash
 set -euo pipefail
 [ "${1:-}" = "--appimage-extract" ]
-mkdir -p squashfs-root
+mkdir -p squashfs-root/usr/lib
+for lib in libGLESv2.so.2 libEGL.so.1 libGLdispatch.so.0; do : > "squashfs-root/usr/lib/$lib"; done
 printf '#!/usr/bin/env bash\\n' > squashfs-root/AppRun
 chmod +x squashfs-root/AppRun
 """,

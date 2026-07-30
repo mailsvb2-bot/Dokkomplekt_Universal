@@ -6,6 +6,12 @@ on:
     paths:
       - '.github/critical-fixes/**'
       - '.github/workflows/apply-critical-fixes.yml'
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - '.github/critical-fixes/**'
+      - '.github/workflows/apply-critical-fixes.yml'
 
 permissions:
   contents: write
@@ -16,6 +22,7 @@ concurrency:
 
 jobs:
   apply-and-verify:
+    if: github.event_name == 'push' || github.head_ref == 'agent/fix-critical-security-privacy'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

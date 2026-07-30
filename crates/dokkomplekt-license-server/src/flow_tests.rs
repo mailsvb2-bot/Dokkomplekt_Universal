@@ -25,6 +25,7 @@ fn config(database_url: Option<String>) -> ServerConfig {
         database_url,
         provider_callback_secret: Some("test-callback-secret".to_string()),
         license_issue_secret: Some("test-issue-secret".to_string()),
+        order_recovery_secret: Some("test-recovery-secret".to_string()),
         yookassa_shop_id: None,
         yookassa_secret_key: None,
         yookassa_api_base_url: "https://api.yookassa.ru".to_string(),
@@ -34,6 +35,8 @@ fn config(database_url: Option<String>) -> ServerConfig {
         order_create_limit_per_hour: 1000,
         order_access_limit_per_minute: 1000,
         provider_callback_limit_per_minute: 1000,
+        order_recovery_limit_per_minute: 1000,
+        trusted_proxies: crate::traffic_guard::TrustedProxyConfig::default(),
     }
 }
 

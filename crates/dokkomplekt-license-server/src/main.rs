@@ -37,14 +37,19 @@ pub(crate) fn ensure_rustls_crypto_provider() {
 fn build_app(state: AppState) -> Router {
     let concurrency_limit = state.config.global_concurrency_limit;
     let request_timeout = Duration::from_secs(state.config.request_timeout_seconds);
+    let trusted_proxies = state.config.trusted_proxies.clone();
     Router::new()
         .merge(http::health::router())
         .merge(http::orders::router())
+        .merge(http::order_recovery::router())
         .merge(http::activations::router())
         .merge(license_issue::router())
         .merge(http::webhooks::router())
         .layer(DefaultBodyLimit::max(64 * 1024))
-        .layer(middleware::from_fn(traffic_guard::attach_client_ip))
+        .layer(middleware::from_fn_with_state(
+            trusted_proxies,
+            traffic_guard::attach_client_ip,
+        ))
         .layer(ConcurrencyLimitLayer::new(concurrency_limit))
         .layer(TimeoutLayer::new(request_timeout))
         .layer(TraceLayer::new_for_http())

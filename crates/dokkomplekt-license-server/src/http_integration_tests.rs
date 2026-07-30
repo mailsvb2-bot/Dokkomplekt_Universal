@@ -1,10 +1,22 @@
-use super::{build_app, config::ServerConfig, state::AppState, storage::PostgresStore};
+use super::{
+    build_app,
+    config::ServerConfig,
+    state::{AppState, OrderRecord, OrderStatus},
+    storage::PostgresStore,
+};
 use axum::{
     body::{to_bytes, Body},
-    http::{header::{AUTHORIZATION, CONTENT_TYPE}, Method, Request, StatusCode},
+    extract::ConnectInfo,
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        Method, Request, StatusCode,
+    },
     Router,
 };
 use postgres::{Client, NoTls};
+use std::net::SocketAddr;
+use time::OffsetDateTime;
+use uuid::Uuid;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -25,6 +37,7 @@ fn base_config(database_url: Option<String>) -> ServerConfig {
         database_url,
         provider_callback_secret: Some("test-callback-secret".to_string()),
         license_issue_secret: Some("test-issue-secret".to_string()),
+        order_recovery_secret: Some("test-recovery-secret".to_string()),
         yookassa_shop_id: None,
         yookassa_secret_key: None,
         yookassa_api_base_url: "https://api.yookassa.ru".to_string(),
@@ -34,6 +47,8 @@ fn base_config(database_url: Option<String>) -> ServerConfig {
         order_create_limit_per_hour: 1000,
         order_access_limit_per_minute: 1000,
         provider_callback_limit_per_minute: 1000,
+        order_recovery_limit_per_minute: 1000,
+        trusted_proxies: crate::traffic_guard::TrustedProxyConfig::default(),
     }
 }
 
@@ -95,6 +110,26 @@ async fn call_authorized(
         serde_json::from_slice(&bytes).unwrap()
     };
     (status, body)
+}
+
+async fn call_from_proxy(
+    app: Router,
+    peer: SocketAddr,
+    forwarded_for: Option<&str>,
+    body: Value,
+) -> StatusCode {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri("/api/orders")
+        .header(CONTENT_TYPE, "application/json")
+        .extension(ConnectInfo(peer));
+    if let Some(forwarded_for) = forwarded_for {
+        builder = builder.header("x-forwarded-for", forwarded_for);
+    }
+    app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 async fn create_paid_order(app: Router, machine_hash: &str) -> String {
@@ -186,6 +221,106 @@ async fn assert_order_payment_activation_flow(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "paid");
+}
+
+#[tokio::test]
+async fn legacy_order_access_recovery_requires_admin_secret_and_is_one_time() {
+    let state = AppState::try_new(base_config(None)).unwrap();
+    let order_id = Uuid::new_v4();
+    state
+        .store
+        .create_order_async(OrderRecord {
+            id: order_id,
+            plan: "doctor_pro".to_string(),
+            amount_rub: 3_900,
+            status: OrderStatus::Paid,
+            machine_hash: Some("legacy-machine".to_string()),
+            access_token_hash: None,
+            created_at: OffsetDateTime::now_utc(),
+        })
+        .await
+        .unwrap();
+    let app = build_app(state);
+    let uri = format!("/api/admin/orders/{order_id}/recover-access");
+    let request = Some(json!({
+        "machine_hash": "legacy-machine",
+        "bind_missing_machine": false,
+    }));
+
+    let (status, _) = call(app.clone(), Method::POST, uri.clone(), request.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call_authorized(
+        app.clone(),
+        Method::POST,
+        uri.clone(),
+        request.clone(),
+        "wrong-recovery-secret",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, recovered) = call_authorized(
+        app.clone(),
+        Method::POST,
+        uri.clone(),
+        request.clone(),
+        "test-recovery-secret",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let access_token = recovered["order_access_token"].as_str().unwrap();
+    let (status, body) = call_authorized(
+        app.clone(),
+        Method::GET,
+        format!("/api/orders/{order_id}/status"),
+        None,
+        access_token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "paid");
+    let (status, _) = call_authorized(
+        app,
+        Method::POST,
+        uri,
+        request,
+        "test-recovery-secret",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn trusted_proxy_rate_limits_are_keyed_by_resolved_client_address() {
+    let mut config = base_config(None);
+    config.order_create_limit_per_hour = 1;
+    config.trusted_proxies = crate::traffic_guard::TrustedProxyConfig::parse(
+        Some("127.0.0.1/32"),
+        true,
+    )
+    .unwrap();
+    let app = build_app(AppState::try_new(config).unwrap());
+    let peer: SocketAddr = "127.0.0.1:41000".parse().unwrap();
+    let order = json!({
+        "plan": "doctor_pro",
+        "amount_rub": 3900,
+        "machine_hash": "machine-owner",
+    });
+    assert_eq!(
+        call_from_proxy(app.clone(), peer, Some("198.51.100.10"), order.clone()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call_from_proxy(app.clone(), peer, Some("198.51.100.10"), order.clone()).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        call_from_proxy(app.clone(), peer, Some("198.51.100.11"), order.clone()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call_from_proxy(app, peer, None, order).await,
+        StatusCode::BAD_REQUEST
+    );
 }
 
 #[tokio::test]

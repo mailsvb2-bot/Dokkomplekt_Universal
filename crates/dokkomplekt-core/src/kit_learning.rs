@@ -280,5 +280,4 @@ mod tests {
         }
         assert!(learn_kit_rules_from_entries(&entries, KitPromotionPolicy::default()).is_empty());
     }
-
 }

@@ -27,15 +27,14 @@ use dokkomplekt_core::{
     set_user_value, suggest_icd10, suggest_template_markup, template_counter_requests,
     template_image_requests, validate_case_relations, validate_field_value, validate_popup_fields,
     CaseFragment, ConfiguredDocument, CorpusAcceptanceSource, CorpusEntry, CorpusEntryMetrics,
-    CorpusEntryRequest,
-    CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation, DocumentTemplateSpec,
-    DomainKind, ExtractedField, FolderNamePart, IntakeDecision, IntakeDeduplicator,
-    KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable, ParsedSourceReport,
-    PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport, ProductPlanId, ScannerMark,
-    SemanticCase, SeriesPlanRequest, TemplateCandidate, TemplateConfirmationRow,
-    TemplateLearningInput, TemplateLearningReport, TemplateMarkupCandidate, UniversalPipelineFlags,
-    UniversalPipelineInput, ValueSource, WorkflowFlags, EXPIRED_DEMO_WATERMARK_TEXT,
-    TRIAL_WATERMARK_TEXT,
+    CorpusEntryRequest, CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation,
+    DocumentTemplateSpec, DomainKind, ExtractedField, FolderNamePart, IntakeDecision,
+    IntakeDeduplicator, KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable,
+    ParsedSourceReport, PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport,
+    ProductPlanId, ScannerMark, SemanticCase, SeriesPlanRequest, TemplateCandidate,
+    TemplateConfirmationRow, TemplateLearningInput, TemplateLearningReport,
+    TemplateMarkupCandidate, UniversalPipelineFlags, UniversalPipelineInput, ValueSource,
+    WorkflowFlags, EXPIRED_DEMO_WATERMARK_TEXT, TRIAL_WATERMARK_TEXT,
 };
 use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
@@ -452,7 +451,10 @@ fn persist_privacy_preferences(
 }
 
 fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     let privacy = load_privacy_preferences(app).unwrap_or_default();
     universal_intake::cleanup_workspace(
         &data_dir.join("intake-work"),

@@ -461,9 +461,8 @@ fn active_session_is_recent(path: &Path, now: std::time::SystemTime) -> bool {
 fn create_sensitive_session(workspace: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
     let root = workspace.join(format!("session-{}", Uuid::new_v4()));
-    std::fs::create_dir(&root).map_err(|error| {
-        format!("Не удалось создать защищённую временную сессию: {error}")
-    })?;
+    std::fs::create_dir(&root)
+        .map_err(|error| format!("Не удалось создать защищённую временную сессию: {error}"))?;
     restrict_directory_permissions(&root)?;
     let marker = root.join(ACTIVE_SESSION_MARKER);
     std::fs::write(&marker, b"active")
@@ -2411,11 +2410,8 @@ pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, 
         let extension = web_extension(&final_url, &content_type).ok_or_else(|| {
             format!("Тип ответа «{content_type}» пока нельзя безопасно нормализовать.")
         })?;
-        let mut session = normalize_uploaded_bytes(
-            &format!("web-source.{extension}"),
-            &bytes,
-            workspace,
-        )?;
+        let mut session =
+            normalize_uploaded_bytes(&format!("web-source.{extension}"), &bytes, workspace)?;
         let normalized = session.take_source()?;
         warnings.extend(normalized.warnings);
         normalized.text
@@ -3473,8 +3469,9 @@ Symbolic Link = ../../secret
     fn uploaded_source_session_deletes_plaintext_on_successful_drop() {
         let workspace = std::env::temp_dir().join(format!("dkk-intake-{}", Uuid::new_v4()));
         let root = {
-            let mut session = normalize_uploaded_bytes("patient.txt", b"secret medical data", &workspace)
-                .expect("session");
+            let mut session =
+                normalize_uploaded_bytes("patient.txt", b"secret medical data", &workspace)
+                    .expect("session");
             let root = session.root().to_path_buf();
             assert!(root.join("patient.txt").is_file());
             let source = session.take_source().expect("source");
@@ -3507,7 +3504,6 @@ Symbolic Link = ../../secret
         let _ = std::fs::remove_dir_all(workspace);
     }
 
-
     #[test]
     fn retained_source_uses_virtual_path_and_materializes_only_inside_raii_session() {
         let workspace = std::env::temp_dir().join(format!("dkk-retained-{}", Uuid::new_v4()));
@@ -3525,5 +3521,4 @@ Symbolic Link = ../../secret
         assert!(!root.exists());
         let _ = std::fs::remove_dir_all(workspace);
     }
-
 }

@@ -25,6 +25,17 @@ pub fn hash_order_access_token(token: &str) -> String {
     hex::encode(digest.finalize())
 }
 
+pub fn bearer_secret_matches(headers: &HeaderMap, configured_secret: Option<&str>) -> bool {
+    let Some(expected) = configured_secret
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= MAX_BEARER_BYTES)
+    else {
+        return false;
+    };
+    bearer_token(headers)
+        .is_some_and(|actual| constant_time_eq(actual.as_bytes(), expected.as_bytes()))
+}
+
 pub fn authorize_order(headers: &HeaderMap, expected_hash: Option<&str>) -> bool {
     let Some(expected_hash) = expected_hash
         .map(str::trim)
@@ -84,6 +95,16 @@ mod tests {
 
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer wrong"));
         assert!(!authorize_order(&headers, Some(&hash)));
+    }
+
+    #[test]
+    fn bearer_control_secret_requires_an_exact_header_match() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer recovery-secret"));
+        assert!(bearer_secret_matches(&headers, Some("recovery-secret")));
+        assert!(!bearer_secret_matches(&headers, Some("other-secret")));
+        assert!(!bearer_secret_matches(&HeaderMap::new(), Some("recovery-secret")));
+        assert!(!bearer_secret_matches(&headers, None));
     }
 
     #[test]

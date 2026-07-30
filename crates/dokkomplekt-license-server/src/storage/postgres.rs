@@ -1,5 +1,6 @@
 use super::{
-    order_status_after_payment, validate_order_status_transition, ActivationIssueOutcome,
+    order_status_after_payment, validate_access_recovery_input, validate_order_status_transition,
+    ActivationIssueOutcome,
     AuditEventRecord, LicenseIssueOutcome, LicenseRecord, LicenseStore, PaymentEventRecord,
     PaymentEventStatus, PaymentEventWriteOutcome, StoreError,
 };
@@ -152,6 +153,70 @@ impl LicenseStore for PostgresStore {
             "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1",
             &[&order_id],
         ).map_err(pg_err)?.map(order_from_row).transpose()
+    }
+
+    fn recover_legacy_order_access(
+        &self,
+        order_id: Uuid,
+        machine_hash: &str,
+        access_token_hash: &str,
+        bind_missing_machine: bool,
+    ) -> Result<OrderRecord, StoreError> {
+        let machine_hash = validate_access_recovery_input(machine_hash, access_token_hash)?;
+        let mut client = self.client()?;
+        let mut tx = client.transaction().map_err(pg_err)?;
+        let row = tx
+            .query_opt(
+                "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+                &[&order_id],
+            )
+            .map_err(pg_err)?
+            .ok_or(StoreError::NotFound)?;
+        let mut order = order_from_row(row)?;
+        if order.access_token_hash.is_some() || matches!(order.status, OrderStatus::Cancelled) {
+            return Err(StoreError::Conflict);
+        }
+        let bound_missing_machine = match order.machine_hash.as_deref().map(str::trim) {
+            Some(expected) if expected == machine_hash => false,
+            Some(_) => return Err(StoreError::Conflict),
+            None if bind_missing_machine => true,
+            None => {
+                return Err(StoreError::Invalid(
+                    "legacy_order_has_no_machine_binding".to_string(),
+                ))
+            }
+        };
+        let stored_machine_hash = if bound_missing_machine {
+            machine_hash.clone()
+        } else {
+            order.machine_hash.clone().unwrap_or_else(|| machine_hash.clone())
+        };
+        let updated = tx
+            .execute(
+                "UPDATE license_orders SET machine_hash = $2, access_token_hash = $3 WHERE id = $1 AND access_token_hash IS NULL",
+                &[&order_id, &stored_machine_hash, &access_token_hash.trim()],
+            )
+            .map_err(pg_err)?;
+        if updated != 1 {
+            return Err(StoreError::Conflict);
+        }
+        insert_audit_event(
+            &mut tx,
+            &AuditEventRecord {
+                id: Uuid::new_v4(),
+                entity_id: order_id,
+                event_type: "order_access_recovered".to_string(),
+                happened_at: OffsetDateTime::now_utc(),
+                details_json: serde_json::json!({
+                    "bound_missing_machine": bound_missing_machine,
+                })
+                .to_string(),
+            },
+        )?;
+        tx.commit().map_err(pg_err)?;
+        order.machine_hash = Some(stored_machine_hash);
+        order.access_token_hash = Some(access_token_hash.trim().to_string());
+        Ok(order)
     }
 
     fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError> {
@@ -598,6 +663,58 @@ mod tests {
         let checksum = schema_checksum(SCHEMA_V1);
         assert_eq!(checksum.len(), 64);
         assert!(checksum.chars().all(|value| value.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn postgres_legacy_recovery_is_serialized_when_configured() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let store = PostgresStore::connect(&database_url).unwrap();
+        let order_id = Uuid::new_v4();
+        store
+            .create_order(OrderRecord {
+                id: order_id,
+                plan: "doctor_pro".to_string(),
+                amount_rub: 3_900,
+                status: OrderStatus::Paid,
+                machine_hash: Some("legacy-machine".to_string()),
+                access_token_hash: None,
+                created_at: OffsetDateTime::now_utc(),
+            })
+            .unwrap();
+
+        let workers = 12;
+        let barrier = Arc::new(Barrier::new(workers));
+        let successes = (0..workers)
+            .map(|index| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .recover_legacy_order_access(
+                            order_id,
+                            "legacy-machine",
+                            &format!("{index:064x}"),
+                            false,
+                        )
+                        .is_ok()
+                })
+            })
+            .map(|handle| handle.join().unwrap())
+            .filter(|success| *success)
+            .count();
+        assert_eq!(successes, 1);
+        assert!(store
+            .get_order(order_id)
+            .unwrap()
+            .unwrap()
+            .access_token_hash
+            .is_some());
     }
 
     #[test]

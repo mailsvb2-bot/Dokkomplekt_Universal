@@ -1,6 +1,7 @@
 use crate::state::{ActivationRecord, MemoryStore, OrderRecord, OrderStatus};
 use crate::storage::{
-    order_status_after_payment, validate_order_status_transition, ActivationIssueOutcome,
+    order_status_after_payment, validate_access_recovery_input, validate_order_status_transition,
+    ActivationIssueOutcome,
     AuditEventRecord, LicenseRecord, LicenseStore, PaymentEventRecord, PaymentEventStatus,
     PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
@@ -21,6 +22,50 @@ impl LicenseStore for Arc<RwLock<MemoryStore>> {
     fn get_order(&self, order_id: Uuid) -> Result<Option<OrderRecord>, StoreError> {
         let store = self.read().map_err(|_| StoreError::Poisoned)?;
         Ok(store.orders.get(&order_id).cloned())
+    }
+
+    fn recover_legacy_order_access(
+        &self,
+        order_id: Uuid,
+        machine_hash: &str,
+        access_token_hash: &str,
+        bind_missing_machine: bool,
+    ) -> Result<OrderRecord, StoreError> {
+        let machine_hash = validate_access_recovery_input(machine_hash, access_token_hash)?;
+        let mut store = self.write().map_err(|_| StoreError::Poisoned)?;
+        let (recovered, bound_missing_machine) = {
+            let order = store.orders.get_mut(&order_id).ok_or(StoreError::NotFound)?;
+            if order.access_token_hash.is_some() || matches!(order.status, OrderStatus::Cancelled) {
+                return Err(StoreError::Conflict);
+            }
+            let bound_missing_machine = match order.machine_hash.as_deref().map(str::trim) {
+                Some(expected) if expected == machine_hash => false,
+                Some(_) => return Err(StoreError::Conflict),
+                None if bind_missing_machine => {
+                    order.machine_hash = Some(machine_hash.clone());
+                    true
+                }
+                None => {
+                    return Err(StoreError::Invalid(
+                        "legacy_order_has_no_machine_binding".to_string(),
+                    ))
+                }
+            };
+            order.access_token_hash = Some(access_token_hash.trim().to_string());
+            (order.clone(), bound_missing_machine)
+        };
+        let audit = AuditEventRecord {
+            id: Uuid::new_v4(),
+            entity_id: order_id,
+            event_type: "order_access_recovered".to_string(),
+            happened_at: time::OffsetDateTime::now_utc(),
+            details_json: serde_json::json!({
+                "bound_missing_machine": bound_missing_machine,
+            })
+            .to_string(),
+        };
+        store.audit_events.insert(audit.id, audit);
+        Ok(recovered)
     }
 
     fn update_order_status(&self, order_id: Uuid, status: OrderStatus) -> Result<(), StoreError> {
@@ -200,6 +245,88 @@ mod tests {
             access_token_hash: Some("a".repeat(64)),
             created_at: OffsetDateTime::now_utc(),
         }
+    }
+
+    #[test]
+    fn legacy_access_recovery_is_atomic_machine_bound_and_one_time() {
+        let store = memory_store();
+        let order_id = Uuid::new_v4();
+        let mut order = order_record(order_id, OrderStatus::Paid);
+        order.machine_hash = Some("machine-owner".to_string());
+        order.access_token_hash = None;
+        store.create_order(order).unwrap();
+
+        assert_eq!(
+            store
+                .recover_legacy_order_access(
+                    order_id,
+                    "machine-attacker",
+                    &"b".repeat(64),
+                    false,
+                )
+                .unwrap_err(),
+            StoreError::Conflict
+        );
+        let recovered_hash = "c".repeat(64);
+        let recovered = store
+            .recover_legacy_order_access(order_id, "machine-owner", &recovered_hash, false)
+            .unwrap();
+        assert_eq!(recovered.access_token_hash.as_deref(), Some(recovered_hash.as_str()));
+        assert_eq!(
+            store
+                .recover_legacy_order_access(order_id, "machine-owner", &"d".repeat(64), false)
+                .unwrap_err(),
+            StoreError::Conflict
+        );
+    }
+
+    #[test]
+    fn legacy_access_recovery_can_deliberately_bind_an_unbound_order() {
+        let store = memory_store();
+        let order_id = Uuid::new_v4();
+        let mut order = order_record(order_id, OrderStatus::Paid);
+        order.machine_hash = None;
+        order.access_token_hash = None;
+        store.create_order(order).unwrap();
+        assert!(matches!(
+            store.recover_legacy_order_access(order_id, "machine-owner", &"e".repeat(64), false),
+            Err(StoreError::Invalid(_))
+        ));
+        let recovered = store
+            .recover_legacy_order_access(order_id, "machine-owner", &"e".repeat(64), true)
+            .unwrap();
+        assert_eq!(recovered.machine_hash.as_deref(), Some("machine-owner"));
+    }
+
+    #[test]
+    fn concurrent_legacy_recovery_produces_exactly_one_winner() {
+        let store = memory_store();
+        let order_id = Uuid::new_v4();
+        let mut order = order_record(order_id, OrderStatus::Paid);
+        order.machine_hash = Some("machine-owner".to_string());
+        order.access_token_hash = None;
+        store.create_order(order).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let winners = (0..16)
+            .map(|index| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .recover_legacy_order_access(
+                            order_id,
+                            "machine-owner",
+                            &format!("{index:064x}"),
+                            false,
+                        )
+                        .is_ok()
+                })
+            })
+            .map(|thread| thread.join().unwrap())
+            .filter(|won| *won)
+            .count();
+        assert_eq!(winners, 1);
     }
 
     #[test]

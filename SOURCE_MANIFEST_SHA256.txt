@@ -3,6 +3,7 @@ aabd2af12e26033cb8de9b63841b54574718406e4479b47e41bc0d92fc6f14e0  .cargo/config.
 0f2def56a839e830303bda7062cf2d439adbe2d9d47ef8b12d01bf4a4fcbcec8  .env.example
 af35a2d765c6a709494d056ff9876166075f40bd26b54531e763c6c46702e257  .github/pr28-transfer/part-00
 5df4cfe5e888557339c19e0b411bb5a16c41e0bc71e23df41478932d048ab4fa  .github/pr28-transfer/part-01
+701af8ed88efa24de6a094b80281c8372e37e55526ffd4ec14168d7787eff331  .github/pr28-transfer/part-02
 c092e59db902b965cb6cfc712f152d5c564768836bd72fd7b87688be32eaa11f  .github/workflows/build-installers.yml
 275334986f8e67449148cf796525e5c7630f099fae2d32fea7bcaa353b90913d  .github/workflows/delete-merged-branch.yml
 896b4962567bddd871e9c85b03e13a64b3b1e29a0f07771aff0949f6eb6c81ea  .github/workflows/quality-gate.yml

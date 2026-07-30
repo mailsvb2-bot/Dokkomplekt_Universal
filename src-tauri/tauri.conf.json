@@ -7,7 +7,8 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420/",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeBundleCommand": "node scripts/stage_linux_appimage_runtime.mjs"
   },
   "app": {
     "windows": [
@@ -55,9 +56,10 @@
     "linux": {
       "appimage": {
         "files": {
-          "/usr/lib/libGLESv2.so.2": "linux-runtime/libGLESv2.so.2",
-          "/usr/lib/libEGL.so.1": "linux-runtime/libEGL.so.1",
-          "/usr/lib/libGLdispatch.so.0": "linux-runtime/libGLdispatch.so.0"
+          "/usr/lib/libGLESv2.so.2": "target/appimage-runtime/libGLESv2.so.2",
+          "/usr/lib/libEGL.so.1": "target/appimage-runtime/libEGL.so.1",
+          "/usr/lib/libGLdispatch.so.0": "target/appimage-runtime/libGLdispatch.so.0",
+          "/usr/share/dokkomplekt/appimage-runtime.json": "target/appimage-runtime/manifest.json"
         }
       }
     }

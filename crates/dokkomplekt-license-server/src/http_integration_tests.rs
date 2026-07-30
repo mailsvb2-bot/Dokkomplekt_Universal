@@ -14,11 +14,11 @@ use axum::{
     Router,
 };
 use postgres::{Client, NoTls};
+use serde_json::{json, Value};
 use std::net::SocketAddr;
 use time::OffsetDateTime;
-use uuid::Uuid;
-use serde_json::{json, Value};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 fn base_config(database_url: Option<String>) -> ServerConfig {
     ServerConfig {
@@ -278,14 +278,8 @@ async fn legacy_order_access_recovery_requires_admin_secret_and_is_one_time() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "paid");
-    let (status, _) = call_authorized(
-        app,
-        Method::POST,
-        uri,
-        request,
-        "test-recovery-secret",
-    )
-    .await;
+    let (status, _) =
+        call_authorized(app, Method::POST, uri, request, "test-recovery-secret").await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
 
@@ -293,11 +287,8 @@ async fn legacy_order_access_recovery_requires_admin_secret_and_is_one_time() {
 async fn trusted_proxy_rate_limits_are_keyed_by_resolved_client_address() {
     let mut config = base_config(None);
     config.order_create_limit_per_hour = 1;
-    config.trusted_proxies = crate::traffic_guard::TrustedProxyConfig::parse(
-        Some("127.0.0.1/32"),
-        true,
-    )
-    .unwrap();
+    config.trusted_proxies =
+        crate::traffic_guard::TrustedProxyConfig::parse(Some("127.0.0.1/32"), true).unwrap();
     let app = build_app(AppState::try_new(config).unwrap());
     let peer: SocketAddr = "127.0.0.1:41000".parse().unwrap();
     let order = json!({
@@ -425,11 +416,17 @@ async fn order_creation_rate_limit_is_enforced_without_touching_tests_or_prices(
     let mut config = base_config(None);
     config.order_create_limit_per_hour = 1;
     let app = build_app(AppState::try_new(config).unwrap());
-    let request = Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-a" }));
+    let request =
+        Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-a" }));
     assert_eq!(
-        call(app.clone(), Method::POST, "/api/orders".to_string(), request.clone())
-            .await
-            .0,
+        call(
+            app.clone(),
+            Method::POST,
+            "/api/orders".to_string(),
+            request.clone()
+        )
+        .await
+        .0,
         StatusCode::OK
     );
     assert_eq!(

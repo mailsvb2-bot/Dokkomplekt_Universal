@@ -6,7 +6,12 @@ use crate::providers::{CreatePaymentRequest, CreatePaymentResponse, PaymentProvi
 use crate::state::{AppState, OrderRecord, OrderStatus};
 use crate::storage::StoreError;
 use crate::traffic_guard::{ClientIp, RateLimitScope};
-use axum::{extract::{Extension, State}, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{Extension, State},
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use time::OffsetDateTime;

@@ -1,8 +1,7 @@
 use super::{
     order_status_after_payment, validate_access_recovery_input, validate_order_status_transition,
-    ActivationIssueOutcome,
-    AuditEventRecord, LicenseIssueOutcome, LicenseRecord, LicenseStore, PaymentEventRecord,
-    PaymentEventStatus, PaymentEventWriteOutcome, StoreError,
+    ActivationIssueOutcome, AuditEventRecord, LicenseIssueOutcome, LicenseRecord, LicenseStore,
+    PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, StoreError,
 };
 use crate::state::{ActivationRecord, OrderRecord, OrderStatus};
 use postgres::error::SqlState;
@@ -189,7 +188,10 @@ impl LicenseStore for PostgresStore {
         let stored_machine_hash = if bound_missing_machine {
             machine_hash.clone()
         } else {
-            order.machine_hash.clone().unwrap_or_else(|| machine_hash.clone())
+            order
+                .machine_hash
+                .clone()
+                .unwrap_or_else(|| machine_hash.clone())
         };
         let updated = tx
             .execute(
@@ -760,7 +762,8 @@ mod tests {
         }
         let successes = handles
             .into_iter()
-            .filter(|handle| handle.join().unwrap().is_ok())
+            .map(|handle| handle.join().unwrap())
+            .filter(Result::is_ok)
             .count();
         assert_eq!(successes, 1);
         assert_eq!(store.activations_for_order(order_id).unwrap().len(), 1);

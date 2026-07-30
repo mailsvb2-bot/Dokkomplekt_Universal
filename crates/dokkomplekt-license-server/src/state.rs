@@ -1,11 +1,11 @@
 use crate::config::ServerConfig;
-use crate::traffic_guard::TrafficGuard;
 use crate::storage::{AuditEventRecord, LicenseRecord, PaymentEventRecord, StoreBackend};
+use crate::traffic_guard::TrafficGuard;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 use time::OffsetDateTime;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 #[derive(Clone)]

@@ -71,7 +71,9 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     }
     left.iter()
         .zip(right)
-        .fold(0_u8, |difference, (left, right)| difference | (left ^ right))
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
         == 0
 }
 
@@ -100,10 +102,16 @@ mod tests {
     #[test]
     fn bearer_control_secret_requires_an_exact_header_match() {
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer recovery-secret"));
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer recovery-secret"),
+        );
         assert!(bearer_secret_matches(&headers, Some("recovery-secret")));
         assert!(!bearer_secret_matches(&headers, Some("other-secret")));
-        assert!(!bearer_secret_matches(&HeaderMap::new(), Some("recovery-secret")));
+        assert!(!bearer_secret_matches(
+            &HeaderMap::new(),
+            Some("recovery-secret")
+        ));
         assert!(!bearer_secret_matches(&headers, None));
     }
 

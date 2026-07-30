@@ -1,9 +1,8 @@
 use crate::state::{ActivationRecord, MemoryStore, OrderRecord, OrderStatus};
 use crate::storage::{
     order_status_after_payment, validate_access_recovery_input, validate_order_status_transition,
-    ActivationIssueOutcome,
-    AuditEventRecord, LicenseRecord, LicenseStore, PaymentEventRecord, PaymentEventStatus,
-    PaymentEventWriteOutcome, PaymentProvider, StoreError,
+    ActivationIssueOutcome, AuditEventRecord, LicenseRecord, LicenseStore, PaymentEventRecord,
+    PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
 use std::mem::discriminant;
 use std::sync::{Arc, RwLock};
@@ -34,7 +33,10 @@ impl LicenseStore for Arc<RwLock<MemoryStore>> {
         let machine_hash = validate_access_recovery_input(machine_hash, access_token_hash)?;
         let mut store = self.write().map_err(|_| StoreError::Poisoned)?;
         let (recovered, bound_missing_machine) = {
-            let order = store.orders.get_mut(&order_id).ok_or(StoreError::NotFound)?;
+            let order = store
+                .orders
+                .get_mut(&order_id)
+                .ok_or(StoreError::NotFound)?;
             if order.access_token_hash.is_some() || matches!(order.status, OrderStatus::Cancelled) {
                 return Err(StoreError::Conflict);
             }
@@ -258,12 +260,7 @@ mod tests {
 
         assert_eq!(
             store
-                .recover_legacy_order_access(
-                    order_id,
-                    "machine-attacker",
-                    &"b".repeat(64),
-                    false,
-                )
+                .recover_legacy_order_access(order_id, "machine-attacker", &"b".repeat(64), false,)
                 .unwrap_err(),
             StoreError::Conflict
         );
@@ -271,7 +268,10 @@ mod tests {
         let recovered = store
             .recover_legacy_order_access(order_id, "machine-owner", &recovered_hash, false)
             .unwrap();
-        assert_eq!(recovered.access_token_hash.as_deref(), Some(recovered_hash.as_str()));
+        assert_eq!(
+            recovered.access_token_hash.as_deref(),
+            Some(recovered_hash.as_str())
+        );
         assert_eq!(
             store
                 .recover_legacy_order_access(order_id, "machine-owner", &"d".repeat(64), false)
@@ -425,12 +425,7 @@ mod tests {
             created_at: OffsetDateTime::now_utc(),
         };
         assert_eq!(
-            store
-                .create_activation_for_order(
-                    attacker,
-                    3,
-                )
-                .unwrap_err(),
+            store.create_activation_for_order(attacker, 3,).unwrap_err(),
             StoreError::Conflict
         );
         assert!(store.activations_for_order(order_id).unwrap().is_empty());
@@ -467,7 +462,8 @@ mod tests {
         }
         let successes = handles
             .into_iter()
-            .filter(|handle| handle.join().unwrap().is_ok())
+            .map(|handle| handle.join().unwrap())
+            .filter(Result::is_ok)
             .count();
         assert_eq!(successes, 1);
         assert_eq!(store.activations_for_order(order_id).unwrap().len(), 1);
@@ -496,5 +492,4 @@ mod tests {
             OrderStatus::LicenseIssued
         );
     }
-
 }

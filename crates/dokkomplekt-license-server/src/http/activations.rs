@@ -97,10 +97,7 @@ async fn activate_machine(
     };
     let outcome = state
         .store
-        .create_activation_for_order_async(
-            record,
-            max_machines_for_plan(&plan),
-        )
+        .create_activation_for_order_async(record, max_machines_for_plan(&plan))
         .await
         .map_err(store_error_status)?;
     Ok(Json(ActivationResponse {

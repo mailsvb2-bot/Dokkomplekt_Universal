@@ -34,7 +34,10 @@ pub struct TrustedProxyConfig {
 }
 
 impl TrustedProxyConfig {
-    pub fn parse(raw_cidrs: Option<&str>, require_forwarded_for_for_api: bool) -> Result<Self, String> {
+    pub fn parse(
+        raw_cidrs: Option<&str>,
+        require_forwarded_for_for_api: bool,
+    ) -> Result<Self, String> {
         let mut networks = Vec::new();
         if let Some(raw_cidrs) = raw_cidrs.map(str::trim).filter(|value| !value.is_empty()) {
             for raw_network in raw_cidrs.split(',') {
@@ -49,11 +52,9 @@ impl TrustedProxyConfig {
     }
 
     pub fn is_trusted(&self, address: IpAddr) -> bool {
-        self.networks.iter().any(|network| network.contains(address))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.networks.is_empty()
+        self.networks
+            .iter()
+            .any(|network| network.contains(address))
     }
 }
 
@@ -138,13 +139,7 @@ impl TrafficGuard {
         }
     }
 
-    pub fn check(
-        &self,
-        ip: IpAddr,
-        scope: RateLimitScope,
-        limit: u32,
-        window: Duration,
-    ) -> bool {
+    pub fn check(&self, ip: IpAddr, scope: RateLimitScope, limit: u32, window: Duration) -> bool {
         self.check_at(ip, scope, limit, window, Instant::now())
     }
 
@@ -195,8 +190,8 @@ pub async fn attach_client_ip(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|value| value.0.ip())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    let require_forwarded = trusted_proxies.require_forwarded_for_for_api
-        && request.uri().path().starts_with("/api/");
+    let require_forwarded =
+        trusted_proxies.require_forwarded_for_for_api && request.uri().path().starts_with("/api/");
     let client_ip = resolve_client_ip(
         peer_ip,
         request.headers(),
@@ -310,10 +305,34 @@ mod tests {
         let first: IpAddr = "192.0.2.10".parse().unwrap();
         let second: IpAddr = "192.0.2.11".parse().unwrap();
         let now = Instant::now();
-        assert!(guard.check_at(first, RateLimitScope::OrderAccess, 1, Duration::from_secs(60), now));
-        assert!(!guard.check_at(first, RateLimitScope::OrderAccess, 1, Duration::from_secs(60), now));
-        assert!(guard.check_at(first, RateLimitScope::OrderCreation, 1, Duration::from_secs(60), now));
-        assert!(guard.check_at(second, RateLimitScope::OrderAccess, 1, Duration::from_secs(60), now));
+        assert!(guard.check_at(
+            first,
+            RateLimitScope::OrderAccess,
+            1,
+            Duration::from_secs(60),
+            now
+        ));
+        assert!(!guard.check_at(
+            first,
+            RateLimitScope::OrderAccess,
+            1,
+            Duration::from_secs(60),
+            now
+        ));
+        assert!(guard.check_at(
+            first,
+            RateLimitScope::OrderCreation,
+            1,
+            Duration::from_secs(60),
+            now
+        ));
+        assert!(guard.check_at(
+            second,
+            RateLimitScope::OrderAccess,
+            1,
+            Duration::from_secs(60),
+            now
+        ));
     }
 
     #[test]

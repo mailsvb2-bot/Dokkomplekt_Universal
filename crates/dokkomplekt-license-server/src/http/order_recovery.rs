@@ -73,7 +73,9 @@ async fn recover_order_access(
     Ok(Json(RecoverOrderAccessResponse {
         order_id,
         status: recovered.status,
-        machine_hash: recovered.machine_hash.unwrap_or_else(|| machine_hash.to_string()),
+        machine_hash: recovered
+            .machine_hash
+            .unwrap_or_else(|| machine_hash.to_string()),
         order_access_token,
     }))
 }

@@ -1,7 +1,10 @@
 use super::{build_app, config::ServerConfig, state::AppState};
 use axum::{
     body::{to_bytes, Body},
-    http::{header::{AUTHORIZATION, CONTENT_TYPE}, Method, Request, StatusCode},
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        Method, Request, StatusCode,
+    },
     Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};

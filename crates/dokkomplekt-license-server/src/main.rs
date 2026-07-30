@@ -19,7 +19,7 @@ mod flow_tests;
 mod http_integration_tests;
 
 use anyhow::Context;
-use axum::{extract::DefaultBodyLimit, middleware, Router};
+use axum::{extract::DefaultBodyLimit, http::StatusCode, middleware, Router};
 use config::ServerConfig;
 use state::AppState;
 use std::net::SocketAddr;
@@ -51,7 +51,10 @@ fn build_app(state: AppState) -> Router {
             traffic_guard::attach_client_ip,
         ))
         .layer(ConcurrencyLimitLayer::new(concurrency_limit))
-        .layer(TimeoutLayer::new(request_timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

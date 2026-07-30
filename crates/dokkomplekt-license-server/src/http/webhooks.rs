@@ -5,7 +5,13 @@ use crate::storage::{
     PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
 use crate::traffic_guard::{ClientIp, RateLimitScope};
-use axum::{body::Bytes, extract::{Extension, State}, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    body::Bytes,
+    extract::{Extension, State},
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use time::OffsetDateTime;
@@ -46,14 +52,9 @@ async fn provider_callback(
         || event_id.len() > 256
         || event_id.chars().any(char::is_control)
         || event.amount_rub == 0
-        || event
-            .provider_payment_id
-            .as_deref()
-            .is_some_and(|value| {
-                value.trim().is_empty()
-                    || value.len() > 256
-                    || value.chars().any(char::is_control)
-            })
+        || event.provider_payment_id.as_deref().is_some_and(|value| {
+            value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+        })
     {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -107,9 +108,9 @@ async fn yookassa_callback(
         let _permit = permit;
         provider.verify_callback(&body)
     })
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    .await
+    .map_err(|_| StatusCode::BAD_GATEWAY)?
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let status = match event.status {
         ProviderPaymentStatus::Pending => PaymentEventStatus::Pending,
         ProviderPaymentStatus::Succeeded => PaymentEventStatus::Succeeded,
@@ -128,10 +129,7 @@ async fn yookassa_callback(
     .await
 }
 
-fn enforce_callback_rate_limit(
-    state: &AppState,
-    client_ip: ClientIp,
-) -> Result<(), StatusCode> {
+fn enforce_callback_rate_limit(state: &AppState, client_ip: ClientIp) -> Result<(), StatusCode> {
     state
         .traffic_guard
         .check(

@@ -234,9 +234,7 @@ impl YooKassaProvider {
     }
 }
 
-fn read_response_limited(
-    response: reqwest::blocking::Response,
-) -> Result<Vec<u8>, ProviderError> {
+fn read_response_limited(response: reqwest::blocking::Response) -> Result<Vec<u8>, ProviderError> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_PROVIDER_RESPONSE_BYTES)
@@ -601,5 +599,4 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ProviderError::Transport(_)));
     }
-
 }

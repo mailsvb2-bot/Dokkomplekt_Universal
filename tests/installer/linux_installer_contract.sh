@@ -65,8 +65,6 @@ run_deb_install_smoke() {
     setsid xvfb-run -a dbus-run-session -- "$binary_path" >"$smoke_home/launch.log" 2>&1 &
   pid=$!
   sleep 5
-  # The whole isolated process group must still exist. A clean exit code is not
-  # enough: a GUI that flashes and closes is a failed launch from the user's view.
   if ! kill -0 -- "-$pid" 2>/dev/null; then
     wait "$pid" || status=$?
     status="${status:-0}"
@@ -76,8 +74,6 @@ run_deb_install_smoke() {
     exit 1
   fi
 
-  # Stop the complete isolated launch session, not only the xvfb-run wrapper.
-  # GTK/Mesa helpers may otherwise survive briefly and race with temp cleanup.
   kill -TERM -- "-$pid" 2>/dev/null || true
   for _ in 1 2 3 4 5; do
     kill -0 -- "-$pid" 2>/dev/null || break
@@ -149,6 +145,12 @@ if requires appimage; then
     echo "AppImage extraction did not produce AppRun" >&2
     exit 1
   }
+  for required_graphics_lib in libGLESv2.so.2 libEGL.so.1 libGLdispatch.so.0; do
+    find "$extract_dir/squashfs-root/usr/lib" -type f -name "$required_graphics_lib" -print -quit | grep -q . || {
+      echo "AppImage is missing required graphics runtime: $required_graphics_lib" >&2
+      exit 1
+    }
+  done
   executable_payload="$(find "$extract_dir/squashfs-root" -type f -perm -u+x \
     \( -name 'AppRun' -o -iname '*dokkomplekt*' \) -print -quit)"
   [ -n "$executable_payload" ] || {

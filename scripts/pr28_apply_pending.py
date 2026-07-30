@@ -52,9 +52,9 @@ def apply_pending_repair() -> None:
     checked(["git", "apply", "-"], input_bytes=patch)
 
     # Restore the canonical verifier before launching any nested Python process.
-    verifier = checked(
-        ["git", "show", "origin/main:scripts/verify_source_manifest.py"]
-    ).stdout
+    verifier = subprocess.check_output(
+        ["git", "show", "origin/main:scripts/verify_source_manifest.py"], cwd=ROOT
+    )
     (ROOT / "scripts" / "verify_source_manifest.py").write_bytes(verifier)
     shutil.rmtree(TRANSFER)
     Path(__file__).unlink()

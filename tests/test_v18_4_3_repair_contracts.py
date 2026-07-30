@@ -81,3 +81,18 @@ def test_trivial_repeated_digit_inn_is_rejected() -> None:
     assert "numbers.iter().all(|value| value == first)" in validators
     assert 'validate_field_value("org.inn", "0000000000")' in validators
     assert 'validate_field_value("org.inn", "111111111111")' in validators
+
+
+def test_accounting_popup_ids_and_input_kinds_are_canonicalized_before_merge() -> None:
+    aliases = text("crates/dokkomplekt-core/src/field_aliases.rs")
+    profiles = text("crates/dokkomplekt-core/src/popup_profiles.rs")
+    domain_profiles = text("crates/dokkomplekt-core/src/domain_profiles.rs")
+
+    assert '"accounting.client" => "counterparty.name".into()' in aliases
+    assert '"accounting.currency" => "amount.currency".into()' in aliases
+    assert '.map(|field| canonical_storage_field_id(field))' in profiles
+    assert 'id.contains("count")' not in profiles
+    assert 'let leaf = id.rsplit' in profiles
+    assert 'add("counterparty.name", true)' in profiles
+    assert 'add("amount.currency", false)' in profiles
+    assert '"accounting.client",\n                    "accounting.amount_total"' not in domain_profiles

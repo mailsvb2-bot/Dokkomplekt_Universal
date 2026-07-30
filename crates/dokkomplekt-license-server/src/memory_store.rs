@@ -1,7 +1,8 @@
 use crate::state::{ActivationRecord, MemoryStore, OrderRecord, OrderStatus};
 use crate::storage::{
-    ActivationIssueOutcome, AuditEventRecord, LicenseRecord, LicenseStore, PaymentEventRecord,
-    PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
+    order_status_after_payment, validate_order_status_transition, ActivationIssueOutcome,
+    AuditEventRecord, LicenseRecord, LicenseStore, PaymentEventRecord, PaymentEventStatus,
+    PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
 use std::mem::discriminant;
 use std::sync::{Arc, RwLock};
@@ -28,6 +29,7 @@ impl LicenseStore for Arc<RwLock<MemoryStore>> {
             .orders
             .get_mut(&order_id)
             .ok_or(StoreError::NotFound)?;
+        validate_order_status_transition(&order.status, &status)?;
         order.status = status;
         Ok(())
     }
@@ -78,6 +80,14 @@ impl LicenseStore for Arc<RwLock<MemoryStore>> {
             .values()
             .filter(|activation| activation.order_id == record.order_id)
             .count() as u32;
+        if active_count == 0
+            && order
+                .machine_hash
+                .as_deref()
+                .is_some_and(|expected| expected != record.machine_hash)
+        {
+            return Err(StoreError::Conflict);
+        }
         if active_count >= max_machines {
             return Err(StoreError::Conflict);
         }
@@ -138,9 +148,7 @@ impl LicenseStore for Arc<RwLock<MemoryStore>> {
         if order.amount_rub != record.amount_rub {
             return Err(StoreError::Invalid("amount_mismatch".to_string()));
         }
-        if matches!(record.status, PaymentEventStatus::Succeeded) {
-            order.status = OrderStatus::Paid;
-        }
+        order.status = order_status_after_payment(&order.status, &record.status)?;
         store.payment_events.insert(record.id, record);
         Ok(PaymentEventWriteOutcome::Recorded)
     }
@@ -189,6 +197,7 @@ mod tests {
             amount_rub: 3900,
             status,
             machine_hash: None,
+            access_token_hash: Some("a".repeat(64)),
             created_at: OffsetDateTime::now_utc(),
         }
     }
@@ -274,4 +283,91 @@ mod tests {
             StoreError::Conflict
         );
     }
+
+    #[test]
+    fn first_activation_is_bound_to_machine_recorded_at_checkout() {
+        let store = memory_store();
+        let order_id = Uuid::new_v4();
+        let mut order = order_record(order_id, OrderStatus::Paid);
+        order.machine_hash = Some("machine-owner".to_string());
+        store.create_order(order).unwrap();
+        let attacker = ActivationRecord {
+            id: Uuid::new_v4(),
+            order_id,
+            machine_hash: "machine-attacker".to_string(),
+            created_at: OffsetDateTime::now_utc(),
+        };
+        assert_eq!(
+            store
+                .create_activation_for_order(
+                    attacker,
+                    3,
+                )
+                .unwrap_err(),
+            StoreError::Conflict
+        );
+        assert!(store.activations_for_order(order_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn activation_capacity_is_serialized_under_concurrent_contention() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let store = memory_store();
+        let order_id = Uuid::new_v4();
+        store
+            .create_order(order_record(order_id, OrderStatus::Paid))
+            .unwrap();
+        let workers = 16;
+        let barrier = Arc::new(Barrier::new(workers));
+        let mut handles = Vec::new();
+        for index in 0..workers {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                store.create_activation_for_order(
+                    ActivationRecord {
+                        id: Uuid::new_v4(),
+                        order_id,
+                        machine_hash: format!("machine-{index}"),
+                        created_at: OffsetDateTime::now_utc(),
+                    },
+                    1,
+                )
+            }));
+        }
+        let successes = handles
+            .into_iter()
+            .filter(|handle| handle.join().unwrap().is_ok())
+            .count();
+        assert_eq!(successes, 1);
+        assert_eq!(store.activations_for_order(order_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn late_success_event_never_downgrades_license_issued_order() {
+        let store = memory_store();
+        let order_id = Uuid::new_v4();
+        store
+            .create_order(order_record(order_id, OrderStatus::LicenseIssued))
+            .unwrap();
+        let record = PaymentEventRecord {
+            id: Uuid::new_v4(),
+            order_id,
+            provider: PaymentProvider::Manual,
+            provider_event_id: "late-success".to_string(),
+            provider_payment_id: None,
+            status: PaymentEventStatus::Succeeded,
+            amount_rub: 3900,
+            received_at: OffsetDateTime::now_utc(),
+        };
+        store.record_payment_event_for_order(record).unwrap();
+        assert_eq!(
+            store.get_order(order_id).unwrap().unwrap().status,
+            OrderStatus::LicenseIssued
+        );
+    }
+
 }

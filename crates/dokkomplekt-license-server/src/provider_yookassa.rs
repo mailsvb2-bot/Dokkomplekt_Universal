@@ -16,6 +16,7 @@ use crate::providers::{
     ProviderKind, ProviderPaymentStatus,
 };
 use serde::{Deserialize, Serialize};
+use std::io::Read as _;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -131,16 +132,26 @@ fn payment_status(value: &str) -> Result<ProviderPaymentStatus, ProviderError> {
     }
 }
 
+const MAX_PROVIDER_RESPONSE_BYTES: u64 = 1024 * 1024;
+
 impl YooKassaProvider {
+    fn validated_api_base_url(&self) -> Result<String, ProviderError> {
+        crate::config::validate_yookassa_api_base_url(&self.api_base_url, false)
+            .map_err(|error| ProviderError::Transport(error.to_string()))
+    }
+
     fn authenticated_client(&self) -> Result<reqwest::blocking::Client, ProviderError> {
         if self.shop_id.trim().is_empty() || self.secret_key.trim().is_empty() {
             return Err(ProviderError::Transport(
                 "YooKassa credentials are not configured".into(),
             ));
         }
+        let base_url = self.validated_api_base_url()?;
         crate::ensure_rustls_crypto_provider();
         reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(base_url.starts_with("https://"))
             .build()
             .map_err(|error| ProviderError::Transport(error.to_string()))
     }
@@ -165,7 +176,7 @@ impl YooKassaProvider {
         }
         let endpoint = format!(
             "{}/v3/payments/{}",
-            self.api_base_url.trim_end_matches('/'),
+            self.validated_api_base_url()?,
             payment_id
         );
         let response = self
@@ -175,9 +186,7 @@ impl YooKassaProvider {
             .send()
             .map_err(|error| ProviderError::Transport(error.to_string()))?;
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .map_err(|error| ProviderError::Transport(error.to_string()))?;
+        let bytes = read_response_limited(response)?;
         if !status.is_success() {
             let body = String::from_utf8_lossy(&bytes);
             return Err(ProviderError::Transport(format!(
@@ -225,6 +234,30 @@ impl YooKassaProvider {
     }
 }
 
+fn read_response_limited(
+    response: reqwest::blocking::Response,
+) -> Result<Vec<u8>, ProviderError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_PROVIDER_RESPONSE_BYTES)
+    {
+        return Err(ProviderError::Transport(
+            "YooKassa response exceeds safe size limit".to_string(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_PROVIDER_RESPONSE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
+    if bytes.len() as u64 > MAX_PROVIDER_RESPONSE_BYTES {
+        return Err(ProviderError::Transport(
+            "YooKassa response exceeds safe size limit".to_string(),
+        ));
+    }
+    Ok(bytes)
+}
+
 impl PaymentProvider for YooKassaProvider {
     fn create_payment(
         &self,
@@ -252,7 +285,7 @@ impl PaymentProvider for YooKassaProvider {
                 order_id: request.order_id.to_string(),
             },
         };
-        let endpoint = format!("{}/v3/payments", self.api_base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v3/payments", self.validated_api_base_url()?);
         let response = self
             .authenticated_client()?
             .post(endpoint)
@@ -262,9 +295,7 @@ impl PaymentProvider for YooKassaProvider {
             .send()
             .map_err(|error| ProviderError::Transport(error.to_string()))?;
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .map_err(|error| ProviderError::Transport(error.to_string()))?;
+        let bytes = read_response_limited(response)?;
         if !status.is_success() {
             let body = String::from_utf8_lossy(&bytes);
             return Err(ProviderError::Transport(format!(
@@ -555,4 +586,20 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ProviderError::Transport(_)));
     }
+
+    #[test]
+    fn arbitrary_remote_api_origin_is_rejected_before_credentials_are_sent() {
+        let mut provider = provider();
+        provider.api_base_url = "https://evil.example".to_string();
+        let error = provider
+            .create_payment(CreatePaymentRequest {
+                order_id: Uuid::nil(),
+                amount_rub: 100,
+                description: "test".to_string(),
+                return_url: None,
+            })
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::Transport(_)));
+    }
+
 }

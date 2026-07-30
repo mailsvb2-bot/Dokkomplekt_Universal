@@ -1,11 +1,14 @@
+use crate::order_access::generate_order_access_token;
 use crate::provider_manual::ManualProvider;
 use crate::provider_sbp::SbpProvider;
 use crate::provider_yookassa::YooKassaProvider;
 use crate::providers::{CreatePaymentRequest, CreatePaymentResponse, PaymentProvider};
 use crate::state::{AppState, OrderRecord, OrderStatus};
 use crate::storage::StoreError;
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use crate::traffic_guard::{ClientIp, RateLimitScope};
+use axum::{extract::{Extension, State}, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -24,6 +27,7 @@ pub struct CreateOrderResponse {
     pub amount_rub: u64,
     pub payment_url: String,
     pub qr_url: String,
+    pub order_access_token: String,
 }
 
 pub fn router() -> Router<AppState> {
@@ -31,9 +35,18 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn create_order(
+    Extension(client_ip): Extension<ClientIp>,
     State(state): State<AppState>,
     Json(request): Json<CreateOrderRequest>,
 ) -> Result<Json<CreateOrderResponse>, StatusCode> {
+    if !state.traffic_guard.check(
+        client_ip.0,
+        RateLimitScope::OrderCreation,
+        state.config.order_create_limit_per_hour,
+        Duration::from_secs(60 * 60),
+    ) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
     let plan = normalize_order_plan(&request.plan).ok_or(StatusCode::BAD_REQUEST)?;
     let amount_rub = tariff_amount_rub(plan).ok_or(StatusCode::BAD_REQUEST)?;
     if matches!(request.amount_rub, Some(client_amount) if client_amount != amount_rub) {
@@ -44,15 +57,18 @@ async fn create_order(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .filter(|value| value.len() <= 256 && !value.chars().any(char::is_control))
         .map(str::to_string)
         .ok_or(StatusCode::BAD_REQUEST)?;
     let order_id = Uuid::new_v4();
+    let (order_access_token, access_token_hash) = generate_order_access_token();
     let record = OrderRecord {
         id: order_id,
         plan: plan.to_string(),
         amount_rub,
         status: OrderStatus::WaitingPayment,
         machine_hash: Some(machine_hash),
+        access_token_hash: Some(access_token_hash),
         created_at: OffsetDateTime::now_utc(),
     };
     state
@@ -63,7 +79,13 @@ async fn create_order(
     let provider = state.config.payment_provider.clone();
     let payment = create_provider_payment(&state, &record)
         .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        .map_err(|error| match error {
+            ProviderCallError::Busy => StatusCode::TOO_MANY_REQUESTS,
+            ProviderCallError::Provider(message) => {
+                tracing::warn!(order_id = %order_id, error = %message, "payment provider call failed");
+                StatusCode::BAD_GATEWAY
+            }
+        })?;
     Ok(Json(CreateOrderResponse {
         order_id,
         status: record.status,
@@ -71,13 +93,20 @@ async fn create_order(
         amount_rub,
         payment_url: payment.confirmation_url,
         qr_url: payment.qr_url.unwrap_or_default(),
+        order_access_token,
     }))
+}
+
+#[derive(Debug)]
+enum ProviderCallError {
+    Busy,
+    Provider(String),
 }
 
 async fn create_provider_payment(
     state: &AppState,
     order: &OrderRecord,
-) -> Result<CreatePaymentResponse, String> {
+) -> Result<CreatePaymentResponse, ProviderCallError> {
     let request = CreatePaymentRequest {
         order_id: order.id,
         amount_rub: order.amount_rub,
@@ -93,23 +122,31 @@ async fn create_provider_payment(
             public_base_url: state.config.public_base_url.clone(),
         }
         .create_payment(request)
-        .map_err(|error| error.to_string()),
+        .map_err(|error| ProviderCallError::Provider(error.to_string())),
         "sbp" => SbpProvider {
             public_base_url: state.config.public_base_url.clone(),
         }
         .create_payment(request)
-        .map_err(|error| error.to_string()),
+        .map_err(|error| ProviderCallError::Provider(error.to_string())),
         "yookassa" => {
+            let permit = state
+                .provider_gate
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| ProviderCallError::Busy)?;
             let provider = YooKassaProvider {
                 public_base_url: state.config.public_base_url.clone(),
                 api_base_url: state.config.yookassa_api_base_url.clone(),
                 shop_id: state.config.yookassa_shop_id.clone().unwrap_or_default(),
                 secret_key: state.config.yookassa_secret_key.clone().unwrap_or_default(),
             };
-            tokio::task::spawn_blocking(move || provider.create_payment(request))
-                .await
-                .map_err(|error| format!("YooKassa task failed: {error}"))?
-                .map_err(|error| error.to_string())
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                provider.create_payment(request)
+            })
+            .await
+            .map_err(|error| ProviderCallError::Provider(format!("YooKassa task failed: {error}")))?
+            .map_err(|error| ProviderCallError::Provider(error.to_string()))
         }
         "bank_invoice" => Ok(CreatePaymentResponse {
             provider: crate::providers::ProviderKind::BankInvoice,
@@ -121,7 +158,9 @@ async fn create_provider_payment(
             ),
             qr_url: None,
         }),
-        other => Err(format!("unsupported payment provider: {other}")),
+        other => Err(ProviderCallError::Provider(format!(
+            "unsupported payment provider: {other}"
+        ))),
     }
 }
 

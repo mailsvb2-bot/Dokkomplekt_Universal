@@ -10,7 +10,7 @@ const DEFAULT_PRIVACY: PrivacyPreferences = {
   copy_source_to_output: false,
   write_trust_report: true,
   include_values_in_trust_report: false,
-  temp_retention_hours: 4,
+  temp_retention_hours: 0,
   archive_processed_sources: true,
   archive_folder_name: '_обработано',
   service_note_retention_days: 30,
@@ -101,7 +101,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
     const normalized = {
       ...privacy,
       archive_folder_name: privacy.archive_folder_name.trim() || '_обработано',
-      temp_retention_hours: Math.max(1, Math.min(720, Math.trunc(privacy.temp_retention_hours || 24))),
+      temp_retention_hours: Math.max(0, Math.min(720, Math.trunc(privacy.temp_retention_hours ?? 0))),
       service_note_retention_days: Math.max(1, Math.min(3650, Math.trunc(privacy.service_note_retention_days || 30))),
       processed_marker_retention_days: Math.max(1, Math.min(3650, Math.trunc(privacy.processed_marker_retention_days || 7))),
       archived_source_retention_days: Math.max(0, Math.min(3650, Math.trunc(privacy.archived_source_retention_days || 0))),
@@ -380,7 +380,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       <label><input type="checkbox" checked={privacy.copy_source_to_output} onChange={e => setPrivacy({ ...privacy, copy_source_to_output: e.target.checked })}/> копировать первичный источник в готовый комплект</label>
       <label><input type="checkbox" checked={privacy.write_trust_report} onChange={e => setPrivacy({ ...privacy, write_trust_report: e.target.checked })}/> создавать локальный отчёт проверяемости</label>
       <label><input type="checkbox" checked={privacy.include_values_in_trust_report} onChange={e => setPrivacy({ ...privacy, include_values_in_trust_report: e.target.checked })}/> включать значения полей в отчёт</label>
-      <label>Хранить временные источники, часов<input type="number" min={1} max={720} value={privacy.temp_retention_hours} onChange={e => setPrivacy({ ...privacy, temp_retention_hours: Number(e.target.value) })}/></label>
+      <label>Хранить временные источники, часов<input type="number" min={0} max={720} value={privacy.temp_retention_hours} onChange={e => setPrivacy({ ...privacy, temp_retention_hours: Number(e.target.value) })}/></label>
       <label><input type="checkbox" checked={privacy.archive_processed_sources} onChange={e => setPrivacy({ ...privacy, archive_processed_sources: e.target.checked })}/> перемещать успешно обработанные источники из рабочей папки в архив</label>
       <label>Подпапка архива<input value={privacy.archive_folder_name} onChange={e => setPrivacy({ ...privacy, archive_folder_name: e.target.value })} placeholder="_обработано" /></label>
       <label>Архивировать служебные заметки через, дней<input type="number" min={1} max={3650} value={privacy.service_note_retention_days} onChange={e => setPrivacy({ ...privacy, service_note_retention_days: Number(e.target.value) })}/></label>

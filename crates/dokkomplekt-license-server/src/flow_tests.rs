@@ -1,7 +1,7 @@
 use super::{build_app, config::ServerConfig, state::AppState};
 use axum::{
     body::{to_bytes, Body},
-    http::{header::CONTENT_TYPE, Method, Request, StatusCode},
+    http::{header::{AUTHORIZATION, CONTENT_TYPE}, Method, Request, StatusCode},
     Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -28,6 +28,12 @@ fn config(database_url: Option<String>) -> ServerConfig {
         yookassa_shop_id: None,
         yookassa_secret_key: None,
         yookassa_api_base_url: "https://api.yookassa.ru".to_string(),
+        global_concurrency_limit: 128,
+        provider_concurrency_limit: 8,
+        request_timeout_seconds: 30,
+        order_create_limit_per_hour: 1000,
+        order_access_limit_per_minute: 1000,
+        provider_callback_limit_per_minute: 1000,
     }
 }
 
@@ -38,6 +44,38 @@ async fn call(
     body: Option<Value>,
 ) -> (StatusCode, Value) {
     let mut builder = Request::builder().method(method).uri(uri);
+    let request_body = match body {
+        Some(value) => {
+            builder = builder.header(CONTENT_TYPE, "application/json");
+            Body::from(value.to_string())
+        }
+        None => Body::empty(),
+    };
+    let response = app
+        .oneshot(builder.body(request_body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, body)
+}
+
+async fn call_authorized(
+    app: Router,
+    method: Method,
+    uri: String,
+    body: Option<Value>,
+    access_token: &str,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {access_token}"));
     let request_body = match body {
         Some(value) => {
             builder = builder.header(CONTENT_TYPE, "application/json");
@@ -83,6 +121,7 @@ async fn emulate(
     .await;
     assert_eq!(status, StatusCode::OK);
     let order_id = order["order_id"].as_str().unwrap().to_string();
+    let access_token = order["order_access_token"].as_str().unwrap().to_string();
     assert_eq!(order["status"], "waiting_payment");
 
     let event_id = format!("evt-{order_id}");
@@ -108,43 +147,47 @@ async fn emulate(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payment["duplicate"], true);
 
-    let (status, state) = call(
+    let (status, state) = call_authorized(
         app.clone(),
         Method::GET,
         format!("/api/orders/{order_id}/status"),
         None,
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["status"], "paid");
 
-    let (status, activation) = call(
+    let (status, activation) = call_authorized(
         app.clone(),
         Method::POST,
         format!("/api/orders/{order_id}/activate-machine"),
         Some(json!({ "machine_hash": "machine-a" })),
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(activation["status"], "paid");
     let first_activation_id = activation["activation_id"].as_str().unwrap().to_string();
 
-    let (status, repeated_activation) = call(
+    let (status, repeated_activation) = call_authorized(
         app.clone(),
         Method::POST,
         format!("/api/orders/{order_id}/activate-machine"),
         Some(json!({ "machine_hash": "machine-a" })),
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(repeated_activation["activation_id"], first_activation_id);
     assert_eq!(repeated_activation["message"], "already_activated");
 
-    let (status, second_activation) = call(
+    let (status, second_activation) = call_authorized(
         app.clone(),
         Method::POST,
         format!("/api/orders/{order_id}/activate-machine"),
         Some(json!({ "machine_hash": "machine-b" })),
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -170,11 +213,12 @@ async fn emulate(
         json!(["machine-a", "machine-b"])
     );
 
-    let (status, state) = call(
+    let (status, state) = call_authorized(
         app.clone(),
         Method::GET,
         format!("/api/orders/{order_id}/status"),
         None,
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);

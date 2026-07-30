@@ -1,10 +1,10 @@
 //! Privacy-preserving ground-truth corpus records.
 //!
-//! A corpus entry is written only after the specialist's final case and the
-//! actually generated document set are known. Raw source text and raw field
-//! values are never stored here: comparisons use domain-separated SHA-256
-//! fingerprints, while confidence/provenance/evidence metadata remain useful
-//! for calibration and promotion decisions.
+//! Corpus entries may describe either specialist-confirmed outcomes or zero-touch
+//! shadow observations. The acceptance source is persisted explicitly; downstream
+//! promotion code must accept only `SpecialistConfirmed`. Raw source text and raw
+//! field values are never stored here: comparisons use domain-separated SHA-256
+//! fingerprints, while confidence/provenance/evidence metadata remain useful.
 
 use crate::{DomainKind, SemanticCase, SemanticValue, ValueSource};
 use hmac::{Hmac, Mac};
@@ -20,6 +20,15 @@ pub struct FieldObservation {
     pub confidence: f32,
     #[serde(default)]
     pub evidence_sha256: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CorpusAcceptanceSource {
+    SpecialistConfirmed,
+    ZeroTouchShadow,
+    #[default]
+    LegacyUnverified,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,11 +48,15 @@ pub struct CorpusEntry {
     #[serde(default)]
     pub final_accepted: Vec<FieldObservation>,
     #[serde(default)]
+    pub field_acceptance_source: CorpusAcceptanceSource,
+    #[serde(default)]
     pub proposed_kit_documents: Vec<String>,
     #[serde(default)]
     pub kit_proposal_source: Option<String>,
     #[serde(default)]
     pub kit_documents: Vec<String>,
+    #[serde(default)]
+    pub kit_acceptance_source: CorpusAcceptanceSource,
     pub created_at: String,
 }
 
@@ -77,9 +90,11 @@ pub struct CorpusEntryRequest<'a> {
     pub model_case: &'a SemanticCase,
     pub deterministic_case: &'a SemanticCase,
     pub final_case: &'a SemanticCase,
+    pub field_acceptance_source: CorpusAcceptanceSource,
     pub proposed_kit_documents: Vec<String>,
     pub kit_proposal_source: Option<String>,
     pub kit_documents: Vec<String>,
+    pub kit_acceptance_source: CorpusAcceptanceSource,
     pub created_at: String,
 }
 
@@ -116,12 +131,14 @@ pub fn build_corpus_entry(request: CorpusEntryRequest<'_>) -> Result<CorpusEntry
             request.fingerprint_key,
         )?,
         final_accepted: observations(request.final_case, None, request.fingerprint_key)?,
+        field_acceptance_source: request.field_acceptance_source,
         proposed_kit_documents,
         kit_proposal_source: request
             .kit_proposal_source
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
         kit_documents,
+        kit_acceptance_source: request.kit_acceptance_source,
         created_at: request.created_at,
     })
 }
@@ -304,9 +321,11 @@ mod tests {
             model_case: &model,
             deterministic_case: &deterministic,
             final_case: &model,
+            field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             proposed_kit_documents: vec!["employment_contract".into()],
             kit_proposal_source: Some("curated-router".into()),
             kit_documents: vec!["employment_contract".into()],
+            kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             created_at: "2026-07-21T12:00:00Z".into(),
         })
         .unwrap();
@@ -350,9 +369,11 @@ mod tests {
             model_case: &model,
             deterministic_case: &deterministic,
             final_case: &final_case,
+            field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             proposed_kit_documents: Vec::new(),
             kit_proposal_source: None,
             kit_documents: Vec::new(),
+            kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             created_at: "2026-07-21T12:00:00Z".into(),
         })
         .unwrap();
@@ -388,9 +409,11 @@ mod tests {
             model_case: &model_case,
             deterministic_case: &deterministic_case,
             final_case: &case,
+            field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             proposed_kit_documents: Vec::new(),
             kit_proposal_source: None,
             kit_documents: Vec::new(),
+            kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             created_at: "2026-07-21T12:00:00Z".into(),
         })
         .unwrap();
@@ -406,9 +429,11 @@ mod tests {
             model_case: &model_case,
             deterministic_case: &deterministic_case,
             final_case: &case,
+            field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             proposed_kit_documents: Vec::new(),
             kit_proposal_source: None,
             kit_documents: Vec::new(),
+            kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             created_at: "2026-07-21T12:00:00Z".into(),
         })
         .unwrap();

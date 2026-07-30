@@ -1,7 +1,7 @@
 use super::{build_app, config::ServerConfig, state::AppState, storage::PostgresStore};
 use axum::{
     body::{to_bytes, Body},
-    http::{header::CONTENT_TYPE, Method, Request, StatusCode},
+    http::{header::{AUTHORIZATION, CONTENT_TYPE}, Method, Request, StatusCode},
     Router,
 };
 use postgres::{Client, NoTls};
@@ -28,6 +28,12 @@ fn base_config(database_url: Option<String>) -> ServerConfig {
         yookassa_shop_id: None,
         yookassa_secret_key: None,
         yookassa_api_base_url: "https://api.yookassa.ru".to_string(),
+        global_concurrency_limit: 128,
+        provider_concurrency_limit: 8,
+        request_timeout_seconds: 30,
+        order_create_limit_per_hour: 1000,
+        order_access_limit_per_minute: 1000,
+        provider_callback_limit_per_minute: 1000,
     }
 }
 
@@ -38,6 +44,38 @@ async fn call(
     body: Option<Value>,
 ) -> (StatusCode, Value) {
     let mut builder = Request::builder().method(method).uri(uri);
+    let request_body = match body {
+        Some(value) => {
+            builder = builder.header(CONTENT_TYPE, "application/json");
+            Body::from(value.to_string())
+        }
+        None => Body::empty(),
+    };
+    let response = app
+        .oneshot(builder.body(request_body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, body)
+}
+
+async fn call_authorized(
+    app: Router,
+    method: Method,
+    uri: String,
+    body: Option<Value>,
+    access_token: &str,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {access_token}"));
     let request_body = match body {
         Some(value) => {
             builder = builder.header(CONTENT_TYPE, "application/json");
@@ -101,6 +139,7 @@ async fn assert_order_payment_activation_flow(
     .await;
     assert_eq!(status, StatusCode::OK);
     let order_id = order["order_id"].as_str().unwrap().to_string();
+    let access_token = order["order_access_token"].as_str().unwrap().to_string();
     assert_eq!(order["status"], "waiting_payment");
 
     let event_id = format!("evt-{order_id}");
@@ -126,25 +165,144 @@ async fn assert_order_payment_activation_flow(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["duplicate"], true);
 
-    let (status, body) = call(
+    let (status, body) = call_authorized(
+        app.clone(),
+        Method::GET,
+        format!("/api/orders/{order_id}/status"),
+        None,
+        &access_token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "paid");
+
+    let (status, body) = call_authorized(
+        app.clone(),
+        Method::POST,
+        format!("/api/orders/{order_id}/activate-machine"),
+        Some(json!({ "machine_hash": "machine-a" })),
+        &access_token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "paid");
+}
+
+#[tokio::test]
+async fn order_status_and_activation_require_the_per_order_bearer_token() {
+    let app = build_app(AppState::try_new(base_config(None)).unwrap());
+    let (status, order) = call(
+        app.clone(),
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-owner" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let order_id = order["order_id"].as_str().unwrap();
+    let token = order["order_access_token"].as_str().unwrap();
+
+    let (status, _) = call(
         app.clone(),
         Method::GET,
         format!("/api/orders/{order_id}/status"),
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "paid");
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    let (status, body) = call(
+    let (status, _) = call_authorized(
         app.clone(),
-        Method::POST,
-        format!("/api/orders/{order_id}/activate-machine"),
-        Some(json!({ "machine_hash": "machine-a" })),
+        Method::GET,
+        format!("/api/orders/{order_id}/status"),
+        None,
+        "wrong-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _) = call_authorized(
+        app,
+        Method::GET,
+        format!("/api/orders/{order_id}/status"),
+        None,
+        token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["status"], "paid");
+}
+
+#[tokio::test]
+async fn first_activation_cannot_be_redirected_to_another_machine() {
+    let app = build_app(AppState::try_new(base_config(None)).unwrap());
+    let (status, order) = call(
+        app.clone(),
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-owner" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let order_id = order["order_id"].as_str().unwrap().to_string();
+    let token = order["order_access_token"].as_str().unwrap().to_string();
+    let callback = json!({
+        "order_id": order_id,
+        "provider_event_id": format!("paid-{order_id}"),
+        "provider_payment_id": "pay-owner",
+        "provider": "manual",
+        "status": "succeeded",
+        "amount_rub": 3900,
+        "callback_secret": "test-callback-secret"
+    });
+    assert_eq!(
+        call(
+            app.clone(),
+            Method::POST,
+            "/api/provider/callback".to_string(),
+            Some(callback),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, _) = call_authorized(
+        app.clone(),
+        Method::POST,
+        format!("/api/orders/{order_id}/activate-machine"),
+        Some(json!({ "machine_hash": "machine-attacker" })),
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call_authorized(
+        app,
+        Method::POST,
+        format!("/api/orders/{order_id}/activate-machine"),
+        Some(json!({ "machine_hash": "machine-owner" })),
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn order_creation_rate_limit_is_enforced_without_touching_tests_or_prices() {
+    let mut config = base_config(None);
+    config.order_create_limit_per_hour = 1;
+    let app = build_app(AppState::try_new(config).unwrap());
+    let request = Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-a" }));
+    assert_eq!(
+        call(app.clone(), Method::POST, "/api/orders".to_string(), request.clone())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(app, Method::POST, "/api/orders".to_string(), request)
+            .await
+            .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 #[tokio::test]
@@ -233,10 +391,23 @@ fn postgres_runtime_migration_records_schema_version_when_database_url_is_presen
     let store = PostgresStore::connect(&database_url).unwrap();
     assert_eq!(store.pool_size(), 4);
     let mut client = Client::connect(&database_url, NoTls).unwrap();
-    let row = client.query_one("SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_license_schema'), checksum FROM schema_migrations WHERE version = '0001_license_schema'", &[]).unwrap();
-    let applied: bool = row.get(0);
-    let checksum: String = row.get(1);
-    assert!(applied);
-    assert_eq!(checksum.len(), 64);
-    assert!(checksum.chars().all(|value| value.is_ascii_hexdigit()));
+    for version in ["0001_license_schema", "0002_order_access_token"] {
+        let row = client
+            .query_one(
+                "SELECT checksum FROM schema_migrations WHERE version = $1",
+                &[&version],
+            )
+            .unwrap();
+        let checksum: String = row.get(0);
+        assert_eq!(checksum.len(), 64);
+        assert!(checksum.chars().all(|value| value.is_ascii_hexdigit()));
+    }
+    let access_token_column: bool = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'license_orders' AND column_name = 'access_token_hash')",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert!(access_token_column);
 }

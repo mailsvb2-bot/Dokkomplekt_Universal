@@ -34,6 +34,8 @@ const MAX_ARCHIVE_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_DEPTH: usize = 3;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_LAYOUT_ITEMS: usize = 20_000;
+const ACTIVE_SESSION_MARKER: &str = ".active";
+const ACTIVE_SESSION_GRACE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IntakeCapability {
@@ -82,6 +84,87 @@ pub struct NormalizedSource {
     pub warnings: Vec<String>,
     pub processed_files: Vec<PathBuf>,
     pub layout_items: Vec<NormalizedLayoutItem>,
+}
+
+#[derive(Debug)]
+pub struct UploadedSourceSession {
+    source: Option<NormalizedSource>,
+    root: PathBuf,
+}
+
+impl UploadedSourceSession {
+    pub fn original_path(&self) -> Result<PathBuf, String> {
+        self.source
+            .as_ref()
+            .and_then(|source| source.processed_files.first().cloned())
+            .or_else(|| {
+                std::fs::read_dir(&self.root)
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .find(|path| {
+                        path.file_name()
+                            .and_then(|value| value.to_str())
+                            .is_some_and(|name| name != ACTIVE_SESSION_MARKER)
+                    })
+            })
+            .ok_or_else(|| "Временная сессия не содержит исходный файл.".to_string())
+    }
+
+    pub fn source(&self) -> Result<&NormalizedSource, String> {
+        self.source
+            .as_ref()
+            .ok_or_else(|| "Временный источник уже был извлечён из сессии.".to_string())
+    }
+
+    pub fn take_source(&mut self) -> Result<NormalizedSource, String> {
+        self.source
+            .take()
+            .ok_or_else(|| "Временный источник уже был извлечён из сессии.".to_string())
+    }
+
+    #[cfg(test)]
+    fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Drop for UploadedSourceSession {
+    fn drop(&mut self) {
+        let _ = remove_sensitive_session(&self.root);
+    }
+}
+
+#[derive(Debug)]
+pub struct RetainedUploadedSource {
+    file_name: String,
+    bytes: Vec<u8>,
+}
+
+impl RetainedUploadedSource {
+    pub fn new(file_name: &str, bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_UPLOAD_BYTES {
+            return Err("Источник превышает безопасный предел 100 МБ.".to_string());
+        }
+        Ok(Self {
+            file_name: safe_file_name(file_name),
+            bytes: bytes.to_vec(),
+        })
+    }
+
+    pub fn virtual_path(&self) -> String {
+        format!("dokkomplekt-upload://current/{}", self.file_name)
+    }
+
+    pub fn materialize(&self, workspace: &Path) -> Result<UploadedSourceSession, String> {
+        materialize_sensitive_file(&self.file_name, &self.bytes, workspace)
+    }
+}
+
+impl Drop for RetainedUploadedSource {
+    fn drop(&mut self) {
+        self.bytes.fill(0);
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -340,8 +423,11 @@ pub fn cleanup_workspace(workspace: &Path, max_age: Duration) -> Result<usize, S
     let mut removed = 0usize;
     for entry in std::fs::read_dir(workspace).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
-        let metadata =
-            std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_dir() && active_session_is_recent(&path, now) {
+            continue;
+        }
         let old_enough = metadata
             .modified()
             .ok()
@@ -350,7 +436,6 @@ pub fn cleanup_workspace(workspace: &Path, max_age: Duration) -> Result<usize, S
         if !old_enough {
             continue;
         }
-        let path = entry.path();
         let result = if metadata.file_type().is_dir() {
             std::fs::remove_dir_all(&path)
         } else {
@@ -363,19 +448,96 @@ pub fn cleanup_workspace(workspace: &Path, max_age: Duration) -> Result<usize, S
     Ok(removed)
 }
 
+fn active_session_is_recent(path: &Path, now: std::time::SystemTime) -> bool {
+    let marker = path.join(ACTIVE_SESSION_MARKER);
+    std::fs::symlink_metadata(marker)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age < ACTIVE_SESSION_GRACE)
+}
+
+fn create_sensitive_session(workspace: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
+    let root = workspace.join(format!("session-{}", Uuid::new_v4()));
+    std::fs::create_dir(&root).map_err(|error| {
+        format!("Не удалось создать защищённую временную сессию: {error}")
+    })?;
+    restrict_directory_permissions(&root)?;
+    let marker = root.join(ACTIVE_SESSION_MARKER);
+    std::fs::write(&marker, b"active")
+        .map_err(|error| format!("Не удалось создать маркер временной сессии: {error}"))?;
+    restrict_file_permissions(&marker)?;
+    Ok(root)
+}
+
+#[cfg(unix)]
+fn restrict_directory_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("Не удалось ограничить доступ к временной папке: {error}"))
+}
+
+#[cfg(not(unix))]
+fn restrict_directory_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_file_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("Не удалось ограничить доступ к временному файлу: {error}"))
+}
+
+#[cfg(not(unix))]
+fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn remove_sensitive_session(root: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        std::fs::remove_file(root).map_err(|error| error.to_string())
+    } else {
+        std::fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+}
+
+pub fn materialize_sensitive_file(
+    file_name: &str,
+    bytes: &[u8],
+    workspace: &Path,
+) -> Result<UploadedSourceSession, String> {
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err("Источник превышает безопасный предел 100 МБ.".to_string());
+    }
+    let root = create_sensitive_session(workspace)?;
+    let session = UploadedSourceSession { source: None, root };
+    let safe_name = safe_file_name(file_name);
+    let path = session.root.join(safe_name);
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("Не удалось сохранить источник во временную папку: {error}"))?;
+    restrict_file_permissions(&path)?;
+    Ok(session)
+}
+
 pub fn normalize_uploaded_bytes(
     file_name: &str,
     bytes: &[u8],
     workspace: &Path,
-) -> Result<NormalizedSource, String> {
-    std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
-    let safe_name = safe_file_name(file_name);
-    let path = workspace.join(format!("{}-{safe_name}", Uuid::new_v4()));
-    std::fs::write(&path, bytes)
-        .map_err(|error| format!("Не удалось сохранить источник во временную папку: {error}"))?;
-    let mut normalized = normalize_path(&path, workspace, 0)?;
+) -> Result<UploadedSourceSession, String> {
+    let mut session = materialize_sensitive_file(file_name, bytes, workspace)?;
+    let path = session.original_path()?;
+    let mut normalized = normalize_path(&path, &session.root, 0)?;
     normalized.processed_files.insert(0, path);
-    Ok(normalized)
+    session.source = Some(normalized);
+    Ok(session)
 }
 
 pub fn normalize_path(
@@ -2249,13 +2411,12 @@ pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, 
         let extension = web_extension(&final_url, &content_type).ok_or_else(|| {
             format!("Тип ответа «{content_type}» пока нельзя безопасно нормализовать.")
         })?;
-        std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
-        let path = workspace.join(format!("web-{}.{}", Uuid::new_v4(), extension));
-        std::fs::write(&path, &bytes)
-            .map_err(|error| format!("Не удалось сохранить HTTPS-источник: {error}"))?;
-        let normalized = normalize_path(&path, workspace, 0);
-        let _ = std::fs::remove_file(&path);
-        let normalized = normalized?;
+        let mut session = normalize_uploaded_bytes(
+            &format!("web-source.{extension}"),
+            &bytes,
+            workspace,
+        )?;
+        let normalized = session.take_source()?;
         warnings.extend(normalized.warnings);
         normalized.text
     };
@@ -3307,4 +3468,62 @@ Symbolic Link = ../../secret
         assert_eq!(entries[0].size, 12);
         assert!(entries[1].link_like);
     }
+
+    #[test]
+    fn uploaded_source_session_deletes_plaintext_on_successful_drop() {
+        let workspace = std::env::temp_dir().join(format!("dkk-intake-{}", Uuid::new_v4()));
+        let root = {
+            let mut session = normalize_uploaded_bytes("patient.txt", b"secret medical data", &workspace)
+                .expect("session");
+            let root = session.root().to_path_buf();
+            assert!(root.join("patient.txt").is_file());
+            let source = session.take_source().expect("source");
+            assert!(source.text.contains("secret medical data"));
+            root
+        };
+        assert!(!root.exists());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn uploaded_source_session_deletes_plaintext_after_parse_error() {
+        let workspace = std::env::temp_dir().join(format!("dkk-intake-{}", Uuid::new_v4()));
+        let result = normalize_uploaded_bytes("patient.unknown", b"secret", &workspace);
+        assert!(result.is_err());
+        let entries = std::fs::read_dir(&workspace)
+            .map(|items| items.count())
+            .unwrap_or_default();
+        assert_eq!(entries, 0);
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn cleanup_never_removes_a_live_sensitive_session() {
+        let workspace = std::env::temp_dir().join(format!("dkk-intake-{}", Uuid::new_v4()));
+        let session = normalize_uploaded_bytes("patient.txt", b"secret", &workspace).unwrap();
+        assert_eq!(cleanup_workspace(&workspace, Duration::ZERO).unwrap(), 0);
+        assert!(session.root().exists());
+        drop(session);
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+
+    #[test]
+    fn retained_source_uses_virtual_path_and_materializes_only_inside_raii_session() {
+        let workspace = std::env::temp_dir().join(format!("dkk-retained-{}", Uuid::new_v4()));
+        let retained = RetainedUploadedSource::new("patient.docx", b"not-a-real-docx").unwrap();
+        assert_eq!(
+            retained.virtual_path(),
+            "dokkomplekt-upload://current/patient.docx"
+        );
+        let root = {
+            let session = retained.materialize(&workspace).unwrap();
+            let root = session.root().to_path_buf();
+            assert!(session.original_path().unwrap().is_file());
+            root
+        };
+        assert!(!root.exists());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
 }

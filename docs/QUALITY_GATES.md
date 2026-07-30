@@ -16,3 +16,14 @@ with `--locked`. Packaging still requires the signed Cargo/RustSec/Windows evide
 checked by `scripts/assert_release_ready.py`.
 
 A green source gate is never evidence of a releasable installer.
+
+## License-server lock and trust-boundary tests
+
+The Rust test suite contains concurrent activation tests under one in-memory write
+lock and, when `DATABASE_URL` is available, across the real PostgreSQL connection
+pool. These tests must prove that contention cannot exceed the machine-slot limit.
+HTTP integration tests also require the per-order bearer token, verify first-machine
+binding, enforce monotonic payment states and exercise request-rate limits.
+
+Production YooKassa configuration is pinned to `https://api.yookassa.ru`; only
+loopback mock origins are accepted outside production.

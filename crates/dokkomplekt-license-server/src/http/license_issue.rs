@@ -1,14 +1,16 @@
 use crate::issuer::{issue_license, IssueLicenseInput};
 use crate::state::{AppState, OrderStatus};
 use crate::storage::{LicenseRecord, StoreError};
+use crate::traffic_guard::{ClientIp, RateLimitScope};
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     routing::post,
     Json, Router,
 };
 use dokkomplekt_license_core::models::{LicenseDocument, PlanId};
 use serde::Deserialize;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -24,12 +26,32 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn issue_for_order(
+    Extension(client_ip): Extension<ClientIp>,
     State(state): State<AppState>,
     Path(order_id): Path<Uuid>,
     Json(request): Json<IssueRequest>,
 ) -> Result<Json<LicenseDocument>, StatusCode> {
+    if !state.traffic_guard.check(
+        client_ip.0,
+        RateLimitScope::LicenseIssue,
+        state.config.order_access_limit_per_minute,
+        Duration::from_secs(60),
+    ) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
     let requested_machine = request.machine_hash.trim();
-    if requested_machine.is_empty() {
+    if requested_machine.is_empty()
+        || requested_machine.len() > 256
+        || requested_machine.chars().any(char::is_control)
+        || request
+            .owner_name
+            .as_deref()
+            .is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control))
+        || request
+            .organization_name
+            .as_deref()
+            .is_some_and(|value| value.len() > 256 || value.chars().any(char::is_control))
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     if !issue_token_matches(

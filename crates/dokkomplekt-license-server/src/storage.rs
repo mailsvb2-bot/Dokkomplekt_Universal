@@ -355,6 +355,47 @@ impl LicenseStore for StoreBackend {
     }
 }
 
+pub(crate) fn order_status_after_payment(
+    current: &OrderStatus,
+    payment: &PaymentEventStatus,
+) -> Result<OrderStatus, StoreError> {
+    match payment {
+        PaymentEventStatus::Succeeded => match current {
+            OrderStatus::Draft | OrderStatus::WaitingPayment => Ok(OrderStatus::Paid),
+            OrderStatus::Paid => Ok(OrderStatus::Paid),
+            OrderStatus::LicenseIssued => Ok(OrderStatus::LicenseIssued),
+            OrderStatus::Cancelled => Err(StoreError::Invalid(
+                "payment_succeeded_after_cancellation".to_string(),
+            )),
+        },
+        PaymentEventStatus::Pending => Ok(current.clone()),
+        PaymentEventStatus::Cancelled | PaymentEventStatus::Rejected => match current {
+            OrderStatus::Draft | OrderStatus::WaitingPayment => Ok(OrderStatus::Cancelled),
+            OrderStatus::Paid => Ok(OrderStatus::Paid),
+            OrderStatus::LicenseIssued => Ok(OrderStatus::LicenseIssued),
+            OrderStatus::Cancelled => Ok(OrderStatus::Cancelled),
+        },
+    }
+}
+
+pub(crate) fn validate_order_status_transition(
+    current: &OrderStatus,
+    requested: &OrderStatus,
+) -> Result<(), StoreError> {
+    let allowed = current == requested
+        || matches!(
+            (current, requested),
+            (OrderStatus::Draft, OrderStatus::WaitingPayment)
+                | (OrderStatus::Draft, OrderStatus::Cancelled)
+                | (OrderStatus::WaitingPayment, OrderStatus::Paid)
+                | (OrderStatus::WaitingPayment, OrderStatus::Cancelled)
+                | (OrderStatus::Paid, OrderStatus::LicenseIssued)
+        );
+    allowed
+        .then_some(())
+        .ok_or_else(|| StoreError::Invalid("non_monotonic_order_status_transition".to_string()))
+}
+
 fn issue_license_for_memory(
     store: &Arc<RwLock<MemoryStore>>,
     record: LicenseRecord,
@@ -442,6 +483,7 @@ mod tests {
             amount_rub: 3900,
             status,
             machine_hash: None,
+            access_token_hash: Some("a".repeat(64)),
             created_at: OffsetDateTime::now_utc(),
         }
     }

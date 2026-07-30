@@ -2110,7 +2110,8 @@ mod tests {
     #[test]
     fn corpus_entries_are_encrypted_and_round_trip_without_raw_values() {
         use dokkomplekt_core::{
-            build_corpus_entry, CorpusEntryRequest, DomainKind, SemanticValue, ValueSource,
+            build_corpus_entry, CorpusAcceptanceSource, CorpusEntryRequest, DomainKind,
+            SemanticValue, ValueSource,
         };
 
         let path = temp_db("corpus");
@@ -2140,9 +2141,11 @@ mod tests {
             model_case: &model_case,
             deterministic_case: &deterministic_case,
             final_case: &final_case,
+            field_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             proposed_kit_documents: vec!["employment_contract".into()],
             kit_proposal_source: Some("curated-router".into()),
             kit_documents: vec!["employment_contract".into()],
+            kit_acceptance_source: CorpusAcceptanceSource::SpecialistConfirmed,
             created_at: "2026-07-21T12:00:00Z".into(),
         })
         .unwrap();

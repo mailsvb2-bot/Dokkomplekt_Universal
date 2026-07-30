@@ -1,13 +1,16 @@
+use crate::order_access::authorize_order;
 use crate::state::{ActivationRecord, AppState, OrderStatus};
 use crate::storage::StoreError;
+use crate::traffic_guard::{ClientIp, RateLimitScope};
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Extension, Path, State},
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use dokkomplekt_license_core::{max_machines_for_plan, PlanId};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -34,15 +37,21 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn order_status(
+    Extension(client_ip): Extension<ClientIp>,
     State(state): State<AppState>,
     Path(order_id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> Result<Json<ActivationResponse>, StatusCode> {
+    enforce_order_access_rate_limit(&state, client_ip)?;
     let order = state
         .store
         .get_order_async(order_id)
         .await
         .map_err(store_error_status)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !authorize_order(&headers, order.access_token_hash.as_deref()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     Ok(Json(ActivationResponse {
         activation_id: Uuid::nil(),
         order_id,
@@ -52,12 +61,18 @@ async fn order_status(
 }
 
 async fn activate_machine(
+    Extension(client_ip): Extension<ClientIp>,
     State(state): State<AppState>,
     Path(order_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(request): Json<ActivateMachineRequest>,
 ) -> Result<Json<ActivationResponse>, StatusCode> {
+    enforce_order_access_rate_limit(&state, client_ip)?;
     let machine_hash = request.machine_hash.trim();
-    if machine_hash.is_empty() {
+    if machine_hash.is_empty()
+        || machine_hash.len() > 256
+        || machine_hash.chars().any(char::is_control)
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
     let order = state
@@ -65,7 +80,10 @@ async fn activate_machine(
         .get_order_async(order_id)
         .await
         .map_err(store_error_status)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !authorize_order(&headers, order.access_token_hash.as_deref()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     if !matches!(order.status, OrderStatus::Paid | OrderStatus::LicenseIssued) {
         return Err(StatusCode::CONFLICT);
     }
@@ -79,7 +97,10 @@ async fn activate_machine(
     };
     let outcome = state
         .store
-        .create_activation_for_order_async(record, max_machines_for_plan(&plan))
+        .create_activation_for_order_async(
+            record,
+            max_machines_for_plan(&plan),
+        )
         .await
         .map_err(store_error_status)?;
     Ok(Json(ActivationResponse {
@@ -92,6 +113,22 @@ async fn activate_machine(
             "slot_available".to_string()
         },
     }))
+}
+
+fn enforce_order_access_rate_limit(
+    state: &AppState,
+    client_ip: ClientIp,
+) -> Result<(), StatusCode> {
+    state
+        .traffic_guard
+        .check(
+            client_ip.0,
+            RateLimitScope::OrderAccess,
+            state.config.order_access_limit_per_minute,
+            Duration::from_secs(60),
+        )
+        .then_some(())
+        .ok_or(StatusCode::TOO_MANY_REQUESTS)
 }
 
 fn store_error_status(error: StoreError) -> StatusCode {

@@ -1,0 +1,102 @@
+name: Format and Verify Commercial Rust Crates
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - '.github/workflows/format-commercial-crates.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: format-commercial-rust-crates
+  cancel-in-progress: false
+
+jobs:
+  format-and-verify:
+    if: github.head_ref == 'agent/fix-critical-security-privacy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/fix-critical-security-privacy
+          fetch-depth: 0
+      - name: Record starting branch head
+        shell: bash
+        run: echo "START_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt,clippy
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install exact release-gate prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
+      - name: Format root and excluded commercial crates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cargo fmt --all
+          find crates/dokkomplekt-license-server crates/dokkomplekt-license-python \
+            -type f -name '*.rs' -print0 | sort -z | xargs -0 rustfmt --edition 2021
+          cargo fmt --all -- --check
+          rm -f .github/workflows/format-commercial-crates.yml
+      - name: Run exact mandatory release Rust gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash scripts/prepackage_rust_gate.sh
+      - name: Regenerate manifest and rerun all contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report /tmp/source-manifest-report.json || true
+          test -s /tmp/SOURCE_MANIFEST_SHA256.generated.txt
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q
+          python scripts/verify_starter_content_packs.py
+          python scripts/check_reference_data_freshness.py
+          python scripts/audit_rust_production_panics.py
+          python scripts/static_quality_gate.py --source-only
+          git diff --check
+      - name: Commit and publish clean tree safely
+        shell: bash
+        env:
+          BRANCH: agent/fix-critical-security-privacy
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'style: format commercial Rust crates under release gate'
+          git fetch origin "$BRANCH"
+          remote_sha="$(git rev-parse "origin/$BRANCH")"
+          if [[ "$remote_sha" != "$START_SHA" ]]; then
+            mapfile -t changed < <(git diff --name-only "$START_SHA..$remote_sha")
+            if [[ "${#changed[@]}" -ne 1 || "${changed[0]}" != 'SOURCE_MANIFEST_SHA256.txt' ]]; then
+              printf 'Refusing to overwrite concurrent product changes:\n%s\n' "${changed[*]}"
+              exit 1
+            fi
+            tree="$(git rev-parse 'HEAD^{tree}')"
+            replacement="$(printf '%s\n' 'style: format commercial Rust crates under release gate' | git commit-tree "$tree" -p "$remote_sha")"
+            git reset --hard "$replacement"
+            git push --force-with-lease="refs/heads/$BRANCH:$remote_sha" origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi

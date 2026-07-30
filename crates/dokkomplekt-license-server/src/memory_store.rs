@@ -2,11 +2,14 @@ use crate::state::{ActivationRecord, MemoryStore, OrderRecord, OrderStatus};
 use crate::storage::{
     order_status_after_payment, validate_access_recovery_input, validate_order_status_transition,
     ActivationIssueOutcome, AuditEventRecord, LicenseRecord, LicenseStore, PaymentEventRecord,
-    PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
+    PaymentEventWriteOutcome, PaymentProvider, StoreError,
 };
 use std::mem::discriminant;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
+
+#[cfg(test)]
+use crate::storage::PaymentEventStatus;
 
 impl LicenseStore for Arc<RwLock<MemoryStore>> {
     fn create_order(&self, record: OrderRecord) -> Result<(), StoreError> {
@@ -307,7 +310,7 @@ mod tests {
         order.access_token_hash = None;
         store.create_order(order).unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(16));
-        let winners = (0..16)
+        let handles = (0..16)
             .map(|index| {
                 let store = store.clone();
                 let barrier = barrier.clone();
@@ -323,6 +326,9 @@ mod tests {
                         .is_ok()
                 })
             })
+            .collect::<Vec<_>>();
+        let winners = handles
+            .into_iter()
             .map(|thread| thread.join().unwrap())
             .filter(|won| *won)
             .count();

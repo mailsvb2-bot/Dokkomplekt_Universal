@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          scripts/prepackage_rust_gate.sh
+          bash scripts/prepackage_rust_gate.sh
       - name: Run complete Python contract wall
         shell: bash
         run: |

@@ -63,6 +63,53 @@ jobs:
           test_import = '\n#[cfg(test)]\nuse crate::storage::PaymentEventStatus;\n'
           if test_import not in text:
               text = text.replace(marker, marker + test_import, 1)
+
+          deadlocked = '''        let winners = (0..16)
+              .map(|index| {
+                  let store = store.clone();
+                  let barrier = barrier.clone();
+                  std::thread::spawn(move || {
+                      barrier.wait();
+                      store
+                          .recover_legacy_order_access(
+                              order_id,
+                              "machine-owner",
+                              &format!("{index:064x}"),
+                              false,
+                          )
+                          .is_ok()
+                  })
+              })
+              .map(|thread| thread.join().unwrap())
+              .filter(|won| *won)
+              .count();
+          '''
+          serialized = '''        let handles = (0..16)
+              .map(|index| {
+                  let store = store.clone();
+                  let barrier = barrier.clone();
+                  std::thread::spawn(move || {
+                      barrier.wait();
+                      store
+                          .recover_legacy_order_access(
+                              order_id,
+                              "machine-owner",
+                              &format!("{index:064x}"),
+                              false,
+                          )
+                          .is_ok()
+                  })
+              })
+              .collect::<Vec<_>>();
+          let winners = handles
+              .into_iter()
+              .map(|thread| thread.join().unwrap())
+              .filter(|won| *won)
+              .count();
+          '''
+          if deadlocked not in text:
+              raise SystemExit('expected concurrent recovery test block was not found')
+          text = text.replace(deadlocked, serialized, 1)
           memory.write_text(text, encoding='utf-8')
 
           Path('scripts/pr28_followup.py').unlink(missing_ok=True)

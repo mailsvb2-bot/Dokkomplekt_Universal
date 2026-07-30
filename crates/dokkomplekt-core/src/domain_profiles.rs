@@ -188,8 +188,8 @@ pub fn accounting_profile() -> DomainProfile {
                 &[
                     "accounting.invoice_number",
                     "accounting.invoice_date",
-                    "accounting.client",
-                    "accounting.amount_total",
+                    "counterparty.name",
+                    "amount.total",
                 ],
             ),
             (
@@ -197,11 +197,11 @@ pub fn accounting_profile() -> DomainProfile {
                 &[
                     "document.number",
                     "document.date",
-                    "accounting.client",
-                    "accounting.amount_total",
+                    "counterparty.name",
+                    "amount.total",
                 ],
             ),
-            ("reconciliation", &["document.date", "accounting.client"]),
+            ("reconciliation", &["document.date", "counterparty.name"]),
         ]),
     }
 }

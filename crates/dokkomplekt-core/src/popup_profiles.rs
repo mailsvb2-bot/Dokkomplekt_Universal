@@ -1,6 +1,6 @@
 use crate::{
-    is_valid_field_id, title_for_field, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
-    PromptAskMode, PromptInputKind,
+    canonical_storage_field_id, is_valid_field_id, title_for_field, DocumentTemplateSpec,
+    DomainKind, PopupFieldConfig, PromptAskMode, PromptInputKind,
 };
 use chrono::Local;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,14 +9,14 @@ pub fn default_popup_fields_for_document(document: &DocumentTemplateSpec) -> Vec
     let mut required = document
         .required_fields
         .iter()
-        .map(String::as_str)
+        .map(|field| canonical_storage_field_id(field))
         .collect::<BTreeSet<_>>();
     let mut ordered = document
         .placeholders
         .iter()
         .chain(document.required_fields.iter())
         .filter(|field| !field.trim().is_empty())
-        .cloned()
+        .map(|field| canonical_storage_field_id(field))
         .collect::<Vec<_>>();
     ordered.sort_by(|a, b| popup_order(a).cmp(&popup_order(b)).then(a.cmp(b)));
     ordered.dedup();
@@ -69,21 +69,30 @@ pub fn effective_popup_fields(document: &DocumentTemplateSpec) -> Vec<PopupField
             .collect::<BTreeMap<_, _>>()
     };
     for config in &document.popup_fields {
-        let Some(normalized) = normalize_popup_field(config.clone()) else {
+        let Some(mut normalized) = normalize_popup_field(config.clone()) else {
             continue;
         };
+        if !document.popup_configured {
+            normalized.input_kind = infer_input_kind(&normalized.field_id);
+            normalized.help_text = validation_hint_for(&normalized.field_id, normalized.input_kind);
+            apply_profession_defaults(&mut normalized, &document.category, &document.role_id);
+        }
         merged.insert(normalized.field_id.clone(), normalized);
     }
     // Fail closed: even a custom popup cannot hide a field that the selected template
     // or workflow has declared strictly required.
     for field_id in &document.required_fields {
-        if !is_valid_field_id(field_id) || merged.contains_key(field_id) {
+        if !is_valid_field_id(field_id) {
             continue;
         }
-        merged.insert(
-            field_id.clone(),
-            popup_config_for_field(field_id, true, &document.category, &document.role_id),
-        );
+        let canonical = canonical_storage_field_id(field_id);
+        if merged.contains_key(&canonical) {
+            continue;
+        }
+        let mut config =
+            popup_config_for_field(&canonical, true, &document.category, &document.role_id);
+        apply_profession_defaults(&mut config, &document.category, &document.role_id);
+        merged.insert(canonical, config);
     }
     let mut fields = merged.into_values().collect::<Vec<_>>();
     fields.sort_by(|a, b| a.order.cmp(&b.order).then(a.field_id.cmp(&b.field_id)));
@@ -98,11 +107,12 @@ pub fn effective_popup_fields(document: &DocumentTemplateSpec) -> Vec<PopupField
 pub fn validate_popup_fields(fields: &[PopupFieldConfig]) -> Result<(), String> {
     let mut ids = BTreeSet::<String>::new();
     for field in fields {
-        let field_id = field.field_id.trim();
-        if !is_valid_field_id(field_id) {
-            return Err(format!("Некорректное смысловое поле: {field_id}"));
+        let raw_field_id = field.field_id.trim();
+        if !is_valid_field_id(raw_field_id) {
+            return Err(format!("Некорректное смысловое поле: {raw_field_id}"));
         }
-        if !ids.insert(field_id.to_string()) {
+        let field_id = canonical_storage_field_id(raw_field_id);
+        if !ids.insert(field_id.clone()) {
             return Err(format!("Поле «{field_id}» добавлено в popup повторно"));
         }
         if field.title.trim().is_empty() {
@@ -130,7 +140,12 @@ pub fn validate_popup_fields(fields: &[PopupFieldConfig]) -> Result<(), String> 
                 .as_deref()
                 .map(str::trim)
                 .filter(|linked| !linked.is_empty())
-                .map(|linked| (field.field_id.trim().to_string(), linked.to_string()))
+                .map(|linked| {
+                    (
+                        canonical_storage_field_id(field.field_id.trim()),
+                        canonical_storage_field_id(linked),
+                    )
+                })
         })
         .collect::<BTreeMap<_, _>>();
     for (field_id, linked_to) in &links {
@@ -172,10 +187,11 @@ pub fn normalize_popup_fields(fields: &[PopupFieldConfig]) -> Vec<PopupFieldConf
 }
 
 pub fn normalize_popup_field(mut config: PopupFieldConfig) -> Option<PopupFieldConfig> {
-    config.field_id = config.field_id.trim().to_string();
-    if config.field_id.is_empty() || !is_valid_field_id(&config.field_id) {
+    let raw_field_id = config.field_id.trim();
+    if raw_field_id.is_empty() || !is_valid_field_id(raw_field_id) {
         return None;
     }
+    config.field_id = canonical_storage_field_id(raw_field_id);
     config.title = config.title.trim().to_string();
     if config.title.is_empty() {
         config.title = title_for_field(&config.field_id);
@@ -208,7 +224,9 @@ pub fn normalize_popup_field(mut config: PopupFieldConfig) -> Option<PopupFieldC
         .linked_to
         .take()
         .map(|value| value.trim().to_string())
-        .filter(|value| is_valid_field_id(value) && value != &config.field_id);
+        .filter(|value| is_valid_field_id(value))
+        .map(|value| canonical_storage_field_id(&value))
+        .filter(|value| value != &config.field_id);
     if config.order == 0 {
         config.order = popup_order(&config.field_id) as i32;
     }
@@ -221,22 +239,23 @@ pub fn popup_config_for_field(
     category: &DomainKind,
     role_id: &str,
 ) -> PopupFieldConfig {
-    let mut config = PopupFieldConfig::new(field_id, title_for_field(field_id));
+    let canonical = canonical_storage_field_id(field_id);
+    let mut config = PopupFieldConfig::new(&canonical, title_for_field(&canonical));
     config.required = required;
-    config.input_kind = infer_input_kind(field_id);
-    config.order = popup_order(field_id) as i32;
+    config.input_kind = infer_input_kind(&canonical);
+    config.order = popup_order(&canonical) as i32;
     config.section = Some(domain_section(category).to_string());
     config.ask_mode = PromptAskMode::IfMissing;
-    config.help_text = validation_hint_for(field_id, config.input_kind);
+    config.help_text = validation_hint_for(&canonical, config.input_kind);
     if matches!(config.input_kind, PromptInputKind::YesNo) {
         config.options = vec!["Нет".into(), "Да".into()];
     }
-    if should_ask_fresh_each_run(field_id, role_id) {
+    if should_ask_fresh_each_run(&canonical, role_id) {
         config.ask_mode = PromptAskMode::Always;
-    } else if should_confirm_each_run(field_id, role_id) {
+    } else if should_confirm_each_run(&canonical, role_id) {
         config.ask_mode = PromptAskMode::Confirm;
     }
-    if is_document_date(field_id) {
+    if is_document_date(&canonical) {
         config.default_value = Some("@today".into());
     }
     config
@@ -252,7 +271,7 @@ pub fn resolve_popup_default(value: Option<&str>) -> Option<String> {
 }
 
 pub fn infer_input_kind(field_id: &str) -> PromptInputKind {
-    let id = field_id.to_lowercase();
+    let id = canonical_storage_field_id(field_id).to_lowercase();
     if id.contains("diagnosis") || id.contains("icd10") || id.ends_with(".icd") {
         return PromptInputKind::Icd10;
     }
@@ -277,11 +296,22 @@ pub fn infer_input_kind(field_id: &str) -> PromptInputKind {
     if id.contains("date") || id.ends_with(".from") || id.ends_with(".until") {
         return PromptInputKind::Date;
     }
-    if id.contains("amount") || id.contains("salary") || id.contains("price") || id.contains("cost")
-    {
+    let leaf = id.rsplit('.').next().unwrap_or(id.as_str());
+    let is_money_field = matches!(
+        leaf,
+        "amount" | "total" | "salary" | "price" | "cost" | "fee" | "vat"
+    ) || leaf.ends_with("_amount")
+        || leaf.ends_with("_total")
+        || leaf.ends_with("_salary")
+        || leaf.ends_with("_price")
+        || leaf.ends_with("_cost");
+    if is_money_field {
         return PromptInputKind::Money;
     }
-    if id.contains("count") || id.contains("quantity") || id.ends_with(".days") {
+    let is_numeric_segment = matches!(leaf, "count" | "quantity" | "days")
+        || leaf.ends_with("_count")
+        || leaf.ends_with("_quantity");
+    if is_numeric_segment {
         return PromptInputKind::Number;
     }
     if id.contains("treatment")
@@ -334,7 +364,7 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
         DomainKind::Hr => config.section = Some("Кадровые данные".into()),
         DomainKind::Accounting => {
             config.section = Some("Бухгалтерские реквизиты".into());
-            if id == "accounting.currency" {
+            if id == "amount.currency" {
                 config.input_kind = PromptInputKind::Select;
                 config.options = vec!["RUB".into(), "USD".into(), "EUR".into(), "CNY".into()];
                 config.allow_custom_option = true;
@@ -447,12 +477,12 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
             if role.contains("invoice") || role.contains("счет") || role.contains("счёт") {
                 add("accounting.invoice_number", true);
                 add("accounting.invoice_date", true);
-                add("accounting.client", true);
+                add("counterparty.name", true);
                 add("org.inn", false);
                 add("org.kpp", false);
                 add("amount.total", true);
                 add("amount.vat", false);
-                add("accounting.currency", false);
+                add("amount.currency", false);
             }
         }
         DomainKind::Education => {
@@ -566,7 +596,7 @@ pub fn popup_order(field_id: &str) -> usize {
         "period.start_date" | "contract.start_date" => 30,
         "period.end_date" | "contract.end_date" | "medical.discharge_date" => 40,
         "subject.name" | "person.full_name" | "hr.employee_name" | "education.student_name" => 50,
-        "organization.name" | "org.name" | "accounting.client" => 60,
+        "organization.name" | "org.name" | "counterparty.name" | "accounting.client" => 60,
         "contract.party_a" | "legal.party_a" => 70,
         "contract.party_b" | "legal.party_b" => 80,
         "org.inn" | "accounting.inn" => 90,
@@ -581,6 +611,7 @@ pub fn popup_order(field_id: &str) -> usize {
         "medical.workplace" | "employee.department" => 160,
         "medical.position" | "employee.position" | "hr.position" => 170,
         "amount.total" | "accounting.amount_total" | "contract.amount" | "legal.amount" => 180,
+        "amount.currency" | "accounting.currency" => 190,
         _ => 500,
     }
 }
@@ -714,5 +745,139 @@ mod tests {
             Some("medical.commission_date")
         );
         assert_eq!(configured.input_kind, PromptInputKind::Date);
+    }
+    #[test]
+    fn accounting_namespace_does_not_force_number_input() {
+        assert_eq!(
+            infer_input_kind("accounting.invoice_number"),
+            PromptInputKind::Text
+        );
+        assert_eq!(infer_input_kind("accounting.client"), PromptInputKind::Text);
+        assert_eq!(
+            infer_input_kind("accounting.currency"),
+            PromptInputKind::Text
+        );
+        assert_eq!(infer_input_kind("items.quantity"), PromptInputKind::Number);
+        assert_eq!(
+            infer_input_kind("items.item_count"),
+            PromptInputKind::Number
+        );
+    }
+
+    #[test]
+    fn stale_automatic_accounting_popup_types_are_repaired_on_load() {
+        let mut stale_client = PopupFieldConfig::new("accounting.client", "Клиент");
+        stale_client.input_kind = PromptInputKind::Number;
+        let mut stale_currency = PopupFieldConfig::new("accounting.currency", "Валюта");
+        stale_currency.input_kind = PromptInputKind::Number;
+        let document = DocumentTemplateSpec {
+            id: "invoice".into(),
+            button_label: "Счёт".into(),
+            template_path: "invoice.docx".into(),
+            category: DomainKind::Accounting,
+            role_id: "invoice".into(),
+            required_fields: vec!["accounting.client".into()],
+            placeholders: vec!["accounting.client".into(), "accounting.currency".into()],
+            is_static_copy: false,
+            popup_fields: vec![stale_client, stale_currency],
+            popup_configured: false,
+        };
+
+        let fields = effective_popup_fields(&document);
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.field_id == "counterparty.name")
+                .unwrap()
+                .input_kind,
+            PromptInputKind::Text
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.field_id == "amount.currency")
+                .unwrap()
+                .input_kind,
+            PromptInputKind::Select
+        );
+    }
+
+    #[test]
+    fn accounting_invoice_popup_uses_one_canonical_client_and_currency() {
+        let document = DocumentTemplateSpec {
+            id: "invoice".into(),
+            button_label: "Счёт".into(),
+            template_path: "invoice.docx".into(),
+            category: DomainKind::Accounting,
+            role_id: "invoice".into(),
+            required_fields: vec![
+                "accounting.invoice_number".into(),
+                "accounting.invoice_date".into(),
+                "accounting.client".into(),
+                "accounting.amount_total".into(),
+            ],
+            placeholders: vec![
+                "accounting.invoice_number".into(),
+                "accounting.invoice_date".into(),
+                "counterparty.name".into(),
+                "amount.total".into(),
+                "accounting.currency".into(),
+                "amount.currency".into(),
+            ],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+
+        let fields = default_popup_fields_for_document(&document);
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.field_id == "counterparty.name")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.field_id == "amount.currency")
+                .count(),
+            1
+        );
+        assert!(!fields.iter().any(|field| {
+            matches!(
+                field.field_id.as_str(),
+                "accounting.client" | "accounting.currency" | "accounting.amount_total"
+            )
+        }));
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.field_id == "accounting.invoice_number")
+                .unwrap()
+                .input_kind,
+            PromptInputKind::Text
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.field_id == "counterparty.name")
+                .unwrap()
+                .input_kind,
+            PromptInputKind::Text
+        );
+        let currency = fields
+            .iter()
+            .find(|field| field.field_id == "amount.currency")
+            .unwrap();
+        assert_eq!(currency.input_kind, PromptInputKind::Select);
+        assert_eq!(currency.options, vec!["RUB", "USD", "EUR", "CNY"]);
+    }
+
+    #[test]
+    fn popup_validation_rejects_alias_and_canonical_duplicate() {
+        let legacy = PopupFieldConfig::new("accounting.client", "Клиент");
+        let canonical = PopupFieldConfig::new("counterparty.name", "Контрагент");
+        assert!(validate_popup_fields(&[legacy, canonical]).is_err());
     }
 }

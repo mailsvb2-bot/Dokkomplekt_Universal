@@ -25,10 +25,9 @@ mkdir -p squashfs-root/usr/bin
 printf '#!/usr/bin/env bash\\n' > squashfs-root/AppRun
 chmod +x squashfs-root/AppRun
 for index in $(seq 1 5000); do
-  path="squashfs-root/usr/bin/helper-$index"
-  : > "$path"
-  chmod +x "$path"
+  : > "squashfs-root/usr/bin/helper-$index"
 done
+chmod +x squashfs-root/usr/bin/helper-*
 """,
         encoding="utf-8",
     )

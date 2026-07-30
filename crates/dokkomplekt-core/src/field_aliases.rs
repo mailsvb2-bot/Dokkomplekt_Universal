@@ -33,6 +33,7 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
         "legal.amount" => "contract.amount".into(),
         "legal.party_a" => "contract.party_a".into(),
         "legal.party_b" => "contract.party_b".into(),
+        "accounting.client" => "counterparty.name".into(),
         "accounting.amount_total" => "amount.total".into(),
         "accounting.currency" => "amount.currency".into(),
         _ => field.to_string(),
@@ -80,6 +81,7 @@ pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
         "contract.amount" => &["contract.amount", "legal.amount"],
         "contract.party_a" => &["contract.party_a", "legal.party_a"],
         "contract.party_b" => &["contract.party_b", "legal.party_b"],
+        "counterparty.name" => &["counterparty.name", "accounting.client"],
         "amount.total" => &["amount.total", "accounting.amount_total"],
         "amount.currency" => &["amount.currency", "accounting.currency"],
         _ => &[],
@@ -116,6 +118,14 @@ mod tests {
         assert_eq!(
             canonical_storage_field_id("legal.contract_number"),
             "contract.number"
+        );
+        assert_eq!(
+            canonical_storage_field_id("accounting.client"),
+            "counterparty.name"
+        );
+        assert_eq!(
+            storage_equivalent_field_ids("counterparty.name"),
+            &["counterparty.name", "accounting.client"]
         );
     }
 

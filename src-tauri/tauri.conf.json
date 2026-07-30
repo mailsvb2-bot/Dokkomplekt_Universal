@@ -51,6 +51,15 @@
         "silent": true
       }
     },
-    "resources": []
+    "resources": [],
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/lib/libGLESv2.so.2": "linux-runtime/libGLESv2.so.2",
+          "/usr/lib/libEGL.so.1": "linux-runtime/libEGL.so.1",
+          "/usr/lib/libGLdispatch.so.0": "linux-runtime/libGLdispatch.so.0"
+        }
+      }
+    }
   }
 }

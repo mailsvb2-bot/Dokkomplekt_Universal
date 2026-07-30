@@ -39,7 +39,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
           python -m pip install -r requirements-dev.txt
           command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
-      - name: Remove one-use transport and fix commercial lint
+      - name: Remove one-use transport and fix commercial gate
         shell: python
         run: |
           from pathlib import Path
@@ -62,54 +62,36 @@ jobs:
           marker = 'use uuid::Uuid;\n'
           test_import = '\n#[cfg(test)]\nuse crate::storage::PaymentEventStatus;\n'
           if test_import not in text:
+              if marker not in text:
+                  raise SystemExit('uuid import marker was not found')
               text = text.replace(marker, marker + test_import, 1)
 
-          deadlocked = '''        let winners = (0..16)
-              .map(|index| {
-                  let store = store.clone();
-                  let barrier = barrier.clone();
-                  std::thread::spawn(move || {
-                      barrier.wait();
-                      store
-                          .recover_legacy_order_access(
-                              order_id,
-                              "machine-owner",
-                              &format!("{index:064x}"),
-                              false,
-                          )
-                          .is_ok()
-                  })
-              })
-              .map(|thread| thread.join().unwrap())
-              .filter(|won| *won)
-              .count();
-          '''
-          serialized = '''        let handles = (0..16)
-              .map(|index| {
-                  let store = store.clone();
-                  let barrier = barrier.clone();
-                  std::thread::spawn(move || {
-                      barrier.wait();
-                      store
-                          .recover_legacy_order_access(
-                              order_id,
-                              "machine-owner",
-                              &format!("{index:064x}"),
-                              false,
-                          )
-                          .is_ok()
-                  })
-              })
-              .collect::<Vec<_>>();
-          let winners = handles
-              .into_iter()
-              .map(|thread| thread.join().unwrap())
-              .filter(|won| *won)
-              .count();
-          '''
-          if deadlocked not in text:
-              raise SystemExit('expected concurrent recovery test block was not found')
-          text = text.replace(deadlocked, serialized, 1)
+          test_name = '    fn concurrent_legacy_recovery_produces_exactly_one_winner() {'
+          start = text.index(test_name)
+          end = text.index('\n    #[test]', start + len(test_name))
+          block = text[start:end]
+          if '        let winners = (0..16)\n' not in block:
+              raise SystemExit('concurrent recovery iterator start was not found')
+          block = block.replace(
+              '        let winners = (0..16)\n',
+              '        let handles = (0..16)\n',
+              1,
+          )
+          join_tail = (
+              '            })\n'
+              '            .map(|thread| thread.join().unwrap())\n'
+          )
+          collected_tail = (
+              '            })\n'
+              '            .collect::<Vec<_>>();\n'
+              '        let winners = handles\n'
+              '            .into_iter()\n'
+              '            .map(|thread| thread.join().unwrap())\n'
+          )
+          if join_tail not in block:
+              raise SystemExit('concurrent recovery join tail was not found')
+          block = block.replace(join_tail, collected_tail, 1)
+          text = text[:start] + block + text[end:]
           memory.write_text(text, encoding='utf-8')
 
           Path('scripts/pr28_followup.py').unlink(missing_ok=True)

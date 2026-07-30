@@ -49,6 +49,16 @@ jobs:
         run: |
           rm -rf .github/critical-fixes
           rm -f .github/workflows/apply-critical-fixes.yml
+      - name: Regenerate checked-in source manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report /tmp/source-manifest-report.json || true
+          test -s /tmp/SOURCE_MANIFEST_SHA256.generated.txt
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
       - name: Install contract-test dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Run complete local contract wall
@@ -59,16 +69,6 @@ jobs:
           python scripts/verify_starter_content_packs.py
           python scripts/check_reference_data_freshness.py
           python scripts/audit_rust_production_panics.py
-      - name: Regenerate and verify source manifest
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python scripts/verify_source_manifest.py \
-            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
-            --json-report /tmp/source-manifest-report.json || true
-          test -s /tmp/SOURCE_MANIFEST_SHA256.generated.txt
-          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py
           python scripts/static_quality_gate.py --source-only
       - name: Commit verified product changes
         shell: bash

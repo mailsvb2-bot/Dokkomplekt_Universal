@@ -31,13 +31,14 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Install Linux and Python dependencies
+      - name: Install Linux, Python and audit dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
           python -m pip install -r requirements-dev.txt
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
       - name: Remove one-use transport and fix commercial lint
         shell: python
         run: |

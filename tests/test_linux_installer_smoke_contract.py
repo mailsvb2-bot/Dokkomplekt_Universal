@@ -10,6 +10,49 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests" / "installer" / "linux_installer_contract.sh"
 
 
+def _fake_appimage_script(*, helper_count: int = 0) -> str:
+    return f'''#!/usr/bin/env bash
+set -euo pipefail
+[ "${{1:-}}" = "--appimage-extract" ]
+mkdir -p squashfs-root/usr/bin squashfs-root/usr/lib squashfs-root/usr/share/dokkomplekt
+python - <<'PY_EMBEDDED'
+import hashlib
+import json
+import platform
+from pathlib import Path
+
+machine = {{"x86_64": 62, "aarch64": 183}}[platform.machine().lower()]
+root = Path("squashfs-root")
+records = []
+for name in ("libGLESv2.so.2", "libEGL.so.1", "libGLdispatch.so.0"):
+    data = bytearray(64)
+    data[:4] = b"\\x7fELF"
+    data[4] = 2
+    data[5] = 1
+    data[18:20] = machine.to_bytes(2, "little")
+    path = root / "usr/lib" / name
+    path.write_bytes(data)
+    path.chmod(0o755)
+    records.append({{
+        "name": name,
+        "elfMachine": machine,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }})
+(root / "usr/share/dokkomplekt/appimage-runtime.json").write_text(
+    json.dumps({{"schema": 1, "libraries": records}}),
+    encoding="utf-8",
+)
+for index in range({helper_count}):
+    path = root / "usr/bin" / f"helper-{{index}}"
+    path.write_bytes(b"#!/bin/sh\\n")
+    path.chmod(0o755)
+PY_EMBEDDED
+printf '#!/usr/bin/env bash\\n' > squashfs-root/AppRun
+chmod +x squashfs-root/AppRun
+'''
+
+
 def test_appimage_validation_is_pipefail_safe_with_relative_bundle_path(
     tmp_path: Path,
 ) -> None:
@@ -17,22 +60,7 @@ def test_appimage_validation_is_pipefail_safe_with_relative_bundle_path(
     bundle_dir = bundle_root / "appimage"
     bundle_dir.mkdir(parents=True)
     appimage = bundle_dir / "Dokkomplekt Universal_test_amd64.AppImage"
-    appimage.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-[ "${1:-}" = "--appimage-extract" ]
-mkdir -p squashfs-root/usr/bin squashfs-root/usr/lib
-for lib in libGLESv2.so.2 libEGL.so.1 libGLdispatch.so.0; do : > "squashfs-root/usr/lib/$lib"; done
-printf '#!/usr/bin/env bash\\n' > squashfs-root/AppRun
-chmod +x squashfs-root/AppRun
-for index in $(seq 1 5000); do
-  path="squashfs-root/usr/bin/helper-$index"
-  : > "$path"
-  chmod +x "$path"
-done
-""",
-        encoding="utf-8",
-    )
+    appimage.write_text(_fake_appimage_script(helper_count=1024), encoding="utf-8")
     appimage.chmod(0o755)
 
     env = os.environ.copy()
@@ -64,17 +92,7 @@ def test_cleanup_retries_a_transient_remove_failure(tmp_path: Path) -> None:
     bundle_dir = bundle_root / "appimage"
     bundle_dir.mkdir(parents=True)
     appimage = bundle_dir / "Dokkomplekt Universal_cleanup_test_amd64.AppImage"
-    appimage.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-[ "${1:-}" = "--appimage-extract" ]
-mkdir -p squashfs-root/usr/lib
-for lib in libGLESv2.so.2 libEGL.so.1 libGLdispatch.so.0; do : > "squashfs-root/usr/lib/$lib"; done
-printf '#!/usr/bin/env bash\\n' > squashfs-root/AppRun
-chmod +x squashfs-root/AppRun
-""",
-        encoding="utf-8",
-    )
+    appimage.write_text(_fake_appimage_script(), encoding="utf-8")
     appimage.chmod(0o755)
 
     real_rm = shutil.which("rm")

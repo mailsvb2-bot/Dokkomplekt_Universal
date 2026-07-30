@@ -111,12 +111,6 @@ impl UploadedSourceSession {
             .ok_or_else(|| "Временная сессия не содержит исходный файл.".to_string())
     }
 
-    pub fn source(&self) -> Result<&NormalizedSource, String> {
-        self.source
-            .as_ref()
-            .ok_or_else(|| "Временный источник уже был извлечён из сессии.".to_string())
-    }
-
     pub fn take_source(&mut self) -> Result<NormalizedSource, String> {
         self.source
             .take()
@@ -156,6 +150,7 @@ impl RetainedUploadedSource {
         format!("dokkomplekt-upload://current/{}", self.file_name)
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn materialize(&self, workspace: &Path) -> Result<UploadedSourceSession, String> {
         materialize_sensitive_file(&self.file_name, &self.bytes, workspace)
     }

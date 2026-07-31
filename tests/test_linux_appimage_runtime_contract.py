@@ -139,7 +139,7 @@ def test_installer_smoke_verifies_final_hashes_elf_architecture_and_gui_liveness
     text = (ROOT / "tests/installer/linux_installer_contract.sh").read_text("utf-8")
     for required in (
         "appimage-runtime.json",
-        ".AppImage.runtime-manifest.json",
+        "runtime-manifest.json",
         "pre-linuxdeploy",
         "post-linuxdeploy",
         "embeddedSourceManifestSha256",

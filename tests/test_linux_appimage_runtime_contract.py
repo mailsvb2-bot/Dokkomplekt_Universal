@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 STAGER = ROOT / "scripts" / "stage_linux_appimage_runtime.mjs"
+FINAL_MANIFEST_WRITER = ROOT / "scripts" / "write_linux_appimage_runtime_manifest.py"
 REQUIRED = ("libGLESv2.so.2", "libEGL.so.1", "libGLdispatch.so.0")
 
 
@@ -80,9 +81,14 @@ def test_appimage_packaging_hook_is_scoped_to_bundle_phase() -> None:
             "target/appimage-runtime/manifest.json"
         ),
     }
+    workflow = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
+    assert "write_linux_appimage_runtime_manifest.py --bundle-dir" in workflow
+    assert FINAL_MANIFEST_WRITER.is_file()
 
 
-def test_stager_copies_matching_elfs_and_writes_integrity_manifest(tmp_path: Path) -> None:
+def test_stager_copies_matching_elfs_and_writes_source_provenance_manifest(
+    tmp_path: Path,
+) -> None:
     library_dir = tmp_path / "libraries"
     library_dir.mkdir()
     libraries = {}
@@ -96,7 +102,8 @@ def test_stager_copies_matching_elfs_and_writes_integrity_manifest(tmp_path: Pat
 
     destination = tmp_path / "staged"
     manifest = json.loads((destination / "manifest.json").read_text("utf-8"))
-    assert manifest["schema"] == 1
+    assert manifest["schema"] == 2
+    assert manifest["phase"] == "pre-linuxdeploy"
     assert manifest["targetArch"] == "x86_64"
     records = {record["name"]: record for record in manifest["libraries"]}
     assert set(records) == set(REQUIRED)
@@ -106,8 +113,8 @@ def test_stager_copies_matching_elfs_and_writes_integrity_manifest(tmp_path: Pat
         assert records[name] == {
             "name": name,
             "elfMachine": 62,
-            "size": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
+            "sourceSize": len(data),
+            "sourceSha256": hashlib.sha256(data).hexdigest(),
         }
 
 
@@ -128,10 +135,14 @@ def test_stager_fails_closed_for_missing_or_wrong_architecture_library(
     assert "missing or has the wrong architecture" in result.stdout
 
 
-def test_installer_smoke_verifies_manifest_elf_architecture_and_gui_liveness() -> None:
+def test_installer_smoke_verifies_final_hashes_elf_architecture_and_gui_liveness() -> None:
     text = (ROOT / "tests/installer/linux_installer_contract.sh").read_text("utf-8")
     for required in (
         "appimage-runtime.json",
+        ".AppImage.runtime-manifest.json",
+        "pre-linuxdeploy",
+        "post-linuxdeploy",
+        "embeddedSourceManifestSha256",
         "elfMachine",
         "sha256",
         "APPIMAGE_EXTRACT_AND_RUN=1",

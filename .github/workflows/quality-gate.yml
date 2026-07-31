@@ -236,6 +236,7 @@ jobs:
         shell: bash
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: '1'
         run: |
           set -o pipefail
           npx tauri build --bundles appimage,deb,rpm 2>&1 | tee "tauri-build-${{ runner.os }}.log"

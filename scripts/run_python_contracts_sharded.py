@@ -16,6 +16,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,9 +39,7 @@ class ModuleResult:
     output_tail: str
 
 
-def terminate_tree(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
+def terminate_tree(process: subprocess.Popen[bytes]) -> None:
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
@@ -55,27 +54,47 @@ def terminate_tree(process: subprocess.Popen[str]) -> None:
         pass
 
 
+def read_output(path: Path) -> str:
+    try:
+        return path.read_bytes().decode("utf-8", errors="replace")
+    except OSError as error:
+        return f"unable to read isolated module output: {error}"
+
+
 def run_module(path: Path, timeout_seconds: int) -> ModuleResult:
     command = [sys.executable, "-m", "pytest", "-q", str(path.relative_to(ROOT))]
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     started = time.monotonic()
-    process = subprocess.Popen(
-        command,
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        start_new_session=os.name != "nt",
-        creationflags=creationflags,
-    )
+    with tempfile.NamedTemporaryFile(prefix="dokkomplekt-pytest-", suffix=".log", delete=False) as output_file:
+        output_path = Path(output_file.name)
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdout=output_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=os.name != "nt",
+            creationflags=creationflags,
+        )
+    timed_out = False
     try:
-        output, _ = process.communicate(timeout=timeout_seconds)
+        process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
+        timed_out = True
         terminate_tree(process)
-        output, _ = process.communicate()
-        duration = time.monotonic() - started
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        # A successful pytest parent may still leave children that inherited its
+        # stdout or server sockets. Kill the isolated process group before reading
+        # the report so one leaked child cannot hang the complete CI contour.
+        terminate_tree(process)
+
+    duration = time.monotonic() - started
+    output = read_output(output_path)
+    output_path.unlink(missing_ok=True)
+    if timed_out:
         return ModuleResult(
             module=path.relative_to(ROOT).as_posix(),
             result="timeout",
@@ -85,7 +104,7 @@ def run_module(path: Path, timeout_seconds: int) -> ModuleResult:
             returncode=None,
             output_tail=output[-4000:],
         )
-    duration = time.monotonic() - started
+
     passed_matches = PASSED_RE.findall(output)
     skipped_matches = SKIPPED_RE.findall(output)
     passed = sum(int(value) for value in passed_matches)

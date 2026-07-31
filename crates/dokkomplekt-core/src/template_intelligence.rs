@@ -262,8 +262,8 @@ fn normalize_button_label(title: &str) -> String {
     while label.contains("  ") {
         label = label.replace("  ", " ");
     }
-    if label.len() > 42 {
-        label.truncate(42);
+    if label.chars().count() > 42 {
+        label = label.chars().take(42).collect();
     }
     if label.is_empty() {
         "Документ".into()
@@ -275,6 +275,20 @@ fn normalize_button_label(title: &str) -> String {
 #[cfg(test)]
 mod alias_regression_tests {
     use super::*;
+
+    #[test]
+    fn button_label_truncation_preserves_utf8_boundaries() {
+        let title = "Очень длинное русское название документа для безопасной кнопки 🧾";
+        let label = normalize_button_label(title);
+        assert_eq!(label.chars().count(), 42);
+        assert!(title.starts_with(label.as_str()));
+        assert!(std::str::from_utf8(label.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn short_unicode_button_label_is_unchanged() {
+        assert_eq!(normalize_button_label("Выписной эпикриз 🧾"), "Выписной эпикриз 🧾");
+    }
 
     #[test]
     fn human_placeholders_become_canonical_fields() {

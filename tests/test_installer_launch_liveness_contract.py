@@ -17,10 +17,15 @@ def test_windows_smoke_rejects_every_early_exit_including_zero() -> None:
     assert "Stop-Process -Id $process.Id -Force" in source
 
 
-def test_linux_smoke_requires_the_isolated_process_group_to_remain_alive() -> None:
+def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process() -> None:
     source = LINUX_CONTRACT.read_text(encoding="utf-8")
 
     assert 'if ! kill -0 -- "-$pid"' in source
-    assert "exited early during launch smoke" in source
-    assert 'if [ "$status" -ne 0 ]' not in source
+    assert "exited before rendering its window" in source
+    assert 'wmctrl -l' in source
+    assert 'xwininfo -id "$window_id"' in source
+    assert 'scrot -o -a "$x,$y,$width,$height"' in source
+    assert "identify -format '%w %h %k" in source
+    assert '[ "$colors" -ge 64 ]' in source
+    assert "did not render a non-blank Dokkomplekt Universal window" in source
     assert 'kill -TERM -- "-$pid"' in source

@@ -135,6 +135,8 @@ def test_installer_smoke_verifies_manifest_elf_architecture_and_gui_liveness() -
         "elfMachine",
         "sha256",
         "APPIMAGE_EXTRACT_AND_RUN=1",
-        "AppImage exited early during launch smoke",
+        "Dokkomplekt Universal",
+        "rendered GUI smoke",
+        "did not render a non-blank",
     ):
         assert required in text

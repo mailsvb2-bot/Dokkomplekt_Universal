@@ -75,14 +75,19 @@ def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_pa
 
     for invariant in (
         'ctypes.util.find_library("X11")',
+        "XInternAtom",
+        "XGetWindowProperty",
+        "_NET_WM_NAME",
         "XQueryTree",
         "XFetchName",
         "XGetWindowAttributes",
+        "XTranslateCoordinates",
         "XGetImage",
         "XGetPixel",
         "XDestroyImage",
         "minimum_colors",
-        "attributes.map_state != 2",
+        "attributes.map_state != self.IS_VIEWABLE",
+        "self.root",
     ):
         assert invariant in probe
 

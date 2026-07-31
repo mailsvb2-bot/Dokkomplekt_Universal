@@ -173,29 +173,70 @@ if requires appimage; then
     echo "AppImage extraction did not produce AppRun" >&2
     exit 1
   }
-  runtime_manifest="$extract_dir/squashfs-root/usr/share/dokkomplekt/appimage-runtime.json"
-  [ -s "$runtime_manifest" ] || {
-    echo "AppImage graphics runtime manifest is missing" >&2
+  runtime_source_manifest="$extract_dir/squashfs-root/usr/share/dokkomplekt/appimage-runtime.json"
+  runtime_final_manifest="${appimage}.runtime-manifest.json"
+  [ -s "$runtime_source_manifest" ] || {
+    echo "AppImage graphics runtime source manifest is missing" >&2
+    exit 1
+  }
+  [ -s "$runtime_final_manifest" ] || {
+    echo "Final AppImage runtime integrity manifest is missing: $runtime_final_manifest" >&2
     exit 1
   }
   command -v python >/dev/null || { echo "python is required for AppImage runtime verification" >&2; exit 1; }
-  python - "$extract_dir/squashfs-root/usr/lib" "$runtime_manifest" <<'PY'
+  python - "$appimage" "$extract_dir/squashfs-root/usr/lib" "$runtime_source_manifest" "$runtime_final_manifest" <<'PY'
 import hashlib
 import json
 import platform
 import sys
 from pathlib import Path
 
-lib_root = Path(sys.argv[1])
-manifest_path = Path(sys.argv[2])
-expected_machine = {"x86_64": 62, "aarch64": 183}.get(platform.machine().lower())
-if expected_machine is None:
+appimage_path = Path(sys.argv[1])
+lib_root = Path(sys.argv[2])
+source_manifest_path = Path(sys.argv[3])
+final_manifest_path = Path(sys.argv[4])
+required = ("libGLESv2.so.2", "libEGL.so.1", "libGLdispatch.so.0")
+arch = {"x86_64": ("x86_64", 62), "amd64": ("x86_64", 62), "aarch64": ("aarch64", 183), "arm64": ("aarch64", 183)}.get(platform.machine().lower())
+if arch is None:
     raise SystemExit(f"unsupported smoke architecture: {platform.machine()}")
-manifest = json.loads(manifest_path.read_text("utf-8"))
-if manifest.get("schema") != 1:
-    raise SystemExit("unsupported AppImage runtime manifest schema")
-records = {entry.get("name"): entry for entry in manifest.get("libraries", [])}
-for name in ("libGLESv2.so.2", "libEGL.so.1", "libGLdispatch.so.0"):
+arch_name, expected_machine = arch
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+source_raw = source_manifest_path.read_bytes()
+source_manifest = json.loads(source_raw.decode("utf-8"))
+if source_manifest.get("schema") != 2 or source_manifest.get("phase") != "pre-linuxdeploy":
+    raise SystemExit("unsupported AppImage runtime source manifest")
+if source_manifest.get("targetArch") != arch_name:
+    raise SystemExit("AppImage runtime source manifest architecture mismatch")
+source_records = {entry.get("name"): entry for entry in source_manifest.get("libraries", []) if isinstance(entry, dict)}
+
+final_manifest = json.loads(final_manifest_path.read_text("utf-8"))
+if final_manifest.get("schema") != 1 or final_manifest.get("phase") != "post-linuxdeploy":
+    raise SystemExit("unsupported final AppImage runtime manifest")
+if final_manifest.get("targetArch") != arch_name:
+    raise SystemExit("final AppImage runtime manifest architecture mismatch")
+if final_manifest.get("embeddedSourceManifestSha256") != hashlib.sha256(source_raw).hexdigest():
+    raise SystemExit("final AppImage manifest references the wrong embedded source manifest")
+appimage_record = final_manifest.get("appImage")
+if not isinstance(appimage_record, dict):
+    raise SystemExit("final runtime manifest has no AppImage record")
+if appimage_record.get("name") != appimage_path.name:
+    raise SystemExit("final runtime manifest names the wrong AppImage")
+if appimage_record.get("size") != appimage_path.stat().st_size:
+    raise SystemExit("final runtime manifest AppImage size mismatch")
+if appimage_record.get("sha256") != sha256_file(appimage_path):
+    raise SystemExit("final runtime manifest AppImage SHA-256 mismatch")
+final_records = {entry.get("name"): entry for entry in final_manifest.get("libraries", []) if isinstance(entry, dict)}
+
+for name in required:
     path = lib_root / name
     if not path.is_file() or path.stat().st_size == 0:
         raise SystemExit(f"AppImage is missing required graphics runtime: {name}")
@@ -208,12 +249,27 @@ for name in ("libGLESv2.so.2", "libEGL.so.1", "libGLdispatch.so.0"):
     machine = int.from_bytes(data[18:20], byteorder)
     if machine != expected_machine:
         raise SystemExit(f"AppImage graphics runtime has wrong architecture: {name} ({machine})")
-    record = records.get(name)
-    if not isinstance(record, dict):
-        raise SystemExit(f"AppImage runtime manifest does not describe: {name}")
+
+    source = source_records.get(name)
+    if not isinstance(source, dict):
+        raise SystemExit(f"AppImage runtime source manifest does not describe: {name}")
+    source_size = source.get("sourceSize")
+    source_sha256 = source.get("sourceSha256")
+    if not isinstance(source_size, int) or source_size <= 0:
+        raise SystemExit(f"AppImage runtime source manifest has invalid size: {name}")
+    if not isinstance(source_sha256, str) or len(source_sha256) != 64:
+        raise SystemExit(f"AppImage runtime source manifest has invalid SHA-256: {name}")
+    if source.get("elfMachine") != machine:
+        raise SystemExit(f"AppImage runtime source manifest architecture mismatch: {name}")
+
+    final = final_records.get(name)
+    if not isinstance(final, dict):
+        raise SystemExit(f"final AppImage runtime manifest does not describe: {name}")
     digest = hashlib.sha256(data).hexdigest()
-    if record.get("sha256") != digest or record.get("size") != len(data) or record.get("elfMachine") != machine:
-        raise SystemExit(f"AppImage runtime manifest integrity mismatch: {name}")
+    if final.get("sha256") != digest or final.get("size") != len(data) or final.get("elfMachine") != machine:
+        raise SystemExit(f"final AppImage runtime integrity mismatch: {name}")
+    if final.get("sourceSize") != source_size or final.get("sourceSha256") != source_sha256:
+        raise SystemExit(f"final AppImage runtime provenance mismatch: {name}")
 PY
   executable_payload="$(find "$extract_dir/squashfs-root" -type f -perm -u+x \
     \( -name 'AppRun' -o -iname '*dokkomplekt*' \) -print -quit)"

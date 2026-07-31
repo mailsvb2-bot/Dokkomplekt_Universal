@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find a named X11 window and prove that it has rendered non-blank pixels."""
+"""Find a named X11 window and prove that its on-screen area is non-blank."""
 
 from __future__ import annotations
 
@@ -48,14 +48,19 @@ class RenderEvidence:
 
 
 class X11Probe:
+    IS_VIEWABLE = 2
+    Z_PIXMAP = 2
+    SUCCESS = 0
+
     def __init__(self, display_name: str) -> None:
         library_name = ctypes.util.find_library("X11") or "libX11.so.6"
         self.lib = ctypes.CDLL(library_name)
         self._bind()
-        encoded = display_name.encode("utf-8")
-        self.display = self.lib.XOpenDisplay(encoded)
+        self.display = self.lib.XOpenDisplay(display_name.encode("utf-8"))
         if not self.display:
             raise RuntimeError(f"unable to open X11 display {display_name!r}")
+        self.root = int(self.lib.XDefaultRootWindow(self.display))
+        self.net_wm_name = int(self.lib.XInternAtom(self.display, b"_NET_WM_NAME", 1))
 
     def _bind(self) -> None:
         lib = self.lib
@@ -65,6 +70,23 @@ class X11Probe:
         lib.XCloseDisplay.restype = ctypes.c_int
         lib.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
         lib.XDefaultRootWindow.restype = ctypes.c_ulong
+        lib.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        lib.XInternAtom.restype = ctypes.c_ulong
+        lib.XGetWindowProperty.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_long,
+            ctypes.c_long,
+            ctypes.c_int,
+            ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+        lib.XGetWindowProperty.restype = ctypes.c_int
         lib.XQueryTree.argtypes = [
             ctypes.c_void_p,
             ctypes.c_ulong,
@@ -86,6 +108,17 @@ class X11Probe:
             ctypes.POINTER(XWindowAttributes),
         ]
         lib.XGetWindowAttributes.restype = ctypes.c_int
+        lib.XTranslateCoordinates.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        lib.XTranslateCoordinates.restype = ctypes.c_int
         lib.XGetImage.argtypes = [
             ctypes.c_void_p,
             ctypes.c_ulong,
@@ -117,7 +150,38 @@ class X11Probe:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _window_name(self, window: int) -> str:
+    def _modern_window_name(self, window: int) -> str:
+        if not self.net_wm_name:
+            return ""
+        actual_type = ctypes.c_ulong()
+        actual_format = ctypes.c_int()
+        item_count = ctypes.c_ulong()
+        bytes_after = ctypes.c_ulong()
+        value = ctypes.POINTER(ctypes.c_ubyte)()
+        status = self.lib.XGetWindowProperty(
+            self.display,
+            window,
+            self.net_wm_name,
+            0,
+            4096,
+            0,
+            0,
+            ctypes.byref(actual_type),
+            ctypes.byref(actual_format),
+            ctypes.byref(item_count),
+            ctypes.byref(bytes_after),
+            ctypes.byref(value),
+        )
+        if status != self.SUCCESS or not value or actual_format.value != 8:
+            if value:
+                self.lib.XFree(value)
+            return ""
+        try:
+            return ctypes.string_at(value, item_count.value).decode("utf-8", errors="replace")
+        finally:
+            self.lib.XFree(value)
+
+    def _legacy_window_name(self, window: int) -> str:
         value = ctypes.c_char_p()
         if not self.lib.XFetchName(self.display, window, ctypes.byref(value)) or not value:
             return ""
@@ -125,6 +189,9 @@ class X11Probe:
             return ctypes.string_at(value).decode("utf-8", errors="replace")
         finally:
             self.lib.XFree(value)
+
+    def _window_name(self, window: int) -> str:
+        return self._modern_window_name(window) or self._legacy_window_name(window)
 
     def _children(self, window: int) -> list[int]:
         root = ctypes.c_ulong()
@@ -147,18 +214,51 @@ class X11Probe:
                 self.lib.XFree(children)
 
     def find_window(self, title: str) -> int | None:
-        root = int(self.lib.XDefaultRootWindow(self.display))
-        pending = [root]
+        pending = [self.root]
         visited: set[int] = set()
         while pending:
             window = pending.pop()
             if window in visited:
                 continue
             visited.add(window)
-            if window != root and title in self._window_name(window):
+            if window != self.root and title.casefold() in self._window_name(window).casefold():
                 return window
             pending.extend(reversed(self._children(window)))
         return None
+
+    def _attributes(self, window: int) -> XWindowAttributes | None:
+        attributes = XWindowAttributes()
+        if not self.lib.XGetWindowAttributes(self.display, window, ctypes.byref(attributes)):
+            return None
+        return attributes
+
+    def _root_rectangle(
+        self, window: int, attributes: XWindowAttributes
+    ) -> tuple[int, int, int, int] | None:
+        root_attributes = self._attributes(self.root)
+        if root_attributes is None:
+            return None
+        root_x = ctypes.c_int()
+        root_y = ctypes.c_int()
+        child = ctypes.c_ulong()
+        if not self.lib.XTranslateCoordinates(
+            self.display,
+            window,
+            self.root,
+            0,
+            0,
+            ctypes.byref(root_x),
+            ctypes.byref(root_y),
+            ctypes.byref(child),
+        ):
+            return None
+        left = max(0, root_x.value)
+        top = max(0, root_y.value)
+        right = min(root_attributes.width, root_x.value + attributes.width)
+        bottom = min(root_attributes.height, root_y.value + attributes.height)
+        if right <= left or bottom <= top:
+            return None
+        return left, top, right - left, bottom - top
 
     def render_evidence(
         self,
@@ -168,25 +268,28 @@ class X11Probe:
         minimum_height: int,
         minimum_colors: int,
     ) -> RenderEvidence | None:
-        attributes = XWindowAttributes()
-        if not self.lib.XGetWindowAttributes(self.display, window, ctypes.byref(attributes)):
+        attributes = self._attributes(window)
+        if attributes is None or attributes.map_state != self.IS_VIEWABLE:
             return None
-        if attributes.map_state != 2:  # IsViewable
+        if attributes.width < minimum_width or attributes.height < minimum_height:
             return None
-        width = int(attributes.width)
-        height = int(attributes.height)
+        rectangle = self._root_rectangle(window, attributes)
+        if rectangle is None:
+            return None
+        x, y, width, height = rectangle
         if width < minimum_width or height < minimum_height:
             return None
 
+        self.lib.XSync(self.display, 0)
         image = self.lib.XGetImage(
             self.display,
-            window,
-            0,
-            0,
+            self.root,
+            x,
+            y,
             width,
             height,
             ctypes.c_ulong(-1).value,
-            2,  # ZPixmap
+            self.Z_PIXMAP,
         )
         if not image:
             return None
@@ -194,9 +297,9 @@ class X11Probe:
             colors: set[int] = set()
             step_x = max(1, width // 160)
             step_y = max(1, height // 120)
-            for y in range(0, height, step_y):
-                for x in range(0, width, step_x):
-                    colors.add(int(self.lib.XGetPixel(image, x, y)))
+            for sample_y in range(0, height, step_y):
+                for sample_x in range(0, width, step_x):
+                    colors.add(int(self.lib.XGetPixel(image, sample_x, sample_y)))
                     if len(colors) >= minimum_colors:
                         return RenderEvidence(window, width, height, len(colors))
             return None

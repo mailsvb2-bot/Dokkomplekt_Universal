@@ -23,37 +23,6 @@ jobs:
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
-      - name: Apply verified self-contained X11 probe patch
-        if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-runtime-user-scenarios-verified'
-        env:
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          patch=.github/runtime-smoke-deps.patch
-          [ -f "$patch" ] || exit 0
-          printf '%s  %s\n' 2688cdec8b960b8d8a9e3d4ddaba65e51bdd852db6f5100847d07659c92f8301 "$patch" | sha256sum -c -
-          git apply --check "$patch"
-          git apply "$patch"
-          rm "$patch"
-          git add -A
-          python - <<'PY'
-          import subprocess
-          expected = {
-              '.github/runtime-smoke-deps.patch',
-              'scripts/verify_rendered_x11_window.py',
-              'tests/installer/linux_installer_contract.sh',
-              'tests/test_installer_launch_liveness_contract.py',
-              'tests/test_linux_appimage_runtime_contract.py',
-          }
-          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
-          if actual != expected:
-              raise SystemExit(f'unexpected patch scope: expected={sorted(expected)} actual={sorted(actual)}')
-          PY
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git diff --cached --check
-          git commit -m "Use self-contained X11 rendered-window probe"
-          git push origin "HEAD:${BRANCH}"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'

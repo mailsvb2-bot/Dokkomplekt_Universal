@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentOutput, CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, GuidedScannerMarkupAction, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentOutput, CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, GuidedScannerMarkupAction, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocx, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
@@ -72,6 +72,7 @@ export function App() {
   const [sourceFilePath, setSourceFilePath] = useState<string | null>(null);
   const [webSourceUrl, setWebSourceUrl] = useState('');
   const [intakeCapabilities, setIntakeCapabilities] = useState<IntakeCapability[]>([]);
+  const [sidecarStatuses, setSidecarStatuses] = useState<SidecarToolStatus[]>([]);
   const [parsed, setParsed] = useState<{
     title: string;
     count: number;
@@ -150,6 +151,9 @@ export function App() {
     void getIntakeCapabilities()
       .then((items) => { if (alive) setIntakeCapabilities(items); })
       .catch(() => { /* browser/tests */ });
+    void getSidecarStatus()
+      .then((items) => { if (alive) setSidecarStatuses(items); })
+      .catch(() => { /* browser/tests */ });
     return () => { alive = false; };
   }, []);
 
@@ -205,11 +209,34 @@ export function App() {
   const previewTitle = detectTitle(templateText) || 'Документ';
   const previewLabel = buttonLabel.trim() || previewTitle;
 
-  async function ensureOptionalComponent(id: string, fallbackLabel: string): Promise<boolean> {
+  function requiredToolsAvailable(statuses: SidecarToolStatus[], requiredTools: string[]): boolean {
+    return requiredTools.every((tool) => statuses.some((status) => status.tool === tool && status.available));
+  }
+
+  async function currentSidecarStatuses(): Promise<SidecarToolStatus[]> {
+    try {
+      const statuses = await getSidecarStatus();
+      setSidecarStatuses(statuses);
+      return statuses;
+    } catch {
+      return sidecarStatuses;
+    }
+  }
+
+  async function ensureOptionalComponent(id: string, fallbackLabel: string, requiredTools: string[] = []): Promise<boolean> {
+    const runtimeStatuses = await currentSidecarStatuses();
+    if (requiredTools.length && requiredToolsAvailable(runtimeStatuses, requiredTools)) return true;
+
     const statuses = await run('get_component_statuses', () => getComponentStatuses());
     if (!statuses) return false;
     const component = statuses.find(item => item.id === id);
-    if (component?.available || component?.installed) return true;
+    if (component?.available || component?.installed) {
+      if (!requiredTools.length) return true;
+      const refreshed = await currentSidecarStatuses();
+      if (requiredToolsAvailable(refreshed, requiredTools)) return true;
+      setStatus(`${component.label || fallbackLabel}: компонент отмечен установленным, но требуемые программы не запускаются.`);
+      return false;
+    }
     const label = component?.label || fallbackLabel;
     const size = component?.size_label || 'размер будет показан после проверки подписанного каталога';
     const accepted = globalThis.confirm?.(`${label} отсутствует. Скачать ${size}?\n\nРазовая загрузка; после установки компонент работает офлайн.`) ?? false;
@@ -219,17 +246,35 @@ export function App() {
     }
     const installed = await run('install_component', () => installComponent(id));
     if (!installed?.installed) return false;
+    const refreshed = await currentSidecarStatuses();
+    if (requiredTools.length && !requiredToolsAvailable(refreshed, requiredTools)) {
+      setStatus(`${installed.label}: загрузка завершена, но требуемые программы не прошли проверку запуска.`);
+      return false;
+    }
     setStatus(`${installed.label}: компонент установлен и доступен офлайн.`);
     return true;
   }
 
   async function ensureComponentForSource(fileName: string): Promise<boolean> {
     const extension = fileName.split('.').at(-1)?.toLowerCase() || '';
-    if (['pdf', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'webp'].includes(extension)) {
-      return ensureOptionalComponent('ocr', 'Распознавание сканов (OCR)');
+    if (['jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'webp'].includes(extension)) {
+      return ensureOptionalComponent('ocr', 'Распознавание сканов (OCR)', ['tesseract']);
     }
-    if (['xls', 'ods'].includes(extension)) {
-      return ensureOptionalComponent('office', 'Конвертация Office-файлов');
+    if (extension === 'pdf') {
+      const statuses = await currentSidecarStatuses();
+      // Do not force a large OCR download when the installed runtime can at
+      // least inspect the PDF text layer. Image-only pages still fail closed in
+      // the backend unless pdftoppm and Tesseract are actually available.
+      if (requiredToolsAvailable(statuses, ['pdftotext'])) return true;
+      return ensureOptionalComponent('ocr', 'Распознавание PDF и сканов', ['pdftotext', 'pdftoppm', 'tesseract']);
+    }
+    if (['doc', 'xls', 'ods'].includes(extension)) {
+      return ensureOptionalComponent('office', 'Конвертация Office-файлов', ['soffice']);
+    }
+    if (['ppt', 'pptx'].includes(extension)) {
+      const officeReady = await ensureOptionalComponent('office', 'Конвертация презентаций', ['soffice']);
+      if (!officeReady) return false;
+      return ensureOptionalComponent('ocr', 'Извлечение текста презентаций', ['pdftotext']);
     }
     return true;
   }
@@ -464,7 +509,7 @@ export function App() {
 
   async function exportLastOutput(pdfa1: boolean) {
     if (!lastOutput?.files.length) return;
-    if (!(await ensureOptionalComponent('office', 'Конвертация и печать (LibreOffice)'))) return;
+    if (!(await ensureOptionalComponent('office', 'Конвертация и печать (LibreOffice)', ['soffice']))) return;
     const result = await run('export_files_to_pdf', () => exportFilesToPdf(lastOutput.files, pdfa1, lastOutput.folder));
     if (!result) return;
     if (result.failed_files.length) {

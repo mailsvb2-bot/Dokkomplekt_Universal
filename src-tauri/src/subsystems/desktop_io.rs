@@ -1543,6 +1543,10 @@ fn write_trust_report(
         include_values,
         source_warnings,
     } = context;
+    if !is_sha256_hex(source_sha256) {
+        return Err("Отчёт проверяемости требует настоящий SHA-256 исходника.".into());
+    }
+    let source_name = sanitize_source_name(source_name);
     let report_path = folder.join("ПРОВЕРИТЬ_КОМПЛЕКТ.txt");
     let mut report = String::new();
     report.push_str("ДОККОМПЛЕКТ — ОТЧЁТ ПРОВЕРЯЕМОСТИ\n");

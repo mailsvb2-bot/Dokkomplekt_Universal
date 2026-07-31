@@ -6,13 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import subprocess
-import sys
 from pathlib import Path
-
-TRANSPORT_HELPER = Path(__file__).resolve().with_name("apply_runtime_fix_transport.py")
-if TRANSPORT_HELPER.is_file():
-    subprocess.run([sys.executable, str(TRANSPORT_HELPER)], check=True)
 
 MODULE_PATH = Path(__file__).resolve().with_name("build_source_archive.py")
 SPEC = importlib.util.spec_from_file_location("build_source_archive", MODULE_PATH)

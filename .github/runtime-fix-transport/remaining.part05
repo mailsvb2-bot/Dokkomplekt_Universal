@@ -1,0 +1,76 @@
++      .then((items) => { if (alive) setSidecarStatuses(items); })
++      .catch(() => { /* browser/tests */ });
+     return () => { alive = false; };
+   }, []);
+ 
+@@ -205,11 +209,34 @@ export function App() {
+   const previewTitle = detectTitle(templateText) || 'Документ';
+   const previewLabel = buttonLabel.trim() || previewTitle;
+ 
+-  async function ensureOptionalComponent(id: string, fallbackLabel: string): Promise<boolean> {
++  function requiredToolsAvailable(statuses: SidecarToolStatus[], requiredTools: string[]): boolean {
++    return requiredTools.every((tool) => statuses.some((status) => status.tool === tool && status.available));
++  }
++
++  async function currentSidecarStatuses(): Promise<SidecarToolStatus[]> {
++    try {
++      const statuses = await getSidecarStatus();
++      setSidecarStatuses(statuses);
++      return statuses;
++    } catch {
++      return sidecarStatuses;
++    }
++  }
++
++  async function ensureOptionalComponent(id: string, fallbackLabel: string, requiredTools: string[] = []): Promise<boolean> {
++    const runtimeStatuses = await currentSidecarStatuses();
++    if (requiredTools.length && requiredToolsAvailable(runtimeStatuses, requiredTools)) return true;
++
+     const statuses = await run('get_component_statuses', () => getComponentStatuses());
+     if (!statuses) return false;
+     const component = statuses.find(item => item.id === id);
+-    if (component?.available || component?.installed) return true;
++    if (component?.available || component?.installed) {
++      if (!requiredTools.length) return true;
++      const refreshed = await currentSidecarStatuses();
++      if (requiredToolsAvailable(refreshed, requiredTools)) return true;
++      setStatus(`${component.label || fallbackLabel}: компонент отмечен установленным, но требуемые программы не запускаются.`);
++      return false;
++    }
+     const label = component?.label || fallbackLabel;
+     const size = component?.size_label || 'размер будет показан после проверки подписанного каталога';
+     const accepted = globalThis.confirm?.(`${label} отсутствует. Скачать ${size}?\n\nРазовая загрузка; после установки компонент работает офлайн.`) ?? false;
+@@ -219,17 +246,35 @@ export function App() {
+     }
+     const installed = await run('install_component', () => installComponent(id));
+     if (!installed?.installed) return false;
++    const refreshed = await currentSidecarStatuses();
++    if (requiredTools.length && !requiredToolsAvailable(refreshed, requiredTools)) {
++      setStatus(`${installed.label}: загрузка завершена, но требуемые программы не прошли проверку запуска.`);
++      return false;
++    }
+     setStatus(`${installed.label}: компонент установлен и доступен офлайн.`);
+     return true;
+   }
+ 
+   async function ensureComponentForSource(fileName: string): Promise<boolean> {
+     const extension = fileName.split('.').at(-1)?.toLowerCase() || '';
+-    if (['pdf', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'webp'].includes(extension)) {
+-      return ensureOptionalComponent('ocr', 'Распознавание сканов (OCR)');
++    if (['jpg', 'jpeg', 'png', 'tif', 'tiff', 'bmp', 'webp'].includes(extension)) {
++      return ensureOptionalComponent('ocr', 'Распознавание сканов (OCR)', ['tesseract']);
++    }
++    if (extension === 'pdf') {
++      const statuses = await currentSidecarStatuses();
++      // Do not force a large OCR download when the installed runtime can at
++      // least inspect the PDF text layer. Image-only pages still fail closed in
++      // the backend unless pdftoppm and Tesseract are actually available.
++      if (requiredToolsAvailable(statuses, ['pdftotext'])) return true;
++      return ensureOptionalComponent('ocr', 'Распознавание PDF и сканов', ['pdftotext', 'pdftoppm', 'tesseract']);
++    }
++    if (['doc', 'xls', 'ods'].includes(extension)) {
++      return ensureOptionalComponent('office', 'Конвертация Office-файлов', ['soffice']);
+     }
+-    if (['xls', 'ods'].includes(extension)) {
+-      return ensureOptionalComponent('office', 'Конвертация Office-файлов');
++    if (['ppt', 'pptx'].includes(extension)) {

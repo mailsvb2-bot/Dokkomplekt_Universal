@@ -1,0 +1,73 @@
+diff --git a/.github/workflows/build-installers.yml b/.github/workflows/build-installers.yml
+index 28e90a7..8bf87a0 100644
+--- a/.github/workflows/build-installers.yml
++++ b/.github/workflows/build-installers.yml
+@@ -275,7 +275,7 @@ jobs:
+       - name: Linux Tauri deps
+         run: |
+           sudo apt-get update
+-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
++          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11 x11-utils imagemagick
+       - run: cargo install cargo-audit --locked --version 0.22.2
+       - name: Run signed Rust gate
+         env:
+@@ -287,6 +287,8 @@ jobs:
+       - run: npm run test
+       - run: npm run build
+       - run: npx tauri build --bundles appimage,deb,rpm
++      - name: Record final AppImage runtime integrity
++        run: python scripts/write_linux_appimage_runtime_manifest.py --bundle-dir target/release/bundle
+       - run: bash tests/installer/linux_installer_contract.sh
+       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+         with:
+diff --git a/.github/workflows/quality-gate.yml b/.github/workflows/quality-gate.yml
+index 3e44c68..bd0304c 100644
+--- a/.github/workflows/quality-gate.yml
++++ b/.github/workflows/quality-gate.yml
+@@ -215,7 +215,7 @@ jobs:
+         if: runner.os == 'Linux'
+         run: |
+           sudo apt-get update
+-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11
++          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb dbus-x11 x11-utils imagemagick
+       - name: Install current CVSS-4-compatible cargo-audit on packaging runner
+         shell: bash
+         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
+diff --git a/tests/test_installer_launch_liveness_contract.py b/tests/test_installer_launch_liveness_contract.py
+index ddecd43..6bddf3e 100644
+--- a/tests/test_installer_launch_liveness_contract.py
++++ b/tests/test_installer_launch_liveness_contract.py
+@@ -29,3 +29,12 @@ def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process()
+     assert '[ "$colors" -ge 64 ]' in source
+     assert "did not render a non-blank Dokkomplekt Universal window" in source
+     assert 'kill -TERM -- "-$pid"' in source
++
++
++def test_linux_packaging_workflows_install_every_rendered_smoke_command() -> None:
++    required_packages = ("xvfb", "dbus-x11", "x11-utils", "imagemagick")
++    for workflow_name in ("quality-gate.yml", "build-installers.yml"):
++        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
++        for package in required_packages:
++            assert package in workflow, f"{workflow_name} does not install {package}"
++        assert "write_linux_appimage_runtime_manifest.py --bundle-dir" in workflow
+diff --git a/tests/test_linux_appimage_runtime_contract.py b/tests/test_linux_appimage_runtime_contract.py
+index 0f2476d..590bd5a 100644
+--- a/tests/test_linux_appimage_runtime_contract.py
++++ b/tests/test_linux_appimage_runtime_contract.py
+@@ -81,8 +81,14 @@ def test_appimage_packaging_hook_is_scoped_to_bundle_phase() -> None:
+             "target/appimage-runtime/manifest.json"
+         ),
+     }
+-    workflow = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
+-    assert "write_linux_appimage_runtime_manifest.py --bundle-dir" in workflow
++    workflows = [
++        (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8"),
++        (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8"),
++    ]
++    for workflow in workflows:
++        assert "write_linux_appimage_runtime_manifest.py --bundle-dir" in workflow
++        assert "x11-utils" in workflow
++        assert "imagemagick" in workflow
+     assert FINAL_MANIFEST_WRITER.is_file()
+ 
+ 

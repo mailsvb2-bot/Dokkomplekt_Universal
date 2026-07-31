@@ -287,7 +287,10 @@ mod alias_regression_tests {
 
     #[test]
     fn short_unicode_button_label_is_unchanged() {
-        assert_eq!(normalize_button_label("Выписной эпикриз 🧾"), "Выписной эпикриз 🧾");
+        assert_eq!(
+            normalize_button_label("Выписной эпикриз 🧾"),
+            "Выписной эпикриз 🧾"
+        );
     }
 
     #[test]

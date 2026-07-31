@@ -637,7 +637,13 @@ impl SourceProvenance {
 fn sanitize_source_name(value: &str) -> String {
     let normalized = value
         .chars()
-        .map(|character| if character.is_control() { ' ' } else { character })
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
         .collect::<String>();
     let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     let shortened = compact.chars().take(240).collect::<String>();
@@ -773,9 +779,7 @@ fn cleanup_activation_queue(queue_dir: &Path) {
             .is_some_and(|name| name.ends_with(".tmp"));
         let stale_regular_file = std::fs::symlink_metadata(&path)
             .ok()
-            .filter(|metadata| {
-                metadata.file_type().is_file() && !metadata.file_type().is_symlink()
-            })
+            .filter(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
             .and_then(|metadata| metadata.modified().ok())
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age >= ACTIVATION_TEMP_MAX_AGE);
@@ -2604,7 +2608,8 @@ mod tests {
 
     #[test]
     fn source_provenance_hashes_exact_bytes_and_sanitizes_name() {
-        let provenance = SourceProvenance::from_bytes("  patient\nrecord.docx\t", b"exact source bytes");
+        let provenance =
+            SourceProvenance::from_bytes("  patient\nrecord.docx\t", b"exact source bytes");
         assert_eq!(provenance.source_name, "patient record.docx");
         assert_eq!(
             provenance.source_sha256,

@@ -47,7 +47,7 @@ jobs:
               'tests/test_installer_launch_liveness_contract.py',
               'tests/test_linux_appimage_runtime_contract.py',
           }
-          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          actual = set(subprocess.check_output(['git', 'diff', 'HEAD', '--name-only'], text=True).splitlines())
           if actual != expected:
               raise SystemExit(f'unexpected patch scope: expected={sorted(expected)} actual={sorted(actual)}')
           PY

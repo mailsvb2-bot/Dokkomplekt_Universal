@@ -1,1 +1,0 @@
-Temporary CI trigger. The verification directory is excluded from source provenance and this file must be deleted after the first fully green run.

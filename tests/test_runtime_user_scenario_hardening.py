@@ -36,7 +36,7 @@ def test_second_launch_activates_primary_without_setup_panic() -> None:
         "create_new(true)",
         "ACTIVATION_TEMP_MAX_AGE",
         "symlink_metadata",
-        '.request',
+        '.request"',
         "run_on_main_thread",
         "window.show()",
         "window.unminimize()",
@@ -58,23 +58,25 @@ def test_ui_uses_real_system_tools_before_component_download() -> None:
     assert "компонент отмечен установленным, но требуемые программы не запускаются" in source
 
 
-def test_linux_installer_gate_requires_rendered_window_and_ci_dependencies() -> None:
+def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_packages() -> None:
     contract = text("tests/installer/linux_installer_contract.sh")
-    quality = text(".github/workflows/quality-gate.yml")
-    release = text(".github/workflows/build-installers.yml")
     for invariant in (
         "Dokkomplekt Universal",
-        "wmctrl -l",
+        "xwininfo -root -tree",
         "xwininfo -id",
-        "scrot -o -a",
+        "import -silent -window",
         "identify -format",
         '"$colors" -ge 64',
         "did not render a non-blank",
     ):
         assert invariant in contract
-    for workflow in (quality, release):
-        for package in ("openbox", "wmctrl", "scrot", "imagemagick", "x11-utils"):
-            assert package in workflow
+
+    # The smoke deliberately uses tools already present on GitHub's Ubuntu image.
+    # Changing workflow files for test-only packages would require manual approval and
+    # would prevent the mandatory pull-request gates from starting automatically.
+    assert "wmctrl" not in contract
+    assert "scrot" not in contract
+    assert "openbox" not in contract
 
 
 def test_isolated_python_runner_does_not_capture_pipe_from_descendants() -> None:

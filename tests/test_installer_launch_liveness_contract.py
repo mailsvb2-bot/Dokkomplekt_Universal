@@ -22,9 +22,9 @@ def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process() 
 
     assert 'if ! kill -0 -- "-$pid"' in source
     assert "exited before rendering its window" in source
-    assert 'wmctrl -l' in source
+    assert 'xwininfo -root -tree' in source
     assert 'xwininfo -id "$window_id"' in source
-    assert 'scrot -o -a "$x,$y,$width,$height"' in source
+    assert 'import -silent -window "$window_id"' in source
     assert "identify -format '%w %h %k" in source
     assert '[ "$colors" -ge 64 ]' in source
     assert "did not render a non-blank Dokkomplekt Universal window" in source

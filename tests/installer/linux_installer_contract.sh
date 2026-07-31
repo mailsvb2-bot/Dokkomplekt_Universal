@@ -52,19 +52,18 @@ run_rendered_gui_smoke() {
   local mode="$3"
   [ "${DOKKOMPLEKT_SKIP_LINUX_INSTALL_SMOKE:-0}" != "1" ] || return 0
 
-  for command in xvfb-run dbus-run-session setsid xwininfo import identify; do
+  for command in xvfb-run dbus-run-session setsid python; do
     command -v "$command" >/dev/null || {
       echo "$command is required for rendered $label smoke" >&2
       return 1
     }
   done
 
-  local smoke_home display_file wrapper pid status display window_id info
-  local x y width height screenshot captured_width captured_height colors metrics
+  local smoke_home display_file wrapper pid status display evidence
+  local window_id captured_width captured_height colors
   smoke_home="$(mktemp -d)"
   display_file="$smoke_home/display"
   wrapper="$smoke_home/launch-wrapper.sh"
-  screenshot="$smoke_home/window.png"
   cleanup_paths+=("$smoke_home")
   cat >"$wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
@@ -96,25 +95,20 @@ WRAPPER
     fi
     if [ -s "$display_file" ]; then
       display="$(cat "$display_file")"
-      window_id="$(DISPLAY="$display" xwininfo -root -tree 2>/dev/null | awk '/"Dokkomplekt Universal"/ { print $1; exit }' || true)"
-      if [ -n "$window_id" ]; then
-        info="$(DISPLAY="$display" xwininfo -id "$window_id" 2>/dev/null || true)"
-        x="$(awk -F: '/Absolute upper-left X/ { gsub(/ /, "", $2); print $2; exit }' <<<"$info")"
-        y="$(awk -F: '/Absolute upper-left Y/ { gsub(/ /, "", $2); print $2; exit }' <<<"$info")"
-        width="$(awk -F: '/Width/ { gsub(/ /, "", $2); print $2; exit }' <<<"$info")"
-        height="$(awk -F: '/Height/ { gsub(/ /, "", $2); print $2; exit }' <<<"$info")"
-        if [[ "$x" =~ ^-?[0-9]+$ && "$y" =~ ^-?[0-9]+$ && "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]]; then
-          if DISPLAY="$display" import -silent -window "$window_id" "$screenshot" >/dev/null 2>&1; then
-            metrics="$(identify -format '%w %h %k\n' "$screenshot" 2>/dev/null || true)"
-            read -r captured_width captured_height colors <<<"$metrics"
-            if [[ "$captured_width" =~ ^[0-9]+$ && "$captured_height" =~ ^[0-9]+$ && "$colors" =~ ^[0-9]+$ ]] \
-              && [ "$captured_width" -ge 800 ] && [ "$captured_height" -ge 500 ] && [ "$colors" -ge 64 ]; then
-              stop_process_group "$pid"
-              printf -- '- %s rendered GUI smoke: OK (%sx%s, %s colors)\n' \
-                "$label" "$captured_width" "$captured_height" "$colors"
-              return 0
-            fi
-          fi
+      evidence="$(python scripts/verify_rendered_x11_window.py \
+        --display "$display" \
+        --title "Dokkomplekt Universal" \
+        --min-width 800 \
+        --min-height 500 \
+        --min-colors 64 2>/dev/null || true)"
+      if [ -n "$evidence" ]; then
+        read -r window_id captured_width captured_height colors <<<"$evidence"
+        if [[ "$window_id" =~ ^[0-9]+$ && "$captured_width" =~ ^[0-9]+$ \
+          && "$captured_height" =~ ^[0-9]+$ && "$colors" =~ ^[0-9]+$ ]]; then
+          stop_process_group "$pid"
+          printf -- '- %s rendered GUI smoke: OK (%sx%s, %s colors)\n' \
+            "$label" "$captured_width" "$captured_height" "$colors"
+          return 0
         fi
       fi
     fi
@@ -122,9 +116,6 @@ WRAPPER
   done
 
   cat "$smoke_home/launch.log" >&2
-  if [ -f "$screenshot" ]; then
-    identify "$screenshot" >&2 || true
-  fi
   stop_process_group "$pid"
   echo "$label did not render a non-blank Dokkomplekt Universal window within 15 seconds" >&2
   return 1

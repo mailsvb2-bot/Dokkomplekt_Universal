@@ -83,6 +83,7 @@ def test_appimage_packaging_hook_is_scoped_to_bundle_phase() -> None:
     }
     workflow = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
     assert "write_linux_appimage_runtime_manifest.py --bundle-dir" in workflow
+    assert (ROOT / "scripts/verify_rendered_x11_window.py").is_file()
     assert FINAL_MANIFEST_WRITER.is_file()
 
 

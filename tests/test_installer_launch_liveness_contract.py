@@ -22,10 +22,10 @@ def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process() 
 
     assert 'if ! kill -0 -- "-$pid"' in source
     assert "exited before rendering its window" in source
-    assert 'xwininfo -root -tree' in source
-    assert 'xwininfo -id "$window_id"' in source
-    assert 'import -silent -window "$window_id"' in source
-    assert "identify -format '%w %h %k" in source
-    assert '[ "$colors" -ge 64 ]' in source
+    assert "verify_rendered_x11_window.py" in source
+    assert '--title "Dokkomplekt Universal"' in source
+    assert "--min-width 800" in source
+    assert "--min-height 500" in source
+    assert "--min-colors 64" in source
     assert "did not render a non-blank Dokkomplekt Universal window" in source
     assert 'kill -TERM -- "-$pid"' in source

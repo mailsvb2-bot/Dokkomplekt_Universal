@@ -60,23 +60,41 @@ def test_ui_uses_real_system_tools_before_component_download() -> None:
 
 def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_packages() -> None:
     contract = text("tests/installer/linux_installer_contract.sh")
+    probe = text("scripts/verify_rendered_x11_window.py")
+
     for invariant in (
         "Dokkomplekt Universal",
-        "xwininfo -root -tree",
-        "xwininfo -id",
-        "import -silent -window",
-        "identify -format",
-        '"$colors" -ge 64',
+        "verify_rendered_x11_window.py",
+        '--title "Dokkomplekt Universal"',
+        "--min-width 800",
+        "--min-height 500",
+        "--min-colors 64",
         "did not render a non-blank",
     ):
         assert invariant in contract
 
-    # The smoke deliberately uses tools already present on GitHub's Ubuntu image.
-    # Changing workflow files for test-only packages would require manual approval and
-    # would prevent the mandatory pull-request gates from starting automatically.
-    assert "wmctrl" not in contract
-    assert "scrot" not in contract
-    assert "openbox" not in contract
+    for invariant in (
+        'ctypes.util.find_library("X11")',
+        "XQueryTree",
+        "XFetchName",
+        "XGetWindowAttributes",
+        "XGetImage",
+        "XGetPixel",
+        "XDestroyImage",
+        "minimum_colors",
+        "attributes.map_state != 2",
+    ):
+        assert invariant in probe
+
+    for external_tool in (
+        "xwininfo",
+        "import -silent",
+        "identify -format",
+        "wmctrl",
+        "scrot",
+        "openbox",
+    ):
+        assert external_tool not in contract
 
 
 def test_isolated_python_runner_does_not_capture_pipe_from_descendants() -> None:

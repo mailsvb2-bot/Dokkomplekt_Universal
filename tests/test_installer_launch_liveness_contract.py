@@ -9,6 +9,8 @@ LINUX_CONTRACT = ROOT / "tests" / "installer" / "linux_installer_contract.sh"
 LINUX_CONTRACT_CORE = (
     ROOT / "tests" / "installer" / "linux_installer_contract_core.sh"
 )
+TAURI_CONFIG = ROOT / "src-tauri" / "tauri.conf.json"
+FRONTEND_ENTRY = ROOT / "src" / "main.tsx"
 
 
 def _linux_contract_source() -> str:
@@ -40,10 +42,13 @@ def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process() 
     assert 'timeout --signal=KILL "${probe_timeout_seconds}s"' in source
     assert 'for command in xvfb-run dbus-run-session setsid timeout python ps tr' in source
     assert '--title "Dokkomplekt Universal"' in source
+    assert "--exact-title" not in source
     assert "--min-width 800" in source
     assert "--min-height 500" in source
     assert "--min-colors 64" in source
-    assert "did not render a non-blank Dokkomplekt Universal window" in source
+    assert "--min-colors 1" in source
+    assert "--accept-title-handshake" not in source
+    assert "did not emit a rendered Dokkomplekt Universal ready window" in source
     assert 'kill -TERM "$pid"' in source
     assert 'kill -TERM -- "-$pgid"' in source
     assert 'DOKKOMPLEKT_LINUX_SMOKE_WATCHDOG_SECONDS' in source
@@ -59,3 +64,20 @@ def test_linux_smoke_forces_webkit_onto_x11_software_rendering_under_xvfb() -> N
     assert "export WEBKIT_DISABLE_DMABUF_RENDERER=1" in entrypoint
     assert "export WEBKIT_DISABLE_COMPOSITING_MODE=1" in entrypoint
     assert 'exec bash "$script_dir/linux_installer_contract_core.sh" "$@"' in entrypoint
+
+
+def test_linux_ready_title_is_emitted_only_after_visible_react_layout() -> None:
+    config = TAURI_CONFIG.read_text(encoding="utf-8")
+    frontend = FRONTEND_ENTRY.read_text(encoding="utf-8")
+
+    assert '"title": "Доккомплект — запуск"' in config
+    assert '"title": "Dokkomplekt Universal — запуск"' not in config
+    assert "const READY_WINDOW_TITLE = 'Dokkomplekt Universal';" in frontend
+    assert "window.requestAnimationFrame(() => window.requestAnimationFrame(probe))" in frontend
+    assert "root.childElementCount > 0" in frontend
+    assert "root.textContent?.trim().length" in frontend
+    assert "root.getBoundingClientRect()" in frontend
+    assert "rectangle.width >= MIN_RENDER_WIDTH" in frontend
+    assert "rectangle.height >= MIN_RENDER_HEIGHT" in frontend
+    assert "getCurrentWindow()" in frontend
+    assert ".setTitle(READY_WINDOW_TITLE)" in frontend

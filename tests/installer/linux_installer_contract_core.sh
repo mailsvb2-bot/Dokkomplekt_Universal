@@ -152,12 +152,13 @@ WRAPPER
         --min-width 800 \
         --min-height 500 \
         --min-colors 1 2>/dev/null || true)"
-      if [ -n "$evidence" ]; then
+      if [ -n "$evidence" ] \
+        && grep -Fq 'Dokkomplekt native frontend IPC ready' "$smoke_home/launch.log"; then
         read -r window_id captured_width captured_height colors <<<"$evidence"
         if [[ "$window_id" =~ ^[0-9]+$ && "$captured_width" =~ ^[0-9]+$ \
           && "$captured_height" =~ ^[0-9]+$ && "$colors" =~ ^[0-9]+$ ]]; then
           stop_process_group "$pid"
-          printf -- '- %s rendered GUI smoke: OK (%sx%s, ready-title handshake, %s capturable X11 colors)\n' \
+          printf -- '- %s packaged frontend IPC smoke: OK (%sx%s, native frontend IPC title, %s capturable X11 colors)\n' \
             "$label" "$captured_width" "$captured_height" "$colors"
           return 0
         fi
@@ -168,7 +169,7 @@ WRAPPER
 
   cat "$smoke_home/launch.log" >&2
   stop_process_group "$pid"
-  echo "$label did not render a non-blank X11 surface; did not emit a rendered Dokkomplekt Universal ready window within 15 seconds" >&2
+  echo "$label did not prove native frontend IPC readiness in a mapped Dokkomplekt Universal X11 window within 15 seconds" >&2
   return 1
 }
 

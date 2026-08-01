@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { App } from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
@@ -25,6 +26,9 @@ function signalNativeWindowWhenRendered(root: HTMLElement): void {
         .catch((error: unknown) => {
           console.error('Failed to signal rendered native window', error);
         });
+      void invoke('get_process_blueprints').catch((error: unknown) => {
+        console.error('Failed to confirm rendered frontend IPC', error);
+      });
     } catch (error: unknown) {
       console.error('Failed to access rendered native window', error);
     }

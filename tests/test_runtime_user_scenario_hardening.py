@@ -74,7 +74,7 @@ def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_pa
         "--min-width 800",
         "--min-height 500",
         "--min-colors 64",
-        "did not render a non-blank",
+        "did not prove native frontend IPC readiness",
     ):
         assert invariant in contract
 

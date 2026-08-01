@@ -153,7 +153,7 @@ def test_installer_smoke_verifies_final_hashes_elf_architecture_and_gui_liveness
         "sha256",
         "APPIMAGE_EXTRACT_AND_RUN=1",
         "Dokkomplekt Universal",
-        "rendered GUI smoke",
-        "did not render a non-blank",
+        "packaged frontend IPC smoke",
+        "did not prove native frontend IPC readiness",
     ):
         assert required in text

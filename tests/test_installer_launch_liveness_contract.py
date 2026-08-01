@@ -75,12 +75,18 @@ def test_linux_ready_title_is_emitted_only_after_visible_react_layout() -> None:
     assert '"title": "Доккомплект — запуск"' in config
     assert '"title": "Dokkomplekt Universal — запуск"' not in config
     assert "const READY_WINDOW_TITLE = 'Dokkomplekt Universal';" in frontend
-    assert "window.requestAnimationFrame(() => window.requestAnimationFrame(probe))" in frontend
+    assert "const RENDER_PROBE_INTERVAL_MS = 50;" in frontend
+    assert "const REQUIRED_STABLE_READY_CHECKS = 2;" in frontend
+    assert "stableReadyChecks = hasRenderedContent ? stableReadyChecks + 1 : 0" in frontend
+    assert "stableReadyChecks >= REQUIRED_STABLE_READY_CHECKS" in frontend
+    assert "window.setTimeout(probe, RENDER_PROBE_INTERVAL_MS)" in frontend
+    assert "window.setTimeout(probe, 0)" in frontend
+    assert "window.requestAnimationFrame(" not in frontend
     assert "root.childElementCount > 0" in frontend
     assert "root.textContent?.trim().length" in frontend
     assert "root.getBoundingClientRect()" not in frontend
-    assert "window.innerWidth >= MIN_RENDER_WIDTH" in frontend
-    assert "window.innerHeight >= MIN_RENDER_HEIGHT" in frontend
+    assert "window.innerWidth" not in frontend
+    assert "window.innerHeight" not in frontend
     assert "__TAURI_INTERNALS__" not in frontend
     assert "document.title = READY_WINDOW_TITLE" in frontend
     assert "getCurrentWindow()" in frontend

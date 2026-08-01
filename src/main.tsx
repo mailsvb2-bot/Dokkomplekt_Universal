@@ -6,47 +6,57 @@ import { AppErrorBoundary } from './components/AppErrorBoundary';
 import './styles.css';
 
 const READY_WINDOW_TITLE = 'Dokkomplekt Universal';
-const MIN_RENDER_WIDTH = 800;
-const MIN_RENDER_HEIGHT = 500;
-const MAX_RENDER_PROBE_FRAMES = 120;
+const RENDER_PROBE_INTERVAL_MS = 50;
+const MAX_RENDER_PROBE_ATTEMPTS = 300;
+const REQUIRED_STABLE_READY_CHECKS = 2;
 
 function signalNativeWindowWhenRendered(root: HTMLElement): void {
-  let remainingFrames = MAX_RENDER_PROBE_FRAMES;
+  let remainingAttempts = MAX_RENDER_PROBE_ATTEMPTS;
+  let stableReadyChecks = 0;
+
+  const signalReady = (): void => {
+    // Keep a browser-level title fallback and always attempt the native Tauri
+    // title update. Browser-only tests may not expose Tauri internals, so the
+    // synchronous call is guarded by try/catch instead of a private runtime flag.
+    document.title = READY_WINDOW_TITLE;
+    try {
+      void getCurrentWindow()
+        .setTitle(READY_WINDOW_TITLE)
+        .catch((error: unknown) => {
+          console.error('Failed to signal rendered native window', error);
+        });
+    } catch (error: unknown) {
+      console.error('Failed to access rendered native window', error);
+    }
+  };
 
   const probe = (): void => {
     const style = window.getComputedStyle(root);
     const hasRenderedContent =
       root.childElementCount > 0 &&
       (root.textContent?.trim().length ?? 0) > 0 &&
-      window.innerWidth >= MIN_RENDER_WIDTH &&
-      window.innerHeight >= MIN_RENDER_HEIGHT &&
       style.display !== 'none' &&
       style.visibility !== 'hidden';
 
-    if (hasRenderedContent) {
-      // Keep a browser-level title fallback and always attempt the native Tauri
-      // title update. Browser-only tests may not expose Tauri internals, so the
-      // synchronous call is guarded by try/catch instead of a private runtime flag.
-      document.title = READY_WINDOW_TITLE;
-      try {
-        void getCurrentWindow()
-          .setTitle(READY_WINDOW_TITLE)
-          .catch((error: unknown) => {
-            console.error('Failed to signal rendered native window', error);
-          });
-      } catch (error: unknown) {
-        console.error('Failed to access rendered native window', error);
-      }
+    stableReadyChecks = hasRenderedContent ? stableReadyChecks + 1 : 0;
+    if (stableReadyChecks >= REQUIRED_STABLE_READY_CHECKS) {
+      signalReady();
       return;
     }
 
-    remainingFrames -= 1;
-    if (remainingFrames > 0) window.requestAnimationFrame(probe);
+    remainingAttempts -= 1;
+    if (remainingAttempts > 0) {
+      window.setTimeout(probe, RENDER_PROBE_INTERVAL_MS);
+      return;
+    }
+
+    console.error('Rendered React root did not become ready for native window signal');
   };
 
-  // A native ready title is emitted only after React has committed and the
-  // browser completed two paint opportunities with a visible, non-empty root.
-  window.requestAnimationFrame(() => window.requestAnimationFrame(probe));
+  // WebKitGTK can throttle requestAnimationFrame under Xvfb even while its native
+  // window is mapped. Timer-driven consecutive checks prove a committed, stable,
+  // visible React tree without relying on compositor paint callbacks.
+  window.setTimeout(probe, 0);
 }
 
 const rootElement = document.getElementById('root');

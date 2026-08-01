@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+watchdog_seconds="${DOKKOMPLEKT_LINUX_SMOKE_WATCHDOG_SECONDS:-180}"
+if ! [[ "$watchdog_seconds" =~ ^[1-9][0-9]*$ ]]; then
+  echo "DOKKOMPLEKT_LINUX_SMOKE_WATCHDOG_SECONDS must be a positive integer" >&2
+  exit 1
+fi
+if [ "${DOKKOMPLEKT_LINUX_SMOKE_WATCHDOG_ACTIVE:-0}" != "1" ]; then
+  command -v timeout >/dev/null || {
+    echo "timeout is required for the Linux installer smoke watchdog" >&2
+    exit 1
+  }
+  exec timeout --signal=TERM --kill-after=10s "${watchdog_seconds}s" \
+    env DOKKOMPLEKT_LINUX_SMOKE_WATCHDOG_ACTIVE=1 bash "$0" "$@"
+fi
+
 bundle_dir="${1:-target/release/bundle}"
 required_bundles="${DOKKOMPLEKT_REQUIRED_LINUX_BUNDLES:-appimage,deb,rpm}"
 [ -d "$bundle_dir" ] || { echo "Bundle directory not found: $bundle_dir" >&2; exit 1; }
@@ -15,15 +29,43 @@ requires() { [[ ",${required_bundles}," == *",$1,"* ]]; }
 cleanup_paths=()
 cleanup_pids=()
 
+process_is_running() {
+  local pid="$1"
+  local state
+  state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ -n "$state" ] && [[ "$state" != Z* ]]
+}
+
 stop_process_group() {
   local pid="$1"
-  kill -TERM -- "-$pid" 2>/dev/null || true
+  local pgid shell_pgid
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  shell_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
+
+  kill -TERM "$pid" 2>/dev/null || true
+  if [ -n "$pgid" ] && [ "$pgid" != "$shell_pgid" ]; then
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+  fi
   for _ in 1 2 3 4 5; do
-    kill -0 -- "-$pid" 2>/dev/null || break
+    if ! process_is_running "$pid"; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
     sleep 0.2
   done
-  kill -KILL -- "-$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+
+  kill -KILL "$pid" 2>/dev/null || true
+  if [ -n "$pgid" ] && [ "$pgid" != "$shell_pgid" ]; then
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+  fi
+  for _ in 1 2 3 4 5; do
+    if ! process_is_running "$pid"; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "WARNING: rendered smoke launcher did not terminate promptly: $pid" >&2
 }
 
 cleanup() {
@@ -52,7 +94,7 @@ run_rendered_gui_smoke() {
   local mode="$3"
   [ "${DOKKOMPLEKT_SKIP_LINUX_INSTALL_SMOKE:-0}" != "1" ] || return 0
 
-  for command in xvfb-run dbus-run-session setsid timeout python; do
+  for command in xvfb-run dbus-run-session setsid timeout python ps tr; do
     command -v "$command" >/dev/null || {
       echo "$command is required for rendered $label smoke" >&2
       return 1
@@ -92,7 +134,7 @@ WRAPPER
   cleanup_pids+=("$pid")
 
   for _ in $(seq 1 60); do
-    if ! kill -0 -- "-$pid" 2>/dev/null; then
+    if ! process_is_running "$pid"; then
       wait "$pid" || status=$?
       status="${status:-0}"
       cat "$smoke_home/launch.log" >&2

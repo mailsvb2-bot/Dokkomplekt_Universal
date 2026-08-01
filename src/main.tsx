@@ -30,7 +30,9 @@ function signalNativeWindowWhenRendered(root: HTMLElement): void {
       if ((window as TauriWindow).__TAURI_INTERNALS__) {
         void getCurrentWindow()
           .setTitle(READY_WINDOW_TITLE)
-          .catch(() => { /* Browser tests do not expose a native Tauri window. */ });
+          .catch((error: unknown) => {
+            console.error('Failed to signal rendered native window', error);
+          });
       }
       return;
     }

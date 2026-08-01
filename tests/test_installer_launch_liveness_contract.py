@@ -77,17 +77,18 @@ def test_linux_ready_title_requires_successful_frontend_tauri_ipc() -> None:
     frontend = FRONTEND_ENTRY.read_text(encoding="utf-8")
     capability = TAURI_CAPABILITY.read_text(encoding="utf-8")
 
-    assert '"title": "Доккомплект — запуск"' in config
+    assert '"title": "Dokkomplekt Universal"' in config
     assert 'fn get_process_blueprints(' in native
     assert 'app: tauri::AppHandle' in native
     assert 'app.get_webview_window("main")' in native
     assert 'window.set_title("Dokkomplekt Universal")' in native
     assert 'Dokkomplekt native frontend IPC ready' in native
+    assert "grep -Fq 'Dokkomplekt native frontend IPC ready'" in _linux_contract_source()
     assert 'Dokkomplekt native frontend IPC signal failed:' in native
     assert "import { invoke } from '@tauri-apps/api/core';" in frontend
     assert "invoke('get_process_blueprints')" in frontend
     assert 'Failed to confirm rendered frontend IPC' in frontend
-    assert '"title": "Dokkomplekt Universal — запуск"' not in config
+    assert '"title": "Доккомплект — запуск"' not in config
     assert "const READY_WINDOW_TITLE = 'Dokkomplekt Universal';" in frontend
     assert "const RENDER_PROBE_INTERVAL_MS = 50;" in frontend
     assert "const REQUIRED_STABLE_READY_CHECKS = 2;" in frontend

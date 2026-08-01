@@ -52,7 +52,7 @@ run_rendered_gui_smoke() {
   local mode="$3"
   [ "${DOKKOMPLEKT_SKIP_LINUX_INSTALL_SMOKE:-0}" != "1" ] || return 0
 
-  for command in xvfb-run dbus-run-session setsid python; do
+  for command in xvfb-run dbus-run-session setsid timeout python; do
     command -v "$command" >/dev/null || {
       echo "$command is required for rendered $label smoke" >&2
       return 1
@@ -61,6 +61,12 @@ run_rendered_gui_smoke() {
 
   local smoke_home display_file wrapper pid status display evidence
   local window_id captured_width captured_height colors
+  local probe_timeout_seconds
+  probe_timeout_seconds="${DOKKOMPLEKT_X11_PROBE_TIMEOUT_SECONDS:-2}"
+  if ! [[ "$probe_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+    echo "DOKKOMPLEKT_X11_PROBE_TIMEOUT_SECONDS must be a positive integer" >&2
+    return 1
+  fi
   smoke_home="$(mktemp -d)"
   display_file="$smoke_home/display"
   wrapper="$smoke_home/launch-wrapper.sh"
@@ -95,7 +101,8 @@ WRAPPER
     fi
     if [ -s "$display_file" ]; then
       display="$(cat "$display_file")"
-      evidence="$(python scripts/verify_rendered_x11_window.py \
+      evidence="$(timeout --signal=KILL "${probe_timeout_seconds}s" \
+        python scripts/verify_rendered_x11_window.py \
         --display "$display" \
         --title "Dokkomplekt Universal" \
         --min-width 800 \

@@ -11,6 +11,7 @@ LINUX_CONTRACT_CORE = (
 )
 TAURI_CONFIG = ROOT / "src-tauri" / "tauri.conf.json"
 FRONTEND_ENTRY = ROOT / "src" / "main.tsx"
+TAURI_CAPABILITY = ROOT / "src-tauri" / "capabilities" / "default.json"
 
 
 def _linux_contract_source() -> str:
@@ -69,6 +70,7 @@ def test_linux_smoke_forces_webkit_onto_x11_software_rendering_under_xvfb() -> N
 def test_linux_ready_title_is_emitted_only_after_visible_react_layout() -> None:
     config = TAURI_CONFIG.read_text(encoding="utf-8")
     frontend = FRONTEND_ENTRY.read_text(encoding="utf-8")
+    capability = TAURI_CAPABILITY.read_text(encoding="utf-8")
 
     assert '"title": "Доккомплект — запуск"' in config
     assert '"title": "Dokkomplekt Universal — запуск"' not in config
@@ -81,3 +83,5 @@ def test_linux_ready_title_is_emitted_only_after_visible_react_layout() -> None:
     assert "rectangle.height >= MIN_RENDER_HEIGHT" in frontend
     assert "getCurrentWindow()" in frontend
     assert ".setTitle(READY_WINDOW_TITLE)" in frontend
+    assert "Failed to signal rendered native window" in frontend
+    assert '"core:window:allow-set-title"' in capability

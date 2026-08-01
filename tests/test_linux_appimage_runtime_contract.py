@@ -137,7 +137,12 @@ def test_stager_fails_closed_for_missing_or_wrong_architecture_library(
 
 
 def test_installer_smoke_verifies_final_hashes_elf_architecture_and_gui_liveness() -> None:
-    text = (ROOT / "tests/installer/linux_installer_contract.sh").read_text("utf-8")
+    text = "\n".join(
+        (
+            (ROOT / "tests/installer/linux_installer_contract.sh").read_text("utf-8"),
+            (ROOT / "tests/installer/linux_installer_contract_core.sh").read_text("utf-8"),
+        )
+    )
     for required in (
         "appimage-runtime.json",
         "runtime-manifest.json",

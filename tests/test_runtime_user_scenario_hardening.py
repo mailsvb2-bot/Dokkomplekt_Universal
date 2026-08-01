@@ -59,7 +59,12 @@ def test_ui_uses_real_system_tools_before_component_download() -> None:
 
 
 def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_packages() -> None:
-    contract = text("tests/installer/linux_installer_contract.sh")
+    contract = "\n".join(
+        (
+            text("tests/installer/linux_installer_contract.sh"),
+            text("tests/installer/linux_installer_contract_core.sh"),
+        )
+    )
     probe = text("scripts/verify_rendered_x11_window.py")
 
     for invariant in (

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find a named X11 window and prove that its on-screen area is non-blank."""
+"""Find a named X11 window and prove that it or a large child rendered pixels."""
 
 from __future__ import annotations
 
@@ -48,6 +48,7 @@ class RenderEvidence:
 
 
 class X11Probe:
+    INPUT_OUTPUT = 1
     IS_VIEWABLE = 2
     Z_PIXMAP = 2
     SUCCESS = 0
@@ -177,7 +178,9 @@ class X11Probe:
                 self.lib.XFree(value)
             return ""
         try:
-            return ctypes.string_at(value, item_count.value).decode("utf-8", errors="replace")
+            return ctypes.string_at(value, item_count.value).decode(
+                "utf-8", errors="replace"
+            )
         finally:
             self.lib.XFree(value)
 
@@ -228,7 +231,9 @@ class X11Probe:
 
     def _attributes(self, window: int) -> XWindowAttributes | None:
         attributes = XWindowAttributes()
-        if not self.lib.XGetWindowAttributes(self.display, window, ctypes.byref(attributes)):
+        if not self.lib.XGetWindowAttributes(
+            self.display, window, ctypes.byref(attributes)
+        ):
             return None
         return attributes
 
@@ -260,6 +265,77 @@ class X11Probe:
             return None
         return left, top, right - left, bottom - top
 
+    def _render_drawables(
+        self,
+        window: int,
+        *,
+        minimum_width: int,
+        minimum_height: int,
+    ) -> list[tuple[int, XWindowAttributes]]:
+        """Return large viewable InputOutput windows below the named top-level."""
+        minimum_drawable_width = max(1, minimum_width // 2)
+        minimum_drawable_height = max(1, minimum_height // 2)
+        pending = [window]
+        visited: set[int] = set()
+        candidates: list[tuple[int, XWindowAttributes]] = []
+
+        while pending:
+            drawable = pending.pop()
+            if drawable in visited:
+                continue
+            visited.add(drawable)
+            attributes = self._attributes(drawable)
+            if (
+                attributes is not None
+                and attributes.map_state == self.IS_VIEWABLE
+                and attributes.class_ == self.INPUT_OUTPUT
+                and attributes.width >= minimum_drawable_width
+                and attributes.height >= minimum_drawable_height
+            ):
+                candidates.append((drawable, attributes))
+            pending.extend(reversed(self._children(drawable)))
+
+        candidates.sort(
+            key=lambda candidate: candidate[1].width * candidate[1].height,
+            reverse=True,
+        )
+        return candidates
+
+    def _sample_colors(
+        self,
+        drawable: int,
+        *,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        minimum_colors: int,
+    ) -> int:
+        image = self.lib.XGetImage(
+            self.display,
+            drawable,
+            x,
+            y,
+            width,
+            height,
+            ctypes.c_ulong(-1).value,
+            self.Z_PIXMAP,
+        )
+        if not image:
+            return 0
+        try:
+            colors: set[int] = set()
+            step_x = max(1, width // 160)
+            step_y = max(1, height // 120)
+            for sample_y in range(0, height, step_y):
+                for sample_x in range(0, width, step_x):
+                    colors.add(int(self.lib.XGetPixel(image, sample_x, sample_y)))
+                    if len(colors) >= minimum_colors:
+                        return len(colors)
+            return len(colors)
+        finally:
+            self.lib.XDestroyImage(image)
+
     def render_evidence(
         self,
         window: int,
@@ -273,38 +349,52 @@ class X11Probe:
             return None
         if attributes.width < minimum_width or attributes.height < minimum_height:
             return None
+
+        self.lib.XSync(self.display, 0)
+
+        # Xvfb does not necessarily composite WebKit child surfaces into the root
+        # pixmap. Prove pixels on the named window or a large viewable descendant
+        # first; this still fails closed on a live but blank application shell.
+        for drawable, drawable_attributes in self._render_drawables(
+            window,
+            minimum_width=minimum_width,
+            minimum_height=minimum_height,
+        ):
+            colors = self._sample_colors(
+                drawable,
+                x=0,
+                y=0,
+                width=drawable_attributes.width,
+                height=drawable_attributes.height,
+                minimum_colors=minimum_colors,
+            )
+            if colors >= minimum_colors:
+                return RenderEvidence(
+                    window,
+                    attributes.width,
+                    attributes.height,
+                    colors,
+                )
+
+        # Retain the visible root-rectangle proof for real X11 desktops where the
+        # compositor exposes the final on-screen image directly.
         rectangle = self._root_rectangle(window, attributes)
         if rectangle is None:
             return None
         x, y, width, height = rectangle
         if width < minimum_width or height < minimum_height:
             return None
-
-        self.lib.XSync(self.display, 0)
-        image = self.lib.XGetImage(
-            self.display,
+        colors = self._sample_colors(
             self.root,
-            x,
-            y,
-            width,
-            height,
-            ctypes.c_ulong(-1).value,
-            self.Z_PIXMAP,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            minimum_colors=minimum_colors,
         )
-        if not image:
+        if colors < minimum_colors:
             return None
-        try:
-            colors: set[int] = set()
-            step_x = max(1, width // 160)
-            step_y = max(1, height // 120)
-            for sample_y in range(0, height, step_y):
-                for sample_x in range(0, width, step_x):
-                    colors.add(int(self.lib.XGetPixel(image, sample_x, sample_y)))
-                    if len(colors) >= minimum_colors:
-                        return RenderEvidence(window, width, height, len(colors))
-            return None
-        finally:
-            self.lib.XDestroyImage(image)
+        return RenderEvidence(window, width, height, colors)
 
 
 def parse_args() -> argparse.Namespace:

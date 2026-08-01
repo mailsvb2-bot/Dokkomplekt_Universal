@@ -78,10 +78,13 @@ def test_linux_ready_title_is_emitted_only_after_visible_react_layout() -> None:
     assert "window.requestAnimationFrame(() => window.requestAnimationFrame(probe))" in frontend
     assert "root.childElementCount > 0" in frontend
     assert "root.textContent?.trim().length" in frontend
-    assert "root.getBoundingClientRect()" in frontend
-    assert "rectangle.width >= MIN_RENDER_WIDTH" in frontend
-    assert "rectangle.height >= MIN_RENDER_HEIGHT" in frontend
+    assert "root.getBoundingClientRect()" not in frontend
+    assert "window.innerWidth >= MIN_RENDER_WIDTH" in frontend
+    assert "window.innerHeight >= MIN_RENDER_HEIGHT" in frontend
+    assert "__TAURI_INTERNALS__" not in frontend
+    assert "document.title = READY_WINDOW_TITLE" in frontend
     assert "getCurrentWindow()" in frontend
     assert ".setTitle(READY_WINDOW_TITLE)" in frontend
     assert "Failed to signal rendered native window" in frontend
+    assert "Failed to access rendered native window" in frontend
     assert '"core:window:allow-set-title"' in capability

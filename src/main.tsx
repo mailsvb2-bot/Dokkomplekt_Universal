@@ -10,29 +10,32 @@ const MIN_RENDER_WIDTH = 800;
 const MIN_RENDER_HEIGHT = 500;
 const MAX_RENDER_PROBE_FRAMES = 120;
 
-type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
-
 function signalNativeWindowWhenRendered(root: HTMLElement): void {
   let remainingFrames = MAX_RENDER_PROBE_FRAMES;
 
   const probe = (): void => {
-    const rectangle = root.getBoundingClientRect();
     const style = window.getComputedStyle(root);
     const hasRenderedContent =
       root.childElementCount > 0 &&
       (root.textContent?.trim().length ?? 0) > 0 &&
-      rectangle.width >= MIN_RENDER_WIDTH &&
-      rectangle.height >= MIN_RENDER_HEIGHT &&
+      window.innerWidth >= MIN_RENDER_WIDTH &&
+      window.innerHeight >= MIN_RENDER_HEIGHT &&
       style.display !== 'none' &&
       style.visibility !== 'hidden';
 
     if (hasRenderedContent) {
-      if ((window as TauriWindow).__TAURI_INTERNALS__) {
+      // Keep a browser-level title fallback and always attempt the native Tauri
+      // title update. Browser-only tests may not expose Tauri internals, so the
+      // synchronous call is guarded by try/catch instead of a private runtime flag.
+      document.title = READY_WINDOW_TITLE;
+      try {
         void getCurrentWindow()
           .setTitle(READY_WINDOW_TITLE)
           .catch((error: unknown) => {
             console.error('Failed to signal rendered native window', error);
           });
+      } catch (error: unknown) {
+        console.error('Failed to access rendered native window', error);
       }
       return;
     }

@@ -6,6 +6,7 @@ import os
 import platform
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -218,3 +219,39 @@ exec "${DOKKOMPLEKT_REAL_RM:?}" "$@"
     assert first_failure_marker.exists(), "the test did not inject a cleanup failure"
     assert result.returncode == 0, result.stdout
     assert "Linux bundle validation OK" in result.stdout
+
+
+def test_contract_watchdog_bounds_a_hung_external_tool(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\nsleep 60\n",
+        encoding="utf-8",
+    )
+    fake_find.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "DOKKOMPLEKT_LINUX_SMOKE_WATCHDOG_SECONDS": "1",
+        }
+    )
+    started = time.monotonic()
+    result = subprocess.run(
+        ["bash", str(CONTRACT), str(bundle_root)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=10,
+        check=False,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 124, result.stdout
+    assert elapsed < 5, f"watchdog returned too slowly: {elapsed:.2f}s"

@@ -57,4 +57,5 @@ def test_linux_smoke_forces_webkit_onto_x11_software_rendering_under_xvfb() -> N
     assert "export GDK_BACKEND=x11" in entrypoint
     assert "export LIBGL_ALWAYS_SOFTWARE=1" in entrypoint
     assert "export WEBKIT_DISABLE_DMABUF_RENDERER=1" in entrypoint
+    assert "export WEBKIT_DISABLE_COMPOSITING_MODE=1" in entrypoint
     assert 'exec bash "$script_dir/linux_installer_contract_core.sh" "$@"' in entrypoint

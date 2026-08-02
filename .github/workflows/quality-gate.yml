@@ -126,6 +126,53 @@ jobs:
       - run: python scripts/static_quality_gate.py --source-only
       - run: python scripts/check_reference_data_freshness.py
 
+  postgres-integration:
+    name: REQUIRED PostgreSQL multi-connection and HTTP integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dokkomplekt
+          POSTGRES_PASSWORD: dokkomplekt_ci
+          POSTGRES_DB: dokkomplekt_license_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dokkomplekt -d dokkomplekt_license_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://dokkomplekt:dokkomplekt_ci@127.0.0.1:5432/dokkomplekt_license_ci
+      DOKKOMPLEKT_REQUIRE_POSTGRES_TESTS: '1'
+      DKK_LICENSE_POSTGRES_POOL_SIZE: '4'
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+      - name: Prove PostgreSQL is reachable before tests
+        run: |
+          python - <<'PY'
+          import socket
+          with socket.create_connection(("127.0.0.1", 5432), timeout=10):
+              print("PostgreSQL TCP endpoint is reachable")
+          PY
+      - name: Run real PostgreSQL backend, concurrency and HTTP tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked -p dokkomplekt-license-server -- --test-threads=1 2>&1 | tee postgres-integration.log
+      - name: Upload PostgreSQL integration evidence
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: postgres-integration-evidence
+          path: postgres-integration.log
+          if-no-files-found: error
+
   ui-thin-client:
     name: TypeScript thin UI checks
     runs-on: ubuntu-latest
@@ -175,7 +222,7 @@ jobs:
 
   tauri-build:
     name: Installer build after Rust gate
-    needs: [rust-compile-gate, rust-dependency-audit, python-contracts, ui-thin-client, e2e]
+    needs: [rust-compile-gate, rust-dependency-audit, python-contracts, postgres-integration, ui-thin-client, e2e]
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -263,6 +310,8 @@ jobs:
             packaging-rust-${{ runner.os }}.log
             tauri-build-${{ runner.os }}.log
             installer-smoke-${{ runner.os }}.log
+            verification/ci/webkit-*.ppm
+            verification/ci/webkit-*-golden.json
           if-no-files-found: warn
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:

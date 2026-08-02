@@ -1,8 +1,7 @@
 name: Apply agent repair patch
 
 on:
-  push:
-    branches: [agent/fix-plan-ui-postgres-maintainability]
+  pull_request:
 
 permissions:
   contents: write
@@ -13,12 +12,13 @@ concurrency:
 
 jobs:
   apply:
-    if: contains(github.event.head_commit.message, 'stage agent repair payload')
+    if: github.head_ref == 'agent/fix-plan-ui-postgres-maintainability'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -32,7 +32,7 @@ jobs:
           gzip --decompress --stdout /tmp/agent-repair.patch.gz > /tmp/agent-repair.patch
           git apply --index /tmp/agent-repair.patch
           git rm -f .github/AGENT_WORK_IN_PROGRESS.md .github/agent-patch-part-* .github/workflows/agent-apply-repair.yml
-          git checkout HEAD^ -- .github/workflows/source-provenance.yml
+          git checkout 9ae2e78d7b7ac6baa521fe21a0a8bae8e7b73ad7 -- .github/workflows/source-provenance.yml
           python scripts/verify_source_manifest.py --candidate /tmp/source-manifest.txt --json-report /tmp/source-manifest.json || true
           cp /tmp/source-manifest.txt SOURCE_MANIFEST_SHA256.txt
           git add -A

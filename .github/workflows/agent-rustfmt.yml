@@ -1,0 +1,40 @@
+name: Apply verified rustfmt
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-rustfmt-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    if: github.head_ref == 'agent/fix-plan-ui-postgres-maintainability'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Format and publish Rust sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          python scripts/verify_source_manifest.py --candidate /tmp/source-manifest.txt --json-report /tmp/source-manifest.json || true
+          cp /tmp/source-manifest.txt SOURCE_MANIFEST_SHA256.txt
+          git add -A
+          git diff --cached --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git diff --cached --quiet && exit 0
+          git commit -m "style: apply rustfmt to repaired modules"
+          git push origin HEAD:agent/fix-plan-ui-postgres-maintainability

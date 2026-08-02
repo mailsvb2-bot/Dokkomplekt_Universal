@@ -101,8 +101,8 @@ run_rendered_gui_smoke() {
     }
   done
 
-  local smoke_home display_file wrapper pid status display evidence
-  local window_id captured_width captured_height colors
+  local smoke_home display_file xauthority_file probe_error_file wrapper pid status
+  local display xauthority evidence window_id captured_width captured_height colors
   local probe_timeout_seconds
   probe_timeout_seconds="${DOKKOMPLEKT_X11_PROBE_TIMEOUT_SECONDS:-2}"
   if ! [[ "$probe_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
@@ -111,15 +111,19 @@ run_rendered_gui_smoke() {
   fi
   smoke_home="$(mktemp -d)"
   display_file="$smoke_home/display"
+  xauthority_file="$smoke_home/xauthority-path"
+  probe_error_file="$smoke_home/x11-probe.err"
   wrapper="$smoke_home/launch-wrapper.sh"
   cleanup_paths+=("$smoke_home")
   cat >"$wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
 display_file="$1"
-mode="$2"
-executable="$3"
+xauthority_file="$2"
+mode="$3"
+executable="$4"
 printf '%s\n' "$DISPLAY" >"$display_file"
+printf '%s\n' "${XAUTHORITY:-}" >"$xauthority_file"
 if [ "$mode" = "appimage" ]; then
   exec env APPIMAGE_EXTRACT_AND_RUN=1 "$executable"
 fi
@@ -129,7 +133,7 @@ WRAPPER
 
   HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
     setsid xvfb-run -a -s '-screen 0 1280x960x24' dbus-run-session -- \
-    "$wrapper" "$display_file" "$mode" "$executable" >"$smoke_home/launch.log" 2>&1 &
+    "$wrapper" "$display_file" "$xauthority_file" "$mode" "$executable" >"$smoke_home/launch.log" 2>&1 &
   pid=$!
   cleanup_pids+=("$pid")
 
@@ -141,17 +145,25 @@ WRAPPER
       echo "$label exited before rendering its window (code $status)" >&2
       return 1
     fi
-    if [ -s "$display_file" ]; then
+    if [ -s "$display_file" ] && [ -s "$xauthority_file" ]; then
       display="$(cat "$display_file")"
+      xauthority="$(cat "$xauthority_file")"
+      if [ ! -r "$xauthority" ]; then
+        sleep 0.25
+        continue
+      fi
+      # xvfb-run creates a private MIT-MAGIC-COOKIE file and exports its path
+      # only to descendants. The verifier runs in this parent shell, so it must
+      # explicitly inherit that XAUTHORITY or XOpenDisplay cannot see any window.
       # Pixel-only validation historically required --min-colors 64. The
       # post-render native-title handshake below requires one capturable X11 color.
-      evidence="$(timeout --signal=KILL "${probe_timeout_seconds}s" \
+      evidence="$(XAUTHORITY="$xauthority" timeout --signal=KILL "${probe_timeout_seconds}s" \
         python scripts/verify_rendered_x11_window.py \
         --display "$display" \
         --title "Dokkomplekt Universal" \
         --min-width 800 \
         --min-height 500 \
-        --min-colors 1 2>/dev/null || true)"
+        --min-colors 1 2>"$probe_error_file" || true)"
       if [ -n "$evidence" ] \
         && grep -Fq 'Dokkomplekt native frontend IPC ready' "$smoke_home/launch.log"; then
         read -r window_id captured_width captured_height colors <<<"$evidence"
@@ -168,6 +180,10 @@ WRAPPER
   done
 
   cat "$smoke_home/launch.log" >&2
+  if [ -s "$probe_error_file" ]; then
+    echo "Last X11 probe error:" >&2
+    cat "$probe_error_file" >&2
+  fi
   stop_process_group "$pid"
   echo "$label did not prove native frontend IPC readiness in a mapped Dokkomplekt Universal X11 window within 15 seconds" >&2
   return 1

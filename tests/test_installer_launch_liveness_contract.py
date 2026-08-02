@@ -60,6 +60,24 @@ def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process() 
     assert 'exec timeout --signal=TERM --kill-after=10s "${watchdog_seconds}s"' in source
 
 
+def test_linux_x11_probe_inherits_the_private_xvfb_authority_cookie() -> None:
+    source = _linux_contract_source()
+
+    assert 'xauthority_file="$smoke_home/xauthority-path"' in source
+    assert r'''printf '%s\n' "${XAUTHORITY:-}" >"$xauthority_file"''' in source
+    assert (
+        '"$wrapper" "$display_file" "$xauthority_file" "$mode" "$executable"'
+        in source
+    )
+    assert 'if [ -s "$display_file" ] && [ -s "$xauthority_file" ]; then' in source
+    assert 'xauthority="$(cat "$xauthority_file")"' in source
+    assert 'if [ ! -r "$xauthority" ]; then' in source
+    assert 'XAUTHORITY="$xauthority" timeout --signal=KILL' in source
+    assert '2>"$probe_error_file"' in source
+    probe_call = source.index('python scripts/verify_rendered_x11_window.py')
+    assert source.rfind('XAUTHORITY="$xauthority"', 0, probe_call) != -1
+
+
 def test_linux_smoke_forces_webkit_onto_x11_software_rendering_under_xvfb() -> None:
     entrypoint = LINUX_CONTRACT.read_text(encoding="utf-8")
 

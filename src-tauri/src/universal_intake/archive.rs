@@ -53,11 +53,7 @@ fn archive_entry_is_symlink(mode: Option<u32>) -> bool {
     mode.is_some_and(|value| value & 0o170000 == 0o120000)
 }
 
-pub(super) fn normalize_zip(
-    path: &Path,
-    workspace: &Path,
-    depth: usize,
-) -> Result<NormalizedSource, String> {
+pub(super) fn normalize_zip(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| format!("ZIP повреждён: {error}"))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
@@ -120,16 +116,14 @@ pub(super) fn normalize_zip(
 }
 
 #[derive(Debug, Clone, Default)]
-struct ExternalArchiveEntry {
+pub(super) struct ExternalArchiveEntry {
     path: String,
-    size: u64,
+    pub(super) size: u64,
     folder: bool,
-    link_like: bool,
+    pub(super) link_like: bool,
 }
 
-pub(super) fn parse_7z_technical_listing(
-    output: &str,
-) -> Result<Vec<ExternalArchiveEntry>, String> {
+pub(super) fn parse_7z_technical_listing(output: &str) -> Result<Vec<ExternalArchiveEntry>, String> {
     let listing = output
         .split_once("----------")
         .map_or(output, |(_, body)| body);
@@ -376,7 +370,7 @@ pub(super) fn normalize_external_archive(
     result
 }
 
-fn prefix_layout_source(items: &mut [NormalizedLayoutItem], prefix: &str) {
+pub(super) fn prefix_layout_source(items: &mut [NormalizedLayoutItem], prefix: &str) {
     for item in items {
         item.source_reference = Some(match item.source_reference.take() {
             Some(reference) if !reference.trim().is_empty() => format!("{prefix};{reference}"),

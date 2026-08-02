@@ -31,7 +31,7 @@ jobs:
           echo "28c1c38f74b1bbd028277cf5c177b4cf21204717915aa654b2d6f79a90eee705  /tmp/agent-repair.patch.gz" | sha256sum -c -
           gzip --decompress --stdout /tmp/agent-repair.patch.gz > /tmp/agent-repair.patch
           git apply --index /tmp/agent-repair.patch
-          git rm -f .github/AGENT_WORK_IN_PROGRESS.md .github/agent-patch-part-* .github/workflows/agent-apply-repair.yml
+          git rm -f --ignore-unmatch .github/AGENT_WORK_IN_PROGRESS.md .github/agent-patch-part-* .github/workflows/agent-apply-repair.yml
           git checkout 9ae2e78d7b7ac6baa521fe21a0a8bae8e7b73ad7 -- .github/workflows/source-provenance.yml
           python scripts/verify_source_manifest.py --candidate /tmp/source-manifest.txt --json-report /tmp/source-manifest.json || true
           cp /tmp/source-manifest.txt SOURCE_MANIFEST_SHA256.txt

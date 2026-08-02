@@ -1,10 +1,9 @@
 use crate::core::{SourceDocument, TargetTemplate};
 use crate::{
     canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
-    resolve_popup_default,
-    run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
-    PromptAskMode, PromptSpec, SemanticCase, UniversalDomain, UniversalPipelineFlags,
-    UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
+    resolve_popup_default, run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind,
+    PopupFieldConfig, PromptAskMode, PromptSpec, SemanticCase, UniversalDomain,
+    UniversalPipelineFlags, UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -117,7 +116,6 @@ pub fn plan_workflow(
             .collect(),
     }
 }
-
 
 fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String> {
     let explicit_popup_fields = document
@@ -412,7 +410,10 @@ mod tests {
             "amount.currency",
             "amount.vat",
         ] {
-            assert!(!ids.contains(unrelated), "unexpected profile-only prompt: {unrelated}");
+            assert!(
+                !ids.contains(unrelated),
+                "unexpected profile-only prompt: {unrelated}"
+            );
         }
     }
 

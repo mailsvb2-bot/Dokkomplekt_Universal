@@ -22,9 +22,9 @@ mod archive;
 mod web;
 
 use archive::{normalize_external_archive, normalize_zip};
-pub use web::fetch_web_source;
 #[cfg(test)]
 use archive::{parse_7z_technical_listing, validate_archive_relative_path};
+pub use web::fetch_web_source;
 #[cfg(test)]
 use web::is_public_ip;
 

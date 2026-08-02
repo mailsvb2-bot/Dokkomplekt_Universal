@@ -53,7 +53,11 @@ fn archive_entry_is_symlink(mode: Option<u32>) -> bool {
     mode.is_some_and(|value| value & 0o170000 == 0o120000)
 }
 
-pub(super) fn normalize_zip(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
+pub(super) fn normalize_zip(
+    path: &Path,
+    workspace: &Path,
+    depth: usize,
+) -> Result<NormalizedSource, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| format!("ZIP повреждён: {error}"))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
@@ -123,7 +127,9 @@ struct ExternalArchiveEntry {
     link_like: bool,
 }
 
-pub(super) fn parse_7z_technical_listing(output: &str) -> Result<Vec<ExternalArchiveEntry>, String> {
+pub(super) fn parse_7z_technical_listing(
+    output: &str,
+) -> Result<Vec<ExternalArchiveEntry>, String> {
     let listing = output
         .split_once("----------")
         .map_or(output, |(_, body)| body);

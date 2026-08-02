@@ -396,6 +396,19 @@ pub fn normalize_payment_provider(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+pub(crate) fn postgres_test_database_url() -> Option<String> {
+    match std::env::var("DATABASE_URL") {
+        Ok(value) if !value.trim().is_empty() => Some(value),
+        _ if std::env::var("DOKKOMPLEKT_REQUIRE_POSTGRES_TESTS").as_deref() == Ok("1") => {
+            eprintln!("DATABASE_URL is required because DOKKOMPLEKT_REQUIRE_POSTGRES_TESTS=1");
+            Some("postgresql://required-postgres-test-database-is-missing".to_string())
+        }
+        _ => None,
+    }
+}
+
+
+#[cfg(test)]
 mod tests {
     use super::{
         database_endpoint, normalize_payment_provider, validate_database_transport,

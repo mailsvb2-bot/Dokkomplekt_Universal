@@ -672,7 +672,7 @@ mod tests {
         use std::sync::{Arc, Barrier};
         use std::thread;
 
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        let Some(database_url) = crate::config::postgres_test_database_url() else {
             return;
         };
         let store = PostgresStore::connect(&database_url).unwrap();
@@ -724,7 +724,7 @@ mod tests {
         use std::sync::{Arc, Barrier};
         use std::thread;
 
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        let Some(database_url) = crate::config::postgres_test_database_url() else {
             return;
         };
         let store = PostgresStore::connect(&database_url).unwrap();

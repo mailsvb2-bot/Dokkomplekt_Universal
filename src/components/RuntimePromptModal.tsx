@@ -58,7 +58,6 @@ function PromptInput({ prompt, value, onChange }: { prompt: PromptSpec; value: s
     <label className="runtimePromptRow" htmlFor={inputId}>
       <span className="runtimePromptLabel">
         {prompt.title}{prompt.required ? <b aria-label="обязательно"> *</b> : null}
-        <small>{prompt.field_id}</small>
       </span>
       <span className="runtimePromptControl">
         {kind === 'long_text' ? (

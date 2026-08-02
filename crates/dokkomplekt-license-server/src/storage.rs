@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn postgres_backend_obeys_license_store_contract_when_database_url_is_present() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        let Some(database_url) = crate::config::postgres_test_database_url() else {
             return;
         };
         let store = StoreBackend::Postgres(PostgresStore::connect(&database_url).unwrap());

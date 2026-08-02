@@ -3,6 +3,7 @@ import { AdvancedToolsPanel } from './AdvancedToolsPanel';
 import { AutomationControlCenter } from './AutomationControlCenter';
 import { BusinessRegistryPanel } from './BusinessRegistryPanel';
 import { OrganizationKnowledgePanel } from './OrganizationKnowledgePanel';
+import { LearningGovernancePanel } from './LearningGovernancePanel';
 
 interface UtilityPanelProps {
   documents: DocumentTemplateSpec[];
@@ -138,6 +139,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
       <OrganizationKnowledgePanel onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
       <AdvancedToolsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} outputRoot={props.outputRoot} onStatus={props.onStatus} onDocumentsChanged={props.onDocumentsChanged} />
       <AutomationControlCenter onStatus={props.onStatus} />
+      <LearningGovernancePanel documents={props.documents} onStatus={props.onStatus} />
       <div className="licenseRow">
         <input
           value={props.licenseText}

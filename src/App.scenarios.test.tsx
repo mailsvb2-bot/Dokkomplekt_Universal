@@ -107,9 +107,12 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'capture_word_scanner': { const req=(payload as {req?:{session_id?:string;close_after_capture?:boolean}})?.req; return { session_id: req?.session_id ?? 'scan-source', selected_text: '148', context_text: 'Счёт № 148', before_text: 'Счёт № ', after_text: '', selection_start: 7, selection_end: 10, expanded_from_cursor: false, document_path: 'source.docx', document_closed: Boolean(req?.close_after_capture) } as never; }
       case 'apply_word_scanner_selection': return { session_id: 'scan-template', output_path: 'guided-copy.docx', selected_text: '148', placeholder: '{{accounting.invoice_number}}', extracted_text: 'Счёт № {{accounting.invoice_number}}', document_closed: true } as never;
       case 'close_word_scanner': return true as never;
-      case 'save_learned_scanner_rule':
-      case 'list_learned_scanner_rules':
+      case 'save_learned_scanner_rule': return [] as never;
+      case 'list_learned_scanner_rules': return [{ rule_id: 'rule-1', field_id: 'document.number', title: 'Номер документа', label_hint: 'Номер', before_text: '№ ', after_text: '', sample_value: '148', input_kind: 'text', created_at: '2026-08-01', learning_status: 'promoted', successful_applications: 3 }] as never;
       case 'delete_learned_scanner_rule': return [] as never;
+      case 'list_template_approvals': return [{ document_id: 'acc_1', template_sha256: 'a'.repeat(64), jurisdiction: 'Российская Федерация', approved_by: 'Главный бухгалтер', approved_at: '2026-08-01', note: '' }] as never;
+      case 'revoke_document_template_approval': return [] as never;
+      case 'get_learned_kit_decision': return { document_ids: ['acc_1'], source: 'local_corpus', confidence: 0.97, auto_apply: true, reason: 'Устойчивое совпадение' } as never;
       case 'update_document_template': return pack as never;
       case 'list_template_versions': return [] as never;
       case 'rollback_template_version': return pack as never;
@@ -259,9 +262,11 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByRole('button', { name: 'Использовать ИНН во всех документах' }));
     await waitFor(() => expect(parsePayload(calls, 'set_field')).toMatchObject({ req: { field_id: 'org.inn', value: '7701234567' } }));
 
-    // save fields -> apply_popup
+    // Answers are applied through the same final batch plan shown in preflight.
     await click(/Сохранить ответы/);
-    await waitFor(() => expect(parsePayload(calls, 'apply_popup')).toMatchObject({ req: { document_id: 'acc_1', answers: [{ field_id: 'org.inn', value: '7701234567' }] } }));
+    await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
+      req: { document_ids: ['acc_1', 'doc_2'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
+    }));
 
     // specialist can configure the document-specific popup without changing the template.
     await click(/Настроить уточнения/);
@@ -353,6 +358,18 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(parsePayload(calls, 'verify_rust_license_text')).toMatchObject({ req: { license_text: 'LIC-123' } }));
     expect((parsePayload(calls, 'verify_rust_license_text') as { req?: Record<string, unknown> })?.req).not.toHaveProperty('public_key_b64');
 
+    const governance = screen.getByText('Обучение и подтверждения').closest('.governanceCard');
+    expect(governance).toBeTruthy();
+    fireEvent.click(within(governance as HTMLElement).getByText('Обучение и подтверждения'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(await within(governance as HTMLElement).findByRole('button', { name: 'Удалить правило' }));
+    await waitFor(() => expect(calls.some((c) => c.command === 'delete_learned_scanner_rule')).toBe(true));
+    fireEvent.change(within(governance as HTMLElement).getByLabelText('Идентификатор кластера'), { target: { value: 'invoice-cluster' } });
+    fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Показать решение' }));
+    await waitFor(() => expect(calls.some((c) => c.command === 'get_learned_kit_decision')).toBe(true));
+    fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Отозвать подтверждение' }));
+    await waitFor(() => expect(calls.some((c) => c.command === 'revoke_document_template_approval')).toBe(true));
+
     fireEvent.change(screen.getByPlaceholderText('идентификатор блока'), { target: { value: 'requisites' } });
     fireEvent.change(screen.getByPlaceholderText('название'), { target: { value: 'Реквизиты' } });
     fireEvent.change(screen.getByPlaceholderText('текст блока с условиями и полями'), { target: { value: '{{org.name}}' } });
@@ -434,7 +451,7 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan', 'get_learned_kit_decision', 'route_intake', 'retry_case_run', 'delete_learned_scanner_rule', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'list_template_approvals', 'approve_document_template', 'revoke_document_template_approval', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint']);
+    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);

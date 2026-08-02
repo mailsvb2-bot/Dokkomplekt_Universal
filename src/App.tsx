@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentOutput, CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, GuidedScannerMarkupAction, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
@@ -15,46 +15,18 @@ import { Workspace } from './components/Workspace';
 import { PopupDesignerModal } from './components/PopupDesignerModal';
 import { RuntimePromptModal } from './components/RuntimePromptModal';
 import { GuidedScannerModal } from './components/GuidedScannerModal';
-import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
-import { bestScannerSuggestion, suggestScannerFields, type ScannerFieldSuggestion } from './lib/scannerSuggestions';
+import { ensurePopupField } from './components/PopupFieldEditor';
+import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
-
-const DEFAULT_YEAR = new Date().getFullYear();
-const STATE_DB = 'dokkomplekt-user-state.sqlite';
-const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
-const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
-const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
-
-type PendingTemplate = {
-  document_id: string;
-  template_path: string;
-  extracted_text: string;
-  file_name: string;
-  button_label: string;
-  popup_fields: PopupFieldConfig[];
-};
-
-type PendingGeneration = {
-  kind: 'single' | 'batch';
-  documentIds: string[];
-};
-
-type GuidedScannerTarget =
-  | { mode: 'source'; documentId: string | null; label: string | null; domain: DomainKind | null }
-  | { mode: 'template'; kind: 'pending' | 'existing'; documentId: string; label: string; domain: DomainKind | null };
-
-type GuidedScannerState = {
-  session: WordScannerSession;
-  target: GuidedScannerTarget;
-  capture: WordScannerCapture | null;
-  suggestions: ScannerFieldSuggestion[];
-  selectedFieldId: string;
-  rememberRule: boolean;
-  addQuestion: boolean;
-  markupAction: GuidedScannerMarkupAction;
-};
+import {
+  AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
+  arrayBufferToBase64, createdPrintItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
+  replaceAllLiteral, type GuidedScannerState, type PendingGeneration, type PendingTemplate,
+} from './lib/appSupport';
 
 
 export function App() {
@@ -83,6 +55,8 @@ export function App() {
   } | null>(null);
 
   const [plan, setPlan] = useState<WorkflowPlan | null>(null);
+  const [preflightPlan, setPreflightPlan] = useState<WorkflowPlan | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [sickLeave, setSickLeave] = useState(false);
 
@@ -206,6 +180,35 @@ export function App() {
     setSelectedDocIds((previous) => previous.filter((id) => existing.has(id)));
   }, [documents]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const sourceReady = Boolean(sourceFileName || parsed);
+    if (!sourceReady || selectedDocIds.length === 0) {
+      setPreflightPlan(null);
+      setPreflightLoading(false);
+      setAnswers({});
+      return () => { cancelled = true; };
+    }
+
+    setPreflightLoading(true);
+    void loadWorkflowPlan(selectedDocIds)
+      .then((workflow) => {
+        if (cancelled) return;
+        setPreflightPlan(workflow);
+        setAnswers((previous) => Object.fromEntries(
+          workflow.prompts.map((prompt) => [prompt.field_id, previous[prompt.field_id] ?? prompt.current_value ?? '']),
+        ));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPreflightPlan(null);
+          setStatus(`Не удалось проверить выбранный комплект: ${errorMessage(error)}`);
+        }
+      })
+      .finally(() => { if (!cancelled) setPreflightLoading(false); });
+    return () => { cancelled = true; };
+  }, [sourceFileName, parsed, selectedDocIds, sickLeave]);
+
   const previewTitle = detectTitle(templateText) || 'Документ';
   const previewLabel = buttonLabel.trim() || previewTitle;
 
@@ -290,6 +293,7 @@ export function App() {
     setSemantic(null);
     setAnswers({});
     setPlan(null);
+    setPreflightPlan(null);
     setPreview(null);
     setScannerField('');
     setScannerText('');
@@ -329,6 +333,7 @@ export function App() {
     });
     setAnswers({});
     setPlan(null);
+    setPreflightPlan(null);
     setPreview(null);
     const routingSummary = applyRoutingRecommendation(res.routing);
     setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
@@ -363,6 +368,7 @@ export function App() {
     });
     setAnswers({});
     setPlan(null);
+    setPreflightPlan(null);
     setPreview(null);
     const routingSummary = applyRoutingRecommendation(res.routing);
     setStatus(`Файл «${file.name}» прочитан. Найдено значений: ${count}.${routingSummary}`);
@@ -393,6 +399,7 @@ export function App() {
     });
     setAnswers({});
     setPlan(null);
+    setPreflightPlan(null);
     setPreview(null);
     const routingSummary = applyRoutingRecommendation(res.routing);
     setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
@@ -408,7 +415,6 @@ export function App() {
     if (template) setActiveTemplateText(template.template_text);
     if (!workflow) return;
     setPlan(workflow);
-    setAnswers(Object.fromEntries(workflow.prompts.map((p) => [p.field_id, p.current_value ?? ''])));
     setStatus(workflow.prompts.length ? `Требуется уточнить полей: ${workflow.prompts.length}.` : 'Все поля распознаны — документ готов.');
   }
 
@@ -551,11 +557,20 @@ export function App() {
     if (autoPrint) await queuePrint(jobsForItems(printItems), true, documentIds, null, res.output_folder);
   }
 
+  async function loadWorkflowPlan(documentIds: string[]): Promise<WorkflowPlan> {
+    return documentIds.length === 1
+      ? getWorkflowPlan(documentIds[0], sickLeave)
+      : getWorkflowPlanBatch(documentIds, sickLeave);
+  }
+
   async function requestGeneration(generation: PendingGeneration) {
-    const workflow = generation.kind === 'single'
-      ? await run('get_workflow_plan', () => getWorkflowPlan(generation.documentIds[0], sickLeave))
-      : await run('get_workflow_plan_batch', () => getWorkflowPlanBatch(generation.documentIds, sickLeave));
+    const workflow = await run(
+      generation.kind === 'single' ? 'get_workflow_plan' : 'get_workflow_plan_batch',
+      () => loadWorkflowPlan(generation.documentIds),
+    );
     if (!workflow) return;
+    setPreflightPlan(workflow);
+    setAnswers(Object.fromEntries(workflow.prompts.map((prompt) => [prompt.field_id, prompt.current_value ?? ''])));
     if (workflow.blocked) {
       setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
       return;
@@ -669,24 +684,45 @@ export function App() {
     setDocuments(pack.documents);
     setActiveDoc(null);
     setPlan(null);
+    setPreflightPlan(null);
     setPreview(null);
     setStatus('Документ убран из набора. Исходный шаблон сохранён.');
   }
 
+  async function refreshPreflightPlan(documentIds = selectedDocIds) {
+    if (!documentIds.length) {
+      setPreflightPlan(null);
+      setAnswers({});
+      return;
+    }
+    const workflow = await loadWorkflowPlan(documentIds);
+    setPreflightPlan(workflow);
+    setAnswers(Object.fromEntries(workflow.prompts.map((prompt) => [prompt.field_id, prompt.current_value ?? ''])));
+  }
+
   async function pinField(fieldId: string) {
     const value = answers[fieldId] ?? '';
-    await run('set_field', () => setField(fieldId, value));
+    const saved = await run('set_field', () => setField(fieldId, value));
+    if (!saved) return;
+    await refreshPreflightPlan();
     setStatus('Значение сохранено и будет использовано в других документах комплекта.');
   }
 
   async function saveFields() {
-    if (!activeDoc || !plan) return;
-    const missing = plan.prompts.filter((p) => p.required && !answers[p.field_id]?.trim());
+    if (!preflightPlan || !selectedDocIds.length) return;
+    const missing = preflightPlan.prompts.filter((prompt) => prompt.required && !answers[prompt.field_id]?.trim());
     if (missing.length) { setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`); return; }
-    const payload = Object.entries(answers).map(([field_id, value]) => ({ field_id, value }));
-    const res = await run('apply_popup', () => applyPopup(activeDoc, sickLeave, payload));
+    const payload = preflightPlan.prompts.map((prompt) => ({
+      field_id: prompt.field_id,
+      value: answers[prompt.field_id] ?? '',
+      continue_without_value: false,
+    }));
+    const res = selectedDocIds.length === 1
+      ? await run('apply_popup', () => applyPopup(selectedDocIds[0], sickLeave, payload))
+      : await run('apply_popup_batch', () => applyPopupBatch(selectedDocIds, sickLeave, payload));
     if (!res) return;
-    setStatus(res.accepted ? 'Поля сохранены. Значения общие для всех документов.' : res.message || `Не заполнено полей: ${res.still_missing?.length ?? 0}`);
+    if (res.accepted) await refreshPreflightPlan();
+    setStatus(res.accepted ? 'Поля сохранены. Выбранный комплект проверен по тому же плану, который используется при создании.' : res.message || `Не заполнено полей: ${res.still_missing?.length ?? 0}`);
   }
 
   async function previewNow() {
@@ -1282,7 +1318,9 @@ export function App() {
             parsed={parsed}
             modelOutput={modelOutput}
             semantic={semantic}
-            plan={plan}
+            plan={preflightPlan}
+            planLoading={preflightLoading}
+            selectedDocumentCount={selectedDocIds.length}
             answers={answers}
             preview={preview}
             setWatchFolder={setWatchFolder}
@@ -1475,142 +1513,4 @@ export function App() {
 
     </div>
   );
-}
-
-function inferGuidedMarkupAction(capture: WordScannerCapture): GuidedScannerMarkupAction {
-  const selected = capture.selected_text.trim();
-  const looksLikeLabel = /[:：№#]\s*$/.test(selected)
-    || /^(?:номер|дата|фио|ф\.и\.о|инн|кпп|огрн|адрес|телефон|должность|диагноз|лечение|сумма|итого|vin)\b/i.test(selected);
-  return looksLikeLabel ? 'insert_after' : 'replace';
-}
-
-function ensureSuggestedPopupField(
-  fields: PopupFieldConfig[],
-  fieldId: string,
-  title: string,
-  inputKind: PopupFieldConfig['input_kind'],
-): PopupFieldConfig[] {
-  if (fields.some((field) => field.field_id === fieldId)) return fields;
-  return [...fields, {
-    ...newPopupField(fieldId),
-    title,
-    input_kind: inputKind,
-    help_text: 'Если программа не найдёт это значение в исходном документе, она попросит специалиста его ввести.',
-  }];
-}
-
-function promptToPopupField(prompt: PromptSpec): PopupFieldConfig {
-  return {
-    field_id: prompt.field_id,
-    title: prompt.title,
-    required: prompt.required,
-    input_kind: prompt.input_kind ?? 'text',
-    ask_mode: prompt.ask_mode ?? 'if_missing',
-    options: prompt.options ?? [],
-    allow_custom_option: prompt.allow_custom_option ?? false,
-    help_text: prompt.help_text ?? prompt.validation_hint ?? null,
-    section: prompt.section ?? 'Данные документа',
-    default_value: null,
-    linked_to: prompt.linked_to ?? null,
-    order: prompt.order ?? 500,
-  };
-}
-
-function loadOutputFolderParts(): FolderNamePartDto[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null');
-    if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) {
-      return parsed as FolderNamePartDto[];
-    }
-  } catch { /* use privacy-safe default */ }
-  return ['DocumentNumber', 'DocumentDate'];
-}
-
-function loadAutoPrintPreference(): boolean {
-  try { return localStorage.getItem(AUTO_PRINT_KEY) === 'true'; } catch { return false; }
-}
-
-function loadPrintCopyPreferences(): Record<string, number> {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(PRINT_COPIES_KEY) || '{}');
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, normalizeCopyCount(Number(value))]));
-    }
-  } catch { /* use one copy by default */ }
-  return {};
-}
-
-function normalizeCopyCount(value: number): number {
-  if (!Number.isFinite(value)) return 1;
-  return Math.max(0, Math.min(99, Math.trunc(value)));
-}
-
-function fileLabel(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop()?.replace(/\.[^.]+$/, '') || 'Документ';
-}
-
-function cursorMarkedTemplatePath(inputPath: string, documentId: string): string {
-  const extension = inputPath.match(/\.[^./\\]+$/)?.[0] ?? '.docx';
-  const base = inputPath.slice(0, -extension.length);
-  const safeId = documentId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return `${base}.cursor-${safeId}-${Date.now()}${extension}`;
-}
-
-function replaceAllLiteral(source: string, needle: string, replacement: string): string {
-  return needle ? source.split(needle).join(replacement) : source;
-}
-
-function createdPrintItems(
-  created: CreatedDocumentOutput[] | undefined,
-  paths: string[],
-  documents: DocumentTemplateSpec[],
-  requestedIds: string[] = [],
-): GeneratedPrintItem[] {
-  if (created?.length) return created.map((item) => ({ ...item }));
-  return paths.map((path, index) => {
-    const documentId = requestedIds[index] ?? `generated:${index}`;
-    const document = documents.find((item) => item.id === documentId);
-    return { document_id: documentId, label: document?.button_label ?? fileLabel(path), path };
-  });
-}
-
-/** File.arrayBuffer с fallback на FileReader (нужен для jsdom в тестах). */
-function readFileBytes(file: File): Promise<ArrayBuffer> {
-  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = () => reject(reader.error ?? new Error('file read failed'));
-    reader.readAsArrayBuffer(file);
-  });
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-function newDocumentId(): string {
-  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  return `template_${random.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  try { return JSON.stringify(error); } catch { return 'Неизвестная ошибка'; }
-}
-
-function detectTitle(text: string): string | null {
-  for (const raw of text.split(/\r?\n/).slice(0, 20)) {
-    const line = raw.trim();
-    if (!line) continue;
-    return line.replace(/\s*\{\{[^}]+\}\}.*/, '').replace(/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+/, '').trim() || line;
-  }
-  return null;
 }

@@ -1,6 +1,7 @@
 use crate::core::{SourceDocument, TargetTemplate};
 use crate::{
-    effective_popup_fields, is_valid_field_id, popup_config_for_field, resolve_popup_default,
+    canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
+    resolve_popup_default,
     run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
     PromptAskMode, PromptSpec, SemanticCase, UniversalDomain, UniversalPipelineFlags,
     UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
@@ -43,14 +44,20 @@ pub fn plan_workflow(
     });
 
     let suppressed = suppressed_prompt_fields(document);
+    // The final selected template is the authority for runtime questions. Domain profiles may
+    // suggest fields in the popup designer, but they must not force unrelated questions into a
+    // document that does not physically use those fields. Explicitly configured popup fields are
+    // part of the selected document contract and therefore remain eligible.
+    let relevant = selected_document_fields(document);
     let required = pipeline
         .workflow
         .requires
         .iter()
         .chain(document.required_fields.iter())
         .filter(|field_id| is_valid_field_id(field_id))
+        .map(|field_id| canonical_storage_field_id(field_id))
+        .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
-        .cloned()
         .collect::<BTreeSet<_>>();
     let optional = pipeline
         .workflow
@@ -58,13 +65,19 @@ pub fn plan_workflow(
         .iter()
         .chain(document.placeholders.iter())
         .filter(|field_id| is_valid_field_id(field_id))
+        .map(|field_id| canonical_storage_field_id(field_id))
+        .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
-        .filter(|field_id| !required.contains(*field_id))
-        .cloned()
+        .filter(|field_id| !required.contains(field_id))
         .collect::<BTreeSet<_>>();
 
     let mut configs = effective_popup_fields(document)
         .into_iter()
+        .map(|mut config| {
+            config.field_id = canonical_storage_field_id(&config.field_id);
+            config
+        })
+        .filter(|config| relevant.contains(&config.field_id))
         .filter(|config| !suppressed.contains(config.field_id.as_str()))
         .map(|config| (config.field_id.clone(), config))
         .collect::<BTreeMap<_, _>>();
@@ -103,6 +116,23 @@ pub fn plan_workflow(
             .map(|field| format!("Небезопасный placeholder: {field}"))
             .collect(),
     }
+}
+
+
+fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String> {
+    let explicit_popup_fields = document
+        .popup_configured
+        .then_some(document.popup_fields.iter().map(|field| &field.field_id))
+        .into_iter()
+        .flatten();
+    document
+        .placeholders
+        .iter()
+        .chain(document.required_fields.iter())
+        .chain(explicit_popup_fields)
+        .filter(|field_id| is_valid_field_id(field_id))
+        .map(|field_id| canonical_storage_field_id(field_id))
+        .collect()
 }
 
 fn suppressed_prompt_fields(document: &DocumentTemplateSpec) -> BTreeSet<&'static str> {
@@ -274,11 +304,16 @@ fn workflow_template_text(document: &DocumentTemplateSpec) -> String {
     } else {
         document.role_id.as_str()
     };
+    let explicit_popup_fields = document
+        .popup_configured
+        .then_some(document.popup_fields.iter().map(|field| &field.field_id))
+        .into_iter()
+        .flatten();
     let fields = document
         .placeholders
         .iter()
         .chain(document.required_fields.iter())
-        .chain(document.popup_fields.iter().map(|field| &field.field_id))
+        .chain(explicit_popup_fields)
         .map(|field_id| format!("{{{{{field_id}}}}}"))
         .collect::<Vec<_>>()
         .join("\n");
@@ -331,6 +366,73 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn accounting_profile_does_not_force_fields_absent_from_selected_template() {
+        let doc = DocumentTemplateSpec {
+            id: "invoice".into(),
+            button_label: "Счёт".into(),
+            template_path: "invoice.docx".into(),
+            category: DomainKind::Accounting,
+            role_id: "invoice".into(),
+            required_fields: Vec::new(),
+            placeholders: vec![
+                "document.number".into(),
+                "document.date".into(),
+                "counterparty.name".into(),
+                "counterparty.inn".into(),
+                "amount.total".into(),
+            ],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let ids = plan
+            .prompts
+            .iter()
+            .map(|prompt| prompt.field_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ids,
+            BTreeSet::from([
+                "amount.total",
+                "counterparty.inn",
+                "counterparty.name",
+                "document.date",
+                "document.number",
+            ])
+        );
+        for unrelated in [
+            "accounting.invoice_number",
+            "accounting.invoice_date",
+            "org.inn",
+            "amount.currency",
+            "amount.vat",
+        ] {
+            assert!(!ids.contains(unrelated), "unexpected profile-only prompt: {unrelated}");
+        }
+    }
+
+    #[test]
+    fn explicitly_configured_popup_field_remains_in_final_plan() {
+        let mut doc = document("one", "document.number");
+        doc.category = DomainKind::Accounting;
+        doc.role_id = "invoice".into();
+        doc.popup_configured = true;
+        doc.popup_fields = vec![PopupFieldConfig::new("amount.currency", "Валюта")];
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        assert!(plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == "amount.currency"));
+        assert!(!plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == "accounting.invoice_date"));
     }
 
     #[test]

@@ -129,7 +129,8 @@ pub(super) struct ExternalArchiveEntry {
 
 pub(super) fn parse_7z_technical_listing(
     output: &str,
-) -> Result<Vec<ExternalArchiveEntry>, String> {
+) -> Result<Vec<ExternalArchiveEntry>, String>
+{
     let listing = output
         .split_once("----------")
         .map_or(output, |(_, body)| body);

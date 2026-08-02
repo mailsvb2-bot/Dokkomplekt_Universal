@@ -587,6 +587,11 @@ fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<Seman
         .lock()
         .map_err(|_| "uploaded source state lock failed")?
         .take();
+    state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")?
+        .take();
     let result = {
         let mut case = state
             .semantic_case
@@ -613,6 +618,12 @@ fn parse_source(
         .lock()
         .map_err(|_| "uploaded source state lock failed")?
         .take();
+    state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")?
+        .take();
+    let provenance = SourceProvenance::from_bytes("вставленный текст", req.source_text.as_bytes());
     let (mut parsed, mut report) = parse_source_text(&req.source_text, req.default_year);
     let learned = apply_learned_scanner_rules(&app, &req.source_text, &mut parsed)?;
     if !learned.is_empty() {
@@ -638,6 +649,10 @@ fn parse_source(
         }
     };
     persist_default_state(&app, &state)?;
+    *state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")? = Some(provenance);
     Ok(response)
 }
 
@@ -670,6 +685,11 @@ fn parse_source_file(
         .lock()
         .map_err(|_| "uploaded source state lock failed")?
         .take();
+    state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")?
+        .take();
     let mut bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
     let workspace = app
         .path()
@@ -679,6 +699,7 @@ fn parse_source_file(
     let mut upload_session =
         universal_intake::normalize_uploaded_bytes(&req.file_name, &bytes, &workspace)?;
     let normalized = upload_session.take_source()?;
+    let provenance = SourceProvenance::from_bytes(&req.file_name, &bytes);
     let retained_source = universal_intake::RetainedUploadedSource::new(&req.file_name, &bytes)?;
     bytes.fill(0);
     let source_path = retained_source.virtual_path();
@@ -722,6 +743,10 @@ fn parse_source_file(
         .retained_uploaded_source
         .lock()
         .map_err(|_| "uploaded source state lock failed")? = Some(retained_source);
+    *state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")? = Some(provenance);
     Ok(response)
 }
 
@@ -787,12 +812,18 @@ fn parse_web_source(
         .lock()
         .map_err(|_| "uploaded source state lock failed")?
         .take();
+    state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")?
+        .take();
     let workspace = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("intake-work");
     let fetched = universal_intake::fetch_web_source(req.url.trim(), &workspace)?;
+    let provenance = SourceProvenance::from_sha256(&fetched.final_url, &fetched.source_sha256)?;
     let (mut parsed, mut report) = parse_source_text(&fetched.source_text, req.default_year);
     report.warnings.extend(fetched.warnings);
     let learned = apply_learned_scanner_rules(&app, &fetched.source_text, &mut parsed)?;
@@ -811,6 +842,10 @@ fn parse_web_source(
         case.clone()
     };
     persist_default_state(&app, &state)?;
+    *state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")? = Some(provenance);
     let routing = {
         let pack = state.pack.lock().map_err(|_| "state lock failed")?;
         recommend_document_bundle(&fetched.source_text, &semantic_case, &pack)
@@ -1268,12 +1303,20 @@ fn render_docx_batch(
             .flat_map(|document| document.placeholders.iter().cloned())
             .collect::<BTreeSet<_>>();
         if privacy.write_trust_report {
+            let provenance = state
+                .source_provenance
+                .lock()
+                .map_err(|_| "source provenance state lock failed")?
+                .clone()
+                .ok_or_else(|| {
+                    "Для проверяемого отчёта сначала загрузите файл, вставьте текст или получите HTTPS-источник.".to_string()
+                })?;
             write_trust_report(
                 &stage,
                 &report_case,
                 TrustReportContext {
-                    source_name: "текущая сессия",
-                    source_sha256: "manual-session",
+                    source_name: &provenance.source_name,
+                    source_sha256: &provenance.source_sha256,
                     generated_names: &generated_names,
                     used_field_ids: &used_field_ids,
                     include_values: privacy.include_values_in_trust_report,

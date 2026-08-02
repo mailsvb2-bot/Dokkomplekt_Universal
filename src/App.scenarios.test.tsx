@@ -12,9 +12,9 @@ const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
 function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing' } = {}) {
-  const componentState = options.componentState ?? ((options.componentInstalled ?? true) ? 'downloaded' : 'missing');
-  const componentInstalled = componentState === 'downloaded';
-  const componentAvailable = componentState !== 'missing';
+  let componentState = options.componentState ?? ((options.componentInstalled ?? true) ? 'downloaded' : 'missing');
+  const componentInstalled = () => componentState === 'downloaded';
+  const componentAvailable = () => componentState !== 'missing';
   let clauseBlocks: Array<{ block_id: string; title: string; content: string; updated_at: string }> = [];
   __setInvokeForTests(async (command, payload) => {
     calls.push({ command, payload });
@@ -32,17 +32,24 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'update_reference_data': return { installed: true, cached: true, restart_required: false, source: 'signed-feed', published_at: '2026-07-18', complete_years: [2025, 2026, 2027], listed_years: [2025, 2026, 2027], message: 'updated' } as never;
       case 'import_reference_data': return { installed: true, cached: true, restart_required: false, source: 'imported', published_at: '2026-07-18', complete_years: [2025, 2026, 2027], listed_years: [2025, 2026, 2027], message: 'imported' } as never;
       case 'get_sidecar_status':
-        return [{ tool: 'tesseract', available: true, bundled: true, state: 'bundled', component_id: 'ocr', resolved_path: 'tools/tesseract.exe', purpose: 'OCR' }] as never;
+        return [
+          { tool: 'tesseract', available: componentAvailable(), bundled: componentState === 'bundled', state: componentState, component_id: 'ocr', resolved_path: componentAvailable() ? 'tools/tesseract.exe' : null, purpose: 'OCR' },
+          { tool: 'pdftotext', available: componentAvailable(), bundled: componentState === 'bundled', state: componentState, component_id: 'ocr', resolved_path: componentAvailable() ? 'tools/pdftotext.exe' : null, purpose: 'PDF text' },
+          { tool: 'pdftoppm', available: componentAvailable(), bundled: componentState === 'bundled', state: componentState, component_id: 'ocr', resolved_path: componentAvailable() ? 'tools/pdftoppm.exe' : null, purpose: 'PDF images' },
+          { tool: 'soffice', available: true, bundled: false, state: 'system', component_id: 'office', resolved_path: 'C:/Program Files/LibreOffice/program/soffice.exe', purpose: 'Office conversion' },
+        ] as never;
       case 'get_component_statuses':
       case 'refresh_component_catalog':
         return [
-          { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42 * 1024 * 1024, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled, available: componentAvailable, catalog_available: true, message: 'ok' },
+          { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42 * 1024 * 1024, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' },
           { id: 'office', label: 'Office', description: '', target: 'windows-x86_64', size_bytes: 210 * 1024 * 1024, size_label: '210 МБ', unlocks: ['soffice'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'ok' },
           { id: 'semantic', label: 'Semantic', description: '', target: 'windows-x86_64', size_bytes: 980 * 1024 * 1024, size_label: '980 МБ', unlocks: ['llama_cpp'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'ok' },
         ] as never;
       case 'install_component':
-      case 'remove_component':
-        return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: command === 'install_component' ? 'downloaded' : 'missing', installed: command === 'install_component', available: command === 'install_component', catalog_available: true, message: 'ok' } as never;
+      case 'remove_component': {
+        componentState = command === 'install_component' ? 'downloaded' : 'missing';
+        return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' } as never;
+      }
       case 'parse_web_source':
         return { source_text: 'Счёт № 148 из HTTPS', semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, final_url: 'https://example.com/doc', content_type: 'text/html' } as never;
       case 'get_document_template_text':

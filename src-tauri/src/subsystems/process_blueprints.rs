@@ -47,6 +47,13 @@ fn process_blueprint_catalog() -> Result<ProcessBlueprintCatalog, String> {
 
 #[tauri::command]
 fn get_process_blueprints(app: tauri::AppHandle) -> Result<ProcessBlueprintState, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window("main") {
+        match window.set_title("Dokkomplekt Universal") {
+            Ok(()) => eprintln!("Dokkomplekt native frontend IPC ready"),
+            Err(error) => eprintln!("Dokkomplekt native frontend IPC signal failed: {error}"),
+        }
+    }
     let catalog = process_blueprint_catalog()?;
     let repo = repository_for(&default_state_db_path(&app)?)?;
     let selected_process_id = repo

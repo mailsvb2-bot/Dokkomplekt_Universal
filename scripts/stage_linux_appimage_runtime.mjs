@@ -139,20 +139,21 @@ function main() {
     if (machine !== architecture.elfMachine) {
       throw new Error(`staged library architecture changed unexpectedly: ${name}`);
     }
-    const size = statSync(target).size;
+    const sourceSize = statSync(target).size;
     manifestLibraries.push({
       name,
       elfMachine: machine,
-      size,
-      sha256: sha256(target),
+      sourceSize,
+      sourceSha256: sha256(target),
     });
-    console.log(`Staged ${name} (${size} bytes) from ${source}`);
+    console.log(`Staged ${name} (${sourceSize} bytes) from ${source}`);
   }
 
   writeFileSync(
     join(destination, 'manifest.json'),
     `${JSON.stringify({
-      schema: 1,
+      schema: 2,
+      phase: 'pre-linuxdeploy',
       generatedBy: 'scripts/stage_linux_appimage_runtime.mjs',
       targetArch: architecture.name,
       libraries: manifestLibraries,

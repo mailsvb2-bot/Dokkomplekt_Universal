@@ -239,6 +239,9 @@ jobs:
         run: |
           set -o pipefail
           npx tauri build --bundles appimage,deb,rpm 2>&1 | tee "tauri-build-${{ runner.os }}.log"
+      - name: Record final AppImage runtime integrity
+        if: runner.os == 'Linux'
+        run: python scripts/write_linux_appimage_runtime_manifest.py --bundle-dir target/release/bundle
       - name: Windows installer smoke
         if: runner.os == 'Windows'
         shell: pwsh

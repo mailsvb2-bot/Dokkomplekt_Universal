@@ -5,6 +5,7 @@ use dokkomplekt_docx::extract_docx_text;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Cursor, Read as _, Write as _};
@@ -168,6 +169,8 @@ pub struct WebIntakeResult {
     pub final_url: String,
     pub content_type: String,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing)]
+    pub source_sha256: String,
 }
 
 pub fn supported_extensions() -> &'static [&'static str] {
@@ -2419,6 +2422,7 @@ pub fn fetch_web_source(url: &str, workspace: &Path) -> Result<WebIntakeResult, 
         final_url: final_url.to_string(),
         content_type,
         warnings,
+        source_sha256: hex::encode(Sha256::digest(&bytes)),
     })
 }
 

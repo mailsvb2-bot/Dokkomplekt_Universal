@@ -609,6 +609,55 @@ impl Drop for CaseRunTracker<'_> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceProvenance {
+    source_name: String,
+    source_sha256: String,
+}
+
+impl SourceProvenance {
+    fn from_bytes(source_name: &str, bytes: &[u8]) -> Self {
+        Self {
+            source_name: sanitize_source_name(source_name),
+            source_sha256: hex::encode(Sha256::digest(bytes)),
+        }
+    }
+
+    fn from_sha256(source_name: &str, source_sha256: &str) -> Result<Self, String> {
+        if !is_sha256_hex(source_sha256) {
+            return Err("Источник не содержит проверяемый SHA-256.".into());
+        }
+        Ok(Self {
+            source_name: sanitize_source_name(source_name),
+            source_sha256: source_sha256.to_ascii_lowercase(),
+        })
+    }
+}
+
+fn sanitize_source_name(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shortened = compact.chars().take(240).collect::<String>();
+    if shortened.is_empty() {
+        "источник".into()
+    } else {
+        shortened
+    }
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 struct AppState {
     semantic_case: Mutex<SemanticCase>,
     pack: Mutex<DocumentPack>,
@@ -620,6 +669,7 @@ struct AppState {
     word_scanner: Mutex<Option<WordScannerSessionState>>,
     word_scanner_source_session: Mutex<Option<universal_intake::UploadedSourceSession>>,
     retained_uploaded_source: Mutex<Option<universal_intake::RetainedUploadedSource>>,
+    source_provenance: Mutex<Option<SourceProvenance>>,
     semantic_runtime: Mutex<Option<semantic_runtime::ManagedSemanticRuntime>>,
     persistence_blocked: AtomicBool,
     persistence_error: Mutex<Option<String>>,
@@ -638,6 +688,7 @@ impl Default for AppState {
             word_scanner: Mutex::new(None),
             word_scanner_source_session: Mutex::new(None),
             retained_uploaded_source: Mutex::new(None),
+            source_provenance: Mutex::new(None),
             semantic_runtime: Mutex::new(None),
             persistence_blocked: AtomicBool::new(false),
             persistence_error: Mutex::new(None),
@@ -700,7 +751,112 @@ fn process_is_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-fn acquire_instance_lock(app: &tauri::AppHandle, background: bool) -> Result<PathBuf, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum InstanceLockOutcome {
+    Acquired(PathBuf),
+    AlreadyRunning,
+}
+
+const ACTIVATION_TEMP_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+
+fn activation_queue_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("activation-requests"))
+}
+
+fn cleanup_activation_queue(queue_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(queue_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let temporary = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.ends_with(".tmp"));
+        let stale_regular_file = std::fs::symlink_metadata(&path)
+            .ok()
+            .filter(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= ACTIVATION_TEMP_MAX_AGE);
+        if temporary && stale_regular_file {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn enqueue_activation_request(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let queue_dir = activation_queue_dir(app)?;
+    std::fs::create_dir_all(&queue_dir).map_err(|error| error.to_string())?;
+    let request_id = Uuid::new_v4();
+    let temporary = queue_dir.join(format!(".{request_id}.tmp"));
+    let final_path = queue_dir.join(format!("{request_id}.request"));
+    let mut request = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("Не удалось создать запрос активации окна: {error}"))?;
+    writeln!(request, "pid={}", std::process::id())
+        .map_err(|error| format!("Не удалось записать запрос активации окна: {error}"))?;
+    request
+        .sync_all()
+        .map_err(|error| format!("Не удалось синхронизировать запрос активации окна: {error}"))?;
+    drop(request);
+    std::fs::rename(&temporary, &final_path)
+        .map_err(|error| format!("Не удалось опубликовать запрос активации окна: {error}"))?;
+    Ok(final_path)
+}
+
+fn restore_main_window(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    });
+}
+
+fn start_activation_listener(app: tauri::AppHandle) -> Result<(), String> {
+    let queue_dir = activation_queue_dir(&app)?;
+    std::fs::create_dir_all(&queue_dir).map_err(|error| error.to_string())?;
+    cleanup_activation_queue(&queue_dir);
+    std::thread::spawn(move || loop {
+        let mut activate = false;
+        if let Ok(entries) = std::fs::read_dir(&queue_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let request = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.ends_with(".request"));
+                let regular_file = std::fs::symlink_metadata(&path)
+                    .ok()
+                    .is_some_and(|metadata| {
+                        metadata.file_type().is_file() && !metadata.file_type().is_symlink()
+                    });
+                if request && regular_file && std::fs::remove_file(path).is_ok() {
+                    activate = true;
+                }
+            }
+        }
+        if activate {
+            restore_main_window(&app);
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    });
+    Ok(())
+}
+
+fn acquire_instance_lock(
+    app: &tauri::AppHandle,
+    background: bool,
+) -> Result<InstanceLockOutcome, String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let mode = if background { "watcher" } else { "ui" };
@@ -714,14 +870,14 @@ fn acquire_instance_lock(app: &tauri::AppHandle, background: bool) -> Result<Pat
             Ok(mut file) => {
                 use std::io::Write as _;
                 writeln!(file, "{}", std::process::id()).map_err(|e| e.to_string())?;
-                return Ok(path);
+                return Ok(InstanceLockOutcome::Acquired(path));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let existing_pid = std::fs::read_to_string(&path)
                     .ok()
                     .and_then(|text| text.trim().parse::<u32>().ok());
                 if existing_pid.map(process_is_alive).unwrap_or(false) {
-                    return Err(format!("Экземпляр Dokkomplekt ({mode}) уже запущен."));
+                    return Ok(InstanceLockOutcome::AlreadyRunning);
                 }
                 std::fs::remove_file(&path).map_err(|e| {
                     format!("Не удалось удалить устаревшую блокировку экземпляра: {e}")
@@ -1969,13 +2125,27 @@ fn main() {
                 }
             }
             let state = app.state::<AppState>();
-            let instance_path = acquire_instance_lock(&handle, background_watch)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::AlreadyExists, error))?;
-            *state
-                .instance_lock
-                .lock()
-                .map_err(|_| std::io::Error::other("instance state lock failed"))? =
-                Some(instance_path);
+            match acquire_instance_lock(&handle, background_watch)
+                .map_err(std::io::Error::other)?
+            {
+                InstanceLockOutcome::Acquired(instance_path) => {
+                    *state
+                        .instance_lock
+                        .lock()
+                        .map_err(|_| std::io::Error::other("instance state lock failed"))? =
+                        Some(instance_path);
+                    if !background_watch {
+                        start_activation_listener(handle.clone()).map_err(std::io::Error::other)?;
+                    }
+                }
+                InstanceLockOutcome::AlreadyRunning => {
+                    if !background_watch {
+                        enqueue_activation_request(&handle).map_err(std::io::Error::other)?;
+                    }
+                    handle.exit(0);
+                    return Ok(());
+                }
+            }
 
             // Normal and background launches both restore the latest user pack
             // and semantic values. Persistence is no longer a hidden utility action.
@@ -2209,7 +2379,8 @@ mod tests {
         canonical_json_bytes, current_year_utc, is_forbidden_update_ip,
         load_or_create_local_data_key, parse_semver, pdf_print_settings, plan_label,
         reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
-        validate_printable_file, validate_update_url, write_trust_report, TrustReportContext,
+        validate_printable_file, validate_update_url, write_trust_report, SourceProvenance,
+        TrustReportContext,
     };
     use base64::Engine as _;
 
@@ -2436,6 +2607,28 @@ mod tests {
     }
 
     #[test]
+    fn source_provenance_hashes_exact_bytes_and_sanitizes_name() {
+        let provenance =
+            SourceProvenance::from_bytes("  patient\nrecord.docx\t", b"exact source bytes");
+        assert_eq!(provenance.source_name, "patient record.docx");
+        assert_eq!(
+            provenance.source_sha256,
+            "08df54b6923c9c8ab26e145805e456aac6ee96804d9a0d31d770f4bf8ccfcecf"
+        );
+    }
+
+    #[test]
+    fn source_provenance_rejects_non_sha256_markers() {
+        assert!(SourceProvenance::from_sha256("source.docx", "manual-session").is_err());
+        assert_eq!(
+            SourceProvenance::from_sha256("source.docx", &"A".repeat(64))
+                .unwrap()
+                .source_sha256,
+            "a".repeat(64)
+        );
+    }
+
+    #[test]
     fn trust_report_is_minimized_and_redacted_by_default() {
         let root = std::env::temp_dir().join(format!(
             "dokkomplekt-trust-report-test-{}",
@@ -2468,7 +2661,7 @@ mod tests {
             &semantic_case,
             TrustReportContext {
                 source_name: "source.docx",
-                source_sha256: "abc123",
+                source_sha256: &"a".repeat(64),
                 generated_names: &generated_names,
                 used_field_ids: &used,
                 include_values: false,
@@ -2477,7 +2670,7 @@ mod tests {
         )
         .expect("report");
         let text = std::fs::read_to_string(report).expect("report text");
-        assert!(text.contains("Источник SHA-256: abc123"));
+        assert!(text.contains(&format!("Источник SHA-256: {}", "a".repeat(64))));
         assert!(text.contains("contract.number: [значение скрыто"));
         assert!(!text.contains("A-42"));
         assert!(!text.contains("unused.secret"));

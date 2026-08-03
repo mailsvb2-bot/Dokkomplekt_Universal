@@ -48,55 +48,46 @@ jobs:
                   raise SystemExit('expected PopupFieldEditor import not found')
               source = source.replace(old_import, new_import, 1)
 
-          old_select = """  async function selectDocument(doc: DocumentTemplateSpec) {
-    setActiveDoc(doc.id);
-    setPreview(null);
-    const [workflow, template] = await Promise.all([
-      run('get_workflow_plan', () => getWorkflowPlan(doc.id, sickLeave)),
-      run('get_document_template_text', () => getDocumentTemplateText(doc.id)),
-    ]);
-    if (template) setActiveTemplateText(template.template_text);
-    if (!workflow) return;
-    setPlan(workflow);
-    setStatus(workflow.prompts.length ? `Требуется уточнить полей: ${workflow.prompts.length}.` : 'Все поля распознаны — документ готов.');
-  }"""
-          new_select = """  async function selectDocument(doc: DocumentTemplateSpec) {
-    setActiveDoc(doc.id);
-    setPreview(null);
-    const finalPlanPromise = selectedDocIds.length && (sourceFileName || parsed)
-      ? loadWorkflowPlan(selectedDocIds)
-      : Promise.resolve(null);
-    const [workflow, template, finalWorkflow] = await Promise.all([
-      run('get_workflow_plan', () => getWorkflowPlan(doc.id, sickLeave)),
-      run('get_document_template_text', () => getDocumentTemplateText(doc.id)),
-      finalPlanPromise,
-    ]);
-    if (template) setActiveTemplateText(template.template_text);
-    if (!workflow) return;
-    setPlan(workflow);
-    if (finalWorkflow) {
-      setPreflightPlan(finalWorkflow);
-      setAnswers((previous) => Object.fromEntries(
-        finalWorkflow.prompts.map((prompt) => [prompt.field_id, previous[prompt.field_id] ?? prompt.current_value ?? '']),
-      ));
-    }
-    const displayedPlan = finalWorkflow ?? workflow;
-    setStatus(displayedPlan.prompts.length
-      ? `Требуется уточнить полей в выбранном комплекте: ${displayedPlan.prompts.length}.`
-      : 'Финальный план выбранного комплекта подтверждён — обязательных уточнений нет.');
-  }"""
-          if new_select not in source:
-              if old_select not in source:
-                  raise SystemExit('expected selectDocument block not found')
-              source = source.replace(old_select, new_select, 1)
+          start_marker = '  async function selectDocument(doc: DocumentTemplateSpec) {'
+          end_marker = '\n  function toggleDocumentSelected(documentId: string) {'
+          start = source.index(start_marker)
+          end = source.index(end_marker, start)
+          replacement = '\n'.join([
+              '  async function selectDocument(doc: DocumentTemplateSpec) {',
+              '    setActiveDoc(doc.id);',
+              '    setPreview(null);',
+              '    const finalPlanPromise = selectedDocIds.length && (sourceFileName || parsed)',
+              '      ? loadWorkflowPlan(selectedDocIds)',
+              '      : Promise.resolve(null);',
+              '    const [workflow, template, finalWorkflow] = await Promise.all([',
+              "      run('get_workflow_plan', () => getWorkflowPlan(doc.id, sickLeave)),",
+              "      run('get_document_template_text', () => getDocumentTemplateText(doc.id)),",
+              '      finalPlanPromise,',
+              '    ]);',
+              '    if (template) setActiveTemplateText(template.template_text);',
+              '    if (!workflow) return;',
+              '    setPlan(workflow);',
+              '    if (finalWorkflow) {',
+              '      setPreflightPlan(finalWorkflow);',
+              '      setAnswers((previous) => Object.fromEntries(',
+              "        finalWorkflow.prompts.map((prompt) => [prompt.field_id, previous[prompt.field_id] ?? prompt.current_value ?? '']),",
+              '      ));',
+              '    }',
+              '    const displayedPlan = finalWorkflow ?? workflow;',
+              '    setStatus(displayedPlan.prompts.length',
+              '      ? `Требуется уточнить полей в выбранном комплекте: ${displayedPlan.prompts.length}.`',
+              "      : 'Финальный план выбранного комплекта подтверждён — обязательных уточнений нет.');",
+              '  }',
+          ])
+          source = source[:start] + replacement + source[end:]
           app.write_text(source, encoding='utf-8')
 
           workflow = Path('.github/workflows/quality-gate.yml')
           text = workflow.read_text(encoding='utf-8')
-          start = text.index('  # BEGIN ONE-TIME FRONTEND SELF-REPAIR\n')
-          end_marker = '  # END ONE-TIME FRONTEND SELF-REPAIR\n\n'
-          end = text.index(end_marker, start) + len(end_marker)
-          text = text[:start] + text[end:]
+          block_start = text.index('  # BEGIN ONE-TIME FRONTEND SELF-REPAIR\n')
+          block_end_marker = '  # END ONE-TIME FRONTEND SELF-REPAIR\n\n'
+          block_end = text.index(block_end_marker, block_start) + len(block_end_marker)
+          text = text[:block_start] + text[block_end:]
           text = text.replace('permissions:\n  contents: write', 'permissions:\n  contents: read', 1)
           workflow.write_text(text, encoding='utf-8')
           PY

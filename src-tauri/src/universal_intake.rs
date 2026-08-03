@@ -21,7 +21,7 @@ use zip::ZipArchive;
 mod archive;
 mod web;
 
-use archive::{normalize_external_archive, normalize_zip};
+use archive::{normalize_external_archive, normalize_zip, prefix_layout_source};
 #[cfg(test)]
 use archive::{parse_7z_technical_listing, validate_archive_relative_path};
 pub use web::fetch_web_source;

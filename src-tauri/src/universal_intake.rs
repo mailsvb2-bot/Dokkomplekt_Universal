@@ -21,7 +21,7 @@ use zip::ZipArchive;
 mod archive;
 mod web;
 
-use archive::{normalize_external_archive, normalize_zip, prefix_layout_source};
+use archive::{normalize_external_archive, normalize_zip};
 #[cfg(test)]
 use archive::{parse_7z_technical_listing, validate_archive_relative_path};
 pub use web::fetch_web_source;
@@ -1771,7 +1771,7 @@ fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
                         Ok(nested) => {
                             text.push_str(&format!("\n[Вложение: {name}]\n{}\n", nested.text));
                             let mut nested_layout = nested.layout_items;
-                            prefix_layout_source(
+                            archive::prefix_layout_source(
                                 &mut nested_layout,
                                 &format!("email_attachment:{name}"),
                             );

@@ -1,20 +1,20 @@
-name: Self-cleaning frontend repair
+name: Diagnose frontend batch-plan scenario
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: frontend-self-repair-${{ github.head_ref }}
+  group: frontend-diagnostic-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
-  repair:
+  diagnose:
     if: github.head_ref == 'agent/fix-plan-ui-postgres-maintainability'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
@@ -24,39 +24,31 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install frontend dependencies
-        run: npm ci
-      - name: Apply and verify focused frontend repair
+      - run: npm ci
+      - name: Diagnose scenario without publishing changes
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('src/App.tsx')
-          source = path.read_text(encoding='utf-8')
-          old = "import { ensurePopupField } from './components/PopupFieldEditor';"
-          new = "import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';"
-          if new not in source:
-              if old not in source:
-                  raise SystemExit('expected PopupFieldEditor import not found')
-              path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          app = Path('src/App.tsx')
+          source = app.read_text(encoding='utf-8')
+          source = source.replace(
+              "import { ensurePopupField } from './components/PopupFieldEditor';",
+              "import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';",
+              1,
+          )
+          app.write_text(source, encoding='utf-8')
+
+          test = Path('src/App.scenarios.test.tsx')
+          source = test.read_text(encoding='utf-8')
+          needle = "    await screen.findByDisplayValue('7701234567');"
+          replacement = """    await waitFor(() => expect(calls.some((c) => c.command === 'get_workflow_plan_batch')).toBe(true));
+    console.log('FINAL_PLAN_CALLS', JSON.stringify(calls.filter((c) => c.command.includes('workflow_plan'))));
+    console.log('REVIEW_STAGE_TEXT', document.querySelector('.reviewStage')?.textContent ?? 'NO_REVIEW_STAGE');
+    await screen.findByDisplayValue('7701234567');"""
+          if needle not in source:
+              raise SystemExit('scenario assertion not found')
+          test.write_text(source.replace(needle, replacement, 1), encoding='utf-8')
           PY
-          git rm .github/workflows/agent-frontend-self-repair.yml
-          python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py
-          git diff --check
           npm run typecheck
-          npm run test
-          npm run build
-      - name: Commit clean verified repair
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/App.tsx SOURCE_MANIFEST_SHA256.txt .github/workflows/agent-frontend-self-repair.yml
-          git commit -m 'Fix frontend popup field import'
-          for attempt in 1 2 3 4 5; do
-            if git push origin "HEAD:${{ github.head_ref }}"; then
-              exit 0
-            fi
-            sleep $((attempt * 10))
-          done
-          exit 1
+          npm run test -- --reporter=verbose

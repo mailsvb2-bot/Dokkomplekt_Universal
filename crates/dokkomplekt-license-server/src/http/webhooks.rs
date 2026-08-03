@@ -238,9 +238,6 @@ pub fn normalize_payment_status(value: &str) -> Option<PaymentEventStatus> {
 pub fn normalize_callback_provider(value: &str) -> Option<PaymentProvider> {
     match value.trim().to_ascii_lowercase().as_str() {
         "manual" => Some(PaymentProvider::Manual),
-        "yookassa" => Some(PaymentProvider::YooKassa),
-        "sbp" => Some(PaymentProvider::Sbp),
-        "bank_invoice" => Some(PaymentProvider::BankInvoice),
         _ => None,
     }
 }
@@ -293,18 +290,9 @@ mod tests {
             normalize_callback_provider(" manual "),
             Some(PaymentProvider::Manual)
         ));
-        assert!(matches!(
-            normalize_callback_provider("YooKassa"),
-            Some(PaymentProvider::YooKassa)
-        ));
-        assert!(matches!(
-            normalize_callback_provider("SBP"),
-            Some(PaymentProvider::Sbp)
-        ));
-        assert!(matches!(
-            normalize_callback_provider("bank_invoice"),
-            Some(PaymentProvider::BankInvoice)
-        ));
+        assert!(normalize_callback_provider("YooKassa").is_none());
+        assert!(normalize_callback_provider("SBP").is_none());
+        assert!(normalize_callback_provider("bank_invoice").is_none());
     }
 
     #[test]

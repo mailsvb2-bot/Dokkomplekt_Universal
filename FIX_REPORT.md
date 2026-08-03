@@ -23,10 +23,23 @@
 - Для повторных CI-прогонов добавлен безопасный Cargo cache, а дублирующий одновременный запуск workflow по `push` и `pull_request` для одной ветки устранён.
 - При падении Rust gate полный диагностический лог сохраняется как GitHub Actions artifact без `continue-on-error` и без ослабления обязательных проверок.
 
+
+## Audit closure 2026-08-04
+
+- Юридические и финансовые реквизиты больше не проходят после скрытого удаления букв/символов: формат проверяется до checksum; email с несколькими `@` и повреждённым доменом блокируется.
+- License server теперь fail-closed по умолчанию. Небезопасный local/test режим требует одновременно явного окружения и `DOKKOMPLEKT_ALLOW_INSECURE_DEV=1`; production URL и payment provider валидируются.
+- Сбой YooKassa после записи заказа больше не делает оплату недоступной: клиент получает order access token и может аутентифицированно повторить создание платежа с тем же order UUID/idempotence key.
+- Заглушки СБП и bank invoice запрещены как production-провайдеры до появления проверяемой банковской интеграции.
+- Повторные PostgreSQL webhook обрабатываются идемпотентно через `ON CONFLICT`; один provider event нельзя привязать к другому заказу.
+- Rate limiter больше не выполняет полное O(n)-очищение на каждом запросе и сохраняет ограниченный резерв для новых адресов при cardinality-атаке.
+- Production CSP очищена от Vite dev-origin; dev-разрешения вынесены в отдельный Tauri config overlay.
+- Windows signing/hardware workflow требует protected environment, точный SHA из `main` и закреплённый SHA-256 signing script до доступа к сертификату.
+- Устаревший checked-in CI evidence удалён: доказательства сохраняются как immutable Actions artifacts и должны быть привязаны к точному commit SHA.
+
 ## Проверено в доступной среде
 
-- `python -m pytest -q`: 212 passed.
-- Isolated shard runner: 33 modules, 212 passed, source fingerprint unchanged.
+- `python3 -m pytest -q`: 267 passed.
+- Новый audit-closure contract: 7 focused source/protection checks passed.
 - DOCX visual goldens: 7 fixtures passed.
 - Rust production panic/source audit and security backport policy: passed.
 - `python scripts/static_quality_gate.py --source-only`: passed.

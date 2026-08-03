@@ -185,10 +185,15 @@ impl LicenseStore for Arc<RwLock<MemoryStore>> {
         record: PaymentEventRecord,
     ) -> Result<PaymentEventWriteOutcome, StoreError> {
         let mut store = self.write().map_err(|_| StoreError::Poisoned)?;
-        if store.payment_events.values().any(|existing| {
+        if let Some(existing) = store.payment_events.values().find(|existing| {
             same_provider(&existing.provider, &record.provider)
                 && existing.provider_event_id == record.provider_event_id
         }) {
+            if existing.order_id != record.order_id {
+                return Err(StoreError::Invalid(
+                    "provider_event_order_mismatch".to_string(),
+                ));
+            }
             return Ok(PaymentEventWriteOutcome::Duplicate);
         }
         let order = store
@@ -373,6 +378,51 @@ mod tests {
             store.record_payment_event_for_order(duplicate).unwrap(),
             PaymentEventWriteOutcome::Duplicate,
         );
+    }
+
+    #[test]
+    fn duplicate_provider_event_cannot_be_rebound_to_another_order() {
+        let store = memory_store();
+        let first_order = Uuid::new_v4();
+        let second_order = Uuid::new_v4();
+        store
+            .create_order(order_record(first_order, OrderStatus::WaitingPayment))
+            .unwrap();
+        store
+            .create_order(order_record(second_order, OrderStatus::WaitingPayment))
+            .unwrap();
+        let first = PaymentEventRecord {
+            id: Uuid::new_v4(),
+            order_id: first_order,
+            provider: PaymentProvider::Manual,
+            provider_event_id: "shared-event".to_string(),
+            provider_payment_id: Some("payment-a".to_string()),
+            status: PaymentEventStatus::Succeeded,
+            amount_rub: 3900,
+            received_at: OffsetDateTime::now_utc(),
+        };
+        assert_eq!(
+            store.record_payment_event_for_order(first).unwrap(),
+            PaymentEventWriteOutcome::Recorded
+        );
+        let rebound = PaymentEventRecord {
+            id: Uuid::new_v4(),
+            order_id: second_order,
+            provider: PaymentProvider::Manual,
+            provider_event_id: "shared-event".to_string(),
+            provider_payment_id: Some("payment-b".to_string()),
+            status: PaymentEventStatus::Succeeded,
+            amount_rub: 3900,
+            received_at: OffsetDateTime::now_utc(),
+        };
+        assert!(matches!(
+            store.record_payment_event_for_order(rebound),
+            Err(StoreError::Invalid(reason)) if reason == "provider_event_order_mismatch"
+        ));
+        assert!(matches!(
+            store.get_order(second_order).unwrap().unwrap().status,
+            OrderStatus::WaitingPayment
+        ));
     }
 
     #[test]

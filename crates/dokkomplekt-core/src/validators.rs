@@ -163,36 +163,73 @@ fn validate_decimal(value: &str, field_id: &str) -> Result<(), String> {
 }
 
 fn validate_email(value: &str) -> Result<(), String> {
+    if value.len() > 254
+        || value.chars().any(char::is_whitespace)
+        || value.matches('@').count() != 1
+    {
+        return Err("Email: некорректный адрес".into());
+    }
     let (local, domain) = value
         .split_once('@')
         .ok_or_else(|| "Email: отсутствует символ @".to_string())?;
     if local.is_empty()
-        || domain.is_empty()
-        || !domain.contains('.')
-        || value.chars().any(char::is_whitespace)
+        || local.len() > 64
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+        || !local.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(
+                    character,
+                    '.' | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '/'
+                        | '=' | '?' | '^' | '_' | '`' | '{' | '|' | '}' | '~'
+                )
+        })
     {
-        return Err("Email: некорректный адрес".into());
+        return Err("Email: некорректная локальная часть".into());
+    }
+    let labels = domain.split('.').collect::<Vec<_>>();
+    if labels.len() < 2
+        || labels.iter().any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+        || labels
+            .last()
+            .is_none_or(|label| label.len() < 2 || !label.chars().any(|c| c.is_ascii_alphabetic()))
+    {
+        return Err("Email: некорректный домен".into());
     }
     Ok(())
 }
+
 fn only_digits(v: &str) -> String {
     v.chars().filter(char::is_ascii_digit).collect()
 }
 
-fn digits(v: &str, len: usize, title: &str) -> Result<(), String> {
-    let d = only_digits(v);
-    if d.len() == len {
-        Ok(())
-    } else {
-        Err(format!("{title}: ожидается {len} цифр"))
+fn normalize_digit_text(v: &str, title: &str) -> Result<String, String> {
+    let value = v.trim();
+    if value.chars().any(|character| {
+        !character.is_ascii_digit() && !matches!(character, ' ' | '-' | '\u{00a0}')
+    }) {
+        return Err(format!(
+            "{title}: допустимы только цифры, пробелы и дефисы"
+        ));
     }
+    Ok(only_digits(value))
+}
+
+fn digits(v: &str, len: usize, title: &str) -> Result<(), String> {
+    normalized_digits(v, len, title).map(|_| ())
 }
 
 pub fn validate_snils(v: &str) -> Result<(), String> {
-    let d = only_digits(v);
-    if d.len() != 11 {
-        return Err("СНИЛС: ожидается 11 цифр".into());
-    }
+    let d = normalized_digits(v, 11, "СНИЛС")?;
     let nums = d
         .chars()
         .map(|c| {
@@ -226,12 +263,7 @@ pub fn validate_snils(v: &str) -> Result<(), String> {
 }
 
 pub fn validate_inn(v: &str) -> Result<(), String> {
-    if v.chars()
-        .any(|ch| !ch.is_ascii_digit() && !matches!(ch, ' ' | '-'))
-    {
-        return Err("ИНН: допустимы только цифры, пробелы и дефисы".into());
-    }
-    let digits = only_digits(v);
+    let digits = normalize_digit_text(v, "ИНН")?;
     let numbers = digits
         .bytes()
         .map(|byte| u32::from(byte - b'0'))
@@ -275,7 +307,7 @@ pub fn validate_inn(v: &str) -> Result<(), String> {
 }
 
 pub fn validate_ogrn(v: &str) -> Result<(), String> {
-    let d = only_digits(v);
+    let d = normalize_digit_text(v, "ОГРН/ОГРНИП")?;
     match d.len() {
         13 => {
             let base: u128 = d[..12]
@@ -428,7 +460,7 @@ pub fn validate_corr_account_with_bik(bik: &str, account: &str) -> Result<(), St
 }
 
 fn normalized_digits(value: &str, expected_len: usize, title: &str) -> Result<String, String> {
-    let digits = only_digits(value);
+    let digits = normalize_digit_text(value, title)?;
     if digits.len() == expected_len {
         Ok(digits)
     } else {
@@ -502,6 +534,25 @@ mod tests {
         assert!(validate_field_value("invoice.total_amount", "NaN").is_err());
         assert!(validate_field_value("contact.email", "doctor@example.org").is_ok());
         assert!(validate_field_value("contact.email", "not-an-email").is_err());
+        assert!(validate_field_value("contact.email", "a@b@c.example").is_err());
+        assert!(validate_field_value("contact.email", ".doctor@example.org").is_err());
+        assert!(validate_field_value("contact.email", "doctor@example.c").is_err());
+    }
+
+
+    #[test]
+    fn digit_identifiers_reject_hidden_letters_and_symbols() {
+        for (field, value) in [
+            ("org.bank_bik", "04452x5225"),
+            ("org.bank_account", "4070281090000000285x9"),
+            ("org.bank_corr_account", "3010181040000000022/5"),
+            ("subject.passport_series", "12a34"),
+            ("subject.passport_number", "12345x6"),
+        ] {
+            assert!(validate_field_value(field, value).is_err(), "{field}: {value}");
+        }
+        assert!(validate_snils("112-233-445x95").is_err());
+        assert!(validate_ogrn("1027700132195x").is_err());
     }
 
     #[test]

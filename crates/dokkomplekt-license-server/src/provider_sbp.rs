@@ -1,6 +1,7 @@
+#![allow(dead_code)]
+
 use crate::providers::{
     CreatePaymentRequest, CreatePaymentResponse, PaymentProvider, ProviderError, ProviderEvent,
-    ProviderKind,
 };
 
 #[derive(Debug, Clone)]
@@ -11,22 +12,40 @@ pub struct SbpProvider {
 impl PaymentProvider for SbpProvider {
     fn create_payment(
         &self,
-        request: CreatePaymentRequest,
+        _request: CreatePaymentRequest,
     ) -> Result<CreatePaymentResponse, ProviderError> {
-        let provider_payment_id = format!("sbp-{}", request.order_id);
-        Ok(CreatePaymentResponse {
-            provider: ProviderKind::Sbp,
-            provider_payment_id,
-            confirmation_url: format!("{}/pay/sbp/{}", self.public_base_url, request.order_id),
-            qr_url: Some(format!(
-                "{}/api/orders/{}/qr",
-                self.public_base_url, request.order_id
-            )),
-        })
+        let _ = &self.public_base_url;
+        Err(ProviderError::Unsupported)
     }
 
-    fn parse_callback(&self, raw_body: &[u8]) -> Result<ProviderEvent, ProviderError> {
-        serde_json::from_slice::<ProviderEvent>(raw_body)
-            .map_err(|err| ProviderError::BadRequest(err.to_string()))
+    fn parse_callback(&self, _raw_body: &[u8]) -> Result<ProviderEvent, ProviderError> {
+        Err(ProviderError::Unsupported)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn sbp_stub_fails_closed_until_a_verified_bank_integration_exists() {
+        let provider = SbpProvider {
+            public_base_url: "https://licenses.example.org".into(),
+        };
+        let request = CreatePaymentRequest {
+            order_id: Uuid::nil(),
+            amount_rub: 1_490,
+            description: "test".into(),
+            return_url: None,
+        };
+        assert!(matches!(
+            provider.create_payment(request),
+            Err(ProviderError::Unsupported)
+        ));
+        assert!(matches!(
+            provider.parse_callback(br#"{}"#),
+            Err(ProviderError::Unsupported)
+        ));
     }
 }

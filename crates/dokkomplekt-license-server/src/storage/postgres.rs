@@ -359,15 +359,28 @@ impl LicenseStore for PostgresStore {
     ) -> Result<PaymentEventWriteOutcome, StoreError> {
         let mut client = self.client()?;
         let mut tx = client.transaction().map_err(pg_err)?;
-        let provider = payment_provider_to_str(&record.provider);
-        if tx
-            .query_opt(
-                "SELECT id FROM billing_events WHERE provider = $1 AND provider_event_id = $2",
-                &[&provider, &record.provider_event_id],
-            )
-            .map_err(pg_err)?
-            .is_some()
-        {
+        let row = tx.query_opt(
+            "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
+            &[&record.order_id],
+        ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
+        let order = order_from_row(row)?;
+        if order.amount_rub != record.amount_rub {
+            return Err(StoreError::Invalid("amount_mismatch".to_string()));
+        }
+        if !try_insert_payment_event(&mut tx, &record)? {
+            let provider = payment_provider_to_str(&record.provider);
+            let existing_order_id: Uuid = tx
+                .query_one(
+                    "SELECT order_id FROM billing_events WHERE provider = $1 AND provider_event_id = $2",
+                    &[&provider, &record.provider_event_id],
+                )
+                .map_err(pg_err)?
+                .get(0);
+            if existing_order_id != record.order_id {
+                return Err(StoreError::Invalid(
+                    "provider_event_order_mismatch".to_string(),
+                ));
+            }
             insert_audit_event(
                 &mut tx,
                 &audit_event(
@@ -380,14 +393,6 @@ impl LicenseStore for PostgresStore {
             tx.commit().map_err(pg_err)?;
             return Ok(PaymentEventWriteOutcome::Duplicate);
         }
-        let row = tx.query_opt(
-            "SELECT id, plan, amount_rub, status, machine_hash, access_token_hash, created_at FROM license_orders WHERE id = $1 FOR UPDATE",
-            &[&record.order_id],
-        ).map_err(pg_err)?.ok_or(StoreError::NotFound)?;
-        let order = order_from_row(row)?;
-        if order.amount_rub != record.amount_rub {
-            return Err(StoreError::Invalid("amount_mismatch".to_string()));
-        }
         let next_status = order_status_after_payment(&order.status, &record.status)?;
         if next_status != order.status {
             let next_status = order_status_to_str(&next_status);
@@ -397,7 +402,6 @@ impl LicenseStore for PostgresStore {
             )
             .map_err(pg_err)?;
         }
-        insert_payment_event(&mut tx, &record)?;
         insert_audit_event(
             &mut tx,
             &audit_event(
@@ -487,6 +491,23 @@ fn configured_pool_size_from(value: Option<&str>) -> usize {
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .unwrap_or(DEFAULT_POSTGRES_POOL_SIZE)
         .clamp(MIN_POSTGRES_POOL_SIZE, MAX_POSTGRES_POOL_SIZE)
+}
+
+fn try_insert_payment_event(
+    client: &mut impl GenericClient,
+    record: &PaymentEventRecord,
+) -> Result<bool, StoreError> {
+    let provider = payment_provider_to_str(&record.provider);
+    let status = payment_status_to_str(&record.status);
+    let amount = amount_to_i64(record.amount_rub)?;
+    let provider_ref = record.provider_payment_id.as_deref();
+    let inserted = client
+        .execute(
+            "INSERT INTO billing_events (id, order_id, provider, provider_event_id, provider_reference_id, status, amount_rub, received_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (provider, provider_event_id) DO NOTHING",
+            &[&record.id, &record.order_id, &provider, &record.provider_event_id, &provider_ref, &status, &amount, &record.received_at],
+        )
+        .map_err(pg_err)?;
+    Ok(inserted == 1)
 }
 
 fn insert_payment_event(
@@ -720,6 +741,74 @@ mod tests {
             .unwrap()
             .access_token_hash
             .is_some());
+    }
+
+    #[test]
+    fn postgres_duplicate_payment_event_is_idempotent_across_real_connections() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let Some(database_url) = crate::config::postgres_test_database_url() else {
+            return;
+        };
+        let store = PostgresStore::connect(&database_url).unwrap();
+        let order_id = Uuid::new_v4();
+        store
+            .create_order(OrderRecord {
+                id: order_id,
+                plan: "doctor_pro".to_string(),
+                amount_rub: 3_900,
+                status: OrderStatus::WaitingPayment,
+                machine_hash: Some("payment-race-machine".to_string()),
+                access_token_hash: Some("b".repeat(64)),
+                created_at: OffsetDateTime::now_utc(),
+            })
+            .unwrap();
+        let provider_event_id = format!("evt-{}", Uuid::new_v4());
+        let workers = 12;
+        let barrier = Arc::new(Barrier::new(workers));
+        let handles = (0..workers)
+            .map(|index| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let provider_event_id = provider_event_id.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    store.record_payment_event_for_order(PaymentEventRecord {
+                        id: Uuid::new_v4(),
+                        order_id,
+                        provider: super::super::PaymentProvider::YooKassa,
+                        provider_event_id,
+                        provider_payment_id: Some(format!("payment-{index}")),
+                        status: PaymentEventStatus::Succeeded,
+                        amount_rub: 3_900,
+                        received_at: OffsetDateTime::now_utc(),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, PaymentEventWriteOutcome::Recorded))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, PaymentEventWriteOutcome::Duplicate))
+                .count(),
+            workers - 1
+        );
+        assert!(matches!(
+            store.get_order(order_id).unwrap().unwrap().status,
+            OrderStatus::Paid
+        ));
     }
 
     #[test]

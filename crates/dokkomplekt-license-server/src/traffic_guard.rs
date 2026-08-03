@@ -115,8 +115,15 @@ impl TrustedProxyNetwork {
 
 #[derive(Debug, Clone)]
 pub struct TrafficGuard {
-    windows: Arc<Mutex<HashMap<(IpAddr, RateLimitScope), FixedWindow>>>,
+    state: Arc<Mutex<TrafficGuardState>>,
     max_entries: usize,
+}
+
+#[derive(Debug)]
+struct TrafficGuardState {
+    windows: HashMap<(IpAddr, RateLimitScope), FixedWindow>,
+    overflow: HashMap<RateLimitScope, FixedWindow>,
+    last_cleanup: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,7 +141,11 @@ impl Default for TrafficGuard {
 impl TrafficGuard {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            windows: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(TrafficGuardState {
+                windows: HashMap::new(),
+                overflow: HashMap::new(),
+                last_cleanup: Instant::now(),
+            })),
             max_entries: max_entries.max(1),
         }
     }
@@ -154,30 +165,68 @@ impl TrafficGuard {
         if limit == 0 || window.is_zero() {
             return false;
         }
-        let Ok(mut windows) = self.windows.lock() else {
+        let Ok(mut state) = self.state.lock() else {
             return false;
         };
-        windows.retain(|_, value| value.expires_at > now);
+        let cleanup_interval = window.min(Duration::from_secs(30));
+        if state.windows.len() >= self.max_entries
+            || now.saturating_duration_since(state.last_cleanup) >= cleanup_interval
+        {
+            state.windows.retain(|_, value| value.expires_at > now);
+            state.overflow.retain(|_, value| value.expires_at > now);
+            state.last_cleanup = now;
+        }
         let key = (ip, scope);
-        if let Some(value) = windows.get_mut(&key) {
-            if value.count >= limit {
-                return false;
-            }
-            value.count = value.count.saturating_add(1);
+        if let Some(value) = state.windows.get_mut(&key) {
+            return consume_fixed_window(value, limit, window, now);
+        }
+        if state.windows.len() < self.max_entries {
+            state.windows.insert(
+                key,
+                FixedWindow {
+                    expires_at: now + window,
+                    count: 1,
+                },
+            );
             return true;
         }
-        if windows.len() >= self.max_entries {
-            return false;
+        // A cardinality attack must not turn the fixed-size table into a total
+        // outage for every previously unseen client. New addresses share one
+        // bounded overflow budget per endpoint scope until regular entries expire.
+        match state.overflow.get_mut(&scope) {
+            Some(value) => consume_fixed_window(value, limit, window, now),
+            None => {
+                state.overflow.insert(
+                    scope,
+                    FixedWindow {
+                        expires_at: now + window,
+                        count: 1,
+                    },
+                );
+                true
+            }
         }
-        windows.insert(
-            key,
-            FixedWindow {
-                expires_at: now + window,
-                count: 1,
-            },
-        );
-        true
     }
+}
+
+fn consume_fixed_window(
+    value: &mut FixedWindow,
+    limit: u32,
+    window: Duration,
+    now: Instant,
+) -> bool {
+    if value.expires_at <= now {
+        *value = FixedWindow {
+            expires_at: now + window,
+            count: 1,
+        };
+        return true;
+    }
+    if value.count >= limit {
+        return false;
+    }
+    value.count = value.count.saturating_add(1);
+    true
 }
 
 pub async fn attach_client_ip(
@@ -296,6 +345,43 @@ mod tests {
             2,
             Duration::from_secs(60),
             start + Duration::from_secs(61)
+        ));
+    }
+
+    #[test]
+    fn cardinality_overflow_uses_a_bounded_shared_budget_instead_of_total_outage() {
+        let guard = TrafficGuard::new(1);
+        let now = Instant::now();
+        let first: IpAddr = "192.0.2.1".parse().unwrap();
+        let second: IpAddr = "192.0.2.2".parse().unwrap();
+        let third: IpAddr = "192.0.2.3".parse().unwrap();
+        assert!(guard.check_at(
+            first,
+            RateLimitScope::OrderCreation,
+            2,
+            Duration::from_secs(60),
+            now
+        ));
+        assert!(guard.check_at(
+            second,
+            RateLimitScope::OrderCreation,
+            2,
+            Duration::from_secs(60),
+            now
+        ));
+        assert!(guard.check_at(
+            third,
+            RateLimitScope::OrderCreation,
+            2,
+            Duration::from_secs(60),
+            now
+        ));
+        assert!(!guard.check_at(
+            "192.0.2.4".parse().unwrap(),
+            RateLimitScope::OrderCreation,
+            2,
+            Duration::from_secs(60),
+            now
         ));
     }
 

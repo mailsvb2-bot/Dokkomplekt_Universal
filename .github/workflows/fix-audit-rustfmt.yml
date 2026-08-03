@@ -26,7 +26,7 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt
-      - name: Format validators and publish safely over manifest-only commits
+      - name: Format validators and publish safely over concurrent manifest commits
         shell: bash
         run: |
           set -euo pipefail
@@ -56,6 +56,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Apply rustfmt to audit validators"
-          git fetch origin agent/fix-all-audit-defects
-          git rebase origin/agent/fix-all-audit-defects
-          git push origin HEAD:agent/fix-all-audit-defects
+          for attempt in 1 2 3 4 5 6; do
+            git fetch origin agent/fix-all-audit-defects
+            git rebase origin/agent/fix-all-audit-defects
+            if git push origin HEAD:agent/fix-all-audit-defects; then
+              exit 0
+            fi
+            echo "Concurrent branch update during attempt ${attempt}; retrying."
+            sleep 2
+          done
+          echo "Unable to publish formatted validators after repeated concurrent updates." >&2
+          exit 1

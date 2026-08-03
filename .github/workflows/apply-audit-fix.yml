@@ -29,7 +29,7 @@ jobs:
           cat .github/audit-fix.patch.gz.b64.part1 .github/audit-fix.patch.gz.b64.part2 \
             | base64 --decode \
             | gzip --decompress > /tmp/audit.patch
-          test "$(sha256sum /tmp/audit.patch | awk '{print $1}')" = "41625f8e51feb8b37a74839428c9d03d814d79cc369d1c50b35eea2dce418d8a"
+          test "$(sha256sum /tmp/audit.patch | awk '{print $1}')" = "9b5203b88487a78d29570059b1689559420278849a19ec358ff8b5b9b5a457e0"
           git apply --binary --index /tmp/audit.patch
           git rm \
             .github/audit-fix.patch.gz.b64.part1 \

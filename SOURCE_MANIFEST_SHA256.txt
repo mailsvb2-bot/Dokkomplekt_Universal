@@ -1,6 +1,7 @@
 f5845e70220c1db3754837d0c70feb865dccf15b16201f6aea3855bec3126cb6  .cargo/audit.toml
 aabd2af12e26033cb8de9b63841b54574718406e4479b47e41bc0d92fc6f14e0  .cargo/config.toml
 0f2def56a839e830303bda7062cf2d439adbe2d9d47ef8b12d01bf4a4fcbcec8  .env.example
+b850cd0430edc6198e2e3ab7a1b59dc3dd04c3438ed60ce673f7d3746b53f6c6  .github/workflows/agent-frontend-final-repair.yml
 6c8e27b2a773f4f36e82243aa94366c8ea2922f171732513aeb058b40fb4fbff  .github/workflows/agent-frontend-self-repair.yml
 c092e59db902b965cb6cfc712f152d5c564768836bd72fd7b87688be32eaa11f  .github/workflows/build-installers.yml
 275334986f8e67449148cf796525e5c7630f099fae2d32fea7bcaa353b90913d  .github/workflows/delete-merged-branch.yml

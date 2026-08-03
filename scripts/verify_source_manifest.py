@@ -18,64 +18,6 @@ SPEC.loader.exec_module(source_archive)
 ROOT = source_archive.ROOT
 MANIFEST_PATH = ROOT / source_archive.SOURCE_MANIFEST
 
-# BEGIN ONE-TIME TRANSIENT CARGO LOCK MANIFEST REPAIR
-import os as _repair_os
-import subprocess as _repair_subprocess
-
-_REPAIR_BRANCH = "agent/fix-plan-ui-postgres-maintainability"
-if _repair_os.environ.get("GITHUB_HEAD_REF") == _REPAIR_BRANCH:
-    _transient_lock = ROOT / "crates/dokkomplekt-license-server/Cargo.lock"
-    if _transient_lock.exists():
-        _transient_lock.unlink()
-
-    _self_path = Path(__file__).resolve()
-    _self_source = _self_path.read_text(encoding="utf-8")
-    _block_start = _self_source.index(
-        "\n# BEGIN ONE-TIME TRANSIENT CARGO LOCK MANIFEST REPAIR\n"
-    )
-    _block_end_marker = "# END ONE-TIME TRANSIENT CARGO LOCK MANIFEST REPAIR\n"
-    _block_end = _self_source.index(_block_end_marker, _block_start) + len(
-        _block_end_marker
-    )
-    _self_path.write_text(
-        _self_source[:_block_start] + _self_source[_block_end:], encoding="utf-8"
-    )
-
-    MANIFEST_PATH.write_bytes(source_archive.source_manifest_payload())
-    _repair_subprocess.run(["git", "diff", "--check"], cwd=ROOT, check=True)
-    _repair_subprocess.run(
-        ["git", "config", "user.name", "github-actions[bot]"], cwd=ROOT, check=True
-    )
-    _repair_subprocess.run(
-        [
-            "git",
-            "config",
-            "user.email",
-            "41898282+github-actions[bot]@users.noreply.github.com",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
-    _repair_subprocess.run(
-        [
-            "git",
-            "add",
-            "scripts/verify_source_manifest.py",
-            "SOURCE_MANIFEST_SHA256.txt",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
-    _repair_subprocess.run(
-        ["git", "commit", "-m", "Remove transient crate lock from source manifest"],
-        cwd=ROOT,
-        check=True,
-    )
-    _repair_subprocess.run(
-        ["git", "push", "origin", f"HEAD:{_REPAIR_BRANCH}"], cwd=ROOT, check=True
-    )
-# END ONE-TIME TRANSIENT CARGO LOCK MANIFEST REPAIR
-
 
 def parse_manifest(payload: bytes) -> dict[str, str]:
     entries: dict[str, str] = {}

@@ -691,7 +691,7 @@ mod tests {
 
         let workers = 12;
         let barrier = Arc::new(Barrier::new(workers));
-        let successes = (0..workers)
+        let handles = (0..workers)
             .map(|index| {
                 let store = store.clone();
                 let barrier = barrier.clone();
@@ -707,6 +707,9 @@ mod tests {
                         .is_ok()
                 })
             })
+            .collect::<Vec<_>>();
+        let successes = handles
+            .into_iter()
             .map(|handle| handle.join().unwrap())
             .filter(|success| *success)
             .count();

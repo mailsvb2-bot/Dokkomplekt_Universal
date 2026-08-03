@@ -55,9 +55,17 @@ jobs:
           executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
           test -x "$app_path/Contents/MacOS/$executable_name"
           signature_state="unsigned-preview"
-          if codesign --display --verbose=2 "$app_path" >/dev/null 2>&1; then
+          signature_details="$(codesign --display --verbose=4 "$app_path" 2>&1 || true)"
+          if grep -q '^Authority=' <<<"$signature_details"; then
             codesign --verify --deep --strict "$app_path"
-            signature_state="verified-envelope"
+            signature_state="verified-identity-envelope"
+          elif grep -q '^Signature=adhoc$' <<<"$signature_details"; then
+            signature_state="ad-hoc-preview"
+          elif grep -q 'code object is not signed at all' <<<"$signature_details"; then
+            signature_state="unsigned-preview"
+          elif [[ -n "$signature_details" ]]; then
+            printf 'Unexpected codesign state:\n%s\n' "$signature_details" >&2
+            exit 1
           fi
           hdiutil verify "$dmg_path"
           printf 'app=%s\ndmg=%s\nsignature=%s\n' "$app_path" "$dmg_path" "$signature_state" > macos-bundle-evidence.txt

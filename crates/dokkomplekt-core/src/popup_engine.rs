@@ -323,36 +323,41 @@ pub fn required_fields_from_user_marks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DocumentTemplateSpec, DomainKind};
-
-    fn discharge_doc() -> DocumentTemplateSpec {
-        DocumentTemplateSpec {
-            id: "d".into(),
-            button_label: "Выписной".into(),
-            template_path: "d.docx".into(),
-            category: DomainKind::Medical,
-            role_id: "discharge".into(),
-            required_fields: vec![],
-            placeholders: vec![],
-            is_static_copy: false,
-            popup_fields: Vec::new(),
-            popup_configured: false,
-        }
-    }
-
     #[test]
     fn required_empty_field_keeps_popup_open() {
         let case = SemanticCase::default();
-        let plan = build_merged_popup_plan(
-            &discharge_doc(),
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![PromptSpec {
+                field_id: "custom.required".into(),
+                title: "Обязательное поле".into(),
+                required: true,
+                current_value: None,
+                validation_hint: None,
+                input_kind: PromptInputKind::Text,
+                ask_mode: crate::PromptAskMode::IfMissing,
+                options: Vec::new(),
+                allow_custom_option: false,
+                help_text: None,
+                section: None,
+                linked_to: None,
+                order: 500,
+            }],
+            blocked: false,
+            block_reasons: vec![],
+        };
+        let result = apply_popup_answers(
             &case,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.required".into(),
+                value: "   ".into(),
+                continue_without_value: false,
+            }],
         );
-        let result = apply_popup_answers(&case, &plan, &[]);
         assert!(!result.accepted);
-        assert!(!result.still_missing.is_empty());
+        assert_eq!(result.still_missing.len(), 1);
+        assert_eq!(result.still_missing[0].field_id, "custom.required");
     }
 
     #[test]

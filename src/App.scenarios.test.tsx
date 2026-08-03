@@ -246,6 +246,7 @@ describe('Полный прогон пользовательских сцена�
 
     // select document -> workflow plan + actual template text, fields render
     fireEvent.click(screen.getByRole('button', { name: 'Счёт на оплату' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать всё' }));
     await screen.findByDisplayValue('7701234567');
     await waitFor(() => expect(calls.some((c) => c.command === 'get_document_template_text')).toBe(true));
 

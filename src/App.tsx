@@ -15,7 +15,7 @@ import { Workspace } from './components/Workspace';
 import { PopupDesignerModal } from './components/PopupDesignerModal';
 import { RuntimePromptModal } from './components/RuntimePromptModal';
 import { GuidedScannerModal } from './components/GuidedScannerModal';
-import { ensurePopupField } from './components/PopupFieldEditor';
+import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';

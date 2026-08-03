@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,101 +18,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # BEGIN ONE-TIME FRONTEND SELF-REPAIR
-  frontend-self-repair:
-    name: One-time verified frontend self-repair
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-plan-ui-postgres-maintainability'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Patch product, remove transport, and verify frontend
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          app = Path('src/App.tsx')
-          source = app.read_text(encoding='utf-8')
-          old_import = "import { ensurePopupField } from './components/PopupFieldEditor';"
-          new_import = "import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';"
-          if new_import not in source:
-              if old_import not in source:
-                  raise SystemExit('expected PopupFieldEditor import not found')
-              source = source.replace(old_import, new_import, 1)
-
-          start_marker = '  async function selectDocument(doc: DocumentTemplateSpec) {'
-          end_marker = '\n  function toggleDocumentSelected(documentId: string) {'
-          start = source.index(start_marker)
-          end = source.index(end_marker, start)
-          replacement = '\n'.join([
-              '  async function selectDocument(doc: DocumentTemplateSpec) {',
-              '    setActiveDoc(doc.id);',
-              '    setPreview(null);',
-              '    const finalPlanPromise = selectedDocIds.length && (sourceFileName || parsed)',
-              '      ? loadWorkflowPlan(selectedDocIds)',
-              '      : Promise.resolve(null);',
-              '    const [workflow, template, finalWorkflow] = await Promise.all([',
-              "      run('get_workflow_plan', () => getWorkflowPlan(doc.id, sickLeave)),",
-              "      run('get_document_template_text', () => getDocumentTemplateText(doc.id)),",
-              '      finalPlanPromise,',
-              '    ]);',
-              '    if (template) setActiveTemplateText(template.template_text);',
-              '    if (!workflow) return;',
-              '    setPlan(workflow);',
-              '    if (finalWorkflow) {',
-              '      setPreflightPlan(finalWorkflow);',
-              '      setAnswers((previous) => Object.fromEntries(',
-              "        finalWorkflow.prompts.map((prompt) => [prompt.field_id, previous[prompt.field_id] ?? prompt.current_value ?? '']),",
-              '      ));',
-              '    }',
-              '    const displayedPlan = finalWorkflow ?? workflow;',
-              '    setStatus(displayedPlan.prompts.length',
-              '      ? `Требуется уточнить полей в выбранном комплекте: ${displayedPlan.prompts.length}.`',
-              "      : 'Финальный план выбранного комплекта подтверждён — обязательных уточнений нет.');",
-              '  }',
-          ])
-          source = source[:start] + replacement + source[end:]
-          app.write_text(source, encoding='utf-8')
-
-          workflow = Path('.github/workflows/quality-gate.yml')
-          text = workflow.read_text(encoding='utf-8')
-          block_start = text.index('  # BEGIN ONE-TIME FRONTEND SELF-REPAIR\n')
-          block_end_marker = '  # END ONE-TIME FRONTEND SELF-REPAIR\n\n'
-          block_end = text.index(block_end_marker, block_start) + len(block_end_marker)
-          text = text[:block_start] + text[block_end:]
-          text = text.replace('permissions:\n  contents: write', 'permissions:\n  contents: read', 1)
-          workflow.write_text(text, encoding='utf-8')
-          PY
-          rm -f .github/workflows/agent-frontend-self-repair.yml
-          rm -f .github/workflows/agent-frontend-final-repair.yml
-          python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py
-          git diff --check
-          npm run typecheck
-          npm run test
-          npm run build
-      - name: Publish clean verified tree
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          TREE_SHA="$(git write-tree)"
-          git commit -m 'Fix final plan refresh and frontend compile' -m "tree-sha: ${TREE_SHA}"
-          for attempt in 1 2 3 4 5; do
-            if git push origin "HEAD:${{ github.head_ref }}"; then exit 0; fi
-            sleep $((attempt * 10))
-          done
-          exit 1
-  # END ONE-TIME FRONTEND SELF-REPAIR
-
   rust-compile-gate:
     name: REQUIRED Rust compile gate (non-bypassable)
     runs-on: ubuntu-latest

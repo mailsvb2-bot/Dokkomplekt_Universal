@@ -77,10 +77,7 @@ fn discharge_sick_leave_prompt_only_when_flag_enabled() {
 fn diaries_require_discharge_date_but_never_treatment() {
     let case = SemanticCase::default();
     let mut diaries = doc("diaries", "Дневники");
-    diaries.placeholders = vec![
-        "medical.discharge_date".into(),
-        "medical.treatment".into(),
-    ];
+    diaries.placeholders = vec!["medical.discharge_date".into(), "medical.treatment".into()];
     let plan = plan_workflow(&diaries, &case, &WorkflowFlags::default());
     assert!(plan
         .prompts

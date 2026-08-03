@@ -93,7 +93,8 @@ async fn create_order(
         .await
         .map_err(store_error_status)?;
     let provider = state.config.payment_provider.clone();
-    let (payment_url, qr_url, payment_state) = match create_provider_payment(&state, &record).await {
+    let (payment_url, qr_url, payment_state) = match create_provider_payment(&state, &record).await
+    {
         Ok(payment) => (
             payment.confirmation_url,
             payment.qr_url.unwrap_or_default(),
@@ -143,7 +144,10 @@ async fn retry_payment(
     if !authorize_order(&headers, order.access_token_hash.as_deref()) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    if !matches!(order.status, OrderStatus::WaitingPayment | OrderStatus::Draft) {
+    if !matches!(
+        order.status,
+        OrderStatus::WaitingPayment | OrderStatus::Draft
+    ) {
         return Err(StatusCode::CONFLICT);
     }
     let payment = create_provider_payment(&state, &order)

@@ -45,11 +45,12 @@ impl ServerConfig {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(365);
-        let payment_provider_raw = std::env::var("DOKKOMPLEKT_PAYMENT_PROVIDER")
-            .unwrap_or_else(|_| "manual".to_string());
-        let payment_provider = normalize_payment_provider(&payment_provider_raw).ok_or_else(|| {
-            anyhow::anyhow!("unsupported payment provider: {payment_provider_raw}")
-        })?;
+        let payment_provider_raw =
+            std::env::var("DOKKOMPLEKT_PAYMENT_PROVIDER").unwrap_or_else(|_| "manual".to_string());
+        let payment_provider =
+            normalize_payment_provider(&payment_provider_raw).ok_or_else(|| {
+                anyhow::anyhow!("unsupported payment provider: {payment_provider_raw}")
+            })?;
         if strict_runtime && payment_provider != "yookassa" {
             anyhow::bail!(
                 "production license server currently supports only the verified yookassa provider"
@@ -315,8 +316,8 @@ pub(crate) fn validate_public_base_url(
         .host_str()
         .ok_or_else(|| anyhow::anyhow!("public base URL has no host"))?;
     let ip = host.parse::<IpAddr>().ok();
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || ip.is_some_and(|address| address.is_loopback());
+    let loopback =
+        host.eq_ignore_ascii_case("localhost") || ip.is_some_and(|address| address.is_loopback());
     if production {
         if url.scheme() != "https" || loopback {
             anyhow::bail!("production public base URL must use HTTPS and a non-loopback host");

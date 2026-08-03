@@ -1,2 +1,0 @@
-Final CI trigger for PR #42 after provenance synchronization.
-Source tree and SOURCE_MANIFEST_SHA256.txt are intentionally unchanged.

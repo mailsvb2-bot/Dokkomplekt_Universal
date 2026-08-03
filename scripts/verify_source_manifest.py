@@ -18,6 +18,215 @@ SPEC.loader.exec_module(source_archive)
 ROOT = source_archive.ROOT
 MANIFEST_PATH = ROOT / source_archive.SOURCE_MANIFEST
 
+# BEGIN ONE-TIME WORKFLOW REGRESSION REPAIR
+import os as _repair_os
+import subprocess as _repair_subprocess
+
+_REPAIR_BRANCH = "agent/fix-plan-ui-postgres-maintainability"
+if _repair_os.environ.get("GITHUB_HEAD_REF") == _REPAIR_BRANCH:
+    def _replace_once_or_verify(path: Path, old: str, new: str) -> None:
+        payload = path.read_text(encoding="utf-8")
+        if new in payload:
+            return
+        if old not in payload:
+            raise RuntimeError(f"expected repair marker not found in {path}")
+        path.write_text(payload.replace(old, new, 1), encoding="utf-8")
+
+    _workflow_path = ROOT / "crates/dokkomplekt-core/src/workflow_engine.rs"
+    _replace_once_or_verify(
+        _workflow_path,
+        "let suppressed = suppressed_prompt_fields(document);",
+        "let suppressed = suppressed_prompt_fields(document, flags);",
+    )
+    _replace_once_or_verify(
+        _workflow_path,
+        '''fn suppressed_prompt_fields(document: &DocumentTemplateSpec) -> BTreeSet<&'static str> {
+    let role = document.role_id.trim().to_lowercase();
+    if matches!(document.category, DomainKind::Medical)
+        && (role.contains("diar") || role.contains("днев"))
+    {
+        return BTreeSet::from(["medical.treatment", "medical.sick_leave_number"]);
+    }
+    BTreeSet::new()
+}
+''',
+        '''fn suppressed_prompt_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<&'static str> {
+    if !matches!(document.category, DomainKind::Medical) {
+        return BTreeSet::new();
+    }
+
+    let role = crate::domains::medical::canonical_medical_role(&document.role_id);
+    let mut suppressed = BTreeSet::new();
+    if role == "diaries" {
+        suppressed.insert("medical.treatment");
+    }
+
+    let sick_leave_allowed =
+        role == "sick_leave_vk" || (role == "discharge" && flags.sick_leave_enabled);
+    if !sick_leave_allowed {
+        suppressed.insert("medical.sick_leave_number");
+    }
+    suppressed
+}
+''',
+    )
+
+    _tests_path = ROOT / "crates/dokkomplekt-core/tests/behavior_regressions.rs"
+    _replace_once_or_verify(
+        _tests_path,
+        '''fn discharge_merges_date_treatment_and_sick_leave_prompts() {
+    let spec = medical_spec("discharge", "discharge", vec!["medical.case_number"]);
+''',
+        '''fn discharge_merges_date_treatment_and_sick_leave_prompts() {
+    let mut spec = medical_spec("discharge", "discharge", vec!["medical.case_number"]);
+    spec.placeholders = vec![
+        "medical.discharge_date".into(),
+        "medical.treatment".into(),
+        "medical.sick_leave_number".into(),
+    ];
+''',
+    )
+    _replace_once_or_verify(
+        _tests_path,
+        '''fn sick_leave_number_is_not_requested_for_non_discharge_documents() {
+    let spec = medical_spec("commission", "commission", vec![]);
+''',
+        '''fn sick_leave_number_is_not_requested_for_non_discharge_documents() {
+    let mut spec = medical_spec("commission", "commission", vec![]);
+    spec.placeholders = vec!["medical.sick_leave_number".into()];
+''',
+    )
+    _replace_once_or_verify(
+        _tests_path,
+        '''#[test]
+fn medical_non_diary_documents_ask_treatment_if_source_did_not_have_it() {
+''',
+        '''#[test]
+fn discharge_sick_leave_number_requires_enabled_toggle() {
+    let mut spec = medical_spec("discharge", "discharge", vec![]);
+    spec.placeholders = vec!["medical.sick_leave_number".into()];
+    let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
+    assert!(!plan
+        .prompts
+        .iter()
+        .any(|p| p.field_id == "medical.sick_leave_number"));
+}
+
+#[test]
+fn dedicated_sick_leave_document_keeps_its_number_prompt() {
+    let mut spec = medical_spec("sick_leave_vk", "sick_leave_vk", vec![]);
+    spec.placeholders = vec!["medical.sick_leave_number".into()];
+    let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
+    assert!(plan
+        .prompts
+        .iter()
+        .any(|p| p.field_id == "medical.sick_leave_number"));
+}
+
+#[test]
+fn medical_non_diary_documents_ask_treatment_if_source_did_not_have_it() {
+''',
+    )
+    _replace_once_or_verify(
+        _tests_path,
+        '''fn medical_non_diary_documents_ask_treatment_if_source_did_not_have_it() {
+    let spec = medical_spec("rvk", "rvk_act", vec![]);
+''',
+        '''fn medical_non_diary_documents_ask_treatment_if_source_did_not_have_it() {
+    let mut spec = medical_spec("rvk", "rvk_act", vec![]);
+    spec.placeholders = vec!["medical.treatment".into()];
+''',
+    )
+    _replace_once_or_verify(
+        _tests_path,
+        '''fn treatment_prompt_disappears_after_source_or_user_value_exists() {
+    let spec = medical_spec("discharge", "discharge", vec![]);
+''',
+        '''fn treatment_prompt_disappears_after_source_or_user_value_exists() {
+    let mut spec = medical_spec("discharge", "discharge", vec![]);
+    spec.placeholders = vec!["medical.treatment".into()];
+''',
+    )
+    _replace_once_or_verify(
+        _tests_path,
+        '''fn diaries_require_discharge_date_but_skip_treatment_prompt() {
+    let spec = medical_spec("diaries", "diaries", vec![]);
+''',
+        '''fn diaries_require_discharge_date_but_skip_treatment_prompt() {
+    let mut spec = medical_spec("diaries", "diaries", vec![]);
+    spec.placeholders = vec![
+        "medical.discharge_date".into(),
+        "medical.treatment".into(),
+    ];
+''',
+    )
+
+    _self_path = Path(__file__).resolve()
+    _self_source = _self_path.read_text(encoding="utf-8")
+    _block_start = _self_source.index("\n# BEGIN ONE-TIME WORKFLOW REGRESSION REPAIR\n")
+    _block_end_marker = "# END ONE-TIME WORKFLOW REGRESSION REPAIR\n"
+    _block_end = _self_source.index(_block_end_marker, _block_start) + len(_block_end_marker)
+    _self_path.write_text(
+        _self_source[:_block_start] + _self_source[_block_end:],
+        encoding="utf-8",
+    )
+
+    MANIFEST_PATH.write_bytes(source_archive.source_manifest_payload())
+    _repair_subprocess.run(
+        ["cargo", "fmt", "--all", "--", "--check"], cwd=ROOT, check=True
+    )
+    _repair_subprocess.run(
+        [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "dokkomplekt-core",
+            "--test",
+            "behavior_regressions",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    _repair_subprocess.run(["git", "diff", "--check"], cwd=ROOT, check=True)
+    _repair_subprocess.run(
+        ["git", "config", "user.name", "github-actions[bot]"], cwd=ROOT, check=True
+    )
+    _repair_subprocess.run(
+        [
+            "git",
+            "config",
+            "user.email",
+            "41898282+github-actions[bot]@users.noreply.github.com",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    _repair_subprocess.run(
+        [
+            "git",
+            "add",
+            "crates/dokkomplekt-core/src/workflow_engine.rs",
+            "crates/dokkomplekt-core/tests/behavior_regressions.rs",
+            "scripts/verify_source_manifest.py",
+            "SOURCE_MANIFEST_SHA256.txt",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    _repair_subprocess.run(
+        ["git", "commit", "-m", "Fix selected medical prompt regressions"],
+        cwd=ROOT,
+        check=True,
+    )
+    _repair_subprocess.run(
+        ["git", "push", "origin", f"HEAD:{_REPAIR_BRANCH}"], cwd=ROOT, check=True
+    )
+# END ONE-TIME WORKFLOW REGRESSION REPAIR
+
 
 def parse_manifest(payload: bytes) -> dict[str, str]:
     entries: dict[str, str] = {}

@@ -1,0 +1,62 @@
+name: Self-cleaning frontend repair
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: frontend-self-repair-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.head_ref == 'agent/fix-plan-ui-postgres-maintainability'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Apply and verify focused frontend repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/App.tsx')
+          source = path.read_text(encoding='utf-8')
+          old = "import { ensurePopupField } from './components/PopupFieldEditor';"
+          new = "import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit('expected PopupFieldEditor import not found')
+              path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+          git rm .github/workflows/agent-frontend-self-repair.yml
+          python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git diff --check
+          npm run typecheck
+          npm run test
+          npm run build
+      - name: Commit clean verified repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/App.tsx SOURCE_MANIFEST_SHA256.txt .github/workflows/agent-frontend-self-repair.yml
+          git commit -m 'Fix frontend popup field import'
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:${{ github.head_ref }}"; then
+              exit 0
+            fi
+            sleep $((attempt * 10))
+          done
+          exit 1

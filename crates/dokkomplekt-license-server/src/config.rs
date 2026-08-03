@@ -407,7 +407,6 @@ pub(crate) fn postgres_test_database_url() -> Option<String> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{

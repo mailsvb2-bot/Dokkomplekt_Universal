@@ -1,0 +1,1 @@
+trigger final trusted verification after rustfmt sync

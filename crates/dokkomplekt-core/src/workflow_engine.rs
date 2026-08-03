@@ -42,7 +42,7 @@ pub fn plan_workflow(
         },
     });
 
-    let suppressed = suppressed_prompt_fields(document);
+    let suppressed = suppressed_prompt_fields(document, flags);
     // The final selected template is the authority for runtime questions. Domain profiles may
     // suggest fields in the popup designer, but they must not force unrelated questions into a
     // document that does not physically use those fields. Explicitly configured popup fields are
@@ -133,14 +133,26 @@ fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String>
         .collect()
 }
 
-fn suppressed_prompt_fields(document: &DocumentTemplateSpec) -> BTreeSet<&'static str> {
-    let role = document.role_id.trim().to_lowercase();
-    if matches!(document.category, DomainKind::Medical)
-        && (role.contains("diar") || role.contains("днев"))
-    {
-        return BTreeSet::from(["medical.treatment", "medical.sick_leave_number"]);
+fn suppressed_prompt_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<&'static str> {
+    if !matches!(document.category, DomainKind::Medical) {
+        return BTreeSet::new();
     }
-    BTreeSet::new()
+
+    let role = crate::domains::medical::canonical_medical_role(&document.role_id);
+    let mut suppressed = BTreeSet::new();
+    if role == "diaries" {
+        suppressed.insert("medical.treatment");
+    }
+
+    let sick_leave_allowed =
+        role == "sick_leave_vk" || (role == "discharge" && flags.sick_leave_enabled);
+    if !sick_leave_allowed {
+        suppressed.insert("medical.sick_leave_number");
+    }
+    suppressed
 }
 
 /// Builds one popup for a whole selected document set. Duplicate semantic fields are asked once,

@@ -125,7 +125,12 @@ fn strict_renderer_reports_missing_valid_custom_fields_and_invalid_fields() {
 
 #[test]
 fn discharge_merges_date_treatment_and_sick_leave_prompts() {
-    let spec = medical_spec("discharge", "discharge", vec!["medical.case_number"]);
+    let mut spec = medical_spec("discharge", "discharge", vec!["medical.case_number"]);
+    spec.placeholders = vec![
+        "medical.discharge_date".into(),
+        "medical.treatment".into(),
+        "medical.sick_leave_number".into(),
+    ];
     let plan = plan_workflow(
         &spec,
         &SemanticCase::default(),
@@ -142,7 +147,8 @@ fn discharge_merges_date_treatment_and_sick_leave_prompts() {
 
 #[test]
 fn sick_leave_number_is_not_requested_for_non_discharge_documents() {
-    let spec = medical_spec("commission", "commission", vec![]);
+    let mut spec = medical_spec("commission", "commission", vec![]);
+    spec.placeholders = vec!["medical.sick_leave_number".into()];
     let plan = plan_workflow(
         &spec,
         &SemanticCase::default(),
@@ -157,8 +163,31 @@ fn sick_leave_number_is_not_requested_for_non_discharge_documents() {
 }
 
 #[test]
+fn discharge_sick_leave_number_requires_enabled_toggle() {
+    let mut spec = medical_spec("discharge", "discharge", vec![]);
+    spec.placeholders = vec!["medical.sick_leave_number".into()];
+    let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
+    assert!(!plan
+        .prompts
+        .iter()
+        .any(|p| p.field_id == "medical.sick_leave_number"));
+}
+
+#[test]
+fn dedicated_sick_leave_document_keeps_its_number_prompt() {
+    let mut spec = medical_spec("sick_leave_vk", "sick_leave_vk", vec![]);
+    spec.placeholders = vec!["medical.sick_leave_number".into()];
+    let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
+    assert!(plan
+        .prompts
+        .iter()
+        .any(|p| p.field_id == "medical.sick_leave_number"));
+}
+
+#[test]
 fn medical_non_diary_documents_ask_treatment_if_source_did_not_have_it() {
-    let spec = medical_spec("rvk", "rvk_act", vec![]);
+    let mut spec = medical_spec("rvk", "rvk_act", vec![]);
+    spec.placeholders = vec!["medical.treatment".into()];
     let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
     assert!(plan
         .prompts
@@ -168,7 +197,8 @@ fn medical_non_diary_documents_ask_treatment_if_source_did_not_have_it() {
 
 #[test]
 fn treatment_prompt_disappears_after_source_or_user_value_exists() {
-    let spec = medical_spec("discharge", "discharge", vec![]);
+    let mut spec = medical_spec("discharge", "discharge", vec![]);
+    spec.placeholders = vec!["medical.treatment".into()];
     let mut case = SemanticCase::default();
     set_scanner_value(&mut case, "medical.treatment", "назначенное лечение", 0.81);
     let plan = plan_workflow(&spec, &case, &WorkflowFlags::default());
@@ -180,7 +210,8 @@ fn treatment_prompt_disappears_after_source_or_user_value_exists() {
 
 #[test]
 fn diaries_require_discharge_date_but_skip_treatment_prompt() {
-    let spec = medical_spec("diaries", "diaries", vec![]);
+    let mut spec = medical_spec("diaries", "diaries", vec![]);
+    spec.placeholders = vec!["medical.discharge_date".into(), "medical.treatment".into()];
     let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
     let fields: Vec<_> = plan.prompts.iter().map(|p| p.field_id.as_str()).collect();
     assert!(fields.contains(&"medical.discharge_date"));

@@ -30,7 +30,13 @@ jobs:
             | base64 --decode \
             | gzip --decompress > /tmp/audit.patch
           test "$(sha256sum /tmp/audit.patch | awk '{print $1}')" = "9b5203b88487a78d29570059b1689559420278849a19ec358ff8b5b9b5a457e0"
-          git apply --binary --index /tmp/audit.patch
+          git apply --binary --index --exclude=SOURCE_MANIFEST_SHA256.txt /tmp/audit.patch
+          python3 scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report /tmp/source-manifest-report.json || true
+          test -s /tmp/SOURCE_MANIFEST_SHA256.generated.txt
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt
           git rm \
             .github/audit-fix.patch.gz.b64.part1 \
             .github/audit-fix.patch.gz.b64.part2 \

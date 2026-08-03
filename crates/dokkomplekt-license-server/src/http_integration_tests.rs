@@ -503,7 +503,7 @@ async fn license_issue_rejects_different_machine_hash() {
 
 #[tokio::test]
 async fn postgres_http_order_payment_activation_flow_when_database_url_is_present() {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+    let Some(database_url) = crate::config::postgres_test_database_url() else {
         return;
     };
     let app = tokio::task::spawn_blocking(move || {
@@ -517,7 +517,7 @@ async fn postgres_http_order_payment_activation_flow_when_database_url_is_presen
 
 #[test]
 fn postgres_runtime_migration_records_schema_version_when_database_url_is_present() {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+    let Some(database_url) = crate::config::postgres_test_database_url() else {
         return;
     };
     let store = PostgresStore::connect(&database_url).unwrap();

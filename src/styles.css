@@ -395,6 +395,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .readyMessage > div { min-width: 0; display: grid; gap: 3px; flex: 1; }
 .readyMessage strong { color: var(--text); font-size: 13px; }
 .readyMessage span { color: var(--text-2); font-size: 11px; }
+.readyMessage.notReady { background: color-mix(in srgb,var(--warn) 9%,var(--panel)); border: 1px solid color-mix(in srgb,var(--warn) 35%,var(--line)); }
+.readyMessage.notReady > i { color: var(--warn); }
 .clientPreview { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 13px; }
 .clientPreview pre { max-height: 340px; overflow: auto; margin: 12px 0; padding: 16px; border: 1px solid var(--paper-line); border-radius: 12px; background: var(--paper); color: var(--text); white-space: pre-wrap; font-size: 11px; line-height: 1.55; }
 

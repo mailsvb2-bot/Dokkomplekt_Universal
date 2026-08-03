@@ -25,7 +25,7 @@ class PerDocumentPrintingContractTest(unittest.TestCase):
         self.assertIn("print_copies_by_document", backend)
 
     def test_frontend_persists_and_sends_copies_per_document(self) -> None:
-        app = text("src/App.tsx")
+        app = "\n".join((text("src/App.tsx"), text("src/lib/appSupport.ts")))
         api = text("src/lib/api.ts")
         rail = text("src/components/DocumentRail.tsx")
         self.assertIn("dokkomplekt.print-copies.v1", app)
@@ -96,7 +96,11 @@ class MedicalProfileParityContractTest(unittest.TestCase):
 
 class CriticalSecurityRegressionContractTest(unittest.TestCase):
     def test_untrusted_templates_archives_and_watcher_fail_closed(self) -> None:
-        intake = text("src-tauri/src/universal_intake.rs")
+        intake = "\n".join((
+            text("src-tauri/src/universal_intake.rs"),
+            text("src-tauri/src/universal_intake/archive.rs"),
+            text("src-tauri/src/universal_intake/web.rs"),
+        ))
         watcher = text("src-tauri/src/subsystems/watcher_commands.rs")
         automation = text("src-tauri/src/subsystems/automation_runtime.rs")
         docx = text("crates/dokkomplekt-docx/src/lib.rs")

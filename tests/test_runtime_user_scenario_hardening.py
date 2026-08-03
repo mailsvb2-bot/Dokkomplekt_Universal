@@ -15,7 +15,10 @@ def test_manual_generation_uses_real_source_provenance() -> None:
     main = text("src-tauri/src/main.rs")
     commands = text("src-tauri/src/subsystems/document_commands.rs")
     desktop = text("src-tauri/src/subsystems/desktop_io.rs")
-    intake = text("src-tauri/src/universal_intake.rs")
+    intake = "\n".join((
+        text("src-tauri/src/universal_intake.rs"),
+        text("src-tauri/src/universal_intake/web.rs"),
+    ))
 
     assert "manual-session" not in commands
     assert "struct SourceProvenance" in main
@@ -74,6 +77,9 @@ def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_pa
         "--min-width 800",
         "--min-height 500",
         "--min-colors 64",
+        "--screenshot",
+        "verify_webkit_pixel_golden.py",
+        "webkit-linux-golden.json",
         "did not prove native frontend IPC readiness",
     ):
         assert invariant in contract
@@ -91,6 +97,7 @@ def test_linux_installer_gate_requires_rendered_named_window_without_extra_ci_pa
         "XGetPixel",
         "XDestroyImage",
         "minimum_colors",
+        "P6",
         "attributes.map_state != self.IS_VIEWABLE",
         "self.root",
     ):

@@ -254,7 +254,7 @@ async fn memory_flow() {
 
 #[tokio::test]
 async fn postgres_flow_when_database_url_is_present() {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+    let Some(database_url) = crate::config::postgres_test_database_url() else {
         return;
     };
     let app = tokio::task::spawn_blocking(move || {

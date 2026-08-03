@@ -42,6 +42,8 @@ interface WorkspaceProps {
   modelOutput: string;
   semantic: SemanticExtractResult | null;
   plan: WorkflowPlan | null;
+  planLoading: boolean;
+  selectedDocumentCount: number;
   answers: Record<string, string>;
   preview: PreviewState | null;
   setWatchFolder(value: string): void;
@@ -115,6 +117,7 @@ export function Workspace(props: WorkspaceProps) {
   const reviewEvidence = reviewField?.evidence?.[0];
   const sourceReady = Boolean(props.sourceFileName || props.parsed);
   const prompts = props.plan?.prompts ?? [];
+  const planReady = !props.planLoading && props.plan !== null;
   const reviewCount = props.semantic?.fields.filter(field => field.confidence < .95).length ?? 0;
 
   return (
@@ -260,12 +263,38 @@ export function Workspace(props: WorkspaceProps) {
           <div className="stageHeading">
             <span className="stageNumber">2</span>
             <div>
-              <h2>{prompts.length ? 'Уточните недостающие данные' : 'Источник готов к созданию комплекта'}</h2>
-              <p>{prompts.length ? 'Показываем только то, чего не удалось надёжно найти в источнике.' : 'Обязательных уточнений сейчас нет. Выберите состав комплекта справа и запустите создание.'}</p>
+              <h2>{props.planLoading
+                ? 'Проверяем выбранный комплект…'
+                : !props.selectedDocumentCount
+                  ? 'Выберите документы комплекта'
+                  : !planReady
+                    ? 'План комплекта пока не готов'
+                    : prompts.length
+                      ? 'Уточните недостающие данные'
+                      : 'Источник готов к созданию комплекта'}</h2>
+              <p>{props.planLoading
+                ? `Строим финальный план для выбранных документов: ${props.selectedDocumentCount}.`
+                : !props.selectedDocumentCount
+                  ? 'Сначала выберите хотя бы один документ справа.'
+                  : !planReady
+                    ? 'Готовность не объявляется, пока backend не подтвердит финальный generation-plan.'
+                    : prompts.length
+                      ? 'Показываем ровно те поля, которые потребуются при создании выбранного комплекта.'
+                      : 'Финальный план проверен: обязательных уточнений для выбранного комплекта нет.'}</p>
             </div>
           </div>
 
-          {prompts.length ? (
+          {props.planLoading ? (
+            <div className="readyMessage" role="status">
+              <i className="ti ti-loader-2" aria-hidden="true" />
+              <div><strong>Сверяем шаблоны и найденные значения</strong><span>Сообщение о готовности появится только после расчёта финального generation-plan.</span></div>
+            </div>
+          ) : !props.selectedDocumentCount || !planReady ? (
+            <div className="readyMessage notReady" role="status">
+              <i className="ti ti-alert-circle" aria-hidden="true" />
+              <div><strong>Создание пока не разрешено</strong><span>Выберите документы и дождитесь подтверждённого финального плана.</span></div>
+            </div>
+          ) : prompts.length ? (
             <div className="clientFields">
               {prompts.map((prompt: PromptSpec) => (
                 <label className="clientField" key={prompt.field_id}>
@@ -289,7 +318,7 @@ export function Workspace(props: WorkspaceProps) {
             <div className="readyMessage">
               <i className="ti ti-circle-check" aria-hidden="true" />
               <div><strong>Можно создавать документы</strong><span>{props.semantic ? `Распознано значений: ${props.semantic.fields.length}${reviewCount ? ` · рекомендуем проверить: ${reviewCount}` : ''}` : 'Данные источника будут проверены ещё раз перед сохранением.'}</span></div>
-              <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy}>Проверить данные</button>
+              <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy || !planReady || !props.selectedDocumentCount}>Проверить данные</button>
             </div>
           )}
 

@@ -1,0 +1,14 @@
+{
+  "schema": "dokkomplekt.webkit-pixel-golden.v1",
+  "description": "Robust native WebKitGTK visual profile. It rejects blank, single-colour, unpainted and severely collapsed windows while tolerating runner font rasterization differences.",
+  "metrics": {
+    "width": { "min": 256, "max": 400 },
+    "height": { "min": 150, "max": 240 },
+    "quantized_colors": { "min": 64, "max": 32768 },
+    "luminance_std": { "min": 12, "max": 128 },
+    "dark_pixel_share": { "min": 0.002, "max": 0.9 },
+    "light_pixel_share": { "min": 0.03, "max": 0.995 },
+    "edge_density": { "min": 0.003, "max": 0.75 },
+    "active_grid_cells": { "min": 18, "max": 160 }
+  }
+}

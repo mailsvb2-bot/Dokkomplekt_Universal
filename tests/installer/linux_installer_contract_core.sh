@@ -103,8 +103,9 @@ run_rendered_gui_smoke() {
 
   local smoke_home display_file xauthority_file probe_error_file wrapper pid status
   local display xauthority evidence window_id captured_width captured_height colors
+  local pixel_evidence_dir pixel_slug screenshot_file golden_report
   local probe_timeout_seconds
-  probe_timeout_seconds="${DOKKOMPLEKT_X11_PROBE_TIMEOUT_SECONDS:-2}"
+  probe_timeout_seconds="${DOKKOMPLEKT_X11_PROBE_TIMEOUT_SECONDS:-10}"
   if ! [[ "$probe_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
     echo "DOKKOMPLEKT_X11_PROBE_TIMEOUT_SECONDS must be a positive integer" >&2
     return 1
@@ -114,6 +115,11 @@ run_rendered_gui_smoke() {
   xauthority_file="$smoke_home/xauthority-path"
   probe_error_file="$smoke_home/x11-probe.err"
   wrapper="$smoke_home/launch-wrapper.sh"
+  pixel_evidence_dir="${DOKKOMPLEKT_PIXEL_EVIDENCE_DIR:-verification/ci}"
+  pixel_slug="$(printf '%s' "$label" | tr -cs '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]')"
+  screenshot_file="$pixel_evidence_dir/webkit-${pixel_slug}.ppm"
+  golden_report="$pixel_evidence_dir/webkit-${pixel_slug}-golden.json"
+  mkdir -p "$pixel_evidence_dir"
   cleanup_paths+=("$smoke_home")
   cat >"$wrapper" <<'WRAPPER'
 #!/usr/bin/env bash
@@ -155,22 +161,25 @@ WRAPPER
       # xvfb-run creates a private MIT-MAGIC-COOKIE file and exports its path
       # only to descendants. The verifier runs in this parent shell, so it must
       # explicitly inherit that XAUTHORITY or XOpenDisplay cannot see any window.
-      # Pixel-only validation historically required --min-colors 64. The
-      # post-render native-title handshake below requires one capturable X11 color.
       evidence="$(XAUTHORITY="$xauthority" timeout --signal=KILL "${probe_timeout_seconds}s" \
         python scripts/verify_rendered_x11_window.py \
         --display "$display" \
         --title "Dokkomplekt Universal" \
         --min-width 800 \
         --min-height 500 \
-        --min-colors 1 2>"$probe_error_file" || true)"
+        --min-colors 64 \
+        --screenshot "$screenshot_file" 2>"$probe_error_file" || true)"
       if [ -n "$evidence" ] \
         && grep -Fq 'Dokkomplekt native frontend IPC ready' "$smoke_home/launch.log"; then
         read -r window_id captured_width captured_height colors <<<"$evidence"
         if [[ "$window_id" =~ ^[0-9]+$ && "$captured_width" =~ ^[0-9]+$ \
-          && "$captured_height" =~ ^[0-9]+$ && "$colors" =~ ^[0-9]+$ ]]; then
+          && "$captured_height" =~ ^[0-9]+$ && "$colors" =~ ^[0-9]+$ ]] \
+          && python scripts/verify_webkit_pixel_golden.py \
+            --image "$screenshot_file" \
+            --baseline tests/fixtures/ui/webkit-linux-golden.json \
+            --report "$golden_report"; then
           stop_process_group "$pid"
-          printf -- '- %s packaged frontend IPC smoke: OK (%sx%s, native frontend IPC title, %s capturable X11 colors)\n' \
+          printf -- '- %s packaged frontend IPC + pixel-golden smoke: OK (%sx%s, %s capturable X11 colors)\n' \
             "$label" "$captured_width" "$captured_height" "$colors"
           return 0
         fi

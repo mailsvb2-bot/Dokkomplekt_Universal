@@ -1,0 +1,82 @@
+name: macOS Build Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-build-smoke:
+    name: macOS app and DMG build smoke
+    runs-on: macos-14
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Check Rust formatting and macOS compilation
+        run: |
+          cargo fmt --all -- --check
+          cargo check --workspace --all-targets --locked
+      - name: Check and test frontend
+        run: |
+          npm run typecheck
+          npm run test
+          npm run build
+      - name: Build native macOS application and DMG
+        run: |
+          set -o pipefail
+          npx tauri build --bundles app,dmg 2>&1 | tee macos-tauri-build.log
+      - name: Validate application bundle structure and signature envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          dmg_path="$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$app_path" && test -d "$app_path"
+          test -n "$dmg_path" && test -f "$dmg_path"
+          plutil -lint "$app_path/Contents/Info.plist"
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
+          test -x "$app_path/Contents/MacOS/$executable_name"
+          signature_state="unsigned-preview"
+          signature_details="$(codesign --display --verbose=4 "$app_path" 2>&1 || true)"
+          if grep -q '^Authority=' <<<"$signature_details"; then
+            codesign --verify --deep --strict "$app_path"
+            signature_state="verified-identity-envelope"
+          elif grep -q '^Signature=adhoc$' <<<"$signature_details"; then
+            signature_state="ad-hoc-preview"
+          elif grep -q 'code object is not signed at all' <<<"$signature_details"; then
+            signature_state="unsigned-preview"
+          elif [[ -n "$signature_details" ]]; then
+            printf 'Unexpected codesign state:\n%s\n' "$signature_details" >&2
+            exit 1
+          fi
+          hdiutil verify "$dmg_path"
+          printf 'app=%s\ndmg=%s\nsignature=%s\n' "$app_path" "$dmg_path" "$signature_state" > macos-bundle-evidence.txt
+      - name: Upload macOS smoke evidence
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: macos-build-smoke-evidence
+          path: |
+            macos-tauri-build.log
+            macos-bundle-evidence.txt
+            target/release/bundle/macos/**
+            target/release/bundle/dmg/**
+          if-no-files-found: warn

@@ -47,8 +47,10 @@ fn uploaded_template_becomes_button_from_top_title() {
 #[test]
 fn discharge_sick_leave_prompt_only_when_flag_enabled() {
     let case = SemanticCase::default();
+    let mut discharge = doc("discharge", "Выписной эпикриз");
+    discharge.placeholders = vec!["medical.sick_leave_number".into()];
     let off = plan_workflow(
-        &doc("discharge", "Выписной эпикриз"),
+        &discharge,
         &case,
         &WorkflowFlags {
             sick_leave_enabled: false,
@@ -59,7 +61,7 @@ fn discharge_sick_leave_prompt_only_when_flag_enabled() {
         .iter()
         .any(|p| p.field_id == "medical.sick_leave_number"));
     let on = plan_workflow(
-        &doc("discharge", "Выписной эпикриз"),
+        &discharge,
         &case,
         &WorkflowFlags {
             sick_leave_enabled: true,
@@ -74,11 +76,9 @@ fn discharge_sick_leave_prompt_only_when_flag_enabled() {
 #[test]
 fn diaries_require_discharge_date_but_never_treatment() {
     let case = SemanticCase::default();
-    let plan = plan_workflow(
-        &doc("diaries", "Дневники"),
-        &case,
-        &WorkflowFlags::default(),
-    );
+    let mut diaries = doc("diaries", "Дневники");
+    diaries.placeholders = vec!["medical.discharge_date".into(), "medical.treatment".into()];
+    let plan = plan_workflow(&diaries, &case, &WorkflowFlags::default());
     assert!(plan
         .prompts
         .iter()

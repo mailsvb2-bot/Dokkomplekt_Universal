@@ -50,7 +50,10 @@ def test_linux_smoke_requires_a_rendered_named_window_not_only_a_live_process() 
     assert "--min-width 800" in source
     assert "--min-height 500" in source
     assert "--min-colors 64" in source
-    assert "--min-colors 1" in source
+    assert "--min-colors 1" not in source
+    assert "verify_webkit_pixel_golden.py" in source
+    assert "--screenshot" in source
+    assert "webkit-linux-golden.json" in source
     assert "--accept-title-handshake" not in source
     assert "Dokkomplekt native frontend IPC ready" in source
     assert "did not prove native frontend IPC readiness" in source

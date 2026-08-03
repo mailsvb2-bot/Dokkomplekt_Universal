@@ -71,8 +71,18 @@ fn functional_port_sick_leave_only_for_discharge() {
             1.0,
         ),
     );
-    let discharge = create_button_from_template_text("Выписной эпикриз", "dis", "d.docx", None);
-    let rvk = create_button_from_template_text("АКТ для РВК", "rvk", "r.docx", None);
+    let discharge = create_button_from_template_text(
+        "Выписной эпикриз\nНомер больничного: {{medical.sick_leave_number}}",
+        "dis",
+        "d.docx",
+        None,
+    );
+    let rvk = create_button_from_template_text(
+        "АКТ для РВК\nНомер больничного: {{medical.sick_leave_number}}",
+        "rvk",
+        "r.docx",
+        None,
+    );
     let discharge_fields: Vec<String> = ported_workflow_plan(&discharge, &case, true)
         .prompts
         .into_iter()

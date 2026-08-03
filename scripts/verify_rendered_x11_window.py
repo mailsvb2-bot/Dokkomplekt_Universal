@@ -242,7 +242,7 @@ class X11Probe:
 
     def _sample_colors(
         self, drawable: int, *, x: int, y: int, width: int, height: int,
-        minimum_colors: int,
+        minimum_colors: int, screenshot: str | None,
     ) -> int:
         image = self.lib.XGetImage(
             self.display, drawable, x, y, width, height,
@@ -252,19 +252,31 @@ class X11Probe:
             return 0
         try:
             colors: set[int] = set()
-            step_x, step_y = max(1, width // 160), max(1, height // 120)
+            target_width, target_height = min(width, 320), min(height, 200)
+            step_x = max(1, (width + target_width - 1) // target_width)
+            step_y = max(1, (height + target_height - 1) // target_height)
+            rows: list[bytes] = []
             for sample_y in range(0, height, step_y):
+                row = bytearray()
                 for sample_x in range(0, width, step_x):
-                    colors.add(int(self.lib.XGetPixel(image, sample_x, sample_y)))
-                    if len(colors) >= minimum_colors:
-                        return len(colors)
+                    pixel = int(self.lib.XGetPixel(image, sample_x, sample_y))
+                    colors.add(pixel)
+                    row.extend(((pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF))
+                rows.append(bytes(row))
+            if screenshot and len(colors) >= minimum_colors and rows:
+                output = os.path.abspath(screenshot)
+                os.makedirs(os.path.dirname(output), exist_ok=True)
+                sampled_width = len(rows[0]) // 3
+                with open(output, "wb") as handle:
+                    handle.write(f"P6\n{sampled_width} {len(rows)}\n255\n".encode("ascii"))
+                    handle.writelines(rows)
             return len(colors)
         finally:
             self.lib.XDestroyImage(image)
 
     def render_evidence(
         self, window: int, *, minimum_width: int, minimum_height: int,
-        minimum_colors: int,
+        minimum_colors: int, screenshot: str | None = None,
     ) -> RenderEvidence | None:
         attributes = self._attributes(window)
         if attributes is None or attributes.map_state != self.IS_VIEWABLE:
@@ -273,20 +285,13 @@ class X11Probe:
             return None
         self.lib.XSync(self.display, 0)
 
-        # The Linux installer contract requests one color only after it has seen
-        # the Rust marker proving stable React -> Tauri IPC -> Rust and a successful
-        # native title update. Xvfb cannot read WebKitGTK's GPU-backed surface on
-        # GitHub runners, so this mode proves the named native window is mapped and
-        # correctly sized instead of pretending that XGetImage captured the page.
-        if minimum_colors == 1:
-            return RenderEvidence(window, attributes.width, attributes.height, 0)
-
         for drawable, drawable_attributes in self._render_drawables(
             window, minimum_width=minimum_width, minimum_height=minimum_height
         ):
             colors = self._sample_colors(
                 drawable, x=0, y=0, width=drawable_attributes.width,
                 height=drawable_attributes.height, minimum_colors=minimum_colors,
+                screenshot=screenshot,
             )
             if colors >= minimum_colors:
                 return RenderEvidence(window, attributes.width, attributes.height, colors)
@@ -300,6 +305,7 @@ class X11Probe:
         colors = self._sample_colors(
             self.root, x=x, y=y, width=width, height=height,
             minimum_colors=minimum_colors,
+            screenshot=screenshot,
         )
         if colors < minimum_colors:
             return None
@@ -313,6 +319,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-width", type=int, default=800)
     parser.add_argument("--min-height", type=int, default=500)
     parser.add_argument("--min-colors", type=int, default=64)
+    parser.add_argument("--screenshot", help="Write a downsampled PPM capture of the verified window")
     return parser.parse_args()
 
 
@@ -331,6 +338,7 @@ def main() -> int:
                 minimum_width=args.min_width,
                 minimum_height=args.min_height,
                 minimum_colors=args.min_colors,
+                screenshot=args.screenshot,
             )
     except (OSError, RuntimeError) as error:
         print(str(error), file=sys.stderr)

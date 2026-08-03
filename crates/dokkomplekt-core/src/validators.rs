@@ -181,8 +181,25 @@ fn validate_email(value: &str) -> Result<(), String> {
             character.is_ascii_alphanumeric()
                 || matches!(
                     character,
-                    '.' | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '/'
-                        | '=' | '?' | '^' | '_' | '`' | '{' | '|' | '}' | '~'
+                    '.' | '!'
+                        | '#'
+                        | '$'
+                        | '%'
+                        | '&'
+                        | '\''
+                        | '*'
+                        | '+'
+                        | '-'
+                        | '/'
+                        | '='
+                        | '?'
+                        | '^'
+                        | '_'
+                        | '`'
+                        | '{'
+                        | '|'
+                        | '}'
+                        | '~'
                 )
         })
     {
@@ -217,9 +234,7 @@ fn normalize_digit_text(v: &str, title: &str) -> Result<String, String> {
     if value.chars().any(|character| {
         !character.is_ascii_digit() && !matches!(character, ' ' | '-' | '\u{00a0}')
     }) {
-        return Err(format!(
-            "{title}: допустимы только цифры, пробелы и дефисы"
-        ));
+        return Err(format!("{title}: допустимы только цифры, пробелы и дефисы"));
     }
     Ok(only_digits(value))
 }
@@ -539,7 +554,6 @@ mod tests {
         assert!(validate_field_value("contact.email", "doctor@example.c").is_err());
     }
 
-
     #[test]
     fn digit_identifiers_reject_hidden_letters_and_symbols() {
         for (field, value) in [
@@ -549,7 +563,10 @@ mod tests {
             ("subject.passport_series", "12a34"),
             ("subject.passport_number", "12345x6"),
         ] {
-            assert!(validate_field_value(field, value).is_err(), "{field}: {value}");
+            assert!(
+                validate_field_value(field, value).is_err(),
+                "{field}: {value}"
+            );
         }
         assert!(validate_snils("112-233-445x95").is_err());
         assert!(validate_ogrn("1027700132195x").is_err());

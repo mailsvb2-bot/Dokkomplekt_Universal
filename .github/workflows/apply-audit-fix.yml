@@ -1,8 +1,8 @@
 name: Apply complete audit fix
 
 on:
-  push:
-    branches: [agent/fix-all-audit-defects]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -13,11 +13,13 @@ concurrency:
 
 jobs:
   apply:
+    if: github.head_ref == 'agent/fix-all-audit-defects'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
       - name: Apply the locally validated complete patch

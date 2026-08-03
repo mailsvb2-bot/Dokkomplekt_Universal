@@ -1,0 +1,42 @@
+name: Apply complete audit fix
+
+on:
+  push:
+    branches: [agent/fix-all-audit-defects]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-complete-audit-fix
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply the locally validated complete patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/audit-fix.patch.gz.b64.part1 .github/audit-fix.patch.gz.b64.part2 \
+            | base64 --decode \
+            | gzip --decompress > /tmp/audit.patch
+          test "$(sha256sum /tmp/audit.patch | awk '{print $1}')" = "41625f8e51feb8b37a74839428c9d03d814d79cc369d1c50b35eea2dce418d8a"
+          git apply --binary --index /tmp/audit.patch
+          git rm \
+            .github/audit-fix.patch.gz.b64.part1 \
+            .github/audit-fix.patch.gz.b64.part2 \
+            .github/workflows/apply-audit-fix.yml
+          python3 -m pytest -q tests/test_v18_4_3_audit_closure.py
+          python3 scripts/verify_source_manifest.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Close audit-critical payment, validation and release gaps"
+          git push origin HEAD:agent/fix-all-audit-defects

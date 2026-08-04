@@ -430,7 +430,12 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.change(within(dialog).getByTestId('template-file-input'), { target: { files: [docxFile, docmFile] } });
     await waitFor(() => expect(calls.some((c) => c.command === 'import_template_file')).toBe(true));
     await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));
-    expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);
+    const analyzedTemplatePaths = calls
+      .filter((call) => call.command === 'analyze_template_file')
+      .map((call) => (call.payload as { req?: { template_path?: string } })?.req?.template_path)
+      .filter((path): path is string => Boolean(path));
+    expect(analyzedTemplatePaths).toHaveLength(2);
+    expect(new Set(analyzedTemplatePaths).size).toBe(2);
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });

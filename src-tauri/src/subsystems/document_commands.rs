@@ -22,7 +22,7 @@ fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, 
     } else if has_user_buttons {
         "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
     } else {
-        "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию.".into()
+        "Первый запуск: нажмите «Создать свои кнопки» и выберите ваши DOCX/DOCM-шаблоны. Один файл создаёт одну кнопку; затем добавьте первичный документ.".into()
     };
     Ok(FirstRunStateResponse {
         has_user_buttons,
@@ -387,15 +387,38 @@ struct ConfirmTemplatesRequest {
     rows: Vec<TemplateConfirmationRow>,
 }
 
+fn validate_template_confirmation_rows(rows: &[TemplateConfirmationRow]) -> Result<(), String> {
+    if rows.is_empty() {
+        return Err("Выберите хотя бы один шаблон DOCX/DOCM.".into());
+    }
+    let mut labels = BTreeSet::new();
+    for row in rows {
+        if row.template_path.trim().is_empty() {
+            return Err("У выбранного шаблона отсутствует путь к файлу.".into());
+        }
+        let label = row
+            .editable_button_label
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if label.is_empty() {
+            return Err("У каждой будущей кнопки должно быть название.".into());
+        }
+        if !labels.insert(label.to_lowercase()) {
+            return Err(format!("Названия кнопок не должны повторяться: {label}."));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn confirm_template_setup(
     req: ConfirmTemplatesRequest,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    if req.rows.iter().any(|row| row.is_static_copy) {
-        return Err("Шаблон не содержит размеченных полей {{field.id}}. Он не добавлен, чтобы примерный текст и чужие смыслы не переносились в новые документы.".into());
-    }
+    validate_template_confirmation_rows(&req.rows)?;
+    let static_copy_count = req.rows.iter().filter(|row| row.is_static_copy).count();
     let incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &req.rows).pack;
     let result = {
         let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
@@ -413,10 +436,64 @@ fn confirm_template_setup(
             &row.document_id,
             &path,
             &template_sha256,
-            "Первичная публикация пользовательского шаблона.",
+            if row.is_static_copy {
+                "Первичная публикация пользовательского шаблона как неизменяемой копии."
+            } else {
+                "Первичная публикация пользовательского шаблона."
+            },
         )?;
     }
+    append_audit_event(
+        &app,
+        "user_template_buttons_created",
+        "",
+        &serde_json::json!({
+            "button_count": req.rows.len(),
+            "static_copy_count": static_copy_count,
+            "explicit_confirmation": true,
+            "template_contents_not_logged": true,
+        }),
+    )?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod template_confirmation_validation_tests {
+    use super::*;
+
+    fn row(label: &str, is_static_copy: bool) -> TemplateConfirmationRow {
+        let candidate = TemplateCandidate {
+            document_id: format!("doc-{label}"),
+            template_path: format!("{label}.docx"),
+            extracted_text: if is_static_copy {
+                format!("{label} без разметки")
+            } else {
+                format!("{label} № {{{{document.number}}}}")
+            },
+            preferred_button_label: Some(label.to_string()),
+        };
+        prepare_template_confirmations(&[candidate]).remove(0)
+    }
+
+    #[test]
+    fn ordinary_unmarked_word_template_is_valid_for_button_creation() {
+        let rows = vec![row("Акт", true)];
+        assert!(rows[0].is_static_copy);
+        assert!(validate_template_confirmation_rows(&rows).is_ok());
+        let pack = create_pack_from_confirmations("test", "Test", &rows).pack;
+        assert_eq!(pack.documents.len(), 1);
+        assert!(pack.documents[0].is_static_copy);
+    }
+
+    #[test]
+    fn duplicate_or_empty_labels_are_rejected_before_persistence() {
+        let mut first = row("Акт", false);
+        let mut second = row("Другой", false);
+        second.editable_button_label = " акт ".into();
+        assert!(validate_template_confirmation_rows(&[first.clone(), second]).is_err());
+        first.editable_button_label.clear();
+        assert!(validate_template_confirmation_rows(&[first]).is_err());
+    }
 }
 
 #[derive(Debug, Deserialize)]

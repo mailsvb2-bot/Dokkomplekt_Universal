@@ -42,8 +42,21 @@ def test_expert_settings_are_not_mixed_into_everyday_settings() -> None:
     assert "Папка готовых документов" in utility
 
 
-def test_static_template_requires_explicit_user_consent() -> None:
+def test_ordinary_word_template_creates_a_button_without_placeholder_gate() -> None:
     setup = text("src/components/TemplateSetupModal.tsx")
-    assert "allowStaticCopies" in setup
-    assert "Создавать неразмеченные шаблоны как неизменяемые копии" in setup
-    assert "Это неизменяемый документ без автоматически заполняемых полей" in setup
+    backend = text("src-tauri/src/subsystems/document_commands.rs")
+    assert "Один Word-файл создаёт одну кнопку" in setup
+    assert "будет добавлен как рабочая кнопка" in setup
+    assert "allowStaticCopies" not in setup
+    assert "if req.rows.iter().any(|row| row.is_static_copy)" not in backend
+    assert "ordinary_unmarked_word_template_is_valid_for_button_creation" in backend
+
+
+def test_primary_interaction_matches_proven_word_first_flow() -> None:
+    workspace = text("src/components/Workspace.tsx")
+    backend = text("src-tauri/src/subsystems/document_commands.rs")
+    assert "Перетащите первичный осмотр или направление" in workspace
+    assert 'accept=".docx,.docm,.doc"' in workspace
+    assert "Другой файл" in workspace
+    assert "primaryDocumentDrop" in workspace
+    assert "Один файл создаёт одну кнопку" in backend

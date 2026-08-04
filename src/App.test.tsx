@@ -76,17 +76,11 @@ describe('App', () => {
     expect(calls).toContain('confirm_template_setup');
   });
 
-  it('does not publish an unmarked example as a static copy', async () => {
+  it('publishes an ordinary unmarked Word template as a working static-copy button', async () => {
     const calls = installTemplateMock(true);
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Создать свои кнопки' }));
-    const input = screen.getByTestId('template-file-input');
-    const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Акт выполненных работ.docx', {
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-    fireEvent.change(input, { target: { files: [file] } });
-    await screen.findByText('3. Нужна разметка или подтверждение');
-    expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(calls).not.toContain('confirm_template_setup');
+    await selectTemplateAndCreateButton();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Акт выполненных работ' })).toBeTruthy());
+    expect(calls).toContain('confirm_template_setup');
   });
 });

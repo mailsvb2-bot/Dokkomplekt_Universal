@@ -102,6 +102,13 @@ function sourceKindLabel(kind?: string): string {
   }
 }
 
+function primarySourceLabel(title: string | undefined, fileName: string | null): string {
+  const value = `${title ?? ''} ${fileName ?? ''}`.toLocaleLowerCase();
+  if (value.includes('направлен') && value.includes('госпитал')) return 'Выбрано направление на госпитализацию';
+  if (value.includes('первичн') || value.includes('осмотр')) return 'Выбран первичный документ';
+  return 'Выбран исходный документ';
+}
+
 function highlightedSource(text: string, evidence: string | undefined): ReactNode {
   const needle = evidence?.trim();
   if (!needle) return text;
@@ -130,8 +137,8 @@ export function Workspace(props: WorkspaceProps) {
       <section className="workflowHero" aria-labelledby="workflow-title">
         <div>
           <span className="workflowEyebrow">Новый комплект</span>
-          <h1 id="workflow-title">Из исходника — готовые документы</h1>
-          <p>Добавьте любой поддерживаемый файл. Программа извлечёт данные, попросит только недостающее и подготовит выбранный комплект.</p>
+          <h1 id="workflow-title">Из первичного документа — готовый комплект</h1>
+          <p>Сначала добавьте первичный осмотр или направление. Программа прочитает его, попросит только недостающее и подготовит выбранные документы.</p>
         </div>
         <div className="workflowHeroActions">
           <button className="softBtn newCaseBtn" onClick={props.onResetCase} disabled={props.busy}><i className="ti ti-file-plus" aria-hidden="true" /> Новый комплект</button>
@@ -199,21 +206,21 @@ export function Workspace(props: WorkspaceProps) {
         <div className="stageHeading">
           <span className="stageNumber">1</span>
           <div>
-            <h2>{sourceReady ? 'Источник принят' : 'Добавьте исходный файл'}</h2>
-            <p>{sourceReady ? 'Данные уже извлечены. При необходимости замените файл или проверьте распознанное.' : 'Перетащите файл сюда или выберите его на компьютере.'}</p>
+            <h2>{sourceReady ? primarySourceLabel(props.parsed?.title, props.sourceFileName) : 'Добавьте первичный документ'}</h2>
+            <p>{sourceReady ? 'Документ прочитан. При необходимости замените его или проверьте распознанные данные.' : 'Перетащите первичный осмотр или направление на госпитализацию.'}</p>
           </div>
         </div>
 
         {!sourceReady ? (
-          <div className="dropHero">
+          <label className="dropHero primaryDocumentDrop">
             <div className="dropIcon"><i className="ti ti-file-upload" aria-hidden="true" /></div>
-            <strong>Перетащите документ в эту область</strong>
-            <span>Word, PDF, изображение, таблица, письмо, архив и другие поддерживаемые форматы</span>
-            <label className="primaryBtn fileBtn largeAction">
-              Выбрать файл
-              <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
-            </label>
-          </div>
+            <strong>Перетащите первичный осмотр или направление</strong>
+            <span>Основной сценарий: Word DOCX/DOCM. Нажмите в любом месте этой области, чтобы выбрать документ.</span>
+            <span className="primaryBtn fileBtn largeAction">
+              Выбрать первичный документ
+              <input type="file" accept=".docx,.docm,.doc" onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
+            </span>
+          </label>
         ) : (
           <div className="sourceAccepted">
             <div className="sourceFileIcon"><i className="ti ti-file-check" aria-hidden="true" /></div>
@@ -225,7 +232,7 @@ export function Workspace(props: WorkspaceProps) {
             <div className="sourceActions">
               <label className="softBtn fileBtn">
                 Заменить файл
-                <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
+                <input type="file" accept=".docx,.docm,.doc" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
               </label>
               <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Начать заново</button>
             </div>
@@ -235,6 +242,14 @@ export function Workspace(props: WorkspaceProps) {
         <details className="alternativeSource">
           <summary>Другой способ добавить источник</summary>
           <div className="alternativeGrid">
+            <div className="alternativeCard">
+              <strong>Другой файл</strong>
+              <p>PDF, изображение, таблица, письмо или архив.</p>
+              <label className="softBtn fileBtn">
+                Выбрать другой формат
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar,.ppt,.pptx" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
+              </label>
+            </div>
             <div className="alternativeCard">
               <strong>Ссылка</strong>
               <p>Загрузить страницу, открытый файл или данные из API.</p>

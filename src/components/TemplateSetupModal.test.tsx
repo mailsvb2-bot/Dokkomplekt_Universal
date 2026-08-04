@@ -13,6 +13,7 @@ const base = {
   onDraftPopupFieldsChange: vi.fn(),
   onPendingTemplateLabelChange: vi.fn(),
   onPendingPopupFieldsChange: vi.fn(),
+  onRemovePendingTemplate: vi.fn(),
   onMarkupPendingTemplate: vi.fn(async () => undefined),
   onStartGuidedPendingScanner: vi.fn(),
   onAnalyze: vi.fn(),
@@ -66,25 +67,32 @@ describe('TemplateSetupModal', () => {
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
-  it('blocks an unmarked example before its text can be copied as new-document data', () => {
+  it('creates a button from an ordinary unmarked Word template without an extra consent trap', () => {
     const onConfirm = vi.fn();
     render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{
       document_id: 'd1',
       file_name: 'Пример.docx',
       button_label: 'Пример',
-      extracted_text: 'Пример документа с Ивановым Иваном Ивановичем',
+      extracted_text: 'Обычный пользовательский шаблон без технических placeholder-ов',
       popup_fields: [],
     }]} />);
-    expect(screen.getByText('3. Нужна разметка или подтверждение')).toBeTruthy();
-    expect(screen.getByText(/явно подтвердите, что это неизменяемые документы/)).toBeTruthy();
+    expect(screen.getByText('3. Всё готово')).toBeTruthy();
+    expect(screen.getByText(/будет добавлен как рабочая кнопка/)).toBeTruthy();
     const confirm = screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
-    fireEvent.click(confirm);
-    expect(onConfirm).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Создавать неразмеченные шаблоны как неизменяемые копии' }));
     expect(confirm.disabled).toBe(false);
     fireEvent.click(confirm);
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it('requires unique non-empty button names and lets the user exclude a file', () => {
+    const onRemovePendingTemplate = vi.fn();
+    render(<TemplateSetupModal {...base} onRemovePendingTemplate={onRemovePendingTemplate} pendingTemplates={[
+      { document_id: 'd1', file_name: 'Акт.docx', button_label: 'Акт', extracted_text: 'Акт', popup_fields: [] },
+      { document_id: 'd2', file_name: 'Акт 2.docx', button_label: ' акт ', extracted_text: 'Акт 2', popup_fields: [] },
+    ]} />);
+    expect(screen.getByText('3. Исправьте названия кнопок')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Создать кнопки (2)' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Не создавать кнопку для Акт 2.docx' }));
+    expect(onRemovePendingTemplate).toHaveBeenCalledWith('d2');
   });
 });

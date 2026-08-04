@@ -1445,6 +1445,7 @@ function AppContent() {
           onDraftPopupFieldsChange={setDraftPopupFields}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
           onPendingPopupFieldsChange={updatePendingPopupFields}
+          onRemovePendingTemplate={(documentId) => setPendingTemplates((previous) => previous.filter((item) => item.document_id !== documentId))}
           onMarkupPendingTemplate={markupPendingTemplate}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}
           onAnalyze={analyzeInDialog}

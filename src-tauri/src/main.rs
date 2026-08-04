@@ -2378,8 +2378,8 @@ fn main() {
 mod tests {
     use super::{
         canonical_json_bytes, current_year_utc, is_forbidden_update_ip,
-        load_or_create_local_data_key, normalized_picker_output, parse_semver, pdf_print_settings, plan_label,
-        reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
+        load_or_create_local_data_key, normalized_picker_output, parse_semver, pdf_print_settings,
+        plan_label, reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
         validate_printable_file, validate_update_url, write_trust_report, SourceProvenance,
         TrustReportContext,
     };
@@ -2388,14 +2388,18 @@ mod tests {
     #[test]
     fn folder_picker_output_is_cancel_safe_and_requires_a_real_directory() {
         assert_eq!(normalized_picker_output(b"").unwrap(), None);
-        let path = std::env::temp_dir().join(format!("dokkomplekt-folder-picker-{}", Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("dokkomplekt-folder-picker-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
         let selected = normalized_picker_output(path.to_string_lossy().as_bytes()).unwrap();
         assert_eq!(selected.as_deref(), Some(path.to_string_lossy().as_ref()));
         std::fs::remove_dir_all(&path).unwrap();
         assert!(normalized_picker_output(path.to_string_lossy().as_bytes()).is_err());
         #[cfg(unix)]
-        assert_eq!(normalized_picker_output(b"/").unwrap().as_deref(), Some("/"));
+        assert_eq!(
+            normalized_picker_output(b"/").unwrap().as_deref(),
+            Some("/")
+        );
     }
 
     #[test]

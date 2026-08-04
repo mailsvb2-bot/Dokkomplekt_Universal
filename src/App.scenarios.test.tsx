@@ -312,8 +312,10 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'update_semantic_model_config')).toBe(true));
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Проверить соединение/ }));
     await waitFor(() => expect(calls.some((c) => c.command === 'test_semantic_model')).toBe(true));
-    vi.spyOn(window, 'prompt').mockReturnValueOnce('corpus-test.json');
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Экспортировать историю проверок/ }));
+    const exportDialog = await screen.findByRole('dialog', { name: 'Экспорт истории проверок' });
+    fireEvent.change(within(exportDialog).getByLabelText('Имя файла *'), { target: { value: 'corpus-test.json' } });
+    fireEvent.click(within(exportDialog).getByRole('button', { name: 'Экспортировать' }));
     await waitFor(() => expect(parsePayload(calls, 'export_corpus')).toMatchObject({ req: { output_path: 'corpus-test.json' } }));
     const thresholdCard = screen.getByText('Безопасная автопечать').closest('.utilityCard');
     expect(thresholdCard).toBeTruthy();
@@ -470,7 +472,6 @@ describe('Полный прогон пользовательских сцена�
   it('не предлагает загрузку, когда OCR уже найден в системе', async () => {
     const calls: Call[] = [];
     installMock(calls, { componentState: 'system' });
-    const confirm = vi.spyOn(globalThis, 'confirm');
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'system-scan.png', { type: 'image/png' });
@@ -478,18 +479,19 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.some(call => call.command === 'install_component')).toBe(false);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: /Установить компонент/ })).toBeNull();
   });
 
   it('для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан', async () => {
     const calls: Call[] = [];
     installMock(calls, { componentInstalled: false });
-    vi.spyOn(globalThis, 'confirm').mockReturnValue(true);
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'scan.png', { type: 'image/png' });
     const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
+    const installDialog = await screen.findByRole('dialog', { name: 'Установить компонент «OCR»?' });
+    fireEvent.click(within(installDialog).getByRole('button', { name: 'Скачать и установить' }));
     await waitFor(() => expect(calls.some(call => call.command === 'install_component')).toBe(true));
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.findIndex(call => call.command === 'install_component')).toBeLessThan(calls.findIndex(call => call.command === 'parse_source_file'));

@@ -1,0 +1,1 @@
+Trigger full CI after aligning Vitest expectations with the simplified UI.

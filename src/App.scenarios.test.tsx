@@ -50,6 +50,8 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         componentState = command === 'install_component' ? 'downloaded' : 'missing';
         return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' } as never;
       }
+      case 'pick_folder':
+        return { selected_path: 'C:/Выбранная папка' } as never;
       case 'parse_web_source':
         return { source_text: 'Счёт № 148 из HTTPS', semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, final_url: 'https://example.com/doc', content_type: 'text/html' } as never;
       case 'get_document_template_text':
@@ -310,8 +312,10 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'update_semantic_model_config')).toBe(true));
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Проверить соединение/ }));
     await waitFor(() => expect(calls.some((c) => c.command === 'test_semantic_model')).toBe(true));
-    vi.spyOn(window, 'prompt').mockReturnValueOnce('corpus-test.json');
     fireEvent.click(within(semanticCard as HTMLElement).getByRole('button', { name: /Экспортировать историю проверок/ }));
+    const exportDialog = await screen.findByRole('dialog', { name: 'Экспорт истории проверок' });
+    fireEvent.change(within(exportDialog).getByLabelText('Имя файла *'), { target: { value: 'corpus-test.json' } });
+    fireEvent.click(within(exportDialog).getByRole('button', { name: 'Экспортировать' }));
     await waitFor(() => expect(parsePayload(calls, 'export_corpus')).toMatchObject({ req: { output_path: 'corpus-test.json' } }));
     const thresholdCard = screen.getByText('Безопасная автопечать').closest('.utilityCard');
     expect(thresholdCard).toBeTruthy();
@@ -336,11 +340,16 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'run_workspace_hygiene')).toBe(true));
     const exceptionCard = screen.getByText(/Нужно подтвердить дату/).closest('.exceptionItem');
     expect(exceptionCard).toBeTruthy();
-    vi.spyOn(window, 'prompt').mockReturnValueOnce('Дата подтверждена по оригиналу');
     fireEvent.click(within(exceptionCard as HTMLElement).getByRole('button', { name: 'Закрыть' }));
+    const resolveDialog = await screen.findByRole('dialog', { name: 'Закрыть исключение' });
+    fireEvent.change(within(resolveDialog).getByLabelText('Что исправлено или подтверждено? *'), { target: { value: 'Дата подтверждена по оригиналу' } });
+    fireEvent.click(within(resolveDialog).getByRole('button', { name: 'Закрыть исключение' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'resolve_automation_exception')).toBe(true));
-    vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
-    fireEvent.click(within(exceptionCard as HTMLElement).getByRole('button', { name: /Подтвердить всё/ }));
+    const refreshedExceptionCard = (await screen.findByText(/Нужно подтвердить дату/)).closest('.exceptionItem');
+    expect(refreshedExceptionCard).toBeTruthy();
+    fireEvent.click(within(refreshedExceptionCard as HTMLElement).getByRole('button', { name: /Подтвердить всё/ }));
+    const riskDialog = await screen.findByRole('dialog', { name: 'Подтвердить спорные значения?' });
+    fireEvent.click(within(riskDialog).getByRole('button', { name: 'Подтвердить и повторить' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'confirm_risk_exception_and_retry')).toBe(true));
     fireEvent.change(screen.getByPlaceholderText('дата начала'), { target: { value: '01.02.2026' } });
     fireEvent.change(screen.getByPlaceholderText('дата окончания'), { target: { value: '03.02.2026' } });
@@ -365,13 +374,16 @@ describe('Полный прогон пользовательских сцена�
     const governance = screen.getByText('Обучение и подтверждения').closest('.governanceCard');
     expect(governance).toBeTruthy();
     fireEvent.click(within(governance as HTMLElement).getByText('Обучение и подтверждения'));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(await within(governance as HTMLElement).findByRole('button', { name: 'Удалить правило' }));
+    const deleteRuleDialog = await screen.findByRole('dialog', { name: 'Удалить обученное правило?' });
+    fireEvent.click(within(deleteRuleDialog).getByRole('button', { name: 'Удалить правило' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'delete_learned_scanner_rule')).toBe(true));
     fireEvent.change(within(governance as HTMLElement).getByLabelText('Идентификатор кластера'), { target: { value: 'invoice-cluster' } });
     fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Показать решение' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'get_learned_kit_decision')).toBe(true));
     fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Отозвать подтверждение' }));
+    const revokeApprovalDialog = await screen.findByRole('dialog', { name: 'Отозвать подтверждение?' });
+    fireEvent.click(within(revokeApprovalDialog).getByRole('button', { name: 'Отозвать подтверждение' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'revoke_document_template_approval')).toBe(true));
 
     fireEvent.change(screen.getByPlaceholderText('идентификатор блока'), { target: { value: 'requisites' } });
@@ -415,6 +427,8 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByText('Автоматическая обработка папки'));
     const automation = screen.getByText('Автоматическая обработка папки').closest('.automationCard');
     expect(automation).toBeTruthy();
+    fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Выбрать' }));
+    await waitFor(() => expect(parsePayload(calls, 'pick_folder')).toMatchObject({ req: { initial_path: expect.any(String) } }));
     fireEvent.change(within(automation as HTMLElement).getByPlaceholderText('Путь к файлу'), { target: { value: 'C:/Созданные документы/Источник.docx' } });
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
     await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
@@ -434,11 +448,14 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(parsePayload(calls, 'semantic_extract')).toMatchObject({ req: { source_text: expect.any(String), default_year: expect.any(Number) } }));
 
     // button management preserves the template while changing only the registry
-    vi.spyOn(window, 'prompt').mockReturnValue('Договор новый');
     await click(/Переименовать/);
+    const renameDialog = await screen.findByRole('dialog', { name: 'Переименовать документ' });
+    fireEvent.change(within(renameDialog).getByLabelText('Новое название кнопки *'), { target: { value: 'Договор новый' } });
+    fireEvent.click(within(renameDialog).getByRole('button', { name: 'Переименовать' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'rename_document_button')).toBe(true));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     await click(/Убрать из набора/);
+    const removeDialog = await screen.findByRole('dialog', { name: 'Убрать документ из набора?' });
+    fireEvent.click(within(removeDialog).getByRole('button', { name: 'Убрать из набора' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'remove_document_button')).toBe(true));
 
     // theme: preset B applies dark bg + persists
@@ -463,7 +480,6 @@ describe('Полный прогон пользовательских сцена�
   it('не предлагает загрузку, когда OCR уже найден в системе', async () => {
     const calls: Call[] = [];
     installMock(calls, { componentState: 'system' });
-    const confirm = vi.spyOn(globalThis, 'confirm');
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'system-scan.png', { type: 'image/png' });
@@ -471,18 +487,19 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.some(call => call.command === 'install_component')).toBe(false);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: /Установить компонент/ })).toBeNull();
   });
 
   it('для отсутствующего OCR предлагает подписанную загрузку и только затем разбирает скан', async () => {
     const calls: Call[] = [];
     installMock(calls, { componentInstalled: false });
-    vi.spyOn(globalThis, 'confirm').mockReturnValue(true);
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'scan.png', { type: 'image/png' });
     const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
+    const installDialog = await screen.findByRole('dialog', { name: 'Установить компонент «OCR»?' });
+    fireEvent.click(within(installDialog).getByRole('button', { name: 'Скачать и установить' }));
     await waitFor(() => expect(calls.some(call => call.command === 'install_component')).toBe(true));
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.findIndex(call => call.command === 'install_component')).toBeLessThan(calls.findIndex(call => call.command === 'parse_source_file'));

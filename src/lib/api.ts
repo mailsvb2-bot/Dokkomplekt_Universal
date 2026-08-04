@@ -433,6 +433,11 @@ export async function createKedoPackage(paths: string[], outputRoot: string, tit
   return callRust('create_kedo_package', { req: { paths, output_root: outputRoot, title } });
 }
 
+export async function pickFolder(initialPath?: string | null): Promise<string | null> {
+  const response = await callRust<{ selected_path: string | null }>('pick_folder', { req: { initial_path: initialPath ?? null } });
+  return response.selected_path;
+}
+
 export async function openInFileManager(path: string): Promise<void> {
   return callRust('open_in_file_manager', { req: { path } });
 }
@@ -673,6 +678,7 @@ export const rustCommandNames = [
   'update_print_preferences',
   'export_files_to_pdf',
   'create_kedo_package',
+  'pick_folder',
   'open_in_file_manager',
   'semantic_extract',
   'import_business_registry',

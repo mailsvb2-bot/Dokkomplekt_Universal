@@ -118,6 +118,7 @@ async function renderUtility(onCheckUpdates = vi.fn()) {
       onScannerFieldChange={vi.fn()}
       onScannerTextChange={vi.fn()}
       onOutputRootChange={vi.fn()}
+      onPickOutputFolder={vi.fn()}
       onFolderPartsChange={vi.fn()}
       onLicenseTextChange={vi.fn()}
       onSeriesPlan={vi.fn()}

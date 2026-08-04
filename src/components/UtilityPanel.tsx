@@ -24,6 +24,7 @@ interface UtilityPanelProps {
   onScannerFieldChange(value: string): void;
   onScannerTextChange(value: string): void;
   onOutputRootChange(value: string): void;
+  onPickOutputFolder(): void;
   onFolderPartsChange(parts: FolderNamePartDto[]): void;
   onLicenseTextChange(value: string): void;
   onSeriesPlan(): void;
@@ -66,12 +67,15 @@ export function UtilityPanel(props: UtilityPanelProps) {
       <div className="utilityGrid primarySettingsGrid">
         <div className="utilityCard outputSettingsCard">
           <strong>Папка готовых документов</strong>
-          <input
-            value={props.outputRoot}
-            onChange={(event) => props.onOutputRootChange(event.target.value)}
-            placeholder="Например: C:\\Документы\\Готовые"
-            aria-label="Папка готовых документов"
-          />
+          <div className="inlineInput folderPicker">
+            <input
+              value={props.outputRoot}
+              onChange={(event) => props.onOutputRootChange(event.target.value)}
+              placeholder="Например: C:\\Документы\\Готовые"
+              aria-label="Папка готовых документов"
+            />
+            <button className="softBtn" type="button" onClick={props.onPickOutputFolder}><i className="ti ti-folder" aria-hidden="true" /> Выбрать</button>
+          </div>
           <fieldset className="folderParts">
             <legend>Имя папки результата</legend>
             {FOLDER_PART_OPTIONS.map((option) => (

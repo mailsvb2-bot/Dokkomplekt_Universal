@@ -2650,6 +2650,129 @@ fn create_kedo_package(
 }
 
 #[derive(Debug, Deserialize)]
+struct PickFolderRequest {
+    initial_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PickFolderResponse {
+    selected_path: Option<String>,
+}
+
+#[tauri::command]
+async fn pick_folder(req: PickFolderRequest) -> Result<PickFolderResponse, String> {
+    let selected_path = tauri::async_runtime::spawn_blocking(move || pick_folder_blocking(req.initial_path))
+        .await
+        .map_err(|error| format!("Не удалось открыть выбор папки: {error}"))??;
+    Ok(PickFolderResponse { selected_path })
+}
+
+fn pick_folder_blocking(initial_path: Option<String>) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Выберите папку'
+$dialog.ShowNewFolderButton = $true
+if ($env:DOKKOMPLEKT_PICK_FOLDER_INITIAL -and (Test-Path -LiteralPath $env:DOKKOMPLEKT_PICK_FOLDER_INITIAL -PathType Container)) {
+  $dialog.SelectedPath = $env:DOKKOMPLEKT_PICK_FOLDER_INITIAL
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.Write($dialog.SelectedPath)
+}
+"#;
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-STA", "-Command", script])
+            .env(
+                "DOKKOMPLEKT_PICK_FOLDER_INITIAL",
+                initial_path.as_deref().unwrap_or_default(),
+            )
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| format!("Не удалось запустить системный выбор папки: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор папки завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        normalized_picker_output(&output.stdout)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut script = String::from("POSIX path of (choose folder with prompt \"Выберите папку\"");
+        if let Some(path) = initial_path.filter(|value| Path::new(value).is_dir()) {
+            script.push_str(" default location POSIX file ");
+            script.push_str(&format!("{:?}", path));
+        }
+        script.push(')');
+        let output = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|error| format!("Не удалось открыть системный выбор папки: {error}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("User canceled") || stderr.contains("-128") {
+                return Ok(None);
+            }
+            return Err(format!("Системный выбор папки завершился с ошибкой: {}", stderr.trim()));
+        }
+        normalized_picker_output(&output.stdout)
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let initial = initial_path.filter(|value| Path::new(value).is_dir());
+        let output = if command_exists("zenity") {
+            let mut command = std::process::Command::new("zenity");
+            command.args(["--file-selection", "--directory", "--title=Выберите папку"]);
+            if let Some(path) = initial.as_deref() {
+                command.arg(format!("--filename={}/", path.trim_end_matches('/')));
+            }
+            command.output()
+        } else if command_exists("kdialog") {
+            let mut command = std::process::Command::new("kdialog");
+            command.arg("--getexistingdirectory");
+            command.arg(initial.as_deref().unwrap_or("."));
+            command.output()
+        } else {
+            return Err("Системный выбор папки недоступен: установите zenity или kdialog.".into());
+        }
+        .map_err(|error| format!("Не удалось открыть системный выбор папки: {error}"))?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        normalized_picker_output(&output.stdout)
+    }
+}
+
+fn normalized_picker_output(bytes: &[u8]) -> Result<Option<String>, String> {
+    let raw = String::from_utf8_lossy(bytes);
+    let trimmed = raw.trim();
+    let value = if trimmed.len() > 1 { trimmed.trim_end_matches('/') } else { trimmed }.to_string();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(&value);
+    if !path.is_dir() {
+        return Err("Выбранная папка не существует или недоступна.".into());
+    }
+    Ok(Some(path.display().to_string()))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn command_exists(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|path| path.join(name).is_file())
+    })
+}
+
+#[derive(Debug, Deserialize)]
 struct OpenPathRequest {
     path: String,
 }

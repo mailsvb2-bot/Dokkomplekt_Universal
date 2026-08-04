@@ -7,6 +7,7 @@ import {
   revokeDocumentTemplateApproval,
   type KitLearningDecision,
 } from '../lib/api';
+import { useAppDialog } from './AppDialogProvider';
 import type { DocumentTemplateSpec, DomainKind, LearnedScannerRule, TemplateApprovalRecord } from '../lib/types';
 
 interface LearningGovernancePanelProps {
@@ -24,6 +25,7 @@ const DOMAINS: Array<{ value: Exclude<DomainKind, { Custom: string }>; label: st
 ];
 
 export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
+  const dialogs = useAppDialog();
   const [rules, setRules] = useState<LearnedScannerRule[]>([]);
   const [approvals, setApprovals] = useState<TemplateApprovalRecord[]>([]);
   const [domain, setDomain] = useState<Exclude<DomainKind, { Custom: string }>>('Generic');
@@ -67,7 +69,7 @@ export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
   }
 
   async function removeRule(rule: LearnedScannerRule) {
-    const confirmed = globalThis.confirm?.(`Удалить обученное правило «${rule.title || rule.field_id}»?`) ?? false;
+    const confirmed = await dialogs.confirm({ title: 'Удалить обученное правило?', message: `Правило «${rule.title || rule.field_id}» перестанет применяться к новым документам.`, confirmLabel: 'Удалить правило', danger: true });
     if (!confirmed) return;
     setBusy(true);
     try {
@@ -82,7 +84,7 @@ export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
 
   async function revokeApproval(record: TemplateApprovalRecord) {
     const label = documentLabels.get(record.document_id) ?? record.document_id;
-    const confirmed = globalThis.confirm?.(`Отозвать подтверждение шаблона «${label}»?`) ?? false;
+    const confirmed = await dialogs.confirm({ title: 'Отозвать подтверждение?', message: `Шаблон «${label}» снова потребует проверки перед использованием.`, confirmLabel: 'Отозвать подтверждение', danger: true });
     if (!confirmed) return;
     setBusy(true);
     try {

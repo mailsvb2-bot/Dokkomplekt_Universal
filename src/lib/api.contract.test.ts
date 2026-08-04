@@ -53,6 +53,7 @@ import {
   installBackgroundWatcher,
   loadState,
   openInFileManager,
+  pickFolder,
   printFiles,
   parseSource,
   parseSourceFile,
@@ -187,6 +188,7 @@ export const registeredBackendCommands = [
   'update_print_preferences',
   'export_files_to_pdf',
   'create_kedo_package',
+  'pick_folder',
   'open_in_file_manager',
   'get_semantic_model_config',
   'update_semantic_model_config',
@@ -272,6 +274,8 @@ function installContractMock(calls: Call[]) {
       case 'install_component':
       case 'remove_component':
         return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: command === 'install_component' ? 'downloaded' : 'missing', installed: command === 'install_component', available: command === 'install_component', catalog_available: true, message: 'ok' } as never;
+      case 'pick_folder':
+        return { selected_path: 'C:/Desktop/output' } as never;
       case 'parse_web_source':
         return { source_text: 'HTTPS документ', final_url: 'https://example.com/doc', content_type: 'text/html', semantic_case: caseDto, report: { recognized_title: 'Документ', warnings: [] } } as never;
       case 'get_document_template_text':
@@ -584,6 +588,7 @@ describe('Tauri command DTO contracts', () => {
     await uninstallBackgroundWatcher();
     await runCreatedDocumentsIntake('C:/Desktop/Созданные документы/Первичный.docx', 'C:/Desktop/Созданные документы', ['FullSubjectName'], 2026, false);
     await printFiles([{ path: 'out.docx', copies: 3 }]);
+    await pickFolder('C:/Desktop');
     await openInFileManager('C:/Desktop/output');
     await semanticExtract('ИНН 7736050003', 2026);
     await importTemplateFile('doc_1', { fileName: 'Договор.docx', bytesBase64: 'UEsDBA==' });
@@ -600,6 +605,7 @@ describe('Tauri command DTO contracts', () => {
       { command: 'uninstall_background_watcher', payload: undefined },
       { command: 'run_created_documents_intake', payload: { req: { source_path: 'C:/Desktop/Созданные документы/Первичный.docx', output_root: 'C:/Desktop/Созданные документы', folder_parts: ['FullSubjectName'], default_year: 2026, sick_leave_enabled: false } } },
       { command: 'print_files', payload: { req: { jobs: [{ path: 'out.docx', copies: 3 }] } } },
+      { command: 'pick_folder', payload: { req: { initial_path: 'C:/Desktop' } } },
       { command: 'open_in_file_manager', payload: { req: { path: 'C:/Desktop/output' } } },
       { command: 'semantic_extract', payload: { req: { source_text: 'ИНН 7736050003', default_year: 2026, model_output: null } } },
       { command: 'import_template_file', payload: { req: { document_id: 'doc_1', file_name: 'Договор.docx', bytes_base64: 'UEsDBA==', template_text: null } } },

@@ -51,6 +51,7 @@ interface WorkspaceProps {
   answers: Record<string, string>;
   preview: PreviewState | null;
   setWatchFolder(value: string): void;
+  onPickWatchFolder(): void;
   setIntakeSource(value: string): void;
   setAutoPrint(value: boolean): void;
   setSourceText(value: string): void;
@@ -362,7 +363,7 @@ export function Workspace(props: WorkspaceProps) {
           <i className="ti ti-chevron-down" aria-hidden="true" />
         </summary>
         <div className="automationBody">
-          <label><span>Рабочая папка</span><input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="Созданные документы" /></label>
+          <label><span>Рабочая папка</span><div className="inlineInput folderPicker"><input value={props.watchFolder} onChange={(event) => props.setWatchFolder(event.target.value)} placeholder="Созданные документы" /><button className="softBtn" type="button" onClick={props.onPickWatchFolder} disabled={props.busy}><i className="ti ti-folder" aria-hidden="true" /> Выбрать</button></div></label>
           <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
           <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
           <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>

@@ -70,6 +70,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
             value={props.outputRoot}
             onChange={(event) => props.onOutputRootChange(event.target.value)}
             placeholder="Например: C:\\Документы\\Готовые"
+            aria-label="Папка готовых документов"
           />
           <fieldset className="folderParts">
             <legend>Имя папки результата</legend>

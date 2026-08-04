@@ -348,8 +348,8 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.change(screen.getByPlaceholderText(/поле, например/), { target: { value: 'document.number' } });
     fireEvent.change(screen.getByPlaceholderText('выделенный текст'), { target: { value: '148' } });
     await click(/Применить разметку/);
-    fireEvent.change(screen.getByPlaceholderText('корневая папка'), { target: { value: 'C:/output' } });
-    await click(/Проверить путь/);
+    fireEvent.change(screen.getByLabelText('Папка готовых документов'), { target: { value: 'C:/output' } });
+    await click(/Проверить папку/);
     await click(/Сохранить сессию/);
     await click(/Загрузить сессию/);
     await click(/Проверить доступ/);

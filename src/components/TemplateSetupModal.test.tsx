@@ -32,7 +32,7 @@ describe('TemplateSetupModal', () => {
 
   it('does not create a manual text template until a field is marked', () => {
     const { rerender } = render(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
-    expect(screen.getByText('Нужно указать места заполнения')).toBeTruthy();
+    expect(screen.getByText('Не найдены места заполнения')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
 
     rerender(<TemplateSetupModal {...base} templateText="Документ № {{document.number}}" />);
@@ -75,11 +75,16 @@ describe('TemplateSetupModal', () => {
       extracted_text: 'Пример документа с Ивановым Иваном Ивановичем',
       popup_fields: [],
     }]} />);
-    expect(screen.getByText('3. Нужна разметка')).toBeTruthy();
-    expect(screen.getByText(/Текст примера не будет скопирован/)).toBeTruthy();
+    expect(screen.getByText('3. Нужна разметка или подтверждение')).toBeTruthy();
+    expect(screen.getByText(/явно подтвердите, что это неизменяемые документы/)).toBeTruthy();
     const confirm = screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     fireEvent.click(confirm);
     expect(onConfirm).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Создавать неразмеченные шаблоны как неизменяемые копии' }));
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledOnce();
   });
 });

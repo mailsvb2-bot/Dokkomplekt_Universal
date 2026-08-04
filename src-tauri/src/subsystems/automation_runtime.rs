@@ -2700,7 +2700,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        return normalized_picker_output(&output.stdout);
+        normalized_picker_output(&output.stdout)
     }
 
     #[cfg(target_os = "macos")]
@@ -2722,7 +2722,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             }
             return Err(format!("Системный выбор папки завершился с ошибкой: {}", stderr.trim()));
         }
-        return normalized_picker_output(&output.stdout);
+        normalized_picker_output(&output.stdout)
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

@@ -1,14 +1,13 @@
-use crate::order_access::generate_order_access_token;
+use crate::order_access::{authorize_order, generate_order_access_token};
 use crate::provider_manual::ManualProvider;
-use crate::provider_sbp::SbpProvider;
 use crate::provider_yookassa::YooKassaProvider;
 use crate::providers::{CreatePaymentRequest, CreatePaymentResponse, PaymentProvider};
 use crate::state::{AppState, OrderRecord, OrderStatus};
 use crate::storage::StoreError;
 use crate::traffic_guard::{ClientIp, RateLimitScope};
 use axum::{
-    extract::{Extension, State},
-    http::StatusCode,
+    extract::{Extension, Path, State},
+    http::{HeaderMap, StatusCode},
     routing::post,
     Json, Router,
 };
@@ -33,10 +32,22 @@ pub struct CreateOrderResponse {
     pub payment_url: String,
     pub qr_url: String,
     pub order_access_token: String,
+    pub payment_state: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RetryPaymentResponse {
+    pub order_id: Uuid,
+    pub provider: String,
+    pub payment_url: String,
+    pub qr_url: String,
+    pub payment_state: String,
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/orders", post(create_order))
+    Router::new()
+        .route("/api/orders", post(create_order))
+        .route("/api/orders/:order_id/payment", post(retry_payment))
 }
 
 async fn create_order(
@@ -82,23 +93,78 @@ async fn create_order(
         .await
         .map_err(store_error_status)?;
     let provider = state.config.payment_provider.clone();
-    let payment = create_provider_payment(&state, &record)
-        .await
-        .map_err(|error| match error {
-            ProviderCallError::Busy => StatusCode::TOO_MANY_REQUESTS,
-            ProviderCallError::Provider(message) => {
-                tracing::warn!(order_id = %order_id, error = %message, "payment provider call failed");
-                StatusCode::BAD_GATEWAY
-            }
-        })?;
+    let (payment_url, qr_url, payment_state) = match create_provider_payment(&state, &record).await
+    {
+        Ok(payment) => (
+            payment.confirmation_url,
+            payment.qr_url.unwrap_or_default(),
+            "ready".to_string(),
+        ),
+        Err(error) => {
+            tracing::warn!(
+                order_id = %order_id,
+                error = %error.message(),
+                "payment provider call failed; order remains recoverable through authenticated retry"
+            );
+            (String::new(), String::new(), "retry_required".to_string())
+        }
+    };
     Ok(Json(CreateOrderResponse {
         order_id,
         status: record.status,
         provider,
         amount_rub,
+        payment_url,
+        qr_url,
+        order_access_token,
+        payment_state,
+    }))
+}
+
+async fn retry_payment(
+    Extension(client_ip): Extension<ClientIp>,
+    State(state): State<AppState>,
+    Path(order_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<RetryPaymentResponse>, StatusCode> {
+    if !state.traffic_guard.check(
+        client_ip.0,
+        RateLimitScope::OrderAccess,
+        state.config.order_access_limit_per_minute,
+        Duration::from_secs(60),
+    ) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    let order = state
+        .store
+        .get_order_async(order_id)
+        .await
+        .map_err(store_error_status)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !authorize_order(&headers, order.access_token_hash.as_deref()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if !matches!(
+        order.status,
+        OrderStatus::WaitingPayment | OrderStatus::Draft
+    ) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let payment = create_provider_payment(&state, &order)
+        .await
+        .map_err(|error| match error {
+            ProviderCallError::Busy => StatusCode::TOO_MANY_REQUESTS,
+            ProviderCallError::Provider(message) => {
+                tracing::warn!(order_id = %order_id, error = %message, "payment retry failed");
+                StatusCode::BAD_GATEWAY
+            }
+        })?;
+    Ok(Json(RetryPaymentResponse {
+        order_id,
+        provider: state.config.payment_provider.clone(),
         payment_url: payment.confirmation_url,
         qr_url: payment.qr_url.unwrap_or_default(),
-        order_access_token,
+        payment_state: "ready".to_string(),
     }))
 }
 
@@ -106,6 +172,15 @@ async fn create_order(
 enum ProviderCallError {
     Busy,
     Provider(String),
+}
+
+impl ProviderCallError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Busy => "provider concurrency limit reached",
+            Self::Provider(message) => message,
+        }
+    }
 }
 
 async fn create_provider_payment(
@@ -128,11 +203,9 @@ async fn create_provider_payment(
         }
         .create_payment(request)
         .map_err(|error| ProviderCallError::Provider(error.to_string())),
-        "sbp" => SbpProvider {
-            public_base_url: state.config.public_base_url.clone(),
-        }
-        .create_payment(request)
-        .map_err(|error| ProviderCallError::Provider(error.to_string())),
+        "sbp" => Err(ProviderCallError::Provider(
+            "SBP provider is not implemented and cannot create payments".to_string(),
+        )),
         "yookassa" => {
             let permit = state
                 .provider_gate
@@ -153,16 +226,9 @@ async fn create_provider_payment(
             .map_err(|error| ProviderCallError::Provider(format!("YooKassa task failed: {error}")))?
             .map_err(|error| ProviderCallError::Provider(error.to_string()))
         }
-        "bank_invoice" => Ok(CreatePaymentResponse {
-            provider: crate::providers::ProviderKind::BankInvoice,
-            provider_payment_id: format!("invoice-{}", order.id),
-            confirmation_url: payment_url_for(
-                &state.config.public_base_url,
-                "bank_invoice",
-                order.id,
-            ),
-            qr_url: None,
-        }),
+        "bank_invoice" => Err(ProviderCallError::Provider(
+            "bank invoice provider is not implemented and cannot create payments".to_string(),
+        )),
         other => Err(ProviderCallError::Provider(format!(
             "unsupported payment provider: {other}"
         ))),
@@ -201,49 +267,9 @@ pub fn tariff_amount_rub(plan: &str) -> Option<u64> {
     }
 }
 
-pub fn payment_url_for(base_url: &str, provider: &str, order_id: Uuid) -> String {
-    format!(
-        "{}/pay/{}/{}",
-        base_url.trim_end_matches('/'),
-        provider,
-        order_id
-    )
-}
-
-#[cfg(test)]
-pub fn qr_url_for(base_url: &str, provider: &str, order_id: Uuid) -> String {
-    match provider {
-        "sbp" => format!(
-            "{}/api/orders/{}/qr",
-            base_url.trim_end_matches('/'),
-            order_id
-        ),
-        _ => "".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn yookassa_payment_url_uses_provider_namespace() {
-        let order_id = Uuid::nil();
-        assert_eq!(
-            payment_url_for("https://lic.example/", "yookassa", order_id),
-            "https://lic.example/pay/yookassa/00000000-0000-0000-0000-000000000000",
-        );
-    }
-
-    #[test]
-    fn sbp_gets_qr_url_and_manual_does_not() {
-        let order_id = Uuid::nil();
-        assert_eq!(
-            qr_url_for("https://lic.example", "sbp", order_id),
-            "https://lic.example/api/orders/00000000-0000-0000-0000-000000000000/qr",
-        );
-        assert_eq!(qr_url_for("https://lic.example", "manual", order_id), "");
-    }
 
     #[test]
     fn order_tariffs_are_server_side_only() {

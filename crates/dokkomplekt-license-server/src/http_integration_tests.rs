@@ -176,6 +176,7 @@ async fn assert_order_payment_activation_flow(
     let order_id = order["order_id"].as_str().unwrap().to_string();
     let access_token = order["order_access_token"].as_str().unwrap().to_string();
     assert_eq!(order["status"], "waiting_payment");
+    assert_eq!(order["payment_state"], "ready");
 
     let event_id = format!("evt-{order_id}");
     let callback = json!({ "order_id": order_id, "provider_event_id": event_id, "provider_payment_id": "pay-1", "provider": "manual", "status": "succeeded", "amount_rub": 3900, "callback_secret": "test-callback-secret" });
@@ -310,6 +311,100 @@ async fn trusted_proxy_rate_limits_are_keyed_by_resolved_client_address() {
     );
     assert_eq!(
         call_from_proxy(app, peer, None, order).await,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn failed_provider_creation_returns_recoverable_order_and_authenticated_retry() {
+    let mut config = base_config(None);
+    config.payment_provider = "sbp".to_string();
+    let app = build_app(AppState::try_new(config).unwrap());
+    let (status, order) = call(
+        app.clone(),
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-retry" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(order["payment_state"], "retry_required");
+    assert_eq!(order["payment_url"], "");
+    let order_id = order["order_id"].as_str().unwrap();
+    let token = order["order_access_token"].as_str().unwrap();
+    assert!(!token.is_empty());
+
+    let (status, _) = call_authorized(
+        app.clone(),
+        Method::POST,
+        format!("/api/orders/{order_id}/payment"),
+        None,
+        "wrong-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call_authorized(
+        app,
+        Method::POST,
+        format!("/api/orders/{order_id}/payment"),
+        None,
+        token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn provider_event_id_cannot_be_rebound_to_another_order_over_http() {
+    let app = build_app(AppState::try_new(base_config(None)).unwrap());
+    let first = call(
+        app.clone(),
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-a" })),
+    )
+    .await
+    .1;
+    let second = call(
+        app.clone(),
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({ "plan": "doctor_pro", "amount_rub": 3900, "machine_hash": "machine-b" })),
+    )
+    .await
+    .1;
+    let shared_event = format!("shared-{}", Uuid::new_v4());
+    let callback = |order_id: &str| {
+        json!({
+            "order_id": order_id,
+            "provider_event_id": shared_event.clone(),
+            "provider_payment_id": "payment-shared",
+            "provider": "manual",
+            "status": "succeeded",
+            "amount_rub": 3900,
+            "callback_secret": "test-callback-secret"
+        })
+    };
+    assert_eq!(
+        call(
+            app.clone(),
+            Method::POST,
+            "/api/provider/callback".to_string(),
+            Some(callback(first["order_id"].as_str().unwrap())),
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            app,
+            Method::POST,
+            "/api/provider/callback".to_string(),
+            Some(callback(second["order_id"].as_str().unwrap())),
+        )
+        .await
+        .0,
         StatusCode::BAD_REQUEST
     );
 }

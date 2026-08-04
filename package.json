@@ -10,7 +10,7 @@
     "test": "vitest run --config vitest.config.ts",
     "e2e:install": "playwright install --with-deps chromium",
     "e2e": "playwright test",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build",
     "tauri:build:check": "tauri build --debug",
     "quality": "npm run typecheck && npm run test && npm run build && npm run test:python && python scripts/static_quality_gate.py --source-only",

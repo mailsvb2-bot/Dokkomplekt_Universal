@@ -32,8 +32,12 @@ impl ServerConfig {
         let bind_addr = std::env::var("DOKKOMPLEKT_LICENSE_BIND")
             .unwrap_or_else(|_| "127.0.0.1:8787".to_string())
             .parse()?;
-        let public_base_url = std::env::var("DOKKOMPLEKT_LICENSE_PUBLIC_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8787".to_string());
+        let strict_runtime = strict_runtime_required();
+        let public_base_url = validate_public_base_url(
+            &std::env::var("DOKKOMPLEKT_LICENSE_PUBLIC_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8787".to_string()),
+            strict_runtime,
+        )?;
         let issuer_id = std::env::var("DOKKOMPLEKT_LICENSE_ISSUER")
             .unwrap_or_else(|_| "dokkomplekt-license-server".to_string());
         let issuer_key_b64 = non_empty_env("DOKKOMPLEKT_LICENSE_ISSUER_KEY_B64");
@@ -41,13 +45,16 @@ impl ServerConfig {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(365);
-        let payment_provider = normalize_payment_provider(
-            &std::env::var("DOKKOMPLEKT_PAYMENT_PROVIDER").unwrap_or_else(|_| "manual".to_string()),
-        )
-        .unwrap_or_else(|| "manual".to_string());
-        let strict_runtime = strict_runtime_required();
-        if strict_runtime && payment_provider == "manual" {
-            anyhow::bail!("manual payment provider is not allowed for license server runtime");
+        let payment_provider_raw =
+            std::env::var("DOKKOMPLEKT_PAYMENT_PROVIDER").unwrap_or_else(|_| "manual".to_string());
+        let payment_provider =
+            normalize_payment_provider(&payment_provider_raw).ok_or_else(|| {
+                anyhow::anyhow!("unsupported payment provider: {payment_provider_raw}")
+            })?;
+        if strict_runtime && payment_provider != "yookassa" {
+            anyhow::bail!(
+                "production license server currently supports only the verified yookassa provider"
+            );
         }
         let database_url = non_empty_env("DATABASE_URL");
         if let Some(database_url) = database_url.as_deref() {
@@ -260,6 +267,7 @@ fn non_empty_env(name: &str) -> Option<String> {
 }
 
 pub(crate) fn strict_runtime_required() -> bool {
+    let mut development_mode = false;
     for name in [
         "DOKKOMPLEKT_ENV",
         "DOKKOMPLEKT_LICENSE_ENV",
@@ -274,8 +282,61 @@ pub(crate) fn strict_runtime_required() -> bool {
         if matches!(value.as_str(), "production" | "prod") {
             return true;
         }
+        if matches!(value.as_str(), "development" | "dev" | "test" | "local") {
+            development_mode = true;
+        }
     }
-    false
+    let explicit_insecure_opt_in = std::env::var("DOKKOMPLEKT_ALLOW_INSECURE_DEV")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        });
+    !(development_mode && explicit_insecure_opt_in)
+}
+
+pub(crate) fn validate_public_base_url(
+    raw_value: &str,
+    production: bool,
+) -> anyhow::Result<String> {
+    let mut url = reqwest::Url::parse(raw_value.trim())?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+    {
+        anyhow::bail!(
+            "public base URL must be an origin without credentials, path, query or fragment"
+        );
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("public base URL has no host"))?;
+    let ip = host.parse::<IpAddr>().ok();
+    let loopback =
+        host.eq_ignore_ascii_case("localhost") || ip.is_some_and(|address| address.is_loopback());
+    if production {
+        if url.scheme() != "https" || loopback {
+            anyhow::bail!("production public base URL must use HTTPS and a non-loopback host");
+        }
+        if ip.is_some_and(|address| {
+            address.is_unspecified()
+                || address.is_multicast()
+                || match address {
+                    IpAddr::V4(value) => value.is_private() || value.is_link_local(),
+                    IpAddr::V6(value) => value.is_unique_local() || value.is_unicast_link_local(),
+                }
+        }) {
+            anyhow::bail!("production public base URL must not use a private or service IP");
+        }
+    } else if !matches!(url.scheme(), "http" | "https") || !loopback {
+        anyhow::bail!("development public base URL must use an HTTP(S) loopback origin");
+    }
+    url.set_path("");
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 pub(crate) fn validate_database_transport(
@@ -411,7 +472,8 @@ pub(crate) fn postgres_test_database_url() -> Option<String> {
 mod tests {
     use super::{
         database_endpoint, normalize_payment_provider, validate_database_transport,
-        validate_distinct_server_secrets, validate_yookassa_api_base_url, DatabaseEndpoint,
+        validate_distinct_server_secrets, validate_public_base_url, validate_yookassa_api_base_url,
+        DatabaseEndpoint,
     };
 
     #[test]
@@ -491,6 +553,19 @@ mod tests {
             Some("same-secret"),
         ])
         .is_err());
+    }
+
+    #[test]
+    fn public_base_url_is_https_origin_in_production_and_loopback_in_development() {
+        assert_eq!(
+            validate_public_base_url("https://licenses.example.org/", true).unwrap(),
+            "https://licenses.example.org"
+        );
+        assert!(validate_public_base_url("http://licenses.example.org", true).is_err());
+        assert!(validate_public_base_url("https://127.0.0.1", true).is_err());
+        assert!(validate_public_base_url("https://licenses.example.org/path", true).is_err());
+        assert!(validate_public_base_url("http://127.0.0.1:8787", false).is_ok());
+        assert!(validate_public_base_url("http://192.0.2.1:8787", false).is_err());
     }
 
     #[test]

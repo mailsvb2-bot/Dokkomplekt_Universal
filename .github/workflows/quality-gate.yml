@@ -148,6 +148,8 @@ jobs:
       DATABASE_URL: postgresql://dokkomplekt:dokkomplekt_ci@127.0.0.1:5432/dokkomplekt_license_ci
       DOKKOMPLEKT_REQUIRE_POSTGRES_TESTS: '1'
       DKK_LICENSE_POSTGRES_POOL_SIZE: '4'
+      DOKKOMPLEKT_ENV: test
+      DOKKOMPLEKT_ALLOW_INSECURE_DEV: '1'
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c

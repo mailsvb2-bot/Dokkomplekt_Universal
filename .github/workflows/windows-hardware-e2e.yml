@@ -2,6 +2,11 @@ name: Windows Hardware E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact protected main commit SHA approved for production signing
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,7 +18,9 @@ concurrency:
 jobs:
   word-printer-watcher-installer:
     name: Word / printer / watcher / signed NSIS
+    if: github.ref == 'refs/heads/main' && inputs.release_sha == github.sha
     runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware-e2e]
+    environment: windows-production-signing
     timeout-minutes: 120
     env:
       DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
@@ -33,6 +40,35 @@ jobs:
       DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove exact protected main source and pin signing implementation
+        shell: pwsh
+        env:
+          EXPECTED_SIGNING_SCRIPT_SHA256: ${{ vars.DOKKOMPLEKT_SIGNING_SCRIPT_SHA256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ('${{ inputs.release_sha }}' -notmatch '^[0-9a-f]{40}$') {
+            throw 'release_sha must be an exact lowercase 40-character commit SHA'
+          }
+          if ((git rev-parse HEAD).Trim() -ne '${{ inputs.release_sha }}') {
+            throw 'checkout does not match approved release_sha'
+          }
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor '${{ inputs.release_sha }}' origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw 'approved release_sha is not reachable from protected main'
+          }
+          $expected = $env:EXPECTED_SIGNING_SCRIPT_SHA256.Trim().ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') {
+            throw 'DOKKOMPLEKT_SIGNING_SCRIPT_SHA256 must pin the audited signing script'
+          }
+          $actual = (Get-FileHash scripts/sign_windows_release.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "signing script hash mismatch: expected $expected, got $actual"
+          }
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1

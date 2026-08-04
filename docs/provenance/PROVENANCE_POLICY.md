@@ -4,9 +4,13 @@
 
 `SOURCE_MANIFEST_SHA256.txt` covers authored, redistributable source files in the deterministic source archive. It deliberately excludes mutable build output and CI evidence under `verification/` and `build-evidence/`.
 
-CI logs, installer smoke logs and binary bundles are release evidence, not source. They are retained as GitHub Actions artifacts and indexed by immutable SHA-256 digests in the versioned evidence record under this directory.
+CI logs, installer smoke logs and binary bundles are release evidence, not source. They are retained as GitHub Actions artifacts. A mutable checked-in JSON file must never be presented as proof for a later commit: release evidence is accepted only when the workflow run, artifact digest and exact source commit SHA are verified together through GitHub Actions or a signed release attestation.
 
 Mixing ignored `*.log` files into the source manifest made the manifest depend on the machine that built the archive. That design is forbidden from the 18.4.3 provenance repair onward.
+
+## No stale checked-in success claims
+
+Versioned `GITHUB_ACTIONS_EVIDENCE_*.json` snapshots are forbidden. They inevitably become stale after the next source commit and can be mistaken for proof of the current tree. Historical evidence belongs in immutable Actions artifacts or a release object whose subject digest names the exact commit and binaries.
 
 ## Mandatory gate
 

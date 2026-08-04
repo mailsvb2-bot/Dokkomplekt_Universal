@@ -1,5 +1,5 @@
 Dokkomplekt Universal 18.4.3 — CURRENT VERIFICATION POLICY
-Updated: 2026-08-03
+Updated: 2026-08-04
 
 This file deliberately does not duplicate volatile test counts. Exact counts, logs, commit SHA and artifacts are recorded by GitHub Actions for the same commit; a historical number in a source file is not release evidence.
 
@@ -15,6 +15,8 @@ Mandatory checks for every current pull request / release candidate:
 - Source provenance: deterministic clean source archive, manifest, Cargo metadata and Git history bundle bound to the same commit.
 
 Current corrective scope:
+- fail-closed license-server configuration, authenticated payment retry, verified-provider-only production billing and idempotent webhook storage;
+- strict legal/financial validators, bounded rate-limit state, separated development CSP and hardened Windows signing trust boundary;
 - one final selected-document plan is used for both preflight and generation popup;
 - profession profiles cannot force runtime questions absent from selected templates;
 - learned scanner rules, learned-kit decisions and template approvals are manageable in the UI;

@@ -1,1 +1,0 @@
-Trigger final CI after rustfmt-normalized native folder picker test.

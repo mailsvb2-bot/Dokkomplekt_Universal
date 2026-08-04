@@ -4,7 +4,7 @@ import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem,
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
-  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocx, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
+  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
@@ -13,7 +13,6 @@ import { TemplateSetupModal } from './components/TemplateSetupModal';
 import { DocumentRail } from './components/DocumentRail';
 import { Workspace } from './components/Workspace';
 import { PopupDesignerModal } from './components/PopupDesignerModal';
-import { RuntimePromptModal } from './components/RuntimePromptModal';
 import { GuidedScannerModal } from './components/GuidedScannerModal';
 import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
@@ -25,7 +24,7 @@ import {
   arrayBufferToBase64, createdPrintItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
-  replaceAllLiteral, type GuidedScannerState, type PendingGeneration, type PendingTemplate,
+  replaceAllLiteral, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
 
@@ -61,7 +60,7 @@ export function App() {
   const [sickLeave, setSickLeave] = useState(false);
 
   const [activeTemplateText, setActiveTemplateText] = useState('');
-  const [preview, setPreview] = useState<{ text: string; missing: number } | null>(null);
+  const [preview, setPreview] = useState<{ text: string; missing: number; label: string } | null>(null);
 
   const [setupOpen, setSetupOpen] = useState(false);
   const [templateText, setTemplateText] = useState('');
@@ -73,10 +72,6 @@ export function App() {
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
-  const [runtimePrompt, setRuntimePrompt] = useState<{ plan: WorkflowPlan; generation: PendingGeneration; title: string } | null>(null);
-  const [runtimeAnswers, setRuntimeAnswers] = useState<Record<string, string>>({});
-  const [runtimeMessage, setRuntimeMessage] = useState('');
-
   const [icdQuery, setIcdQuery] = useState('');
   const [icdHits, setIcdHits] = useState<Icd10Suggestion[]>([]);
 
@@ -174,11 +169,23 @@ export function App() {
   }, [setupOpen]);
 
   const visibleDocs = documents;
+  const activeDocumentLabel = activeDoc
+    ? documents.find((document) => document.id === activeDoc)?.button_label ?? null
+    : null;
+  const showSickLeaveOption = selectedDocIds.some((documentId) => {
+    const document = documents.find((item) => item.id === documentId);
+    const role = document?.role_id.toLowerCase() ?? '';
+    return document?.category === 'Medical' && (role === 'discharge' || role.endsWith('.discharge'));
+  });
 
   useEffect(() => {
     const existing = new Set(documents.map((document) => document.id));
     setSelectedDocIds((previous) => previous.filter((id) => existing.has(id)));
   }, [documents]);
+
+  useEffect(() => {
+    if (!showSickLeaveOption && sickLeave) setSickLeave(false);
+  }, [showSickLeaveOption, sickLeave]);
 
   useEffect(() => {
     let cancelled = false;
@@ -297,8 +304,6 @@ export function App() {
     setPreview(null);
     setScannerField('');
     setScannerText('');
-    setRuntimePrompt(null);
-    setRuntimeMessage('');
     setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
   }
 
@@ -540,7 +545,45 @@ export function App() {
       setStatus('Отметьте хотя бы один документ для комплекта.');
       return;
     }
-    await requestGeneration({ kind: 'batch', documentIds: selectedDocIds });
+    if (preflightLoading) {
+      setStatus('Подождите: программа ещё проверяет выбранный комплект.');
+      return;
+    }
+
+    const workflow = preflightPlan ?? await run(
+      selectedDocIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch',
+      () => loadWorkflowPlan(selectedDocIds),
+    );
+    if (!workflow) return;
+    setPreflightPlan(workflow);
+    if (workflow.blocked) {
+      setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
+      return;
+    }
+
+    if (workflow.prompts.length) {
+      const missing = workflow.prompts.filter((prompt) => prompt.required && !(answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
+      if (missing.length) {
+        setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`);
+        return;
+      }
+      const payload = workflow.prompts.map((prompt) => ({
+        field_id: prompt.field_id,
+        value: answers[prompt.field_id] ?? prompt.current_value ?? '',
+        continue_without_value: false,
+      }));
+      const applied = selectedDocIds.length === 1
+        ? await run('apply_popup', () => applyPopup(selectedDocIds[0], sickLeave, payload))
+        : await run('apply_popup_batch', () => applyPopupBatch(selectedDocIds, sickLeave, payload));
+      if (!applied) return;
+      if (!applied.accepted) {
+        setStatus(applied.message || `Не заполнено полей: ${applied.still_missing?.length ?? 0}`);
+        return;
+      }
+    }
+
+    setStatus('Данные проверены. Формируется комплект…');
+    await performGenerateSelectedDocuments(selectedDocIds);
   }
 
   async function performGenerateSelectedDocuments(documentIds: string[]) {
@@ -561,60 +604,6 @@ export function App() {
     return documentIds.length === 1
       ? getWorkflowPlan(documentIds[0], sickLeave)
       : getWorkflowPlanBatch(documentIds, sickLeave);
-  }
-
-  async function requestGeneration(generation: PendingGeneration) {
-    const workflow = await run(
-      generation.kind === 'single' ? 'get_workflow_plan' : 'get_workflow_plan_batch',
-      () => loadWorkflowPlan(generation.documentIds),
-    );
-    if (!workflow) return;
-    setPreflightPlan(workflow);
-    setAnswers(Object.fromEntries(workflow.prompts.map((prompt) => [prompt.field_id, prompt.current_value ?? ''])));
-    if (workflow.blocked) {
-      setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
-      return;
-    }
-    if (!workflow.prompts.length) {
-      await completeGeneration(generation);
-      return;
-    }
-    setRuntimeAnswers(Object.fromEntries(workflow.prompts.map((prompt) => [prompt.field_id, prompt.current_value ?? ''])));
-    setRuntimeMessage('');
-    setRuntimePrompt({
-      plan: workflow,
-      generation,
-      title: generation.kind === 'batch' ? `Уточнить данные комплекта (${generation.documentIds.length})` : 'Уточнить данные документа',
-    });
-    setStatus(`Перед созданием нужно проверить или заполнить полей: ${workflow.prompts.length}.`);
-  }
-
-  async function submitRuntimePrompt() {
-    if (!runtimePrompt) return;
-    const payload = runtimePrompt.plan.prompts.map((prompt) => ({
-      field_id: prompt.field_id,
-      value: runtimeAnswers[prompt.field_id] ?? '',
-      continue_without_value: false,
-    }));
-    const result = runtimePrompt.generation.kind === 'single'
-      ? await run('apply_popup', () => applyPopup(runtimePrompt.generation.documentIds[0], sickLeave, payload))
-      : await run('apply_popup_batch', () => applyPopupBatch(runtimePrompt.generation.documentIds, sickLeave, payload));
-    if (!result) return;
-    if (!result.accepted) {
-      setRuntimeMessage(result.message || 'Проверьте введённые значения. Окно оставлено открытым.');
-      setStatus(result.message || 'Проверьте обязательные поля.');
-      return;
-    }
-    const generation = runtimePrompt.generation;
-    setRuntimePrompt(null);
-    setRuntimeMessage('');
-    setStatus('Данные подтверждены. Формируется документ…');
-    await completeGeneration(generation);
-  }
-
-  async function completeGeneration(generation: PendingGeneration) {
-    if (generation.kind === 'single') await performGenerateDocx(generation.documentIds[0]);
-    else await performGenerateSelectedDocuments(generation.documentIds);
   }
 
   function openPopupDesigner() {
@@ -708,47 +697,19 @@ export function App() {
     setStatus('Значение сохранено и будет использовано в других документах комплекта.');
   }
 
-  async function saveFields() {
-    if (!preflightPlan || !selectedDocIds.length) return;
-    const missing = preflightPlan.prompts.filter((prompt) => prompt.required && !answers[prompt.field_id]?.trim());
-    if (missing.length) { setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`); return; }
-    const payload = preflightPlan.prompts.map((prompt) => ({
-      field_id: prompt.field_id,
-      value: answers[prompt.field_id] ?? '',
-      continue_without_value: false,
-    }));
-    const res = selectedDocIds.length === 1
-      ? await run('apply_popup', () => applyPopup(selectedDocIds[0], sickLeave, payload))
-      : await run('apply_popup_batch', () => applyPopupBatch(selectedDocIds, sickLeave, payload));
-    if (!res) return;
-    if (res.accepted) await refreshPreflightPlan();
-    setStatus(res.accepted ? 'Поля сохранены. Выбранный комплект проверен по тому же плану, который используется при создании.' : res.message || `Не заполнено полей: ${res.still_missing?.length ?? 0}`);
-  }
-
   async function previewNow() {
+    if (!activeDoc) {
+      setStatus('Откройте документ справа, чтобы посмотреть его перед созданием комплекта.');
+      return;
+    }
+    const document = documents.find((item) => item.id === activeDoc);
+    if (!document) return;
     const res = await run('render_preview', () => renderPreview(activeTemplateText, false));
     if (!res) return;
-    setPreview({ text: res.output_text ?? '', missing: res.missing_fields?.length ?? 0 });
-    setStatus(res.missing_fields?.length ? `Предпросмотр: не заполнено полей — ${res.missing_fields.length}.` : 'Предпросмотр готов — незаполненных полей нет.');
-  }
-
-  async function generateDocx() {
-    if (!activeDoc) { setStatus('Выберите документ, который нужно создать.'); return; }
-    await requestGeneration({ kind: 'single', documentIds: [activeDoc] });
-  }
-
-  async function performGenerateDocx(documentId: string) {
-    const res = await run('render_docx', () => renderDocx(documentId, `output/${documentId}.docx`, true));
-    if (!res) return;
-    if (res.output_path) {
-      const current = documents.find((document) => document.id === documentId);
-      const printItems: GeneratedPrintItem[] = [{ document_id: documentId, label: current?.button_label ?? fileLabel(res.output_path), path: res.output_path }];
-      setLastOutput({ folder: res.output_path, files: [res.output_path], source: 'single', print_items: printItems });
-      setStatus(`Готово: ${res.output_path}`);
-      if (autoPrint) await queuePrint(jobsForItems(printItems), true, [documentId], null, res.output_path);
-    } else {
-      setStatus(`Не заполнено полей: ${res.missing_fields?.length ?? 0}.`);
-    }
+    setPreview({ text: res.output_text ?? '', missing: res.missing_fields?.length ?? 0, label: document.button_label });
+    setStatus(res.missing_fields?.length
+      ? `Предпросмотр «${document.button_label}»: не заполнено полей — ${res.missing_fields.length}.`
+      : `Предпросмотр «${document.button_label}» готов.`);
   }
 
   async function analyzeInDialog() {
@@ -1321,6 +1282,9 @@ export function App() {
             plan={preflightPlan}
             planLoading={preflightLoading}
             selectedDocumentCount={selectedDocIds.length}
+            activeDocumentLabel={activeDocumentLabel}
+            showSickLeaveOption={showSickLeaveOption}
+            sickLeaveEnabled={sickLeave}
             answers={answers}
             preview={preview}
             setWatchFolder={setWatchFolder}
@@ -1333,6 +1297,7 @@ export function App() {
             setScannerText={setScannerText}
             setModelOutput={setModelOutput}
             setAnswers={setAnswers}
+            onSickLeaveChange={setSickLeave}
             onRunZeroTouch={runZeroTouch}
             onOpenLastOutput={openLastOutput}
             onPrintLastOutput={printLastOutput}
@@ -1352,8 +1317,7 @@ export function App() {
             onUnderstand={understand}
             onPinField={pinField}
             onPreview={previewNow}
-            onSaveFields={saveFields}
-            onGenerate={generateDocx}
+            onCreateSelected={generateSelectedDocuments}
           />
           <DocumentRail
             documents={visibleDocs}
@@ -1361,14 +1325,11 @@ export function App() {
             selectedDocumentIds={selectedDocIds}
             busy={busy}
             printCopies={printCopies}
-            extraRulesEnabled={sickLeave}
-            onExtraRulesChange={setSickLeave}
             onSelect={selectDocument}
             onToggleSelected={toggleDocumentSelected}
             onPrintCopiesChange={updatePrintCopies}
             onSelectAll={selectAllVisibleDocuments}
             onClearSelected={clearSelectedDocuments}
-            onGenerateSelected={generateSelectedDocuments}
             onRename={renameActiveDocument}
             onConfigurePopups={openPopupDesigner}
             onScanTemplate={startGuidedExistingTemplateScanner}
@@ -1462,28 +1423,6 @@ export function App() {
           onChange={setPopupDesignerFields}
           onCancel={() => setPopupDesignerDocument(null)}
           onSave={savePopupDesigner}
-        />
-      )}
-
-      {runtimePrompt && (
-        <RuntimePromptModal
-          title={runtimePrompt.title}
-          plan={runtimePrompt.plan}
-          answers={runtimeAnswers}
-          message={runtimeMessage}
-          busy={busy}
-          onAnswer={(fieldId, value) => setRuntimeAnswers((previous) => {
-            const previousSourceValue = previous[fieldId] ?? '';
-            const next = { ...previous, [fieldId]: value };
-            for (const prompt of runtimePrompt.plan.prompts) {
-              if (prompt.linked_to !== fieldId) continue;
-              const linkedCurrent = previous[prompt.field_id] ?? '';
-              if (!linkedCurrent || linkedCurrent === previousSourceValue) next[prompt.field_id] = value;
-            }
-            return next;
-          })}
-          onCancel={() => { setRuntimePrompt(null); setRuntimeMessage(''); setStatus('Создание отменено: данные не изменены.'); }}
-          onSubmit={submitRuntimePrompt}
         />
       )}
 

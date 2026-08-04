@@ -14,21 +14,25 @@ class ProfessionalPopupContracts(unittest.TestCase):
     def read(self, relative: str) -> str:
         return project_text(relative)
 
-    def test_one_merged_popup_exists_for_whole_selected_set(self) -> None:
+    def test_one_merged_preflight_exists_for_whole_selected_set(self) -> None:
         workflow = self.read("crates/dokkomplekt-core/src/workflow_engine.rs")
         main = self.read("src-tauri/src/main.rs")
         app = self.read("src/App.tsx")
+        workspace = self.read("src/components/Workspace.tsx")
         self.assertIn("pub fn plan_workflow_batch", workflow)
         self.assertIn("fn get_workflow_plan_batch", main)
         self.assertIn("fn apply_popup_batch", main)
-        self.assertIn("Уточнить данные комплекта", app)
+        self.assertIn("applyPopupBatch(selectedDocIds", app)
+        self.assertIn("Проверить и создать", workspace)
 
-    def test_invalid_required_value_keeps_modal_open(self) -> None:
+    def test_invalid_required_value_keeps_preflight_visible(self) -> None:
         popup = self.read("crates/dokkomplekt-core/src/popup_engine.rs")
         app = self.read("src/App.tsx")
+        workspace = self.read("src/components/Workspace.tsx")
         self.assertIn("still_missing", popup)
-        self.assertIn("if (!result.accepted)", app)
-        self.assertIn("Окно оставлено открытым", app)
+        self.assertIn("if (!applied.accepted)", app)
+        self.assertIn("Не заполнено обязательное поле", app)
+        self.assertIn("clientFields", workspace)
 
     def test_specialist_can_design_popup_without_editing_rust(self) -> None:
         editor = self.read("src/components/PopupFieldEditor.tsx")
@@ -78,10 +82,10 @@ class ProfessionalPopupContracts(unittest.TestCase):
 
     def test_linked_dates_copy_until_specialist_edits_them(self) -> None:
         profiles = self.read("crates/dokkomplekt-core/src/popup_profiles.rs")
-        app = self.read("src/App.tsx")
+        workspace = self.read("src/components/Workspace.tsx")
         editor = self.read("src/components/PopupFieldEditor.tsx")
         self.assertIn('config.linked_to = Some("medical.commission_date".into())', profiles)
-        self.assertIn("prompt.linked_to !== fieldId", app)
+        self.assertIn("linkedPrompt.linked_to !== prompt.field_id", workspace)
         self.assertIn("Повторять значение поля", editor)
 
     def test_popup_values_have_final_user_confirmed_priority(self) -> None:

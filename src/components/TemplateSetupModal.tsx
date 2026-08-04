@@ -34,8 +34,9 @@ interface TemplateSetupModalProps {
 export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const hasBatch = props.pendingTemplates.length > 0;
   const unmarkedTemplateCount = props.pendingTemplates.filter((item) => !hasConfirmedPlaceholder(item.extracted_text)).length;
-  const batchReady = hasBatch && unmarkedTemplateCount === 0;
-  const manualReady = hasConfirmedPlaceholder(props.templateText);
+  const [allowStaticCopies, setAllowStaticCopies] = useState(false);
+  const batchReady = hasBatch && (unmarkedTemplateCount === 0 || allowStaticCopies);
+  const manualReady = hasConfirmedPlaceholder(props.templateText) || (allowStaticCopies && Boolean(props.templateText.trim()));
   const [scannerField, setScannerField] = useState('');
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
@@ -155,14 +156,20 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                 </tbody>
               </table>
               <button className="softBtn" onClick={props.onAnalyze}>Анализировать</button>
-              {props.templateText.trim() && !manualReady ? (
-                <div className="readyMessage templateReadyMessage warning">
-                  <i className="ti ti-alert-triangle" aria-hidden="true" />
-                  <div>
-                    <strong>Нужно указать места заполнения</strong>
-                    <span>Выделите примерное значение ниже и замените его смысловым полем. Иначе текст примера мог бы попасть в новый документ.</span>
+              {props.templateText.trim() && !hasConfirmedPlaceholder(props.templateText) ? (
+                <>
+                  <div className="readyMessage templateReadyMessage warning">
+                    <i className="ti ti-alert-triangle" aria-hidden="true" />
+                    <div>
+                      <strong>Не найдены места заполнения</strong>
+                      <span>Разметьте изменяемые значения либо подтвердите, что документ должен создаваться как неизменяемая копия.</span>
+                    </div>
                   </div>
-                </div>
+                  <label className="checkLine staticCopyConsent">
+                    <input type="checkbox" checked={allowStaticCopies} onChange={(event) => setAllowStaticCopies(event.target.checked)} />
+                    <span>Это неизменяемый документ без автоматически заполняемых полей</span>
+                  </label>
+                </>
               ) : null}
               <details className="manualScannerDetails">
                 <summary>Дополнительная разметка</summary>
@@ -203,14 +210,23 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             <div className={`readyMessage templateReadyMessage ${batchReady ? '' : 'warning'}`}>
               <i className={batchReady ? 'ti ti-circle-check' : 'ti ti-alert-triangle'} aria-hidden="true" />
               <div>
-                <strong>{batchReady ? '3. Всё готово' : '3. Нужна разметка'}</strong>
+                <strong>{batchReady ? '3. Всё готово' : '3. Нужна разметка или подтверждение'}</strong>
                 <span>
-                  {batchReady
+                  {unmarkedTemplateCount === 0
                     ? `Нажмите «${confirmLabel}». Шаблон задаёт форму, а значения будут взяты только из исходного документа и подтверждённых ответов.`
-                    : `В ${unmarkedTemplateCount} шаблон(ах) не найдено подтверждённых мест заполнения. Откройте дополнительную настройку и покажите хотя бы одно место в Word. Текст примера не будет скопирован как данные нового документа.`}
+                    : allowStaticCopies
+                      ? `${unmarkedTemplateCount} шаблон(ов) будут создаваться как неизменяемые копии. Данные исходного документа в них не подставляются.`
+                      : `В ${unmarkedTemplateCount} шаблон(ах) не найдены места заполнения. Покажите хотя бы одно место в Word или явно подтвердите, что это неизменяемые документы.`}
                 </span>
               </div>
             </div>
+
+            {unmarkedTemplateCount > 0 ? (
+              <label className="checkLine staticCopyConsent">
+                <input type="checkbox" checked={allowStaticCopies} onChange={(event) => setAllowStaticCopies(event.target.checked)} />
+                <span>Создавать неразмеченные шаблоны как неизменяемые копии</span>
+              </label>
+            ) : null}
 
             {activePending ? (
               <details className="manualScannerDetails templateAdvancedSetup">

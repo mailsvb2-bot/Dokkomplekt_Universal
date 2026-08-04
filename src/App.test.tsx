@@ -85,7 +85,7 @@ describe('App', () => {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     });
     fireEvent.change(input, { target: { files: [file] } });
-    await screen.findByText('3. Нужна разметка');
+    await screen.findByText('3. Нужна разметка или подтверждение');
     expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(true);
     expect(calls).not.toContain('confirm_template_setup');
   });

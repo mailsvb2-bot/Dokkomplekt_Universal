@@ -381,13 +381,16 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .alternativeCard p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .alternativeCard textarea, .modelDetails textarea { width: 100%; min-height: 86px; resize: vertical; border: 1px solid var(--field-line); border-radius: 10px; background: var(--field); padding: 9px 10px; color: var(--text); font-size: 12px; }
 .inlineInput { display: flex; gap: 8px; min-width: 0; }
-.inlineInput input, .automationBody input, .manualMarkup input, .clientField input { min-width: 0; width: 100%; height: 38px; border: 1px solid var(--field-line); border-radius: 10px; background: var(--field); padding: 0 11px; color: var(--text); font-size: 12px; }
+.inlineInput input, .automationBody input, .manualMarkup input, .clientField input, .clientField select { min-width: 0; width: 100%; height: 38px; border: 1px solid var(--field-line); border-radius: 10px; background: var(--field); padding: 0 11px; color: var(--text); font-size: 12px; }
 
 .clientFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-top: 18px; }
 .clientField { display: grid; gap: 6px; }
 .clientField > span { color: var(--text-2); font-size: 11px; font-weight: 650; }
 .clientField b { margin-left: 3px; color: var(--danger); }
-.clientField > div { display: flex; gap: 6px; }
+.clientField > div { display: flex; align-items: flex-start; gap: 6px; }
+.clientFieldControl { display: grid; flex: 1; gap: 4px; }
+.clientFieldControl textarea { min-height: 86px; width: 100%; resize: vertical; border: 1px solid var(--field-line); border-radius: 10px; background: var(--field); padding: 9px 11px; color: var(--text); font-size: 12px; }
+.clientFieldControl small { color: var(--muted); font-size: 10px; line-height: 1.35; }
 .iconOnlyBtn { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border: 1px solid var(--btn-line); border-radius: 10px; background: var(--panel2); color: var(--text-2); }
 .reviewActions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 .readyMessage { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 14px; border-radius: 14px; background: var(--client-success-bg); }
@@ -472,7 +475,6 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .packageOpen > span { overflow: hidden; color: var(--text); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .packageOpen > small { color: var(--muted); font-size: 9px; }
 .packageSelectionActions { display: flex; justify-content: space-between; margin-top: 9px; }
-.packageGenerate { min-height: 44px; margin-top: 12px; font-size: 13px; font-weight: 700; }
 .packageSettings { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
 .packageSettings > summary, .copySettings > summary { cursor: pointer; color: var(--text-2); font-size: 11px; font-weight: 650; }
 .packageSettingsBody { display: grid; gap: 7px; margin-top: 10px; }
@@ -524,3 +526,22 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .newCaseBtn { min-height: 32px; padding: 6px 10px; font-size: 10px; box-shadow: none; }
 @media (max-width: 720px) { .workflowHeroActions { width: 100%; justify-items: stretch; } .newCaseBtn { justify-self: end; } }
 .ti-settings::before{content:"⚙"}.ti-file-check::before{content:"✓"}.ti-dots::before{content:"⋯"}.ti-sparkles::before{content:"✦"}.ti-adjustments::before,.ti-adjustments-horizontal::before{content:"≡"}.ti-chevron-down::before{content:"⌄"}.ti-file-plus::before{content:"＋"}
+
+.settingsPanel { border-top: 1px solid var(--line); background: var(--panel); }
+.settingsSectionHeader { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 4px; }
+.settingsSectionHeader > div { display: grid; gap: 3px; }
+.settingsSectionHeader strong { color: var(--text); font-size: 14px; }
+.settingsSectionHeader small { color: var(--muted); font-size: 11px; }
+.primarySettingsGrid { border-top: 0; padding-top: 8px; }
+.expertSettings { margin: 0 16px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2); }
+.expertSettings > summary { cursor: pointer; padding: 13px 14px; color: var(--text-2); font-size: 12px; font-weight: 700; }
+.expertSettings > p { margin: 0; padding: 0 14px 10px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.expertSettingsGrid { border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; padding: 12px; }
+.workflowOption { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
+.readyActions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+@media (max-width: 720px) { .readyActions { width: 100%; margin-left: 0; flex-wrap: wrap; } .readyActions .primaryBtn { flex: 1; justify-content: center; } }
+
+.licenseStack { display: grid; gap: 7px; }
+.licenseStack input { width: 100%; }
+
+.staticCopyConsent { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }

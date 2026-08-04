@@ -2747,7 +2747,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         if !output.status.success() {
             return Ok(None);
         }
-        return normalized_picker_output(&output.stdout);
+        normalized_picker_output(&output.stdout)
     }
 }
 

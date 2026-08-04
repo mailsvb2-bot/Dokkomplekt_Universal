@@ -1,0 +1,1 @@
+Trigger final verification after explicit UUID scope repair.

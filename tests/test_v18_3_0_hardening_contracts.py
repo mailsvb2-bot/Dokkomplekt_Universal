@@ -233,7 +233,7 @@ class V1830HardeningContracts(unittest.TestCase):
         self.assertIsNotNone(api_block)
         frontend = set(re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", api_block.group(1)))
         self.assertEqual(backend, frontend)
-        self.assertEqual(len(backend), 113)
+        self.assertEqual(len(backend), 114)
 
     def test_python_contract_runner_is_process_isolated_and_bounded(self) -> None:
         runner = text("scripts/run_python_contracts_sharded.py")

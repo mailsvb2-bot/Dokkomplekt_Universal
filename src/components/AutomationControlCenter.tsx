@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, CaseRunRecord, LocalSemanticModelConfig, LocalSemanticModelStatus, CorpusStatus, CalibratedThresholdStatus, ReferenceDataStatus, QueueStatus, PrinterInventory, PrivacyPreferences, SidecarToolStatus, ComponentProgress, ComponentStatus, QualityTelemetryReport } from '../lib/types';
+import { useAppDialog } from './AppDialogProvider';
 import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
 import { confirmRiskExceptionAndRetry, confirmBundleExceptionAndRetry, getAutomationMetrics, getDailyAutomationDashboard, getQualityTelemetry, getQueueStatus, getCorpusStatus, exportCorpus, getCalibratedThresholdStatus, importCalibratedThresholdsFile, getPrinterInventory, listCaseRuns, retryCaseRun, getPrivacyPreferences, getSemanticModelConfig, getReferenceDataStatus, getSidecarStatus, getComponentStatuses, installComponent, refreshComponentCatalog, removeComponent, listAuditEvents, listAutomationExceptions, resolveAutomationException, runWorkspaceHygiene, testSemanticModel, updatePrintPreferences, updatePrivacyPreferences, updateReferenceData, importReferenceDataFile, updateSemanticModelConfig } from '../lib/api';
 
@@ -39,6 +40,7 @@ const DEFAULT_PRINTERS: PrinterInventory = {
 };
 
 export function AutomationControlCenter({ onStatus }: Props) {
+  const dialogs = useAppDialog();
   const [privacy, setPrivacy] = useState<PrivacyPreferences>(DEFAULT_PRIVACY);
   const [exceptions, setExceptions] = useState<AutomationExceptionRecord[]>([]);
   const [caseRuns, setCaseRuns] = useState<CaseRunRecord[]>([]);
@@ -124,7 +126,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
   }
 
   async function resolve(item: AutomationExceptionRecord) {
-    const resolution = globalThis.prompt?.('Что исправлено или подтверждено?', 'Проверено специалистом')?.trim();
+    const resolution = await dialogs.prompt({ title: 'Закрыть исключение', label: 'Что исправлено или подтверждено?', initialValue: 'Проверено специалистом', required: true, confirmLabel: 'Закрыть исключение' });
     if (!resolution) return;
     const ok = await execute('закрытие исключения', () => resolveAutomationException(item.exception_id, resolution));
     if (ok) { onStatus('Исключение закрыто. Повторите обработку источника после исправления причины.'); await refresh(); }
@@ -134,7 +136,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
     const details = parseExceptionDetails(item.details_json);
     const blockers = Array.isArray(details?.blockers) ? details.blockers : [];
     const fieldIds = blockers.map((entry: unknown) => typeof entry === 'object' && entry !== null && 'field_id' in entry ? String((entry as { field_id: unknown }).field_id) : '').filter(Boolean);
-    const accepted = globalThis.confirm?.(`Подтвердить найденные значения сразу для ${fieldIds.length} полей и повторить создание комплекта?\n\n${fieldIds.join('\n')}`) ?? false;
+    const accepted = await dialogs.confirm({ title: 'Подтвердить спорные значения?', message: `Будут подтверждены поля (${fieldIds.length}): ${fieldIds.join(', ')}. После этого программа повторит создание комплекта.`, confirmLabel: 'Подтвердить и повторить' });
     if (!accepted) return;
     const result = await execute('подтверждение спорных данных', () => confirmRiskExceptionAndRetry(item.exception_id));
     if (!result) return;
@@ -151,7 +153,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       onStatus('В исключении нет безопасного предложения состава. Откройте исходный случай и выберите документы вручную.');
       return;
     }
-    const accepted = globalThis.confirm?.(`Создать только этот комплект?\n\n${proposed.join('\n')}`) ?? false;
+    const accepted = await dialogs.confirm({ title: 'Создать предложенный комплект?', message: `Документы: ${proposed.join(', ')}. Остальные документы в этот запуск не войдут.`, confirmLabel: 'Создать этот комплект' });
     if (!accepted) return;
     const result = await execute('подтверждение состава комплекта', () => confirmBundleExceptionAndRetry(item.exception_id, proposed));
     if (!result) return;
@@ -189,7 +191,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
   async function exportPilotCorpus() {
     const date = new Date().toISOString().slice(0, 10);
-    const outputPath = globalThis.prompt?.('Имя файла с обезличенной историей проверок', `dokkomplekt-check-history-${date}.json`)?.trim();
+    const outputPath = await dialogs.prompt({ title: 'Экспорт истории проверок', label: 'Имя файла', initialValue: `dokkomplekt-check-history-${date}.json`, required: true, confirmLabel: 'Экспортировать' });
     if (!outputPath) return;
     const result = await execute('экспорт истории проверок', () => exportCorpus(outputPath));
     if (!result) return;
@@ -216,7 +218,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
   }
 
   async function deleteComponent(item: ComponentStatus) {
-    if (!globalThis.confirm?.(`Удалить компонент «${item.label}»? Функции снова станут недоступны офлайн.`)) return;
+    if (!await dialogs.confirm({ title: 'Удалить локальный компонент?', message: `Компонент «${item.label}» будет удалён. Связанные функции снова потребуют загрузки.`, confirmLabel: 'Удалить компонент', danger: true })) return;
     const component = await execute(`удаление ${item.label}`, () => removeComponent(item.id));
     if (!component) return;
     setComponents(current => current.map(currentItem => currentItem.id === component.id ? component : currentItem));

@@ -365,6 +365,7 @@ export const COMMAND_RESPONSE_KIND = {
   'load_state': 'object',
   'lookup_business_registry': 'nullable-object',
   'open_in_file_manager': 'void',
+  'pick_folder': 'object',
   'parse_source': 'object',
   'parse_source_file': 'object',
   'parse_web_source': 'object',
@@ -501,6 +502,11 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
     case 'semantic_extract':
       validateSemantic(command, value);
       break;
+    case 'pick_folder': {
+      const root = record(command, value);
+      if (root.selected_path !== null) string(command, root.selected_path, 'selected_path');
+      break;
+    }
     case 'install_background_watcher':
     case 'uninstall_background_watcher':
       validateWatcher(command, value);

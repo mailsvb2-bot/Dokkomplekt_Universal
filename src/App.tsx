@@ -5,7 +5,7 @@ import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickFolder, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -14,6 +14,7 @@ import { DocumentRail } from './components/DocumentRail';
 import { Workspace } from './components/Workspace';
 import { PopupDesignerModal } from './components/PopupDesignerModal';
 import { GuidedScannerModal } from './components/GuidedScannerModal';
+import { AppDialogProvider, useAppDialog } from './components/AppDialogProvider';
 import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
@@ -29,6 +30,11 @@ import {
 
 
 export function App() {
+  return <AppDialogProvider><AppContent /></AppDialogProvider>;
+}
+
+function AppContent() {
+  const dialogs = useAppDialog();
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
   useEffect(() => { applyTheme(buildTheme(theme)); saveTheme(theme); }, [theme]);
 
@@ -249,7 +255,11 @@ export function App() {
     }
     const label = component?.label || fallbackLabel;
     const size = component?.size_label || 'размер будет показан после проверки подписанного каталога';
-    const accepted = globalThis.confirm?.(`${label} отсутствует. Скачать ${size}?\n\nРазовая загрузка; после установки компонент работает офлайн.`) ?? false;
+    const accepted = await dialogs.confirm({
+      title: `Установить компонент «${label}»?`,
+      message: `Размер: ${size}. Разовая загрузка; после установки компонент работает офлайн.`,
+      confirmLabel: 'Скачать и установить',
+    });
     if (!accepted) {
       setStatus(`${label}: пользователь отказался от загрузки; функция не запущена.`);
       return false;
@@ -634,7 +644,13 @@ export function App() {
   async function renameActiveDocument() {
     if (!activeDoc) return;
     const current = documents.find((document) => document.id === activeDoc);
-    const requested = globalThis.prompt?.('Новое название документа', current?.button_label ?? '')?.trim();
+    const requested = await dialogs.prompt({
+      title: 'Переименовать документ',
+      label: 'Новое название кнопки',
+      initialValue: current?.button_label ?? '',
+      required: true,
+      confirmLabel: 'Переименовать',
+    });
     if (!requested || requested === current?.button_label) return;
     const pack = await run('rename_document_button', () => renameDocumentButton(activeDoc, requested));
     if (!pack) return;
@@ -645,14 +661,23 @@ export function App() {
   async function approveActiveTemplate() {
     if (!activeDoc) return;
     const current = documents.find((document) => document.id === activeDoc);
-    const jurisdiction = globalThis.prompt?.('Юрисдикция утверждённой формы', 'Российская Федерация')?.trim() ?? '';
-    if (!jurisdiction) return;
-    const approvedBy = globalThis.prompt?.('Кто утвердил форму (ФИО или роль)', '')?.trim() ?? '';
-    if (!approvedBy) return;
-    const acknowledgement = globalThis.confirm?.(
-      `Подтвердите: организация проверила точную ревизию шаблона «${current?.button_label ?? activeDoc}» и принимает ответственность за её применение в указанной юрисдикции.`,
-    ) ?? false;
-    if (!acknowledgement) return;
+    const approvalForm = await dialogs.form({
+      title: 'Подтвердить версию шаблона',
+      message: `Подтверждение относится только к точной ревизии «${current?.button_label ?? activeDoc}».`,
+      fields: [
+        { name: 'jurisdiction', label: 'Юрисдикция', initialValue: 'Российская Федерация', required: true },
+        { name: 'approvedBy', label: 'Кто утвердил форму (ФИО или роль)', required: true },
+      ],
+      acknowledgement: {
+        label: 'Организация проверила шаблон и принимает ответственность за его применение.',
+        required: true,
+      },
+      confirmLabel: 'Подтвердить версию',
+    });
+    if (!approvalForm) return;
+    const jurisdiction = approvalForm.jurisdiction;
+    const approvedBy = approvalForm.approvedBy;
+    const acknowledgement = true;
     const approval = await run('approve_document_template', () => approveDocumentTemplate({
       documentId: activeDoc,
       jurisdiction,
@@ -666,7 +691,12 @@ export function App() {
   async function removeActiveDocument() {
     if (!activeDoc) return;
     const current = documents.find((document) => document.id === activeDoc);
-    const confirmed = globalThis.confirm?.(`Убрать документ «${current?.button_label ?? activeDoc}» из набора? Файл шаблона останется на диске.`) ?? false;
+    const confirmed = await dialogs.confirm({
+      title: 'Убрать документ из набора?',
+      message: `Документ «${current?.button_label ?? activeDoc}» исчезнет из списка, но файл шаблона останется на диске.`,
+      confirmLabel: 'Убрать из набора',
+      danger: true,
+    });
     if (!confirmed) return;
     const pack = await run('remove_document_button', () => removeDocumentButton(activeDoc));
     if (!pack) return;
@@ -676,6 +706,13 @@ export function App() {
     setPreflightPlan(null);
     setPreview(null);
     setStatus('Документ убран из набора. Исходный шаблон сохранён.');
+  }
+
+  async function chooseFolder(currentPath: string, apply: (path: string) => void, label: string) {
+    const selected = await run('pick_folder', () => pickFolder(currentPath));
+    if (!selected) return;
+    apply(selected);
+    setStatus(`${label}: ${selected}`);
   }
 
   async function refreshPreflightPlan(documentIds = selectedDocIds) {
@@ -1288,6 +1325,7 @@ export function App() {
             answers={answers}
             preview={preview}
             setWatchFolder={setWatchFolder}
+            onPickWatchFolder={() => void chooseFolder(watchFolder, setWatchFolder, 'Рабочая папка')}
             setIntakeSource={setIntakeSource}
             setAutoPrint={updateAutoPrint}
             setSourceText={setSourceText}
@@ -1360,6 +1398,7 @@ export function App() {
             onScannerFieldChange={setScannerField}
             onScannerTextChange={setScannerText}
             onOutputRootChange={setOutputRoot}
+            onPickOutputFolder={() => void chooseFolder(outputRoot, setOutputRoot, 'Папка готовых документов')}
             onFolderPartsChange={updateFolderParts}
             onLicenseTextChange={setLicenseText}
             onSeriesPlan={seriesPlan}

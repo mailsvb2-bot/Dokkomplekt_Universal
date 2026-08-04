@@ -50,6 +50,8 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         componentState = command === 'install_component' ? 'downloaded' : 'missing';
         return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' } as never;
       }
+      case 'pick_folder':
+        return { selected_path: 'C:/Выбранная папка' } as never;
       case 'parse_web_source':
         return { source_text: 'Счёт № 148 из HTTPS', semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, final_url: 'https://example.com/doc', content_type: 'text/html' } as never;
       case 'get_document_template_text':
@@ -415,6 +417,8 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByText('Автоматическая обработка папки'));
     const automation = screen.getByText('Автоматическая обработка папки').closest('.automationCard');
     expect(automation).toBeTruthy();
+    fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Выбрать' }));
+    await waitFor(() => expect(parsePayload(calls, 'pick_folder')).toMatchObject({ req: { initial_path: expect.any(String) } }));
     fireEvent.change(within(automation as HTMLElement).getByPlaceholderText('Путь к файлу'), { target: { value: 'C:/Созданные документы/Источник.docx' } });
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
     await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
@@ -434,11 +438,14 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(parsePayload(calls, 'semantic_extract')).toMatchObject({ req: { source_text: expect.any(String), default_year: expect.any(Number) } }));
 
     // button management preserves the template while changing only the registry
-    vi.spyOn(window, 'prompt').mockReturnValue('Договор новый');
     await click(/Переименовать/);
+    const renameDialog = await screen.findByRole('dialog', { name: 'Переименовать документ' });
+    fireEvent.change(within(renameDialog).getByLabelText('Новое название кнопки *'), { target: { value: 'Договор новый' } });
+    fireEvent.click(within(renameDialog).getByRole('button', { name: 'Переименовать' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'rename_document_button')).toBe(true));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     await click(/Убрать из набора/);
+    const removeDialog = await screen.findByRole('dialog', { name: 'Убрать документ из набора?' });
+    fireEvent.click(within(removeDialog).getByRole('button', { name: 'Убрать из набора' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'remove_document_button')).toBe(true));
 
     // theme: preset B applies dark bg + persists

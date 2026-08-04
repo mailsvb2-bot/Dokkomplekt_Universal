@@ -27,13 +27,13 @@ describe('TemplateSetupModal', () => {
   it('keeps the first step simple and disables confirmation without input', () => {
     render(<TemplateSetupModal {...base} />);
     expect(screen.getByText('1. Выберите шаблоны')).toBeTruthy();
-    expect(screen.getByText(/Шаблон задаёт форму и расположение полей/)).toBeTruthy();
+    expect(screen.getByText(/Один Word-файл создаёт одну кнопку/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('does not create a manual text template until a field is marked', () => {
     const { rerender } = render(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
-    expect(screen.getByText('Не найдены места заполнения')).toBeTruthy();
+    expect(screen.getByText('Для текста нужна разметка')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
 
     rerender(<TemplateSetupModal {...base} templateText="Документ № {{document.number}}" />);

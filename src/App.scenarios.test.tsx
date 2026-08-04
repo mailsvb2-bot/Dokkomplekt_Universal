@@ -16,6 +16,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
   const componentInstalled = () => componentState === 'downloaded';
   const componentAvailable = () => componentState !== 'missing';
   let clauseBlocks: Array<{ block_id: string; title: string; content: string; updated_at: string }> = [];
+  let importedTemplateIndex = 0;
   __setInvokeForTests(async (command, payload) => {
     calls.push({ command, payload });
     switch (command) {
@@ -136,8 +137,16 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         return true as never;
       case 'uninstall_background_watcher':
         return { platform: 'windows', installed: false, removed_files: [], warnings: [] } as never;
-      case 'import_template_file':
-        return { template_path: '/app-data/user-templates/tpl.docx', extracted_text: 'Договор\n{{org.inn}}' } as never;
+      case 'import_template_file': {
+        const req = (payload as { req?: { document_id?: string; file_name?: string | null } })?.req;
+        importedTemplateIndex += 1;
+        const fileName = req?.file_name ?? `Шаблон ${importedTemplateIndex}.docx`;
+        const label = fileName.replace(/\.doc[xm]$/i, '');
+        return {
+          template_path: `/app-data/user-templates/${req?.document_id ?? importedTemplateIndex}.docx`,
+          extracted_text: `${label}\n{{org.inn}}`,
+        } as never;
+      }
       case 'print_files':
         return { queued_files: ['C:/Созданные документы/Иванов/Договор.docx'], queued_copies: 3, failed_files: [] } as never;
       case 'update_print_preferences': return { platform: 'windows', printers: [], preferences: (payload as { req?: { preferences?: unknown } })?.req?.preferences, advanced_options_note: 'ok' } as never;
@@ -154,8 +163,20 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'analyze_template':
       case 'analyze_template_file':
         return { document: { ...accDoc, placeholders: ['org.inn', 'org.name'] }, analysis_json: {}, core_pipeline_json: {} } as never;
-      case 'prepare_template_setup':
-        return [{ document_id: 'tpl', template_path: 't.docx', detected_title: 'Договор', suggested_button_label: 'Договор', editable_button_label: 'Договор', role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }] as never;
+      case 'prepare_template_setup': {
+        const candidates = (payload as { req?: { candidates?: Array<{ document_id: string; template_path: string; preferred_button_label: string }> } })?.req?.candidates ?? [];
+        return candidates.map((candidate) => ({
+          document_id: candidate.document_id,
+          template_path: candidate.template_path,
+          detected_title: candidate.preferred_button_label,
+          suggested_button_label: candidate.preferred_button_label,
+          editable_button_label: candidate.preferred_button_label,
+          role_id: 'generic',
+          is_static_copy: false,
+          analysis: {},
+          popup_fields: [],
+        })) as never;
+      }
       case 'confirm_template_setup':
         return { pack_id: 'default', name: 'Пакет', documents: [{ ...accDoc, id: 'tpl', button_label: 'Договор' }] } as never;
       case 'rename_document_button':
@@ -413,10 +434,9 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
-    expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
-      { template_path: '/app-data/user-templates/tpl.docx' },
-      { template_path: '/app-data/user-templates/tpl.docx' },
-    ] } });
+    const prepared = (parsePayload(calls, 'prepare_template_setup') as { req?: { candidates?: Array<{ template_path: string }> } })?.req?.candidates ?? [];
+    expect(prepared).toHaveLength(2);
+    expect(new Set(prepared.map((candidate) => candidate.template_path)).size).toBe(2);
 
     // HTTPS/site/API intake -> parse_web_source
     fireEvent.change(screen.getByLabelText('Адрес источника'), { target: { value: 'https://example.com/doc' } });
@@ -483,7 +503,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'system-scan.png', { type: 'image/png' });
-    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
+    const zone = screen.getByRole('heading', { name: 'Добавьте первичный документ' }).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.some(call => call.command === 'install_component')).toBe(false);
@@ -496,7 +516,7 @@ describe('Полный прогон пользовательских сцена�
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'scan.png', { type: 'image/png' });
-    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
+    const zone = screen.getByRole('heading', { name: 'Добавьте первичный документ' }).closest('.sourceStage');
     fireEvent.drop(zone as Element, { dataTransfer: { files: [image] } });
     const installDialog = await screen.findByRole('dialog', { name: 'Установить компонент «OCR»?' });
     fireEvent.click(within(installDialog).getByRole('button', { name: 'Скачать и установить' }));

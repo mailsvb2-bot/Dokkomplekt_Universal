@@ -2388,8 +2388,10 @@ mod tests {
     #[test]
     fn folder_picker_output_is_cancel_safe_and_requires_a_real_directory() {
         assert_eq!(normalized_picker_output(b"").unwrap(), None);
-        let path =
-            std::env::temp_dir().join(format!("dokkomplekt-folder-picker-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "dokkomplekt-folder-picker-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&path).unwrap();
         let selected = normalized_picker_output(path.to_string_lossy().as_bytes()).unwrap();
         assert_eq!(selected.as_deref(), Some(path.to_string_lossy().as_ref()));

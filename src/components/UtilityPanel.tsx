@@ -59,95 +59,119 @@ export function UtilityPanel(props: UtilityPanelProps) {
   }
 
   return (
-    <section className="utilityGrid" aria-label="Дополнительные инструменты">
-      <div className="utilityCard">
-        <strong>Серия записей</strong>
-        <input value={props.seriesStart} onChange={(event) => props.onSeriesStartChange(event.target.value)} placeholder="дата начала" />
-        <input value={props.seriesEnd} onChange={(event) => props.onSeriesEndChange(event.target.value)} placeholder="дата окончания" />
-        <label>
+    <section className="settingsPanel" aria-label="Настройки программы">
+      <div className="settingsSectionHeader">
+        <div><strong>Основные настройки</strong><small>Результат, автоматическая обработка, обновления и лицензия.</small></div>
+      </div>
+      <div className="utilityGrid primarySettingsGrid">
+        <div className="utilityCard outputSettingsCard">
+          <strong>Папка готовых документов</strong>
           <input
-            type="checkbox"
-            checked={props.seriesSkipWeekends}
-            onChange={(event) => props.onSeriesSkipWeekendsChange(event.target.checked)}
-          />{' '}
-          пропускать выходные
-        </label>
-        <button className="utilBtn" onClick={props.onSeriesPlan}>
-          <i className="ti ti-calendar" aria-hidden="true" /> Рассчитать
-        </button>
+            value={props.outputRoot}
+            onChange={(event) => props.onOutputRootChange(event.target.value)}
+            placeholder="Например: C:\\Документы\\Готовые"
+          />
+          <fieldset className="folderParts">
+            <legend>Имя папки результата</legend>
+            {FOLDER_PART_OPTIONS.map((option) => (
+              <label key={option.value}>
+                <input
+                  type="checkbox"
+                  checked={props.folderParts.includes(option.value)}
+                  onChange={(event) => toggleFolderPart(option.value, event.target.checked)}
+                />
+                {option.label}{option.sensitive ? ' · персональные данные' : ''}
+              </label>
+            ))}
+          </fieldset>
+          <small>По умолчанию используются номер и дата документа. Персональные данные добавляются только явно.</small>
+          <button className="utilBtn" onClick={props.onOutputPlan}>
+            <i className="ti ti-folder" aria-hidden="true" /> Проверить папку
+          </button>
+        </div>
+
+        <div className="utilityCard">
+          <strong>Автоматическая обработка</strong>
+          <small>Фоновый агент замечает новые файлы в рабочей папке и создаёт комплект без ручного запуска.</small>
+          <button className="utilBtn" onClick={props.onInstallWatcher}>
+            <i className="ti ti-eye-cog" aria-hidden="true" /> Включить фоновый агент
+          </button>
+          <button className="utilBtn" onClick={props.onUninstallWatcher}>
+            <i className="ti ti-eye-off" aria-hidden="true" /> Отключить фоновый агент
+          </button>
+        </div>
+
+        <div className="utilityCard">
+          <strong>Программа и доступ</strong>
+          <button className="utilBtn" onClick={props.onCheckUpdates}>
+            <i className="ti ti-refresh" aria-hidden="true" /> Проверить обновления
+          </button>
+          <button className="utilBtn" onClick={props.onCheckAccess}>
+            <i className="ti ti-shield-check" aria-hidden="true" /> Проверить доступ
+          </button>
+          <div className="licenseStack">
+            <input
+              value={props.licenseText}
+              placeholder="Вставьте подписанную лицензию"
+              onChange={(event) => props.onLicenseTextChange(event.target.value)}
+            />
+            <button className="softBtn" onClick={props.onVerifyLicense}>Активировать лицензию</button>
+          </div>
+        </div>
       </div>
-      <div className="utilityCard">
-        <strong>Ручная разметка</strong>
-        <input
-          value={props.scannerField}
-          onChange={(event) => props.onScannerFieldChange(event.target.value)}
-          placeholder="поле, например document.number"
-        />
-        <input
-          value={props.scannerText}
-          onChange={(event) => props.onScannerTextChange(event.target.value)}
-          placeholder="выделенный текст"
-        />
-        <button className="utilBtn" onClick={props.onScanMarks}>
-          <i className="ti ti-scan" aria-hidden="true" /> Применить разметку
-        </button>
-      </div>
-      <div className="utilityCard outputSettingsCard">
-        <strong>План вывода</strong>
-        <input
-          value={props.outputRoot}
-          onChange={(event) => props.onOutputRootChange(event.target.value)}
-          placeholder="корневая папка"
-        />
-        <fieldset className="folderParts">
-          <legend>Имя папки результата</legend>
-          {FOLDER_PART_OPTIONS.map((option) => (
-            <label key={option.value}>
+
+      <details className="expertSettings">
+        <summary>Экспертные и административные инструменты</summary>
+        <p>Разметка, серии документов, сохранение сессий, реестры, обучение шаблонов и управление качеством. Для ежедневного создания документов этот раздел не требуется.</p>
+        <div className="utilityGrid expertSettingsGrid">
+          <div className="utilityCard">
+            <strong>Серия записей</strong>
+            <input value={props.seriesStart} onChange={(event) => props.onSeriesStartChange(event.target.value)} placeholder="дата начала" />
+            <input value={props.seriesEnd} onChange={(event) => props.onSeriesEndChange(event.target.value)} placeholder="дата окончания" />
+            <label>
               <input
                 type="checkbox"
-                checked={props.folderParts.includes(option.value)}
-                onChange={(event) => toggleFolderPart(option.value, event.target.checked)}
-              />
-              {option.label}{option.sensitive ? ' · персональные данные' : ''}
+                checked={props.seriesSkipWeekends}
+                onChange={(event) => props.onSeriesSkipWeekendsChange(event.target.checked)}
+              />{' '}
+              пропускать выходные
             </label>
-          ))}
-        </fieldset>
-        <small>Безопасное значение по умолчанию: номер и дата документа. Персональные данные включаются только явно.</small>
-        <button className="utilBtn" onClick={props.onOutputPlan}>
-          <i className="ti ti-folder" aria-hidden="true" /> Проверить путь
-        </button>
-      </div>
-      <button className="utilBtn" onClick={props.onSaveSession}>
-        <i className="ti ti-database-export" aria-hidden="true" /> Сохранить сессию
-      </button>
-      <button className="utilBtn" onClick={props.onLoadSession}>
-        <i className="ti ti-database-import" aria-hidden="true" /> Загрузить сессию
-      </button>
-      <button className="utilBtn" onClick={props.onCheckAccess}>
-        <i className="ti ti-shield-check" aria-hidden="true" /> Проверить доступ
-      </button>
-      <button className="utilBtn" onClick={props.onCheckUpdates}>
-        <i className="ti ti-refresh" aria-hidden="true" /> Проверить обновления
-      </button>
-      <button className="utilBtn" onClick={props.onInstallWatcher}>
-        <i className="ti ti-eye-cog" aria-hidden="true" /> Фоновый агент
-      </button>
-      <button className="utilBtn" onClick={props.onUninstallWatcher}>
-        <i className="ti ti-eye-off" aria-hidden="true" /> Отключить агент
-      </button>
-      <BusinessRegistryPanel outputRoot={props.outputRoot} onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
-      <OrganizationKnowledgePanel onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
-      <AdvancedToolsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} outputRoot={props.outputRoot} onStatus={props.onStatus} onDocumentsChanged={props.onDocumentsChanged} />
-      <AutomationControlCenter onStatus={props.onStatus} />
-      <LearningGovernancePanel documents={props.documents} onStatus={props.onStatus} />
-      <div className="licenseRow">
-        <input
-          value={props.licenseText}
-          placeholder="вставьте подписанную лицензию"
-          onChange={(event) => props.onLicenseTextChange(event.target.value)}
-        />
-        <button className="softBtn" onClick={props.onVerifyLicense}>Активировать лицензию</button>
-      </div>
+            <button className="utilBtn" onClick={props.onSeriesPlan}>
+              <i className="ti ti-calendar" aria-hidden="true" /> Рассчитать
+            </button>
+          </div>
+
+          <div className="utilityCard">
+            <strong>Ручная разметка</strong>
+            <input
+              value={props.scannerField}
+              onChange={(event) => props.onScannerFieldChange(event.target.value)}
+              placeholder="поле, например document.number"
+            />
+            <input
+              value={props.scannerText}
+              onChange={(event) => props.onScannerTextChange(event.target.value)}
+              placeholder="выделенный текст"
+            />
+            <button className="utilBtn" onClick={props.onScanMarks}>
+              <i className="ti ti-scan" aria-hidden="true" /> Применить разметку
+            </button>
+          </div>
+
+          <button className="utilBtn" onClick={props.onSaveSession}>
+            <i className="ti ti-database-export" aria-hidden="true" /> Сохранить сессию
+          </button>
+          <button className="utilBtn" onClick={props.onLoadSession}>
+            <i className="ti ti-database-import" aria-hidden="true" /> Загрузить сессию
+          </button>
+          <BusinessRegistryPanel outputRoot={props.outputRoot} onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
+          <OrganizationKnowledgePanel onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
+          <AdvancedToolsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} outputRoot={props.outputRoot} onStatus={props.onStatus} onDocumentsChanged={props.onDocumentsChanged} />
+          <AutomationControlCenter onStatus={props.onStatus} />
+          <LearningGovernancePanel documents={props.documents} onStatus={props.onStatus} />
+        </div>
+      </details>
     </section>
   );
+
 }

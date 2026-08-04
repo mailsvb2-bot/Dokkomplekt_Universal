@@ -263,10 +263,13 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByRole('button', { name: 'Использовать ИНН во всех документах' }));
     await waitFor(() => expect(parsePayload(calls, 'set_field')).toMatchObject({ req: { field_id: 'org.inn', value: '7701234567' } }));
 
-    // Answers are applied through the same final batch plan shown in preflight.
-    await click(/Сохранить ответы/);
+    // One action applies the visible answers and creates the selected package.
+    await click(/Проверить и создать \(2\)/);
     await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
       req: { document_ids: ['acc_1', 'doc_2'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
+    }));
+    await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
+      req: { document_ids: ['acc_1', 'doc_2'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
     }));
 
     // specialist can configure the document-specific popup without changing the template.
@@ -275,30 +278,30 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(within(popupDesigner).getByRole('button', { name: /Сохранить вопросы/ }));
     await waitFor(() => expect(parsePayload(calls, 'update_document_popup_fields')).toMatchObject({ req: { document_id: 'acc_1' } }));
 
-    // preview -> render_preview, text shown
-    await click(/Предпросмотр/);
+    // Preview is explicitly bound to the opened document and never starts a second generation flow.
+    await click(/Предпросмотр «Счёт на оплату»/);
     await screen.findByText('СЧЁТ-ПРЕВЬЮ');
+    expect(screen.getByText(/Предпросмотр: Счёт на оплату/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Создать только этот документ/ })).toBeNull();
 
-    // generate docx -> render_docx
-    await click(/Создать только этот документ/);
-    const singlePrompt = await screen.findByRole('dialog', { name: 'Уточнить данные документа' });
-    fireEvent.click(within(singlePrompt).getByRole('button', { name: /Применить и создать/ }));
-    await waitFor(() => expect(parsePayload(calls, 'render_docx')).toMatchObject({ req: { document_id: 'acc_1' } }));
-
-    // multi-document batch: selection is separate from opening a document
+    // A one-document package uses the same output plan and batch renderer.
     fireEvent.click(screen.getByRole('button', { name: 'Снять выбор' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
-    await click(/Создать документы \(1\)/);
-    const batchPrompt = await screen.findByRole('dialog', { name: /Уточнить данные комплекта/ });
-    fireEvent.click(within(batchPrompt).getByRole('button', { name: /Применить и создать/ }));
-    await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
-      req: { document_ids: ['acc_1'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
+    await waitFor(() => expect(screen.getByRole('button', { name: /Проверить и создать \(1\)/ })).toBeTruthy());
+    await click(/Проверить и создать \(1\)/);
+    await waitFor(() => expect(parsePayload(calls, 'apply_popup')).toMatchObject({
+      req: { document_id: 'acc_1', answers: [{ field_id: 'org.inn', value: '7701234567' }] },
     }));
+    const batchCalls = calls.filter((call) => call.command === 'render_docx_batch');
+    expect(batchCalls.at(-1)?.payload).toMatchObject({
+      req: { document_ids: ['acc_1'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
+    });
 
     // Profile-specific dictionaries are tested separately and appear only when a template requests them.
 
     // utility scenarios use real user inputs, not demo constants
     await click(/^Настройки$/);
+    fireEvent.click(screen.getByText('Экспертные и административные инструменты'));
     await screen.findByText('Конфиденциальность и хранение');
     const semanticCard = screen.getByText('Локальное понимание документов').closest('.utilityCard');
     expect(semanticCard).toBeTruthy();
@@ -352,8 +355,8 @@ describe('Полный прогон пользовательских сцена�
     await click(/Проверить доступ/);
     await click(/Проверить обновления/);
     await waitFor(() => expect(calls.some((c) => c.command === 'check_for_updates')).toBe(true));
-    await click(/Фоновый агент/);
-    await click(/Отключить агент/);
+    await click(/Включить фоновый агент/);
+    await click(/Отключить фоновый агент/);
     fireEvent.change(screen.getByPlaceholderText(/подписанную лицензию/), { target: { value: 'LIC-123' } });
     await click(/Активировать лицензию/);
     await waitFor(() => expect(parsePayload(calls, 'verify_rust_license_text')).toMatchObject({ req: { license_text: 'LIC-123' } }));

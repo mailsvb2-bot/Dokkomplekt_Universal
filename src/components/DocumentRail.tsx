@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import type { DocumentTemplateSpec } from '../lib/types';
 
 interface DocumentRailProps {
@@ -7,14 +6,11 @@ interface DocumentRailProps {
   selectedDocumentIds: string[];
   busy: boolean;
   printCopies: Record<string, number>;
-  extraRulesEnabled: boolean;
-  onExtraRulesChange(value: boolean): void;
   onSelect(document: DocumentTemplateSpec): void;
   onToggleSelected(documentId: string): void;
   onPrintCopiesChange(documentId: string, copies: number): void;
   onSelectAll(): void;
   onClearSelected(): void;
-  onGenerateSelected(): void;
   onRename(): void;
   onConfigurePopups(): void;
   onScanTemplate(): void;
@@ -27,19 +23,6 @@ interface DocumentRailProps {
 export function DocumentRail(props: DocumentRailProps) {
   const hasDocuments = props.documents.length > 0;
   const selectedCount = props.selectedDocumentIds.length;
-  const previousDocumentIds = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const currentDocumentIds = new Set(props.documents.map((document) => document.id));
-    const newlyAddedSelectedIds = props.documents
-      .filter((document) => !previousDocumentIds.current.has(document.id))
-      .filter((document) => props.selectedDocumentIds.includes(document.id))
-      .map((document) => document.id);
-
-    previousDocumentIds.current = currentDocumentIds;
-    for (const documentId of newlyAddedSelectedIds) props.onToggleSelected(documentId);
-  }, [props.documents, props.onToggleSelected, props.selectedDocumentIds]);
-
   return (
     <aside className="packagePanel" aria-label="Документы для создания">
       <div className="packageHeader">
@@ -84,15 +67,6 @@ export function DocumentRail(props: DocumentRailProps) {
             <button className="textBtn" onClick={props.onAdd}>Добавить шаблоны</button>
           </div>
 
-          <button
-            className="primaryBtn full packageGenerate"
-            onClick={props.onGenerateSelected}
-            disabled={!selectedCount || props.busy}
-          >
-            <i className="ti ti-sparkles" aria-hidden="true" />
-            {props.busy ? 'Создаём документы…' : selectedCount ? `Создать документы (${selectedCount})` : 'Выберите документы'}
-          </button>
-
           <details className="packageSettings">
             <summary><i className="ti ti-settings" aria-hidden="true" /> Управление кнопками</summary>
             <div className="packageSettingsBody">
@@ -107,10 +81,6 @@ export function DocumentRail(props: DocumentRailProps) {
               ) : (
                 <small>Откройте нужную кнопку документа, чтобы изменить её настройки.</small>
               )}
-              <label className="checkLine compact">
-                <input type="checkbox" checked={props.extraRulesEnabled} onChange={(event) => props.onExtraRulesChange(event.target.checked)} />
-                <span>Учитывать дополнительные условия выбранных шаблонов</span>
-              </label>
               <details className="copySettings">
                 <summary>Количество экземпляров</summary>
                 {props.documents.map(document => (

@@ -21,6 +21,7 @@ interface ParsedSourceSummary {
 interface PreviewState {
   text: string;
   missing: number;
+  label: string;
 }
 
 interface WorkspaceProps {
@@ -44,6 +45,9 @@ interface WorkspaceProps {
   plan: WorkflowPlan | null;
   planLoading: boolean;
   selectedDocumentCount: number;
+  activeDocumentLabel: string | null;
+  showSickLeaveOption: boolean;
+  sickLeaveEnabled: boolean;
   answers: Record<string, string>;
   preview: PreviewState | null;
   setWatchFolder(value: string): void;
@@ -56,6 +60,7 @@ interface WorkspaceProps {
   setScannerText(value: string): void;
   setModelOutput(value: string): void;
   setAnswers: Dispatch<SetStateAction<Record<string, string>>>;
+  onSickLeaveChange(value: boolean): void;
   onRunZeroTouch(): void;
   onOpenLastOutput(): void;
   onPrintLastOutput(): void;
@@ -75,8 +80,7 @@ interface WorkspaceProps {
   onUnderstand(): void;
   onPinField(fieldId: string): void;
   onPreview(): void;
-  onSaveFields(): void;
-  onGenerate(): void;
+  onCreateSelected(): void;
 }
 
 function sourceKindLabel(kind?: string): string {
@@ -296,37 +300,56 @@ export function Workspace(props: WorkspaceProps) {
             </div>
           ) : prompts.length ? (
             <div className="clientFields">
-              {prompts.map((prompt: PromptSpec) => (
-                <label className="clientField" key={prompt.field_id}>
-                  <span>{prompt.title}{prompt.required && <b>*</b>}</span>
-                  <div>
-                    <input
-                      value={props.answers[prompt.field_id] ?? ''}
-                      placeholder={prompt.validation_hint || 'Введите значение'}
-                      onChange={(event) => props.setAnswers((previous) => ({ ...previous, [prompt.field_id]: event.target.value }))}
-                    />
-                    <button className="iconOnlyBtn" title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={() => props.onPinField(prompt.field_id)}><i className="ti ti-pin" aria-hidden="true" /></button>
-                  </div>
+              {props.showSickLeaveOption && (
+                <label className="checkLine workflowOption">
+                  <input type="checkbox" checked={props.sickLeaveEnabled} onChange={(event) => props.onSickLeaveChange(event.target.checked)} />
+                  <span>Оформляется больничный лист</span>
                 </label>
+              )}
+              {prompts.map((prompt: PromptSpec) => (
+                <WorkflowPromptField
+                  key={prompt.field_id}
+                  prompt={prompt}
+                  value={props.answers[prompt.field_id] ?? prompt.current_value ?? ''}
+                  onChange={(value) => props.setAnswers((previous) => {
+                    const previousSourceValue = previous[prompt.field_id] ?? prompt.current_value ?? '';
+                    const next = { ...previous, [prompt.field_id]: value };
+                    for (const linkedPrompt of prompts) {
+                      if (linkedPrompt.linked_to !== prompt.field_id) continue;
+                      const linkedCurrent = previous[linkedPrompt.field_id] ?? linkedPrompt.current_value ?? '';
+                      if (!linkedCurrent || linkedCurrent === previousSourceValue) next[linkedPrompt.field_id] = value;
+                    }
+                    return next;
+                  })}
+                  onPin={() => props.onPinField(prompt.field_id)}
+                />
               ))}
               <div className="reviewActions">
-                <button className="primaryBtn" onClick={props.onSaveFields} disabled={props.busy}>Сохранить ответы</button>
-                <button className="softBtn" onClick={props.onPreview} disabled={props.busy}>Предпросмотр</button>
+                <button className="primaryBtn" onClick={props.onCreateSelected} disabled={props.busy || !planReady}>
+                  {props.busy ? 'Создаём документы…' : `Проверить и создать (${props.selectedDocumentCount})`}
+                </button>
+                <button className="softBtn" onClick={props.onPreview} disabled={props.busy || !props.activeDocumentLabel}>
+                  {props.activeDocumentLabel ? `Предпросмотр «${props.activeDocumentLabel}»` : 'Откройте документ для предпросмотра'}
+                </button>
               </div>
             </div>
           ) : (
             <div className="readyMessage">
               <i className="ti ti-circle-check" aria-hidden="true" />
               <div><strong>Можно создавать документы</strong><span>{props.semantic ? `Распознано значений: ${props.semantic.fields.length}${reviewCount ? ` · рекомендуем проверить: ${reviewCount}` : ''}` : 'Данные источника будут проверены ещё раз перед сохранением.'}</span></div>
-              <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy || !planReady || !props.selectedDocumentCount}>Проверить данные</button>
+              <div className="readyActions">
+                <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy || !planReady || !props.selectedDocumentCount}>Проверить данные</button>
+                <button className="primaryBtn" onClick={props.onCreateSelected} disabled={props.busy || !planReady || !props.selectedDocumentCount}>
+                  {props.busy ? 'Создаём документы…' : `Создать документы (${props.selectedDocumentCount})`}
+                </button>
+              </div>
             </div>
           )}
 
           {props.preview && (
             <details className="clientPreview" open>
-              <summary>Предпросмотр документа{props.preview.missing ? ` · не заполнено: ${props.preview.missing}` : ''}</summary>
+              <summary>Предпросмотр: {props.preview.label}{props.preview.missing ? ` · не заполнено: ${props.preview.missing}` : ''}</summary>
               <pre>{props.preview.text || '—'}</pre>
-              <button className="primaryBtn" onClick={props.onGenerate} disabled={props.busy}>Создать только этот документ</button>
             </details>
           )}
         </section>
@@ -392,5 +415,62 @@ export function Workspace(props: WorkspaceProps) {
         </div>
       </details>
     </main>
+  );
+}
+
+function WorkflowPromptField(props: {
+  prompt: PromptSpec;
+  value: string;
+  onChange(value: string): void;
+  onPin(): void;
+}) {
+  const { prompt } = props;
+  const kind = prompt.input_kind ?? 'text';
+  const inputId = `workflow-${prompt.field_id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+  const options = prompt.options ?? [];
+  const hint = prompt.validation_hint || prompt.help_text;
+  let control: ReactNode;
+
+  if (kind === 'long_text') {
+    control = <textarea id={inputId} value={props.value} rows={4} onChange={(event) => props.onChange(event.target.value)} />;
+  } else if (kind === 'yes_no') {
+    control = (
+      <select id={inputId} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        <option value="">Выберите…</option><option value="Нет">Нет</option><option value="Да">Да</option>
+      </select>
+    );
+  } else if (kind === 'select' && !prompt.allow_custom_option) {
+    control = (
+      <select id={inputId} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        <option value="">Выберите…</option>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    );
+  } else {
+    control = (
+      <>
+        <input
+          id={inputId}
+          value={props.value}
+          inputMode={kind === 'number' || kind === 'money' ? 'decimal' : undefined}
+          placeholder={kind === 'date' ? 'ДД.ММ.ГГГГ' : hint || 'Введите значение'}
+          list={kind === 'select' && prompt.allow_custom_option ? `${inputId}-options` : undefined}
+          onChange={(event) => props.onChange(event.target.value)}
+        />
+        {kind === 'select' && prompt.allow_custom_option ? (
+          <datalist id={`${inputId}-options`}>{options.map((option) => <option key={option} value={option} />)}</datalist>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <label className="clientField" htmlFor={inputId}>
+      <span>{prompt.title}{prompt.required && <b>*</b>}</span>
+      <div>
+        <span className="clientFieldControl">{control}{hint ? <small>{hint}</small> : null}</span>
+        <button type="button" className="iconOnlyBtn" title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={props.onPin}><i className="ti ti-pin" aria-hidden="true" /></button>
+      </div>
+    </label>
   );
 }

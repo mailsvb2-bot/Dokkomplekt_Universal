@@ -1,111 +1,88 @@
 #!/usr/bin/env python3
-"""One-shot, fail-closed governance-dialog scenario repair for PR #44."""
+"""Verify that the checked-in source manifest matches the current source tree."""
 
 from __future__ import annotations
 
-import os
+import argparse
+import importlib.util
+import json
 from pathlib import Path
-import shutil
-import subprocess
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = Path(__file__).relative_to(ROOT).as_posix()
-TARGET = "src/App.scenarios.test.tsx"
-MANIFEST = "SOURCE_MANIFEST_SHA256.txt"
-OLD = """    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.click(await within(governance as HTMLElement).findByRole('button', { name: 'Удалить правило' }));
-    await waitFor(() => expect(calls.some((c) => c.command === 'delete_learned_scanner_rule')).toBe(true));
-    fireEvent.change(within(governance as HTMLElement).getByLabelText('Идентификатор кластера'), { target: { value: 'invoice-cluster' } });
-    fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Показать решение' }));
-    await waitFor(() => expect(calls.some((c) => c.command === 'get_learned_kit_decision')).toBe(true));
-    fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Отозвать подтверждение' }));
-    await waitFor(() => expect(calls.some((c) => c.command === 'revoke_document_template_approval')).toBe(true));
-"""
-NEW = """    fireEvent.click(await within(governance as HTMLElement).findByRole('button', { name: 'Удалить правило' }));
-    const deleteRuleDialog = await screen.findByRole('dialog', { name: 'Удалить обученное правило?' });
-    fireEvent.click(within(deleteRuleDialog).getByRole('button', { name: 'Удалить правило' }));
-    await waitFor(() => expect(calls.some((c) => c.command === 'delete_learned_scanner_rule')).toBe(true));
-    fireEvent.change(within(governance as HTMLElement).getByLabelText('Идентификатор кластера'), { target: { value: 'invoice-cluster' } });
-    fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Показать решение' }));
-    await waitFor(() => expect(calls.some((c) => c.command === 'get_learned_kit_decision')).toBe(true));
-    fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Отозвать подтверждение' }));
-    const revokeApprovalDialog = await screen.findByRole('dialog', { name: 'Отозвать подтверждение?' });
-    fireEvent.click(within(revokeApprovalDialog).getByRole('button', { name: 'Отозвать подтверждение' }));
-    await waitFor(() => expect(calls.some((c) => c.command === 'revoke_document_template_approval')).toBe(true));
-"""
+MODULE_PATH = Path(__file__).resolve().with_name("build_source_archive.py")
+SPEC = importlib.util.spec_from_file_location("build_source_archive", MODULE_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load source archive module: {MODULE_PATH}")
+source_archive = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(source_archive)
+
+ROOT = source_archive.ROOT
+MANIFEST_PATH = ROOT / source_archive.SOURCE_MANIFEST
 
 
-def run(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=ROOT, check=check, text=True, capture_output=capture)
+def parse_manifest(payload: bytes) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    for line_number, raw_line in enumerate(payload.decode("utf-8").splitlines(), start=1):
+        if not raw_line:
+            continue
+        try:
+            digest, relative = raw_line.split("  ", 1)
+        except ValueError as exc:
+            raise ValueError(f"invalid manifest line {line_number}: {raw_line!r}") from exc
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError(f"invalid SHA-256 at line {line_number}: {digest!r}")
+        if relative in entries:
+            raise ValueError(f"duplicate manifest path at line {line_number}: {relative}")
+        entries[relative] = digest
+    return entries
 
 
-def changed_paths() -> set[str]:
-    output = run("git", "diff", "--name-only", capture=True).stdout
-    return {line.strip() for line in output.splitlines() if line.strip()}
+def manifest_report(actual_payload: bytes, expected_payload: bytes) -> dict[str, object]:
+    actual = parse_manifest(actual_payload)
+    expected = parse_manifest(expected_payload)
+    missing = sorted(set(expected) - set(actual))
+    orphaned = sorted(set(actual) - set(expected))
+    changed = sorted(
+        path for path in set(actual) & set(expected) if actual[path] != expected[path]
+    )
+    return {
+        "schema": "dokkomplekt.source-manifest-verification.v1",
+        "matches": not (missing or orphaned or changed),
+        "expected_file_count": len(expected),
+        "manifest_file_count": len(actual),
+        "missing_entries": missing,
+        "orphaned_entries": orphaned,
+        "hash_mismatches": changed,
+    }
+
+
+def verify(candidate_path: Path | None = None) -> dict[str, object]:
+    expected_payload = source_archive.source_manifest_payload()
+    if candidate_path is not None:
+        candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate_path.write_bytes(expected_payload)
+    actual_payload = MANIFEST_PATH.read_bytes() if MANIFEST_PATH.is_file() else b""
+    return manifest_report(actual_payload, expected_payload)
 
 
 def main() -> int:
-    branch = os.environ.get("GITHUB_HEAD_REF") or run(
-        "git", "branch", "--show-current", capture=True
-    ).stdout.strip()
-    if not branch:
-        raise RuntimeError("cannot determine pull-request branch")
-
-    run("git", "fetch", "origin", "main")
-    target = ROOT / TARGET
-    source = target.read_text(encoding="utf-8")
-    if source.count(OLD) != 1:
-        raise RuntimeError(f"expected one legacy governance block, found {source.count(OLD)}")
-    updated = source.replace(OLD, NEW, 1)
-    if OLD in updated or updated.count(NEW) != 1:
-        raise RuntimeError("governance scenario replacement postcondition failed")
-    if "vi.spyOn(window, 'confirm')" in updated or "vi.spyOn(window, 'prompt')" in updated:
-        raise RuntimeError("legacy browser dialog mock remains in scenario test")
-    target.write_text(updated, encoding="utf-8")
-
-    original = run("git", "show", f"origin/main:{SCRIPT}", capture=True).stdout
-    (ROOT / SCRIPT).write_text(original, encoding="utf-8")
-
-    expected_before = {SCRIPT, TARGET}
-    before = changed_paths()
-    if before != expected_before:
-        raise RuntimeError(f"unexpected changed paths before manifest: {sorted(before)}")
-
-    candidate = ROOT / "verification" / "ci" / "SOURCE_MANIFEST_SHA256.generated.txt"
-    report = ROOT / "verification" / "ci" / "source-manifest-report.json"
-    candidate.parent.mkdir(parents=True, exist_ok=True)
-    run(
-        sys.executable,
-        SCRIPT,
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
         "--candidate",
-        str(candidate),
-        "--json-report",
-        str(report),
-        check=False,
+        type=Path,
+        help="write the generated manifest to this path without mutating the checked-in manifest",
     )
-    if not candidate.is_file():
-        raise RuntimeError("source manifest candidate was not generated")
-    shutil.copyfile(candidate, ROOT / MANIFEST)
-    run(sys.executable, SCRIPT)
+    parser.add_argument("--json-report", type=Path)
+    args = parser.parse_args()
 
-    expected_final = {SCRIPT, TARGET, MANIFEST}
-    final = changed_paths()
-    if final != expected_final:
-        raise RuntimeError(f"unexpected final changed paths: {sorted(final)}")
-
-    run("git", "config", "user.name", "github-actions[bot]")
-    run(
-        "git",
-        "config",
-        "user.email",
-        "41898282+github-actions[bot]@users.noreply.github.com",
-    )
-    run("git", "add", *sorted(expected_final))
-    run("git", "commit", "-m", "test(ui): confirm governance actions in native dialogs")
-    run("git", "push", "origin", f"HEAD:{branch}")
-
-    return run(sys.executable, SCRIPT, *sys.argv[1:], check=False).returncode
+    candidate = args.candidate.resolve() if args.candidate else None
+    report = verify(candidate)
+    rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    if args.json_report:
+        output = args.json_report.resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+    print(rendered, end="")
+    return 0 if report["matches"] else 1
 
 
 if __name__ == "__main__":

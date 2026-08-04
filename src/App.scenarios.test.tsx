@@ -374,13 +374,16 @@ describe('Полный прогон пользовательских сцена�
     const governance = screen.getByText('Обучение и подтверждения').closest('.governanceCard');
     expect(governance).toBeTruthy();
     fireEvent.click(within(governance as HTMLElement).getByText('Обучение и подтверждения'));
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(await within(governance as HTMLElement).findByRole('button', { name: 'Удалить правило' }));
+    const deleteRuleDialog = await screen.findByRole('dialog', { name: 'Удалить обученное правило?' });
+    fireEvent.click(within(deleteRuleDialog).getByRole('button', { name: 'Удалить правило' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'delete_learned_scanner_rule')).toBe(true));
     fireEvent.change(within(governance as HTMLElement).getByLabelText('Идентификатор кластера'), { target: { value: 'invoice-cluster' } });
     fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Показать решение' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'get_learned_kit_decision')).toBe(true));
     fireEvent.click(within(governance as HTMLElement).getByRole('button', { name: 'Отозвать подтверждение' }));
+    const revokeApprovalDialog = await screen.findByRole('dialog', { name: 'Отозвать подтверждение?' });
+    fireEvent.click(within(revokeApprovalDialog).getByRole('button', { name: 'Отозвать подтверждение' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'revoke_document_template_approval')).toBe(true));
 
     fireEvent.change(screen.getByPlaceholderText('идентификатор блока'), { target: { value: 'requisites' } });

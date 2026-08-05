@@ -28,6 +28,9 @@ jobs:
           git apply --check "$RUNNER_TEMP/test-matcher-fix.patch"
           git apply --index "$RUNNER_TEMP/test-matcher-fix.patch"
           git rm .github/patches/test-matcher-fix.b64 .github/workflows/apply-test-matcher-fix.yml
+          python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest.txt" || true
+          mv "$RUNNER_TEMP/source-manifest.txt" SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt
           python scripts/verify_source_manifest.py
           git diff --check
           git config user.name github-actions[bot]

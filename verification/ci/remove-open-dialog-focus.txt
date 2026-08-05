@@ -1,1 +1,0 @@
-Remove the invalid SetFocus call after successful native WM_SETTEXT.

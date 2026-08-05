@@ -194,7 +194,6 @@ function Set-UiValue {
     throw 'OpenFileDialog file-name control exposes neither ValuePattern nor a native HWND.'
   }
   $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
-  $Element.SetFocus()
   Start-Sleep -Milliseconds 200
 }
 

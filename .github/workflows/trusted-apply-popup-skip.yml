@@ -1,0 +1,63 @@
+name: Trusted apply popup skip fix
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/apply-popup-skip-fix' &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve and validate same-repository PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_repo="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
+          head_ref="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.ref')"
+          test "$head_repo" = "$REPOSITORY"
+          test "$head_ref" = 'agent/fix-popup-skip-and-field-validation'
+          echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+
+      - name: Verify, apply and clean audited transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/patches/popup-skip-fix.part*.b64 | base64 --decode > "$RUNNER_TEMP/popup-skip-fix.patch"
+          echo "64ca3084c8f7767a78e235aff81257a746ec6fdda8c5d3ac19d23d22421ab4a4  $RUNNER_TEMP/popup-skip-fix.patch" | sha256sum --check -
+          git apply --check "$RUNNER_TEMP/popup-skip-fix.patch"
+          git apply --index "$RUNNER_TEMP/popup-skip-fix.patch"
+          git rm -r .github/patches/popup-skip-fix.part*.b64 .github/workflows/apply-popup-skip-fix.yml
+          python scripts/verify_source_manifest.py
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Fix explicit popup skips and field validation"
+          git push origin "HEAD:${{ steps.pr.outputs.head_ref }}"
+
+      - name: Report applied commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "Trusted patch applied and transport removed. Commit: \`$(git rev-parse HEAD)\`."

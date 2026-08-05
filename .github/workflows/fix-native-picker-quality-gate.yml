@@ -2,16 +2,35 @@ name: Fix Native Picker Quality Gate
 
 on:
   pull_request_target:
-    types: [reopened]
+    types: [reopened, edited]
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   repair:
     if: ${{ github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
+    env:
+      SERVICE_ISSUE: '48'
     steps:
+      - name: Mark repair start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({'body': f"Native picker quality-gate repair run {os.environ['RUN_ID']} started."}).encode(),
+              headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'},
+              method='POST',
+          )
+          urllib.request.urlopen(request).read()
+          PY
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: agent/fix-native-template-picker
@@ -33,26 +52,26 @@ jobs:
           assert_eq!(paths.len(), 2);
           assert!(paths[0].ends_with("Акт работ.docx"));
           assert!(paths[1].ends_with("Счёт.docm"));
-          '''.replace('          ', '    ')
+          '''.replace('          ', '        ')
           new = '''        let paths = parse_picker_paths("C:/Шаблоны/Акт работ.docx\\r\\nC:/Шаблоны/Счёт.docm\\r\\n".as_bytes());
           assert_eq!(paths.as_ref().map(Vec::len), Ok(2));
           assert!(paths.as_ref().is_ok_and(|items| {
               items.first().is_some_and(|path| path.ends_with("Акт работ.docx"))
                   && items.get(1).is_some_and(|path| path.ends_with("Счёт.docm"))
           }));
-          '''.replace('          ', '    ')
-          if old not in text:
-              raise SystemExit('expected parser test block was not found')
+          '''.replace('          ', '        ')
+          if text.count(old) != 1:
+              raise SystemExit(f'expected parser test block count=1, actual={text.count(old)}')
           text = text.replace(old, new, 1)
 
           old_error = '''        let error = parse_picker_paths(b"C:/tmp/template.pdf\\n").expect_err("must reject");
           assert!(error.contains("неподдерживаемый"));
-          '''.replace('          ', '    ')
+          '''.replace('          ', '        ')
           new_error = '''        let result = parse_picker_paths(b"C:/tmp/template.pdf\\n");
           assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));
-          '''.replace('          ', '    ')
-          if old_error not in text:
-              raise SystemExit('expected rejection test block was not found')
+          '''.replace('          ', '        ')
+          if text.count(old_error) != 1:
+              raise SystemExit(f'expected rejection test block count=1, actual={text.count(old_error)}')
           path.write_text(text.replace(old_error, new_error, 1), encoding='utf-8')
           PY
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
@@ -69,3 +88,20 @@ jobs:
           git add src-tauri/src/subsystems/template_picker.rs SOURCE_MANIFEST_SHA256.txt
           git commit -m "Remove native picker panic shortcuts"
           git push origin HEAD:agent/fix-native-template-picker
+      - name: Mark repair failure
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({'body': f"Native picker quality-gate repair run {os.environ['RUN_ID']} failed; inspect the Actions log."}).encode(),
+              headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'},
+              method='POST',
+          )
+          urllib.request.urlopen(request).read()
+          PY

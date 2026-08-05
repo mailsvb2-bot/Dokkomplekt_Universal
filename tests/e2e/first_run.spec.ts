@@ -30,6 +30,8 @@ async function installTauriMock(page: Page) {
             return [];
           case 'update_background_watcher_preferences':
             return true;
+          case 'pick_template_files':
+            return { files: [{ file_name: 'Счёт на оплату.docx', template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' }] };
           case 'import_template_file':
             return { template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' };
           case 'analyze_template_file':
@@ -73,21 +75,14 @@ test('marked DOCX becomes a button without copying example facts', async ({ page
   await page.goto('/');
   await page.getByRole('button', { name: 'Создать свои кнопки' }).click();
   await expect(page.getByRole('dialog', { name: 'Добавление шаблонов' })).toBeVisible();
-
-  await page.getByTestId('template-file-input').setInputFiles({
-    name: 'Счёт на оплату.docx',
-    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
-  });
-
   await expect(page.getByLabel('Название документа для Счёт на оплату.docx')).toHaveValue('Счёт на оплату');
-  await expect(page.getByText('Всё готово')).toBeVisible();
+  await expect(page.getByText('Кнопки готовы к созданию')).toBeVisible();
   await page.getByRole('button', { name: 'Создать кнопки (1)' }).click();
   await expect(page.getByRole('button', { name: 'Счёт на оплату' })).toBeVisible();
 
   const commands = await page.evaluate(() =>
     ((window as unknown as Record<string, unknown>).__E2E_CALLS__ as Array<{ command: string }>).map((c) => c.command));
-  expect(commands).toContain('import_template_file');
+  expect(commands).toContain('pick_template_files');
   expect(commands).toContain('analyze_template_file');
   expect(commands).toContain('confirm_template_setup');
 });

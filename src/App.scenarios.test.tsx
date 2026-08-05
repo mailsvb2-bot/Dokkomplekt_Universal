@@ -50,6 +50,11 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         componentState = command === 'install_component' ? 'downloaded' : 'missing';
         return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' } as never;
       }
+      case 'pick_template_files':
+        return { files: [
+          { file_name: 'Договор.docx', template_path: '/app-data/user-templates/contract.docx', extracted_text: 'Договор\n{{org.inn}}' },
+          { file_name: 'Акт.docx', template_path: '/app-data/user-templates/act.docx', extracted_text: 'Акт выполненных работ' },
+        ] } as never;
       case 'pick_folder':
         return { selected_path: 'C:/Выбранная папка' } as never;
       case 'parse_web_source':
@@ -154,8 +159,20 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'analyze_template':
       case 'analyze_template_file':
         return { document: { ...accDoc, placeholders: ['org.inn', 'org.name'] }, analysis_json: {}, core_pipeline_json: {} } as never;
-      case 'prepare_template_setup':
-        return [{ document_id: 'tpl', template_path: 't.docx', detected_title: 'Договор', suggested_button_label: 'Договор', editable_button_label: 'Договор', role_id: 'generic', is_static_copy: false, analysis: {}, popup_fields: [] }] as never;
+      case 'prepare_template_setup': {
+        const candidates = (payload as { req?: { candidates?: Array<{ document_id: string; template_path: string; preferred_button_label?: string }> } })?.req?.candidates ?? [];
+        return candidates.map((candidate) => ({
+          document_id: candidate.document_id,
+          template_path: candidate.template_path,
+          detected_title: candidate.preferred_button_label ?? 'Документ',
+          suggested_button_label: candidate.preferred_button_label ?? 'Документ',
+          editable_button_label: candidate.preferred_button_label ?? 'Документ',
+          role_id: 'generic',
+          is_static_copy: false,
+          analysis: {},
+          popup_fields: [],
+        })) as never;
+      }
       case 'confirm_template_setup':
         return { pack_id: 'default', name: 'Пакет', documents: [{ ...accDoc, id: 'tpl', button_label: 'Договор' }] } as never;
       case 'rename_document_button':
@@ -398,25 +415,28 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'prepare_mail_merge_file')).toBe(true));
     fireEvent.change(screen.getByPlaceholderText(/Наименование;document\.number/),{target:{value:'subject.name;contract.number\nИванов;Д-1'}}); await click(/^Проверить$/); await click(/Создать комплекты/);
 
-    // add-document dialog -> analyze_template, analyze_template_file, prepare + confirm
+    // Native first-run/add-template flow: the visible action opens the OS picker,
+    // then the selected DOCX files are analysed and presented for confirmation.
+    const priorTemplateAnalyses = calls.filter((call) => call.command === 'analyze_template_file').length;
     await click(/Добавить шаблоны/);
-    const dialog = screen.getByRole('dialog', { name: 'Добавление шаблонов' });
-    fireEvent.click(within(dialog).getByText('Создать шаблон из вставленного текста'));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Анализировать' }));
-    // Настоящий выбор файла: байты DOCX уходят в Rust через import_template_file.
-    const docxFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Договор.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    const docmFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Акт.docm', { type: 'application/vnd.ms-word.document.macroEnabled.12' });
-    fireEvent.change(within(dialog).getByTestId('template-file-input'), { target: { files: [docxFile, docmFile] } });
-    await waitFor(() => expect(calls.some((c) => c.command === 'import_template_file')).toBe(true));
-    await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template_file')).toBe(true));
-    expect(calls.filter((call) => call.command === 'analyze_template_file').some((call) => JSON.stringify(call.payload).includes('/app-data/user-templates/tpl.docx'))).toBe(true);
+    const dialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
+    await waitFor(() => expect(calls.some((c) => c.command === 'pick_template_files')).toBe(true));
+    await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(priorTemplateAnalyses + 2));
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
     expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
-      { template_path: '/app-data/user-templates/tpl.docx' },
-      { template_path: '/app-data/user-templates/tpl.docx' },
+      { template_path: '/app-data/user-templates/contract.docx' },
+      { template_path: '/app-data/user-templates/act.docx' },
     ] } });
+
+    // Text fallback remains explicitly reachable without cancelling the native picker.
+    await click(/Создать из текста/);
+    const manualDialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
+    fireEvent.change(within(manualDialog).getByPlaceholderText('Вставьте текст документа'), { target: { value: 'Договор № {{document.number}}' } });
+    fireEvent.click(within(manualDialog).getByRole('button', { name: 'Проверить шаблон' }));
+    await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template')).toBe(true));
+    fireEvent.click(within(manualDialog).getByRole('button', { name: 'Отмена' }));
 
     // HTTPS/site/API intake -> parse_web_source
     fireEvent.change(screen.getByLabelText('Адрес источника'), { target: { value: 'https://example.com/doc' } });

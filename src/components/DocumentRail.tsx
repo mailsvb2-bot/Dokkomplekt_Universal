@@ -17,6 +17,7 @@ interface DocumentRailProps {
   onApprove(): void;
   onRemove(): void;
   onAdd(): void;
+  onAddFromText(): void;
   onToggleUtilities(): void;
 }
 
@@ -64,7 +65,8 @@ export function DocumentRail(props: DocumentRailProps) {
           <div className="packageSelectionActions">
             <button className="textBtn" onClick={props.onSelectAll}>Выбрать всё</button>
             <button className="textBtn" onClick={props.onClearSelected} disabled={!selectedCount}>Снять выбор</button>
-            <button className="textBtn" onClick={props.onAdd}>Добавить шаблоны</button>
+            <button className="textBtn" onClick={props.onAdd} disabled={props.busy}>Добавить шаблоны</button>
+            <button className="textBtn" onClick={props.onAddFromText} disabled={props.busy}>Создать из текста</button>
           </div>
 
           <details className="packageSettings">
@@ -98,7 +100,8 @@ export function DocumentRail(props: DocumentRailProps) {
           <div><i className="ti ti-layout-grid-add" /></div>
           <h3>Создайте кнопки документов</h3>
           <p>Выберите свои шаблоны Word. Один файл станет одной понятной кнопкой.</p>
-          <button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd}>Создать свои кнопки</button>
+          <button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd} disabled={props.busy}>Создать свои кнопки</button>
+          <button className="textBtn firstRunTextTemplate" onClick={props.onAddFromText} disabled={props.busy}>Создать кнопку из текста</button>
         </div>
       )}
 

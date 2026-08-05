@@ -40,6 +40,7 @@ function buildProps(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
     onApprove: vi.fn(),
     onRemove: vi.fn(),
     onAdd: vi.fn(),
+    onAddFromText: vi.fn(),
     onToggleUtilities: vi.fn(),
     ...overrides,
   };
@@ -52,13 +53,16 @@ function renderRail(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
 }
 
 describe('DocumentRail', () => {
-  it('shows one clear first-run action when there are no buttons', () => {
-    const onAdd = vi.fn();
-    renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], onAdd });
-    expect(screen.getByText('Создайте кнопки документов')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
-    expect(onAdd).toHaveBeenCalledOnce();
-  });
+it('keeps the native picker primary and exposes an explicit text fallback', () => {
+  const onAdd = vi.fn();
+  const onAddFromText = vi.fn();
+  renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], onAdd, onAddFromText });
+  expect(screen.getByText('Создайте кнопки документов')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Создать кнопку из текста' }));
+  expect(onAdd).toHaveBeenCalledOnce();
+  expect(onAddFromText).toHaveBeenCalledOnce();
+});
 
   it('keeps document selection and button management separate from generation', () => {
     const { props } = renderRail();

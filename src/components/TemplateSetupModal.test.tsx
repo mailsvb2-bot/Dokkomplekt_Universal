@@ -25,17 +25,16 @@ const base = {
 describe('TemplateSetupModal', () => {
   it('keeps the first step simple and disables confirmation without input', () => {
     render(<TemplateSetupModal {...base} />);
-    expect(screen.getByText('1. Выберите шаблоны')).toBeTruthy();
-    expect(screen.getByText(/Шаблон задаёт форму и расположение полей/)).toBeTruthy();
+    expect(screen.getByText('Выберите шаблоны документов')).toBeTruthy();
+    expect(screen.getByText(/Каждый DOCX или DOCM сразу станет отдельной кнопкой/)).toBeTruthy();
+    expect(screen.getByText('Создать одну кнопку из вставленного текста')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('does not create a manual text template until a field is marked', () => {
-    const { rerender } = render(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
-    expect(screen.getByText('Не найдены места заполнения')).toBeTruthy();
+  it('allows a non-empty manual text template without mandatory markup', () => {
+    const { rerender } = render(<TemplateSetupModal {...base} />);
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
-
-    rerender(<TemplateSetupModal {...base} templateText="Документ № {{document.number}}" />);
+    rerender(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
     expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -45,7 +44,7 @@ describe('TemplateSetupModal', () => {
       document_id: 'd1',
       file_name: 'Счёт на оплату.docx',
       button_label: 'Счёт на оплату №',
-      extracted_text: 'Счёт на оплату № {{document.number}}',
+      extracted_text: 'Счёт № {{document.number}}',
       popup_fields: [],
     }]} />);
     await waitFor(() => expect(onPendingTemplateLabelChange).toHaveBeenCalledWith('d1', 'Счёт на оплату'));
@@ -53,36 +52,27 @@ describe('TemplateSetupModal', () => {
 
   it('creates every prepared template as a button', () => {
     const onConfirm = vi.fn();
-    render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{
-      document_id: 'd1',
-      file_name: 'Акт.docx',
-      button_label: 'Акт',
-      extracted_text: 'Акт № {{document.number}}',
-      popup_fields: [],
-    }]} />);
-    expect(screen.getByText('2. Проверьте названия кнопок')).toBeTruthy();
-    expect(screen.getByText('3. Всё готово')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
+    render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[
+      { document_id: 'd1', file_name: 'Акт.docx', button_label: 'Акт', extracted_text: 'Акт № {{document.number}}', popup_fields: [] },
+      { document_id: 'd2', file_name: 'Договор.docx', button_label: 'Договор', extracted_text: 'Договор', popup_fields: [] },
+    ]} />);
+    expect(screen.getByText('Проверьте названия кнопок')).toBeTruthy();
+    expect(screen.getByText('Кнопки готовы к созданию')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (2)' }));
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
-  it('blocks an unmarked example before its text can be copied as new-document data', () => {
+  it('allows an unmarked DOCX as an immediately usable static-copy button', () => {
     const onConfirm = vi.fn();
     render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{
       document_id: 'd1',
       file_name: 'Пример.docx',
       button_label: 'Пример',
-      extracted_text: 'Пример документа с Ивановым Иваном Ивановичем',
+      extracted_text: 'Пример документа',
       popup_fields: [],
     }]} />);
-    expect(screen.getByText('3. Нужна разметка или подтверждение')).toBeTruthy();
-    expect(screen.getByText(/явно подтвердите, что это неизменяемые документы/)).toBeTruthy();
+    expect(screen.getByText(/Неразмеченные шаблоны сохранят свою форму и будут доступны сразу/)).toBeTruthy();
     const confirm = screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
-    fireEvent.click(confirm);
-    expect(onConfirm).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Создавать неразмеченные шаблоны как неизменяемые копии' }));
     expect(confirm.disabled).toBe(false);
     fireEvent.click(confirm);
     expect(onConfirm).toHaveBeenCalledOnce();

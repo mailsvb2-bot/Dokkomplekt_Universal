@@ -2343,6 +2343,7 @@ fn main() {
             update_print_preferences,
             export_files_to_pdf,
             create_kedo_package,
+            pick_template_files,
             pick_folder,
             open_in_file_manager,
             get_semantic_model_config,

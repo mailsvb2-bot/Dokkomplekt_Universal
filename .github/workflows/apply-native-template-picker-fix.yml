@@ -1,105 +1,73 @@
-name: Apply Native Template Picker Fix
+name: Inspect Native Picker Archive
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   pull_request_target:
     types: [reopened]
 
 permissions:
-  contents: write
+  contents: read
   issues: write
 
 jobs:
-  apply-fix:
-    if: ${{ github.event_name == 'schedule' || (github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository) }}
+  inspect-archive:
+    if: ${{ github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     env:
       SERVICE_ISSUE: '48'
     steps:
-      - name: Mark applicator start
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.run_id }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json, os, urllib.request
-          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
-          request = urllib.request.Request(
-              url,
-              data=json.dumps({"body": f"Native picker applicator run {os.environ['RUN_ID']} started."}).encode(),
-              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
-              method="POST",
-          )
-          urllib.request.urlopen(request).read()
-          PY
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: agent/fix-native-template-picker
-          fetch-depth: 0
-      - name: Apply and normalize reviewed product fix
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          old_head="$(git rev-parse HEAD)"
-          echo "OLD_HEAD=$old_head" >> "$GITHUB_ENV"
-          cp tests/test_v18_4_4_native_template_picker.py /tmp/test_v18_4_4_native_template_picker.py
-
-          python scripts/apply_native_picker_staging.py
-          git add -N src-tauri/src/subsystems/template_picker.rs
-          git diff --binary -- \
-            src-tauri/src/main.rs \
-            src-tauri/src/subsystems/update_runtime.rs \
-            src-tauri/src/subsystems/template_picker.rs \
-            src/App.scenarios.test.tsx \
-            src/App.test.tsx \
-            src/App.tsx \
-            src/components/DocumentRail.tsx \
-            src/lib/api.contract.test.ts \
-            src/lib/api.ts \
-            src/lib/runtimeValidation.ts \
-            tests/e2e/first_run.spec.ts \
-            tests/installer/windows_installer_contract.ps1 \
-            tests/test_v18_3_0_hardening_contracts.py \
-            > /tmp/native-picker-product.patch
-          test -s /tmp/native-picker-product.patch
-
-          git reset --hard origin/main
-          git clean -fd
-          git apply --check /tmp/native-picker-product.patch
-          git apply /tmp/native-picker-product.patch
-          cp /tmp/test_v18_4_4_native_template_picker.py tests/test_v18_4_4_native_template_picker.py
-          rm -f .github/workflows/apply-native-template-picker-fix.yml
-          python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
-          python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
-      - name: Publish clean fix branch
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Fix native first-run template picker"
-          git push --force-with-lease=refs/heads/agent/fix-native-template-picker:${OLD_HEAD} origin HEAD:agent/fix-native-template-picker
-      - name: Mark applicator failure
-        if: ${{ failure() }}
+          fetch-depth: 1
+      - name: Inspect staged archive encodings
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
           python - <<'PY'
-          import json, os, urllib.request
+          import base64, hashlib, io, json, os, tarfile, urllib.request, zipfile
           from pathlib import Path
 
-          patch = Path('.native-picker.patch')
-          diagnostic = ''
-          if patch.is_file():
-              lines = patch.read_text(encoding='utf-8', errors='replace').splitlines()
-              start, end = 84, min(len(lines), 108)
-              diagnostic = '\n```diff\n' + '\n'.join(f'{index + 1:04d}: {lines[index]}' for index in range(start, end)) + '\n```'
-          body = f"Native picker applicator run {os.environ['RUN_ID']} failed.{diagnostic}"
+          chunk_paths = sorted(Path('.github/native-picker-archive').glob('chunk-*'))
+          encoded_chunks = [''.join(path.read_text(encoding='ascii').split()) for path in chunk_paths]
+          candidates = {}
+          joined = ''.join(encoded_chunks)
+          try:
+              candidates['joined-base64'] = base64.b64decode(joined + '=' * (-len(joined) % 4), validate=True)
+          except Exception as error:
+              candidates['joined-base64-error'] = repr(error).encode()
+          try:
+              candidates['per-chunk-base64'] = b''.join(
+                  base64.b64decode(chunk + '=' * (-len(chunk) % 4), validate=True)
+                  for chunk in encoded_chunks
+              )
+          except Exception as error:
+              candidates['per-chunk-base64-error'] = repr(error).encode()
+
+          report = [f'Native picker archive diagnostic run {os.environ["RUN_ID"]}.', f'chunks={len(chunk_paths)}']
+          for name, payload in candidates.items():
+              report.append(f'\n{name}: bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()} magic={payload[:16].hex()}')
+              if name.endswith('-error'):
+                  report.append(payload.decode(errors='replace'))
+                  continue
+              listed = False
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(payload), mode='r:*') as archive:
+                      members = archive.getnames()
+                  report.append('tar members:\n' + '\n'.join(members[:120]))
+                  listed = True
+              except Exception as error:
+                  report.append(f'tar error: {error!r}')
+              if not listed:
+                  try:
+                      with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                          members = archive.namelist()
+                      report.append('zip members:\n' + '\n'.join(members[:120]))
+                  except Exception as error:
+                      report.append(f'zip error: {error!r}')
+
+          body = '```text\n' + '\n'.join(report)[:60000] + '\n```'
           url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
           request = urllib.request.Request(
               url,

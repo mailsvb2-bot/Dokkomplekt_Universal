@@ -42,8 +42,9 @@ def test_expert_settings_are_not_mixed_into_everyday_settings() -> None:
     assert "Папка готовых документов" in utility
 
 
-def test_static_template_requires_explicit_user_consent() -> None:
+def test_static_template_does_not_block_first_button_creation() -> None:
     setup = text("src/components/TemplateSetupModal.tsx")
-    assert "allowStaticCopies" in setup
-    assert "Создавать неразмеченные шаблоны как неизменяемые копии" in setup
-    assert "Это неизменяемый документ без автоматически заполняемых полей" in setup
+    assert "const batchReady = hasBatch && !invalidLabel" in setup
+    assert "Сначала создайте кнопки и начните работать" in setup
+    assert "Необязательно: настроить автоматическое заполнение" in setup
+    assert "allowStaticCopies" not in setup

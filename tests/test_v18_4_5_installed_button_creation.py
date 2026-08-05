@@ -26,6 +26,8 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
 
     assert "New-PlainDocxFixture" in smoke
     assert "function Set-UiValue" in smoke
+    assert "SendMessage" in smoke
+    assert "0x000C" in smoke
     assert "IsValuePatternAvailableProperty" in smoke
     assert "button-smoke.docx" in smoke
     assert "Проверочная кнопка" in smoke

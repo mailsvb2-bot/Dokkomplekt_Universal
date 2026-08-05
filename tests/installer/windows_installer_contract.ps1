@@ -83,6 +83,8 @@ using System.Runtime.InteropServices;
 public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
 }
 "@
 
@@ -179,11 +181,21 @@ function Set-UiValue {
     [System.Windows.Automation.TreeScope]::Subtree,
     $supportsValue
   )
-  if ($null -eq $valueElement) {
-    throw 'UI element and its descendants do not expose ValuePattern.'
+  if ($null -ne $valueElement) {
+    $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $pattern.SetValue($Value)
+    return
   }
-  $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-  $pattern.SetValue($Value)
+
+  # The modern Windows OpenFileDialog exposes the file-name ComboBox without
+  # UIA ValuePattern on hosted runners. Set its native window text directly.
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog file-name control exposes neither ValuePattern nor a native HWND.'
+  }
+  $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
+  $Element.SetFocus()
+  Start-Sleep -Milliseconds 200
 }
 
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement

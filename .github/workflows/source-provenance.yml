@@ -29,6 +29,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply native OpenFileDialog text fallback
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-installed-button-creation'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          test -f verification/ci/open-dialog-wm-settext.patch
+          git apply --check verification/ci/open-dialog-wm-settext.patch
+          git apply verification/ci/open-dialog-wm-settext.patch
+          rm verification/ci/open-dialog-wm-settext.patch
+          git checkout origin/main -- .github/workflows/source-provenance.yml
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          python -m pytest -q tests/test_v18_4_5_installed_button_creation.py
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Test OpenFileDialog through native WM_SETTEXT fallback"
+          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

@@ -50,6 +50,7 @@ def test_signing_workflow_is_approval_and_commit_pinned() -> None:
 
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
     workflow = text(".github/workflows/windows-hardware-e2e.yml")
+    release_workflow = text(".github/workflows/build-installers.yml")
     hardware = text("tests/windows/windows_hardware_e2e.ps1")
     sidecar_signatures = text("tests/windows/verify_sidecar_authenticode.ps1")
     assert "python -m pip install --disable-pip-version-check -r requirements-dev.txt" in workflow
@@ -73,6 +74,15 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "AUTHENTICODE_SIGNATURES.json" in hardware
     assert "NSIS silent uninstall failed" in hardware
     assert "silent_uninstall_passed = $true" in hardware
+
+    assert "environment: windows-production-signing" in release_workflow
+    assert "verify_sidecar_authenticode.ps1" in release_workflow
+    assert "SIDECAR_AUTHENTICODE.json" in release_workflow
+    assert "--output-json verification/release/scanned-pdf-ocr.json" in release_workflow
+    assert "verification/release/**" in release_workflow
+    assert "path: .release-gate/**" in release_workflow
+    assert "needs: [windows-hardware-e2e, linux-bundles]" in release_workflow
+    assert "Attach artifacts only after signing and hardware E2E" in release_workflow
 
 
 def test_production_csp_excludes_dev_server_and_dev_overlay_is_explicit() -> None:

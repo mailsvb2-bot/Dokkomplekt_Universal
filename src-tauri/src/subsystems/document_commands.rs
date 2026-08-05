@@ -393,8 +393,15 @@ fn confirm_template_setup(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    if req.rows.iter().any(|row| row.is_static_copy) {
-        return Err("Шаблон не содержит размеченных полей {{field.id}}. Он не добавлен, чтобы примерный текст и чужие смыслы не переносились в новые документы.".into());
+    if req.rows.is_empty() {
+        return Err("Выберите хотя бы один шаблон Word.".into());
+    }
+    if req
+        .rows
+        .iter()
+        .any(|row| row.editable_button_label.trim().is_empty())
+    {
+        return Err("У каждого шаблона должно быть название кнопки.".into());
     }
     let incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &req.rows).pack;
     let result = {

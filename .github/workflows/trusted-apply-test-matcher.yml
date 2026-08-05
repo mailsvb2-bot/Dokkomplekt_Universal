@@ -1,39 +1,23 @@
 name: Trusted apply frontend matcher fix
 
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write
   pull-requests: read
-  issues: write
 
 jobs:
   apply:
     if: >-
-      github.event.issue.pull_request &&
-      github.event.comment.body == '/apply-test-matcher-fix' &&
-      github.event.comment.author_association == 'OWNER'
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/fix-popup-skip-and-field-validation'
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve exact same-repository PR head
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          head_repo="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
-          head_ref="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.ref')"
-          test "$head_repo" = "$REPOSITORY"
-          test "$head_ref" = 'agent/fix-popup-skip-and-field-validation'
-          echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          ref: ${{ steps.pr.outputs.head_ref }}
+          ref: agent/fix-popup-skip-and-field-validation
           fetch-depth: 0
       - name: Verify, apply and remove transport
         shell: bash
@@ -49,4 +33,4 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "Use built-in Vitest assertions for popup skip scenario"
-          git push origin "HEAD:${{ steps.pr.outputs.head_ref }}"
+          git push origin HEAD:agent/fix-popup-skip-and-field-validation

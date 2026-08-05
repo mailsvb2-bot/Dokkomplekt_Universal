@@ -3,6 +3,8 @@ name: Verify Hardware Gate PR
 on:
   pull_request_target:
     types: [reopened, edited]
+  issues:
+    types: [reopened]
 
 permissions:
   contents: read
@@ -10,7 +12,7 @@ permissions:
 
 jobs:
   verify:
-    if: ${{ github.event.pull_request.number == 49 && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.number == 49 && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'issues' && github.event.issue.number == 50) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

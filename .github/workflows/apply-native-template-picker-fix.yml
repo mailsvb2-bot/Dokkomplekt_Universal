@@ -8,12 +8,32 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   apply-fix:
     if: ${{ github.event_name == 'schedule' || github.event.issue.number == 48 }}
     runs-on: ubuntu-latest
+    env:
+      SERVICE_ISSUE: '48'
     steps:
+      - name: Mark applicator start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"body": f"Native picker applicator run {os.environ['RUN_ID']} started."}).encode(),
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+              method="POST",
+          )
+          urllib.request.urlopen(request).read()
+          PY
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: agent/fix-native-template-picker
@@ -62,3 +82,21 @@ jobs:
           git add -A
           git commit -m "Fix native first-run template picker"
           git push --force-with-lease=refs/heads/agent/fix-native-template-picker:${OLD_HEAD} origin HEAD:agent/fix-native-template-picker
+      - name: Mark applicator failure
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
+          request = urllib.request.Request(
+              url,
+              data=json.dumps({"body": f"Native picker applicator run {os.environ['RUN_ID']} failed; inspect the Actions log before retrying."}).encode(),
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+              method="POST",
+          )
+          urllib.request.urlopen(request).read()
+          PY

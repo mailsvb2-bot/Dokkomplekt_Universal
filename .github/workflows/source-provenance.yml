@@ -41,6 +41,7 @@ jobs:
           rm .github/button_creation_fix.patch
           rm -f .github/workflows/apply-installed-button-creation-fix.yml
           git checkout origin/main -- .github/workflows/source-provenance.yml
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
           python -m pytest -q \
             tests/test_v18_4_5_installed_button_creation.py \
             tests/test_v18_4_3_proven_first_run_button_flow.py \

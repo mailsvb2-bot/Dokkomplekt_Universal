@@ -24,6 +24,7 @@ jobs:
           set -Eeuo pipefail
           old_head="$(git rev-parse HEAD)"
           echo "OLD_HEAD=$old_head" >> "$GITHUB_ENV"
+          cp tests/test_v18_4_4_native_template_picker.py /tmp/test_v18_4_4_native_template_picker.py
 
           python scripts/apply_native_picker_staging.py
           git add -N src-tauri/src/subsystems/template_picker.rs
@@ -48,6 +49,7 @@ jobs:
           git clean -fd
           git apply --check /tmp/native-picker-product.patch
           git apply /tmp/native-picker-product.patch
+          cp /tmp/test_v18_4_4_native_template_picker.py tests/test_v18_4_4_native_template_picker.py
           rm -f .github/workflows/apply-native-template-picker-fix.yml
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
           python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py

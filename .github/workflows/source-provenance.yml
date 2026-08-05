@@ -35,9 +35,90 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          test -f verification/ci/open-dialog-wm-settext.patch
-          git apply --check verification/ci/open-dialog-wm-settext.patch
-          git apply verification/ci/open-dialog-wm-settext.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          smoke_path = Path('tests/installer/windows_installer_contract.ps1')
+          smoke = smoke_path.read_text(encoding='utf-8')
+          old_native = '''public static class DokkomplektNativeMouse {
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+          }
+          '''
+          new_native = '''public static class DokkomplektNativeMouse {
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+          }
+          '''
+          old_setter = '''function Set-UiValue {
+            param(
+              [Parameter(Mandatory = $true)]$Element,
+              [Parameter(Mandatory = $true)][string]$Value
+            )
+            $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+              [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+              $true
+            )
+            $valueElement = $Element.FindFirst(
+              [System.Windows.Automation.TreeScope]::Subtree,
+              $supportsValue
+            )
+            if ($null -eq $valueElement) {
+              throw 'UI element and its descendants do not expose ValuePattern.'
+            }
+            $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            $pattern.SetValue($Value)
+          }
+          '''
+          new_setter = '''function Set-UiValue {
+            param(
+              [Parameter(Mandatory = $true)]$Element,
+              [Parameter(Mandatory = $true)][string]$Value
+            )
+            $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+              [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+              $true
+            )
+            $valueElement = $Element.FindFirst(
+              [System.Windows.Automation.TreeScope]::Subtree,
+              $supportsValue
+            )
+            if ($null -ne $valueElement) {
+              $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+              $pattern.SetValue($Value)
+              return
+            }
+
+            # The modern Windows OpenFileDialog exposes the file-name ComboBox without
+            # UIA ValuePattern on hosted runners. Set its native window text directly.
+            $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+            if ($nativeHandle -eq [IntPtr]::Zero) {
+              throw 'OpenFileDialog file-name control exposes neither ValuePattern nor a native HWND.'
+            }
+            $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
+            $Element.SetFocus()
+            Start-Sleep -Milliseconds 200
+          }
+          '''
+          if old_native not in smoke:
+              raise SystemExit('Expected native mouse block was not found.')
+          if old_setter not in smoke:
+              raise SystemExit('Expected Set-UiValue block was not found.')
+          smoke = smoke.replace(old_native, new_native, 1).replace(old_setter, new_setter, 1)
+          smoke_path.write_text(smoke, encoding='utf-8')
+
+          test_path = Path('tests/test_v18_4_5_installed_button_creation.py')
+          test = test_path.read_text(encoding='utf-8')
+          anchor = '    assert "function Set-UiValue" in smoke\n'
+          addition = anchor + '    assert "SendMessage" in smoke\n    assert "0x000C" in smoke\n'
+          if 'assert "SendMessage" in smoke' not in test:
+              if anchor not in test:
+                  raise SystemExit('Expected regression-test anchor was not found.')
+              test = test.replace(anchor, addition, 1)
+              test_path.write_text(test, encoding='utf-8')
+          PY
           rm verification/ci/open-dialog-wm-settext.patch
           git checkout origin/main -- .github/workflows/source-provenance.yml
           python -m pip install --disable-pip-version-check -r requirements-dev.txt

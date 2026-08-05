@@ -29,3 +29,11 @@ def test_empty_first_run_still_has_one_clear_create_buttons_action():
 
     assert "Создать свои кнопки" in rail
     assert "Один файл станет одной понятной кнопкой" in rail
+
+
+def test_button_creation_remains_the_primary_first_run_action():
+    source = (ROOT / "src" / "components" / "TemplateSetupModal.tsx").read_text(encoding="utf-8")
+
+    assert "Создать свои кнопки" in source
+    assert "Выбрать DOCX/DOCM" in source
+    assert "Необязательно: настроить автоматическое заполнение" in source

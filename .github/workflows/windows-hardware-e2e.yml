@@ -110,6 +110,9 @@ jobs:
           DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
         run: scripts\prepackage_rust_gate.bat
       - run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
+      - name: Verify Authenticode signatures of all staged PE sidecars
+        shell: pwsh
+        run: tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
       - name: Probe every staged offline runtime entry point
         shell: pwsh
         run: |

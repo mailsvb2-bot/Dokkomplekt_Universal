@@ -51,11 +51,14 @@ def test_signing_workflow_is_approval_and_commit_pinned() -> None:
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
     workflow = text(".github/workflows/windows-hardware-e2e.yml")
     hardware = text("tests/windows/windows_hardware_e2e.ps1")
+    assert "python -m pip install --disable-pip-version-check -r requirements-dev.txt" in workflow
     assert "--mode windows-runtime" in workflow
     assert "scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean" in workflow
     assert "scripts\\prepackage_rust_gate.bat" in workflow
     assert "create_offline_runtime_bundle.py" in workflow
     assert "--require-signature" in workflow
+    assert "finally {" in workflow
+    assert "Runtime signing private key cleanup failed" in workflow
     assert "--output-json verification/release/scanned-pdf-ocr.json" in workflow
     assert "release-runtime/**" in workflow
     assert "verification/release/**" in workflow

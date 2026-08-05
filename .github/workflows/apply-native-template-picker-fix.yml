@@ -1,4 +1,4 @@
-name: Apply Native Template Picker Fix
+name: Finalize Native Template Picker Fix
 
 on:
   pull_request_target:
@@ -9,13 +9,13 @@ permissions:
   issues: write
 
 jobs:
-  apply-fix:
+  finalize-fix:
     if: ${{ github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     env:
       SERVICE_ISSUE: '48'
     steps:
-      - name: Mark applicator start
+      - name: Mark finalizer start
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
@@ -26,7 +26,7 @@ jobs:
           url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
           request = urllib.request.Request(
               url,
-              data=json.dumps({'body': f"Native picker applicator run {os.environ['RUN_ID']} started."}).encode(),
+              data=json.dumps({'body': f"Native picker finalizer run {os.environ['RUN_ID']} started."}).encode(),
               headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'},
               method='POST',
           )
@@ -38,17 +38,24 @@ jobs:
           fetch-depth: 0
       - name: Install Python test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Apply and normalize reviewed product fix
+      - name: Rebuild clean branch on current main
         shell: bash
         run: |
           set -Eeuo pipefail
+          git fetch origin main
           old_head="$(git rev-parse HEAD)"
+          main_head="$(git rev-parse origin/main)"
+          merge_base="$(git merge-base HEAD origin/main)"
           echo "OLD_HEAD=$old_head" >> "$GITHUB_ENV"
-          cp tests/test_v18_4_4_native_template_picker.py /tmp/test_v18_4_4_native_template_picker.py
 
-          python scripts/apply_native_picker_staging.py
-          git add -N src-tauri/src/subsystems/template_picker.rs
-          git diff --binary -- \
+          if [[ "$merge_base" == "$main_head" ]]; then
+            echo "NEEDS_PUSH=0" >> "$GITHUB_ENV"
+            python scripts/verify_source_manifest.py
+            python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
+            exit 0
+          fi
+
+          git diff --binary "$merge_base" HEAD -- \
             src-tauri/src/main.rs \
             src-tauri/src/subsystems/update_runtime.rs \
             src-tauri/src/subsystems/template_picker.rs \
@@ -62,6 +69,7 @@ jobs:
             tests/e2e/first_run.spec.ts \
             tests/installer/windows_installer_contract.ps1 \
             tests/test_v18_3_0_hardening_contracts.py \
+            tests/test_v18_4_4_native_template_picker.py \
             > /tmp/native-picker-product.patch
           test -s /tmp/native-picker-product.patch
 
@@ -69,11 +77,12 @@ jobs:
           git clean -fd
           git apply --check /tmp/native-picker-product.patch
           git apply /tmp/native-picker-product.patch
-          cp /tmp/test_v18_4_4_native_template_picker.py tests/test_v18_4_4_native_template_picker.py
           rm -f .github/workflows/apply-native-template-picker-fix.yml
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
           python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
-      - name: Publish clean fix branch
+          echo "NEEDS_PUSH=1" >> "$GITHUB_ENV"
+      - name: Publish finalized branch
+        if: ${{ env.NEEDS_PUSH == '1' }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -82,7 +91,7 @@ jobs:
           git add -A
           git commit -m "Fix native first-run template picker"
           git push --force-with-lease=refs/heads/agent/fix-native-template-picker:${OLD_HEAD} origin HEAD:agent/fix-native-template-picker
-      - name: Mark applicator failure
+      - name: Mark finalizer failure
         if: ${{ failure() }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,16 +100,7 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          from pathlib import Path
-
-          patch = Path('.native-picker.patch')
-          diagnostic = ''
-          if patch.is_file():
-              lines = patch.read_text(encoding='utf-8', errors='replace').splitlines()
-              marker = next((i for i, line in enumerate(lines) if line.startswith('diff --git') and i > 0 and not lines[i - 1].startswith((' ', '+', '-', '@'))), 95)
-              start, end = max(0, marker - 12), min(len(lines), marker + 13)
-              diagnostic = '\n```diff\n' + '\n'.join(f'{index + 1:04d}: {lines[index]}' for index in range(start, end)) + '\n```'
-          body = f"Native picker applicator run {os.environ['RUN_ID']} failed.{diagnostic}"
+          body = f"Native picker finalizer run {os.environ['RUN_ID']} failed; inspect its Actions log."
           url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
           request = urllib.request.Request(
               url,

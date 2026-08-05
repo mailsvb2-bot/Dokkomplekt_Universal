@@ -48,6 +48,24 @@ def test_signing_workflow_is_approval_and_commit_pinned() -> None:
     assert "git merge-base --is-ancestor" in workflow
 
 
+def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
+    workflow = text(".github/workflows/windows-hardware-e2e.yml")
+    hardware = text("tests/windows/windows_hardware_e2e.ps1")
+    assert "--mode windows-runtime" in workflow
+    assert "scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean" in workflow
+    assert "scripts\\prepackage_rust_gate.bat" in workflow
+    assert "create_offline_runtime_bundle.py" in workflow
+    assert "--require-signature" in workflow
+    assert "--output-json verification/release/scanned-pdf-ocr.json" in workflow
+    assert "release-runtime/**" in workflow
+    assert "verification/release/**" in workflow
+    assert "$rebootEvidencePath = $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH" in hardware
+    assert "PRINT_EVENT_307.json" in hardware
+    assert "AUTHENTICODE_SIGNATURES.json" in hardware
+    assert "NSIS silent uninstall failed" in hardware
+    assert "silent_uninstall_passed = $true" in hardware
+
+
 def test_production_csp_excludes_dev_server_and_dev_overlay_is_explicit() -> None:
     import json
 

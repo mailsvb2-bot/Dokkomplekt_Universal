@@ -1,0 +1,48 @@
+diff --git a/tests/installer/windows_installer_contract.ps1 b/tests/installer/windows_installer_contract.ps1
+index 8ba16c0..0000000 100644
+--- a/tests/installer/windows_installer_contract.ps1
++++ b/tests/installer/windows_installer_contract.ps1
+@@ -84,6 +84,8 @@ public static class DokkomplektNativeMouse {
+   [DllImport("user32.dll", SetLastError = true)]
+   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
++  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
++  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+ }
+ "@
+@@ -174,11 +176,20 @@ function Set-UiValue {
+     [System.Windows.Automation.TreeScope]::Subtree,
+     $supportsValue
+   )
+-  if ($null -eq $valueElement) {
+-    throw 'UI element and its descendants do not expose ValuePattern.'
++  if ($null -ne $valueElement) {
++    $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
++    $pattern.SetValue($Value)
++    return
+   }
+-  $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+-  $pattern.SetValue($Value)
++
++  # The modern Windows OpenFileDialog exposes the file-name ComboBox without
++  # UIA ValuePattern on hosted runners. Set its native window text directly.
++  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
++  if ($nativeHandle -eq [IntPtr]::Zero) {
++    throw 'OpenFileDialog file-name control exposes neither ValuePattern nor a native HWND.'
++  }
++  $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
++  $Element.SetFocus()
+ }
+ 
+diff --git a/tests/test_v18_4_5_installed_button_creation.py b/tests/test_v18_4_5_installed_button_creation.py
+index 5fd301d..0000000 100644
+--- a/tests/test_v18_4_5_installed_button_creation.py
++++ b/tests/test_v18_4_5_installed_button_creation.py
+@@ -25,6 +25,8 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
+ 
+     assert "New-PlainDocxFixture" in smoke
+     assert "function Set-UiValue" in smoke
++    assert "SendMessage" in smoke
++    assert "0x000C" in smoke
+     assert "IsValuePatternAvailableProperty" in smoke
+     assert "button-smoke.docx" in smoke
+     assert "Проверочная кнопка" in smoke

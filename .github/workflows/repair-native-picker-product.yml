@@ -2,7 +2,7 @@ name: Repair Native Picker Product
 
 on:
   pull_request_target:
-    types: [edited]
+    types: [edited, reopened]
 
 permissions:
   contents: write

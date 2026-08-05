@@ -61,6 +61,7 @@ jobs:
     name: Signed Windows NSIS + signed offline runtime
     needs: release-gate
     runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]
+    environment: windows-production-signing
     timeout-minutes: 120
     env:
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
@@ -118,9 +119,12 @@ jobs:
       - name: Verify the pre-provisioned offline runtime staged from runner-owned manifest
         shell: pwsh
         run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
+      - name: Verify Authenticode signatures of all staged PE sidecars
+        shell: pwsh
+        run: tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
       - run: python scripts/probe_offline_runtime.py --target windows-x86_64
       - name: Verify image-only PDF table OCR with the staged runtime
-        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64
+        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
       - name: Build deterministic signed optional component packs
         shell: pwsh
         env:
@@ -199,6 +203,7 @@ jobs:
             release-installers/**
             release-components/**
             release-runtime/**
+            verification/release/**
             .cargo-gate/**
             .release-gate/**
           if-no-files-found: error
@@ -237,9 +242,7 @@ jobs:
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
           name: Dokkomplekt-Windows-Hardware-E2E-Evidence
-          path: |
-            .release-gate/WINDOWS_HARDWARE_E2E_PASSED.json
-            .release-gate/WINDOWS_REBOOT_E2E_PASSED.json
+          path: .release-gate/**
           if-no-files-found: error
 
   linux-bundles:

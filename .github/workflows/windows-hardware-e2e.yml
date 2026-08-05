@@ -21,13 +21,15 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.release_sha == github.sha
     runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware-e2e]
     environment: windows-production-signing
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
       DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
       DOKKOMPLEKT_TEST_DUPLEX: ${{ vars.DOKKOMPLEKT_TEST_DUPLEX }}
       DOKKOMPLEKT_TEST_TRAY: ${{ vars.DOKKOMPLEKT_TEST_TRAY }}
       DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
+      DOKKOMPLEKT_SIDECAR_MANIFEST_PATH: ${{ vars.DOKKOMPLEKT_SIDECAR_MANIFEST_PATH }}
+      DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
       DOKKOMPLEKT_LICENSE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}
       DOKKOMPLEKT_UPDATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_UPDATE_PUBKEY_B64 }}
@@ -80,16 +82,67 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Validate production and hardware trust boundaries
+      - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Validate production, runtime and hardware trust boundaries
+        shell: pwsh
+        env:
+          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
+          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
+          DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
+          DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64 }}
         run: |
           python scripts/release_environment_preflight.py --mode production-build --json-report verification/release/production-build-preflight.json
+          python scripts/release_environment_preflight.py --mode windows-runtime --json-report verification/release/windows-runtime-preflight.json
           python scripts/release_environment_preflight.py --mode windows-hardware --json-report verification/release/hardware-preflight.json
+      - name: Stage exact runner-owned offline runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean
+          if ($LASTEXITCODE -ne 0) { throw 'Sidecar staging failed.' }
+          New-Item -ItemType Directory -Force verification/release | Out-Null
+          Copy-Item src-tauri/resources/tools/windows-x86_64/sidecar-status.json verification/release/sidecar-status.json -Force
       - run: npm ci
       - run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Execute signed Rust and RustSec release gate
+        shell: cmd
+        env:
+          DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
+        run: scripts\prepackage_rust_gate.bat
       - run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
-      - run: python scripts/probe_offline_runtime.py --target windows-x86_64
+      - name: Verify Authenticode signatures of all staged PE sidecars
+        shell: pwsh
+        run: tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
+      - name: Probe every staged offline runtime entry point
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & python scripts/probe_offline_runtime.py --target windows-x86_64 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | Tee-Object -FilePath verification/release/offline-runtime-probe.log
+          if ($exitCode -ne 0) { throw "Offline runtime probe failed with exit code $exitCode" }
       - name: Verify image-only PDF table OCR with the staged runtime
-        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64
+        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
+      - name: Create signed offline runtime bundle and SBOM
+        shell: pwsh
+        env:
+          DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($null -eq (Get-Command openssl -ErrorAction SilentlyContinue)) { throw 'OpenSSL is required on the production runner.' }
+          New-Item -ItemType Directory -Force verification/release | Out-Null
+          $privateKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-private-" + [Guid]::NewGuid().ToString('N') + '.pem')
+          $trustedKey = (Resolve-Path verification/release).Path + '\runtime-trusted-public.pem'
+          try {
+            [IO.File]::WriteAllBytes($privateKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64))
+            [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
+            python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --output-dir release-runtime --require-semantic-model --require-supply-chain --signing-key $privateKey --trusted-public-key $trustedKey --require-signature
+            if ($LASTEXITCODE -ne 0) { throw 'Signed offline runtime bundle creation failed.' }
+          } finally {
+            Remove-Item -LiteralPath $privateKey -Force -ErrorAction SilentlyContinue
+          }
+          if (Test-Path -LiteralPath $privateKey) { throw 'Runtime signing private key cleanup failed.' }
+          "DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH=$trustedKey" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: npx tauri build --no-bundle
       - name: Sign and verify application binary
         shell: pwsh
@@ -104,6 +157,9 @@ jobs:
           DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
           DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
+      - name: Bind signed application, installer, runtime, SBOM and Rust gate evidence
+        shell: pwsh
+        run: scripts/write_windows_release_evidence.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey $env:DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH
       - name: Execute opt-in hardware E2E
         shell: pwsh
         run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
@@ -112,6 +168,8 @@ jobs:
           name: Dokkomplekt-Windows-Hardware-E2E-Signed
           path: |
             target/release/bundle/nsis/**
+            release-runtime/**
+            verification/release/**
             .cargo-gate/**
             .release-gate/**
           if-no-files-found: error

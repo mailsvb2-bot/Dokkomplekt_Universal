@@ -1,20 +1,22 @@
 name: Apply Native Template Picker Fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-native-template-picker
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply-fix:
-    if: ${{ github.actor != 'github-actions[bot]' }}
+    if: ${{ github.event.pull_request.head.ref == 'agent/fix-native-template-picker' && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          ref: agent/fix-native-template-picker
           fetch-depth: 0
       - name: Apply reviewed product fix
         shell: bash

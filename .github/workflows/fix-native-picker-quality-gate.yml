@@ -46,33 +46,41 @@ jobs:
           from pathlib import Path
 
           path = Path('src-tauri/src/subsystems/template_picker.rs')
-          text = path.read_text(encoding='utf-8')
-          old = '''        let paths = parse_picker_paths("C:/Шаблоны/Акт работ.docx\\r\\nC:/Шаблоны/Счёт.docm\\r\\n".as_bytes())
-              .expect("paths");
-          assert_eq!(paths.len(), 2);
-          assert!(paths[0].ends_with("Акт работ.docx"));
-          assert!(paths[1].ends_with("Счёт.docm"));
-          '''.replace('          ', '        ')
-          new = '''        let paths = parse_picker_paths("C:/Шаблоны/Акт работ.docx\\r\\nC:/Шаблоны/Счёт.docm\\r\\n".as_bytes());
-          assert_eq!(paths.as_ref().map(Vec::len), Ok(2));
-          assert!(paths.as_ref().is_ok_and(|items| {
-              items.first().is_some_and(|path| path.ends_with("Акт работ.docx"))
-                  && items.get(1).is_some_and(|path| path.ends_with("Счёт.docm"))
-          }));
-          '''.replace('          ', '        ')
-          if text.count(old) != 1:
-              raise SystemExit(f'expected parser test block count=1, actual={text.count(old)}')
-          text = text.replace(old, new, 1)
+          lines = path.read_text(encoding='utf-8').splitlines()
 
-          old_error = '''        let error = parse_picker_paths(b"C:/tmp/template.pdf\\n").expect_err("must reject");
-          assert!(error.contains("неподдерживаемый"));
-          '''.replace('          ', '        ')
-          new_error = '''        let result = parse_picker_paths(b"C:/tmp/template.pdf\\n");
-          assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));
-          '''.replace('          ', '        ')
-          if text.count(old_error) != 1:
-              raise SystemExit(f'expected rejection test block count=1, actual={text.count(old_error)}')
-          path.write_text(text.replace(old_error, new_error, 1), encoding='utf-8')
+          expect_indexes = [index for index, line in enumerate(lines) if '.expect("paths");' in line]
+          if len(expect_indexes) != 1:
+              raise SystemExit(f'expected one paths expect, found {len(expect_indexes)}')
+          expect_index = expect_indexes[0]
+          if not lines[expect_index - 1].rstrip().endswith('.as_bytes())'):
+              raise SystemExit('unexpected parse_picker_paths call shape')
+          lines[expect_index - 1] = lines[expect_index - 1] + ';'
+          del lines[expect_index]
+
+          assertion_indexes = [index for index, line in enumerate(lines) if line.strip() == 'assert_eq!(paths.len(), 2);']
+          if len(assertion_indexes) != 1:
+              raise SystemExit(f'expected one paths length assertion, found {len(assertion_indexes)}')
+          assertion_index = assertion_indexes[0]
+          lines[assertion_index:assertion_index + 3] = [
+              '        assert_eq!(paths.as_ref().map(Vec::len), Ok(2));',
+              '        assert!(paths.as_ref().is_ok_and(|items| {',
+              '            items.first().is_some_and(|path| path.ends_with("Акт работ.docx"))',
+              '                && items.get(1).is_some_and(|path| path.ends_with("Счёт.docm"))',
+              '        }));',
+          ]
+
+          error_indexes = [index for index, line in enumerate(lines) if '.expect_err("must reject")' in line]
+          if len(error_indexes) != 1:
+              raise SystemExit(f'expected one rejection expect, found {len(error_indexes)}')
+          error_index = error_indexes[0]
+          if lines[error_index + 1].strip() != 'assert!(error.contains("неподдерживаемый"));':
+              raise SystemExit('unexpected rejection assertion shape')
+          lines[error_index:error_index + 2] = [
+              '        let result = parse_picker_paths(b"C:/tmp/template.pdf\\n");',
+              '        assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));',
+          ]
+
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
       - name: Verify repaired quality-gate contracts

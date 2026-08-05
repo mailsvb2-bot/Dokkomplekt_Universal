@@ -48,7 +48,7 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Apply deterministic product repair
         working-directory: work
-        run: python ../control/scripts/repair_native_picker_product.py
+        run: python ../control/scripts/repair_native_picker_product_v2.py
       - name: Verify full frontend and targeted backend contracts
         working-directory: work
         run: |

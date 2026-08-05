@@ -51,10 +51,16 @@ def test_signing_workflow_is_approval_and_commit_pinned() -> None:
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
     workflow = text(".github/workflows/windows-hardware-e2e.yml")
     hardware = text("tests/windows/windows_hardware_e2e.ps1")
+    sidecar_signatures = text("tests/windows/verify_sidecar_authenticode.ps1")
     assert "python -m pip install --disable-pip-version-check -r requirements-dev.txt" in workflow
     assert "--mode windows-runtime" in workflow
     assert "scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean" in workflow
     assert "scripts\\prepackage_rust_gate.bat" in workflow
+    assert "verify_sidecar_authenticode.ps1" in workflow
+    assert "SIDECAR_AUTHENTICODE.json" in workflow
+    assert "Get-AuthenticodeSignature" in sidecar_signatures
+    assert "Sidecar Authenticode signature is not valid" in sidecar_signatures
+    assert "dokkomplekt.sidecar-authenticode.v1" in sidecar_signatures
     assert "create_offline_runtime_bundle.py" in workflow
     assert "--require-signature" in workflow
     assert "finally {" in workflow

@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-installed-button-creation
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -14,6 +17,7 @@ concurrency:
 
 jobs:
   apply:
+    if: github.head_ref == 'agent/fix-installed-button-creation' || github.ref_name == 'agent/fix-installed-button-creation'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

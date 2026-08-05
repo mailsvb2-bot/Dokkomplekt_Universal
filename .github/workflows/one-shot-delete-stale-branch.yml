@@ -1,15 +1,16 @@
 name: One-shot stale branch cleanup
 
 on:
-  push:
+  pull_request:
     branches:
-      - chore/delete-stale-first-run-branch
+      - main
 
 permissions:
   contents: write
 
 jobs:
   delete-branches:
+    if: github.head_ref == 'chore/delete-stale-first-run-branch'
     runs-on: ubuntu-latest
     steps:
       - name: Delete obsolete and one-shot branches

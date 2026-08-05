@@ -5,7 +5,7 @@ import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickFolder, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -763,13 +763,49 @@ function AppContent() {
     if (files.length) await processTemplateFiles(files);
   }
 
-  function openTemplateSetup() {
+  async function openTemplateSetup() {
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
+    setSetupOpen(false);
+    setStatus('Выберите шаблоны Word в системном окне…');
+
+    const picked = await run('pick_template_files', () => pickTemplateFiles());
+    if (!picked) return;
+    if (!picked.length) {
+      setStatus('Выбор шаблонов отменён. Нажмите «Создать свои кнопки», когда будете готовы.');
+      return;
+    }
+
+    const importedRows: PendingTemplate[] = [];
+    for (const file of picked) {
+      const id = newDocumentId();
+      const detectedLabel = detectTitle(file.extracted_text) || file.file_name.replace(/\.doc[xm]$/i, '');
+      const analyzed = await run('analyze_template_file', () => analyzeTemplateFile(file.template_path, id, detectedLabel));
+      if (!analyzed) continue;
+      importedRows.push({
+        document_id: id,
+        template_path: file.template_path,
+        extracted_text: file.extracted_text,
+        file_name: file.file_name,
+        button_label: detectedLabel,
+        popup_fields: analyzed.document.popup_fields ?? [],
+      });
+    }
+    if (!importedRows.length) {
+      setStatus('Не удалось подготовить выбранные шаблоны. Проверьте, что это безопасные DOCX без макросов и внешних связей.');
+      return;
+    }
+
+    setPendingTemplates(importedRows);
+    const last = importedRows.at(-1)!;
+    setImportedTemplatePath(last.template_path);
+    setTemplateText(last.extracted_text);
+    setButtonLabel(last.button_label);
     setSetupOpen(true);
+    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
   }
 
   async function processTemplateFiles(files: File[]) {

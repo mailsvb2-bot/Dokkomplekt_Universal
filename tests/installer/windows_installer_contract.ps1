@@ -71,6 +71,94 @@ if ($process.HasExited) {
   $earlyExitCode = $process.ExitCode
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
+
+# Product-level first-run proof: invoke the real WebView button and require the
+# native Windows OpenFileDialog to appear. A browser-only mock cannot prove this.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class DokkomplektNativeMouse {
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+}
+"@
+
+function Wait-UiElement {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$Probe,
+    [Parameter(Mandatory = $true)][string]$Description,
+    [int]$TimeoutSeconds = 25
+  )
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $element = & $Probe
+    if ($null -ne $element) { return $element }
+    Start-Sleep -Milliseconds 250
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "UI smoke timeout: $Description"
+}
+
+function Invoke-UiElement {
+  param([Parameter(Mandatory = $true)]$Element)
+  try {
+    $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $pattern.Invoke()
+    return
+  } catch {
+    $point = $Element.GetClickablePoint()
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+    [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+  }
+}
+
+$desktop = [System.Windows.Automation.AutomationElement]::RootElement
+$appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
+$createButton = Wait-UiElement -Description 'Создать свои кнопки button' -Probe {
+  $name = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Создать свои кнопки'
+  )
+  $kind = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+  )
+  $condition = [System.Windows.Automation.AndCondition]::new($name, $kind)
+  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+Invoke-UiElement -Element $createButton
+
+$templateDialog = Wait-UiElement -Description 'native Word template picker' -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Выберите шаблоны Word'
+  )
+  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
+try {
+  $windowPattern = $templateDialog.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+  $windowPattern.Close()
+} catch {
+  $cancelNameRu = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Отмена')
+  $cancelNameEn = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Cancel')
+  $cancelCondition = [System.Windows.Automation.OrCondition]::new($cancelNameRu, $cancelNameEn)
+  $cancelButton = $templateDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cancelCondition)
+  if ($null -eq $cancelButton) { throw 'Native template picker opened but could not be closed.' }
+  Invoke-UiElement -Element $cancelButton
+}
+Start-Sleep -Milliseconds 500
+if ($process.HasExited) { throw 'Application exited after the native template picker was cancelled.' }
+Write-Host 'Native first-run template picker OK: visible button opened the Windows OpenFileDialog.'
+
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
 

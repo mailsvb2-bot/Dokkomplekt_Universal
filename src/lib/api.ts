@@ -438,6 +438,19 @@ export async function pickFolder(initialPath?: string | null): Promise<string | 
   return response.selected_path;
 }
 
+export interface PickedTemplateFile {
+  file_name: string;
+  template_path: string;
+  extracted_text: string;
+}
+
+export async function pickTemplateFiles(initialPath?: string | null): Promise<PickedTemplateFile[]> {
+  const response = await callRust<{ files: PickedTemplateFile[] }>('pick_template_files', {
+    req: { initial_path: initialPath ?? null },
+  });
+  return response.files;
+}
+
 export async function openInFileManager(path: string): Promise<void> {
   return callRust('open_in_file_manager', { req: { path } });
 }
@@ -678,6 +691,7 @@ export const rustCommandNames = [
   'update_print_preferences',
   'export_files_to_pdf',
   'create_kedo_package',
+  'pick_template_files',
   'pick_folder',
   'open_in_file_manager',
   'semantic_extract',

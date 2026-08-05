@@ -456,3 +456,5 @@ fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResponse, Strin
         size_bytes: Some(artifact.size_bytes),
     })
 }
+
+include!("template_picker.rs");

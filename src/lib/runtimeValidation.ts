@@ -365,6 +365,7 @@ export const COMMAND_RESPONSE_KIND = {
   'load_state': 'object',
   'lookup_business_registry': 'nullable-object',
   'open_in_file_manager': 'void',
+  'pick_template_files': 'object',
   'pick_folder': 'object',
   'parse_source': 'object',
   'parse_source_file': 'object',
@@ -502,6 +503,17 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
     case 'semantic_extract':
       validateSemantic(command, value);
       break;
+    case 'pick_template_files': {
+      const root = record(command, value);
+      const files = array(command, root.files, 'files');
+      files.forEach((item, index) => {
+        const file = record(command, item, `files[${index}]`);
+        string(command, file.file_name, `files[${index}].file_name`);
+        string(command, file.template_path, `files[${index}].template_path`);
+        string(command, file.extracted_text, `files[${index}].extracted_text`);
+      });
+      break;
+    }
     case 'pick_folder': {
       const root = record(command, value);
       if (root.selected_path !== null) string(command, root.selected_path, 'selected_path');

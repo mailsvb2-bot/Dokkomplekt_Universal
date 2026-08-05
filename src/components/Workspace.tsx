@@ -49,6 +49,7 @@ interface WorkspaceProps {
   showSickLeaveOption: boolean;
   sickLeaveEnabled: boolean;
   answers: Record<string, string>;
+  skippedAnswers: Record<string, boolean>;
   preview: PreviewState | null;
   setWatchFolder(value: string): void;
   onPickWatchFolder(): void;
@@ -61,6 +62,7 @@ interface WorkspaceProps {
   setScannerText(value: string): void;
   setModelOutput(value: string): void;
   setAnswers: Dispatch<SetStateAction<Record<string, string>>>;
+  setSkippedAnswers: Dispatch<SetStateAction<Record<string, boolean>>>;
   onSickLeaveChange(value: boolean): void;
   onRunZeroTouch(): void;
   onOpenLastOutput(): void;
@@ -312,16 +314,24 @@ export function Workspace(props: WorkspaceProps) {
                   key={prompt.field_id}
                   prompt={prompt}
                   value={props.answers[prompt.field_id] ?? prompt.current_value ?? ''}
-                  onChange={(value) => props.setAnswers((previous) => {
-                    const previousSourceValue = previous[prompt.field_id] ?? prompt.current_value ?? '';
-                    const next = { ...previous, [prompt.field_id]: value };
-                    for (const linkedPrompt of prompts) {
-                      if (linkedPrompt.linked_to !== prompt.field_id) continue;
-                      const linkedCurrent = previous[linkedPrompt.field_id] ?? linkedPrompt.current_value ?? '';
-                      if (!linkedCurrent || linkedCurrent === previousSourceValue) next[linkedPrompt.field_id] = value;
-                    }
-                    return next;
-                  })}
+                  skipped={Boolean(props.skippedAnswers[prompt.field_id])}
+                  onChange={(value) => {
+                    props.setSkippedAnswers((previous) => ({ ...previous, [prompt.field_id]: false }));
+                    props.setAnswers((previous) => {
+                      const previousSourceValue = previous[prompt.field_id] ?? prompt.current_value ?? '';
+                      const next = { ...previous, [prompt.field_id]: value };
+                      for (const linkedPrompt of prompts) {
+                        if (linkedPrompt.linked_to !== prompt.field_id) continue;
+                        const linkedCurrent = previous[linkedPrompt.field_id] ?? linkedPrompt.current_value ?? '';
+                        if (!linkedCurrent || linkedCurrent === previousSourceValue) next[linkedPrompt.field_id] = value;
+                      }
+                      return next;
+                    });
+                  }}
+                  onSkipChange={(skipped) => props.setSkippedAnswers((previous) => ({
+                    ...previous,
+                    [prompt.field_id]: skipped,
+                  }))}
                   onPin={() => props.onPinField(prompt.field_id)}
                 />
               ))}
@@ -422,7 +432,9 @@ export function Workspace(props: WorkspaceProps) {
 function WorkflowPromptField(props: {
   prompt: PromptSpec;
   value: string;
+  skipped: boolean;
   onChange(value: string): void;
+  onSkipChange(value: boolean): void;
   onPin(): void;
 }) {
   const { prompt } = props;
@@ -433,16 +445,16 @@ function WorkflowPromptField(props: {
   let control: ReactNode;
 
   if (kind === 'long_text') {
-    control = <textarea id={inputId} value={props.value} rows={4} onChange={(event) => props.onChange(event.target.value)} />;
+    control = <textarea id={inputId} value={props.value} rows={4} disabled={props.skipped} onChange={(event) => props.onChange(event.target.value)} />;
   } else if (kind === 'yes_no') {
     control = (
-      <select id={inputId} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+      <select id={inputId} value={props.value} disabled={props.skipped} onChange={(event) => props.onChange(event.target.value)}>
         <option value="">Выберите…</option><option value="Нет">Нет</option><option value="Да">Да</option>
       </select>
     );
   } else if (kind === 'select' && !prompt.allow_custom_option) {
     control = (
-      <select id={inputId} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+      <select id={inputId} value={props.value} disabled={props.skipped} onChange={(event) => props.onChange(event.target.value)}>
         <option value="">Выберите…</option>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
       </select>
@@ -453,6 +465,7 @@ function WorkflowPromptField(props: {
         <input
           id={inputId}
           value={props.value}
+          disabled={props.skipped}
           inputMode={kind === 'number' || kind === 'money' ? 'decimal' : undefined}
           placeholder={kind === 'date' ? 'ДД.ММ.ГГГГ' : hint || 'Введите значение'}
           list={kind === 'select' && prompt.allow_custom_option ? `${inputId}-options` : undefined}
@@ -466,12 +479,26 @@ function WorkflowPromptField(props: {
   }
 
   return (
-    <label className="clientField" htmlFor={inputId}>
-      <span>{prompt.title}{prompt.required && <b>*</b>}</span>
+    <div className={`clientField ${props.skipped ? 'skipped' : ''}`}>
+      <label className="clientFieldLabel" htmlFor={inputId}>{prompt.title}{prompt.required && <b>*</b>}</label>
       <div>
-        <span className="clientFieldControl">{control}{hint ? <small>{hint}</small> : null}</span>
-        <button type="button" className="iconOnlyBtn" title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={props.onPin}><i className="ti ti-pin" aria-hidden="true" /></button>
+        <span className="clientFieldControl">
+          {control}
+          {hint ? <small>{hint}</small> : null}
+          {prompt.required ? (
+            <button
+              type="button"
+              className="continueWithoutValue"
+              aria-pressed={props.skipped}
+              onClick={() => props.onSkipChange(!props.skipped)}
+            >
+              {props.skipped ? 'Вернуться к заполнению' : 'Продолжить без этого значения'}
+            </button>
+          ) : null}
+          {props.skipped ? <small className="skipWarning">Поле будет намеренно оставлено пустым только по вашему подтверждению.</small> : null}
+        </span>
+        <button type="button" className="iconOnlyBtn" disabled={props.skipped} title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={props.onPin}><i className="ti ti-pin" aria-hidden="true" /></button>
       </div>
-    </label>
+    </div>
   );
 }

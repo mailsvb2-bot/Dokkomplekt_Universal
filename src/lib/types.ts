@@ -103,6 +103,7 @@ export interface SemanticCase {
   values: Record<string, SemanticValue>;
   collections?: Record<string, Array<Record<string, unknown>>>;
   blocks?: Record<string, string>;
+  skipped_fields?: string[];
 }
 
 export type OrganizationKnowledgeCategory = 'organization' | 'employee' | 'position' | 'signatory' | 'department' | 'counter' | 'print_form' | 'authority' | 'template_rule';

@@ -497,6 +497,31 @@ describe('Полный прогон пользовательских сцена�
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);
 
+  it('явное продолжение без обязательного значения передаётся в Rust и не блокирует генерацию', async () => {
+    const calls: Call[] = [];
+    installMock(calls);
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Счёт № 148' } });
+    await click(/Использовать текст/);
+    await screen.findByDisplayValue('7701234567');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Продолжить без этого значения' }));
+    expect((screen.getByDisplayValue('7701234567') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Вернуться к заполнению' }).getAttribute('aria-pressed')).toBe('true');
+
+    await click(/Проверить и создать \(2\)/);
+    await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
+      req: {
+        document_ids: ['acc_1', 'doc_2'],
+        answers: [{ field_id: 'org.inn', value: '', continue_without_value: true }],
+      },
+    }));
+    await waitFor(() => expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(true));
+  });
+
   it('не предлагает загрузку, когда OCR уже найден в системе', async () => {
     const calls: Call[] = [];
     installMock(calls, { componentState: 'system' });

@@ -390,6 +390,9 @@ impl State<'_> {
                     }
                 }
                 Node::Image(field_id) => {
+                    if self.case.is_skipped(field_id) {
+                        continue;
+                    }
                     if self
                         .lookup(field_id)
                         .map(|value| !value.as_text().trim().is_empty())
@@ -451,6 +454,9 @@ impl State<'_> {
             if let Some(v) = scope.get(id) {
                 return Some(v.clone());
             }
+        }
+        if self.case.is_skipped(id) {
+            return Some(SemanticAtom::Text(String::new()));
         }
         self.case.get(id).map(|v| SemanticAtom::Text(v.to_string()))
     }

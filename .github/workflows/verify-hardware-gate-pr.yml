@@ -50,8 +50,13 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import yaml
-          workflow = yaml.safe_load(Path('.github/workflows/windows-hardware-e2e.yml').read_text(encoding='utf-8'))
-          assert workflow['name'] == 'Windows Hardware E2E'
-          print('workflow YAML parsed')
+          expected = {
+              '.github/workflows/windows-hardware-e2e.yml': 'Windows Hardware E2E',
+              '.github/workflows/build-installers.yml': 'Build Signed Offline Installers',
+          }
+          for path, name in expected.items():
+              workflow = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
+              assert workflow['name'] == name
+              print(f'workflow YAML parsed: {path}')
           PY
           pwsh -NoProfile -Command "$paths = @('tests/windows/windows_hardware_e2e.ps1', 'tests/windows/verify_sidecar_authenticode.ps1'); foreach ($path in $paths) { $tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }; Write-Host \"PowerShell AST parsed: $path\

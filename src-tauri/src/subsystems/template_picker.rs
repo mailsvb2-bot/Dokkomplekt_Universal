@@ -288,16 +288,17 @@ mod template_picker_tests {
 
     #[test]
     fn parses_multiple_picker_paths_and_preserves_spaces() {
-        let paths = parse_picker_paths("C:/Шаблоны/Акт работ.docx\r\nC:/Шаблоны/Счёт.docm\r\n".as_bytes())
-            .expect("paths");
-        assert_eq!(paths.len(), 2);
-        assert!(paths[0].ends_with("Акт работ.docx"));
-        assert!(paths[1].ends_with("Счёт.docm"));
+        let paths = parse_picker_paths("C:/Шаблоны/Акт работ.docx\r\nC:/Шаблоны/Счёт.docm\r\n".as_bytes());
+        assert_eq!(paths.as_ref().map(Vec::len), Ok(2));
+        assert!(paths.as_ref().is_ok_and(|items| {
+            items.first().is_some_and(|path| path.ends_with("Акт работ.docx"))
+                && items.get(1).is_some_and(|path| path.ends_with("Счёт.docm"))
+        }));
     }
 
     #[test]
     fn rejects_non_word_picker_output() {
-        let error = parse_picker_paths(b"C:/tmp/template.pdf\n").expect_err("must reject");
-        assert!(error.contains("неподдерживаемый"));
+        let result = parse_picker_paths(b"C:/tmp/template.pdf\n");
+        assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));
     }
 }

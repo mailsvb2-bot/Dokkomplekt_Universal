@@ -1,4 +1,4 @@
-name: Finalize Native Template Picker Fix
+name: Repair Native Picker Frontend Contracts
 
 on:
   pull_request_target:
@@ -9,89 +9,172 @@ permissions:
   issues: write
 
 jobs:
-  finalize-fix:
+  repair-tests:
     if: ${{ github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     env:
       SERVICE_ISSUE: '48'
     steps:
-      - name: Mark finalizer start
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.run_id }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json, os, urllib.request
-          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
-          request = urllib.request.Request(
-              url,
-              data=json.dumps({'body': f"Native picker finalizer run {os.environ['RUN_ID']} started."}).encode(),
-              headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'},
-              method='POST',
-          )
-          urllib.request.urlopen(request).read()
-          PY
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: agent/fix-native-template-picker
           fetch-depth: 0
-      - name: Install Python test dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Rebuild clean branch on current main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Update stale frontend contracts
         shell: bash
         run: |
-          set -Eeuo pipefail
-          git fetch origin main
-          old_head="$(git rev-parse HEAD)"
-          main_head="$(git rev-parse origin/main)"
-          merge_base="$(git merge-base HEAD origin/main)"
-          echo "OLD_HEAD=$old_head" >> "$GITHUB_ENV"
+          python - <<'PY'
+          from pathlib import Path
 
-          if [[ "$merge_base" == "$main_head" ]]; then
-            echo "NEEDS_PUSH=0" >> "$GITHUB_ENV"
-            python scripts/verify_source_manifest.py
-            python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
-            exit 0
-          fi
+          scenario_path = Path('src/App.scenarios.test.tsx')
+          scenario = scenario_path.read_text(encoding='utf-8')
+          old_start = """    await click(/Добавить шаблоны/);
+              const dialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
+          """.replace('              ', '    ')
+          new_start = """    const priorTemplateAnalyses = calls.filter((call) => call.command === 'analyze_template_file').length;
+              await click(/Добавить шаблоны/);
+              const dialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
+          """.replace('              ', '    ')
+          if scenario.count(old_start) != 1:
+              raise SystemExit('native picker scenario start marker is not unique')
+          scenario = scenario.replace(old_start, new_start, 1)
+          old_assertion = "await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(2));"
+          new_assertion = "await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(priorTemplateAnalyses + 2));"
+          if scenario.count(old_assertion) != 1:
+              raise SystemExit('native picker analysis assertion is not unique')
+          scenario_path.write_text(scenario.replace(old_assertion, new_assertion, 1), encoding='utf-8')
 
-          git diff --binary "$merge_base" HEAD -- \
-            src-tauri/src/main.rs \
-            src-tauri/src/subsystems/update_runtime.rs \
-            src-tauri/src/subsystems/template_picker.rs \
-            src/App.scenarios.test.tsx \
-            src/App.test.tsx \
-            src/App.tsx \
-            src/components/DocumentRail.tsx \
-            src/lib/api.contract.test.ts \
-            src/lib/api.ts \
-            src/lib/runtimeValidation.ts \
-            tests/e2e/first_run.spec.ts \
-            tests/installer/windows_installer_contract.ps1 \
-            tests/test_v18_3_0_hardening_contracts.py \
-            tests/test_v18_4_4_native_template_picker.py \
-            > /tmp/native-picker-product.patch
-          test -s /tmp/native-picker-product.patch
+          runtime_path = Path('src/lib/runtimeValidation.test.ts')
+          runtime = runtime_path.read_text(encoding='utf-8')
+          old_runtime = """    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(114);
+              expect(() => validateRustResponse('new_unregistered_command', {})).toThrow(/не зарегистрирован контракт/);
+          """.replace('              ', '    ')
+          new_runtime = """    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(115);
+              expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');
+              expect(() => validateRustResponse('new_unregistered_command', {})).toThrow(/не зарегистрирован контракт/);
+          """.replace('              ', '    ')
+          if runtime.count(old_runtime) != 1:
+              raise SystemExit('runtime command-count assertion is not unique')
+          runtime_path.write_text(runtime.replace(old_runtime, new_runtime, 1), encoding='utf-8')
 
-          git reset --hard origin/main
-          git clean -fd
-          git apply --check /tmp/native-picker-product.patch
-          git apply /tmp/native-picker-product.patch
-          rm -f .github/workflows/apply-native-template-picker-fix.yml
+          Path('src/components/TemplateSetupModal.test.tsx').write_text("""import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+          import { describe, expect, it, vi } from 'vitest';
+          import { TemplateSetupModal } from './TemplateSetupModal';
+
+          const base = {
+            templateText: '',
+            buttonLabel: '',
+            previewTitle: 'Документ',
+            pendingTemplates: [],
+            draftPopupFields: [],
+            onTemplateTextChange: vi.fn(),
+            onButtonLabelChange: vi.fn(),
+            onDraftPopupFieldsChange: vi.fn(),
+            onPendingTemplateLabelChange: vi.fn(),
+            onPendingPopupFieldsChange: vi.fn(),
+            onMarkupPendingTemplate: vi.fn(async () => undefined),
+            onStartGuidedPendingScanner: vi.fn(),
+            onAnalyze: vi.fn(),
+            onPickFile: vi.fn(),
+            onDropFiles: vi.fn(),
+            onCancel: vi.fn(),
+            onConfirm: vi.fn(),
+          };
+
+          describe('TemplateSetupModal', () => {
+            it('keeps the first step simple and disables confirmation without input', () => {
+              render(<TemplateSetupModal {...base} />);
+              expect(screen.getByText('Выберите шаблоны документов')).toBeTruthy();
+              expect(screen.getByText(/Каждый DOCX или DOCM сразу станет отдельной кнопкой/)).toBeTruthy();
+              expect(screen.getByText('Создать одну кнопку из вставленного текста')).toBeTruthy();
+              expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
+            });
+
+            it('allows a non-empty manual text template without mandatory markup', () => {
+              const { rerender } = render(<TemplateSetupModal {...base} />);
+              expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
+
+              rerender(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
+              expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(false);
+            });
+
+            it('cleans a dangling number mark from the suggested button label', async () => {
+              const onPendingTemplateLabelChange = vi.fn();
+              render(<TemplateSetupModal {...base} onPendingTemplateLabelChange={onPendingTemplateLabelChange} pendingTemplates={[{
+                document_id: 'd1',
+                file_name: 'Счёт на оплату.docx',
+                button_label: 'Счёт на оплату №',
+                extracted_text: 'Счёт на оплату № {{document.number}}',
+                popup_fields: [],
+              }]} />);
+              await waitFor(() => expect(onPendingTemplateLabelChange).toHaveBeenCalledWith('d1', 'Счёт на оплату'));
+            });
+
+            it('creates every prepared template as a button', () => {
+              const onConfirm = vi.fn();
+              render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[
+                {
+                  document_id: 'd1',
+                  file_name: 'Акт.docx',
+                  button_label: 'Акт',
+                  extracted_text: 'Акт № {{document.number}}',
+                  popup_fields: [],
+                },
+                {
+                  document_id: 'd2',
+                  file_name: 'Договор.docx',
+                  button_label: 'Договор',
+                  extracted_text: 'Договор',
+                  popup_fields: [],
+                },
+              ]} />);
+              expect(screen.getByText('Проверьте названия кнопок')).toBeTruthy();
+              expect(screen.getByText('Кнопки готовы к созданию')).toBeTruthy();
+              fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (2)' }));
+              expect(onConfirm).toHaveBeenCalledOnce();
+            });
+
+            it('allows an unmarked DOCX as an immediately usable static-copy button', () => {
+              const onConfirm = vi.fn();
+              render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{
+                document_id: 'd1',
+                file_name: 'Пример.docx',
+                button_label: 'Пример',
+                extracted_text: 'Пример документа с Ивановым Иваном Ивановичем',
+                popup_fields: [],
+              }]} />);
+              expect(screen.getByText(/Неразмеченные шаблоны сохранят свою форму и будут доступны сразу/)).toBeTruthy();
+              const confirm = screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement;
+              expect(confirm.disabled).toBe(false);
+              fireEvent.click(confirm);
+              expect(onConfirm).toHaveBeenCalledOnce();
+            });
+          });
+          """.replace(/^          /gm, ''), encoding='utf-8')
+          PY
+      - name: Verify repaired contracts
+        run: |
+          npx vitest run --config vitest.config.ts src/App.scenarios.test.tsx src/components/TemplateSetupModal.test.tsx src/lib/runtimeValidation.test.ts
+          npm run typecheck
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
           python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
-          echo "NEEDS_PUSH=1" >> "$GITHUB_ENV"
-      - name: Publish finalized branch
-        if: ${{ env.NEEDS_PUSH == '1' }}
+      - name: Publish repaired branch
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Fix native first-run template picker"
-          git push --force-with-lease=refs/heads/agent/fix-native-template-picker:${OLD_HEAD} origin HEAD:agent/fix-native-template-picker
-      - name: Mark finalizer failure
+          git commit -m "Test native template picker workflow contracts"
+          git push origin HEAD:agent/fix-native-template-picker
+      - name: Report failure
         if: ${{ failure() }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,13 +183,8 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          body = f"Native picker finalizer run {os.environ['RUN_ID']} failed; inspect its Actions log."
+          body = f"Native picker frontend-contract repair run {os.environ['RUN_ID']} failed; inspect its Actions log."
           url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
-          request = urllib.request.Request(
-              url,
-              data=json.dumps({'body': body}).encode(),
-              headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'},
-              method='POST',
-          )
+          request = urllib.request.Request(url, data=json.dumps({'body': body}).encode(), headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'}, method='POST')
           urllib.request.urlopen(request).read()
           PY

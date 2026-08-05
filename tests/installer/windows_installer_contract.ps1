@@ -83,6 +83,10 @@ using System.Runtime.InteropServices;
 public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+  [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
+  public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }
 "@
 
@@ -115,6 +119,121 @@ function Invoke-UiElement {
   }
 }
 
+
+function New-PlainDocxFixture {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    try {
+      $parts = @{
+        '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+        '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+        'word/document.xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Проверочная кнопка</w:t></w:r></w:p><w:p><w:r><w:t>Обычный статический шаблон без технической разметки.</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'
+      }
+      foreach ($name in $parts.Keys) {
+        $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+        try { $writer.Write($parts[$name]) } finally { $writer.Dispose() }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
+function Find-ButtonByNames {
+  param(
+    [Parameter(Mandatory = $true)]$Root,
+    [Parameter(Mandatory = $true)][string[]]$Names
+  )
+  foreach ($candidate in $Names) {
+    $name = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      $candidate
+    )
+    $kind = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+    $found = $Root.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.AndCondition]::new($name, $kind)
+    )
+    if ($null -ne $found) { return $found }
+  }
+  return $null
+}
+
+function Set-UiValue {
+  param(
+    [Parameter(Mandatory = $true)]$Element,
+    [Parameter(Mandatory = $true)][string]$Value
+  )
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -ne $valueElement) {
+    $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $pattern.SetValue($Value)
+    return
+  }
+
+  # The modern Windows OpenFileDialog exposes the file-name ComboBox without
+  # UIA ValuePattern on hosted runners. Set its native window text directly.
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog file-name control exposes neither ValuePattern nor a native HWND.'
+  }
+  $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
+  Start-Sleep -Milliseconds 200
+}
+
+function Submit-OpenFileDialog {
+  param([Parameter(Mandatory = $true)]$Dialog)
+
+  $automationId = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1'
+  )
+  $kind = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+  )
+  $openButton = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.AndCondition]::new($automationId, $kind)
+  )
+  if ($null -ne $openButton) {
+    Invoke-UiElement -Element $openButton
+    return
+  }
+
+  # Hosted Windows runners may hide the localized Open button from UIA.
+  # IDOK=1 is the stable native command for confirming a common dialog.
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+  }
+  $null = [DokkomplektNativeMouse]::SendMessagePtr(
+    $dialogHandle,
+    0x0111,
+    [IntPtr]1,
+    [IntPtr]::Zero
+  )
+  Start-Sleep -Milliseconds 500
+}
+
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
 $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -144,20 +263,48 @@ $templateDialog = Wait-UiElement -Description 'native Word template picker' -Pro
   )
   $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
-try {
-  $windowPattern = $templateDialog.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
-  $windowPattern.Close()
-} catch {
-  $cancelNameRu = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Отмена')
-  $cancelNameEn = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Cancel')
-  $cancelCondition = [System.Windows.Automation.OrCondition]::new($cancelNameRu, $cancelNameEn)
-  $cancelButton = $templateDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cancelCondition)
-  if ($null -eq $cancelButton) { throw 'Native template picker opened but could not be closed.' }
-  Invoke-UiElement -Element $cancelButton
+
+# Create button from a real unmarked DOCX through the installed application's native picker.
+$plainTemplate = Join-Path $env:RUNNER_TEMP "button-smoke.docx"
+New-PlainDocxFixture -Path $plainTemplate
+$fileNameEdit = Wait-UiElement -Description 'OpenFileDialog file name field' -Probe {
+  $automationId = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+  $templateDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
 }
-Start-Sleep -Milliseconds 500
-if ($process.HasExited) { throw 'Application exited after the native template picker was cancelled.' }
-Write-Host 'Native first-run template picker OK: visible button opened the Windows OpenFileDialog.'
+Set-UiValue -Element $fileNameEdit -Value $plainTemplate
+Submit-OpenFileDialog -Dialog $templateDialog
+Write-Host 'Native first-run template picker OK: real DOCX selected.'
+
+$createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) button' -TimeoutSeconds 40 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+}
+Invoke-UiElement -Element $createPreparedButton
+
+$createdDocumentButton = Wait-UiElement -Description 'created static template button' -TimeoutSeconds 40 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+}
+if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
+Write-Host 'Create button from a real unmarked DOCX OK.'
+
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+Start-Sleep -Seconds 1
+$process = Start-Process -FilePath $app.FullName -PassThru
+$appWindow = Wait-UiElement -Description 'restarted installed Dokkomplekt window' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
+$persistedButton = Wait-UiElement -Description 'persisted template button after restart' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+}
+if ($null -eq $persistedButton) { throw 'Created template button was lost after application restart.' }
+Write-Host 'Persisted template button survived application restart.'
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()

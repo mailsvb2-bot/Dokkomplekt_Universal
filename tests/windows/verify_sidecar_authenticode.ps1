@@ -5,8 +5,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath $RuntimeRoot -ErrorAction Stop).Path
+
+function Test-PortableExecutable([string] $Path) {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        if ($stream.Length -lt 2) { return $false }
+        return $stream.ReadByte() -eq 0x4D -and $stream.ReadByte() -eq 0x5A
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 $portableExecutables = @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object {
-    $_.Extension.ToLowerInvariant() -in @('.exe', '.dll')
+    Test-PortableExecutable $_.FullName
 })
 if ($portableExecutables.Count -eq 0) {
     throw "No Windows PE sidecars were found under $root"
@@ -17,7 +28,7 @@ $records = foreach ($file in $portableExecutables) {
     if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
         throw "Sidecar Authenticode signature is not valid: $($file.FullName) ($($signature.Status))"
     }
-    $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace('\\', '/')
+    $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace([char]92, [char]47)
     [ordered]@{
         path = $relative
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

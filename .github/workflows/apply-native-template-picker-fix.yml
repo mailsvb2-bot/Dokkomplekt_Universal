@@ -15,15 +15,45 @@ jobs:
         with:
           ref: agent/fix-native-template-picker
           fetch-depth: 0
-      - name: Apply reviewed product fix
+      - name: Apply and normalize reviewed product fix
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          old_head="$(git rev-parse HEAD)"
+          echo "OLD_HEAD=$old_head" >> "$GITHUB_ENV"
+
           python scripts/apply_native_picker_staging.py
+          git add -N src-tauri/src/subsystems/template_picker.rs
+          git diff --binary -- \
+            src-tauri/src/main.rs \
+            src-tauri/src/subsystems/update_runtime.rs \
+            src-tauri/src/subsystems/template_picker.rs \
+            src/App.scenarios.test.tsx \
+            src/App.test.tsx \
+            src/App.tsx \
+            src/components/DocumentRail.tsx \
+            src/lib/api.contract.test.ts \
+            src/lib/api.ts \
+            src/lib/runtimeValidation.ts \
+            tests/e2e/first_run.spec.ts \
+            tests/installer/windows_installer_contract.ps1 \
+            tests/test_v18_3_0_hardening_contracts.py \
+            > /tmp/native-picker-product.patch
+          test -s /tmp/native-picker-product.patch
+
+          git reset --hard origin/main
+          git clean -fd
+          git apply --check /tmp/native-picker-product.patch
+          git apply /tmp/native-picker-product.patch
+          rm -f .github/workflows/apply-native-template-picker-fix.yml
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
           python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
-      - name: Publish fix to branch
+      - name: Publish clean fix branch
+        shell: bash
         run: |
+          set -Eeuo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "Fix native first-run template picker"
-          git push origin HEAD:agent/fix-native-template-picker
+          git push --force-with-lease=refs/heads/agent/fix-native-template-picker:${OLD_HEAD} origin HEAD:agent/fix-native-template-picker

@@ -1,0 +1,32 @@
+name: One-shot stale branch cleanup
+
+on:
+  push:
+    branches:
+      - chore/delete-stale-first-run-branch
+
+permissions:
+  contents: write
+
+jobs:
+  delete-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete obsolete and one-shot branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/git/refs/heads"
+          headers=(
+            -H "Authorization: Bearer ${GH_TOKEN}"
+            -H "Accept: application/vnd.github+json"
+            -H "X-GitHub-Api-Version: 2022-11-28"
+          )
+
+          curl --fail-with-body --silent --show-error -L -X DELETE "${headers[@]}" \
+            "${api}/agent%2Frestore-proven-first-run-and-buttons"
+
+          curl --fail-with-body --silent --show-error -L -X DELETE "${headers[@]}" \
+            "${api}/chore%2Fdelete-stale-first-run-branch"

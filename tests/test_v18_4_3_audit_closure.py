@@ -1,4 +1,9 @@
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -85,6 +90,47 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "path: .release-gate/**" in release_workflow
     assert "needs: [windows-hardware-e2e, linux-bundles]" in release_workflow
     assert "Attach artifacts only after signing and hardware E2E" in release_workflow
+
+
+def test_production_workflow_yaml_and_hardware_powershell_parse() -> None:
+    expected_workflows = {
+        ".github/workflows/windows-hardware-e2e.yml": "Windows Hardware E2E",
+        ".github/workflows/build-installers.yml": "Build Signed Offline Installers",
+    }
+    for path, expected_name in expected_workflows.items():
+        parsed = yaml.safe_load(text(path))
+        assert parsed["name"] == expected_name
+
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell is not installed in this development environment")
+    parser_script = r"""
+$paths = @(
+  'tests/windows/windows_hardware_e2e.ps1',
+  'tests/windows/verify_sidecar_authenticode.ps1'
+)
+foreach ($path in $paths) {
+  $tokens = $null
+  $errors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $path),
+    [ref]$tokens,
+    [ref]$errors
+  ) | Out-Null
+  if ($errors.Count -gt 0) {
+    $details = ($errors | ForEach-Object { $_.Message }) -join '; '
+    throw "PowerShell parse failed for ${path}: ${details}"
+  }
+}
+"""
+    result = subprocess.run(
+        [pwsh, "-NoProfile", "-NonInteractive", "-Command", parser_script],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_production_csp_excludes_dev_server_and_dev_overlay_is_explicit() -> None:

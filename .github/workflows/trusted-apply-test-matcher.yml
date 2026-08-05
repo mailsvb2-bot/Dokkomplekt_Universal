@@ -1,0 +1,52 @@
+name: Trusted apply frontend matcher fix
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/apply-test-matcher-fix' &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve exact same-repository PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_repo="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
+          head_ref="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.ref')"
+          test "$head_repo" = "$REPOSITORY"
+          test "$head_ref" = 'agent/fix-popup-skip-and-field-validation'
+          echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+      - name: Verify, apply and remove transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .github/patches/test-matcher-fix.b64 > "$RUNNER_TEMP/test-matcher-fix.patch"
+          echo "57540e3e1790679dfe71b40111b1b650954505a64cd93b6503126dc04ea34cc9  $RUNNER_TEMP/test-matcher-fix.patch" | sha256sum --check -
+          git apply --check "$RUNNER_TEMP/test-matcher-fix.patch"
+          git apply --index "$RUNNER_TEMP/test-matcher-fix.patch"
+          git rm .github/patches/test-matcher-fix.b64 .github/workflows/apply-test-matcher-fix.yml
+          python scripts/verify_source_manifest.py
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Use built-in Vitest assertions for popup skip scenario"
+          git push origin "HEAD:${{ steps.pr.outputs.head_ref }}"

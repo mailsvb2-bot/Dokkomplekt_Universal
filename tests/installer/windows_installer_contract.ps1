@@ -166,6 +166,26 @@ function Find-ButtonByNames {
   return $null
 }
 
+function Set-UiValue {
+  param(
+    [Parameter(Mandatory = $true)]$Element,
+    [Parameter(Mandatory = $true)][string]$Value
+  )
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -eq $valueElement) {
+    throw 'UI element and its descendants do not expose ValuePattern.'
+  }
+  $pattern = $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+  $pattern.SetValue($Value)
+}
+
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
 $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -206,8 +226,7 @@ $fileNameEdit = Wait-UiElement -Description 'OpenFileDialog file name field' -Pr
   )
   $templateDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
 }
-$valuePattern = $fileNameEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-$valuePattern.SetValue($plainTemplate)
+Set-UiValue -Element $fileNameEdit -Value $plainTemplate
 $openButton = Wait-UiElement -Description 'OpenFileDialog Open button' -Probe {
   Find-ButtonByNames -Root $templateDialog -Names @('Открыть', 'Open')
 }

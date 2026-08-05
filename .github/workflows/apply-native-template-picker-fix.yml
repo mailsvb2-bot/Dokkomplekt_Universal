@@ -1,0 +1,41 @@
+name: Apply Native Template Picker Fix
+
+on:
+  push:
+    branches:
+      - agent/fix-native-template-picker
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed product fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/native-picker-patch/*.b64 | base64 --decode > /tmp/native-picker.patch
+          git apply --check /tmp/native-picker.patch
+          git apply /tmp/native-picker.patch
+          mkdir -p src-tauri/src/subsystems
+          cat .github/native-picker-runtime/*.b64 | base64 --decode > src-tauri/src/subsystems/template_picker.rs
+          rm -rf .github/native-picker-patch .github/native-picker-runtime
+          rm -f .github/workflows/apply-native-template-picker-fix.yml
+          rm -f .github/native-picker-trigger.txt .github/native-picker-trigger-2.txt
+          python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
+          python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
+      - name: Publish fix to branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Fix native first-run template picker"
+          git push origin HEAD:agent/fix-native-template-picker

@@ -25,6 +25,8 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
     smoke = text("tests/installer/windows_installer_contract.ps1")
 
     assert "New-PlainDocxFixture" in smoke
+    assert "function Set-UiValue" in smoke
+    assert "IsValuePatternAvailableProperty" in smoke
     assert "button-smoke.docx" in smoke
     assert "Проверочная кнопка" in smoke
     assert "Create button from a real unmarked DOCX" in smoke

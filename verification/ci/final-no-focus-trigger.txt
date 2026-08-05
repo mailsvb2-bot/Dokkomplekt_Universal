@@ -1,0 +1,1 @@
+Trigger final Windows installed-button test without invalid SetFocus.

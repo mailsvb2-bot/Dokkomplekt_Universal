@@ -417,10 +417,11 @@ describe('Полный прогон пользовательских сцена�
 
     // Native first-run/add-template flow: the visible action opens the OS picker,
     // then the selected DOCX files are analysed and presented for confirmation.
+    const priorTemplateAnalyses = calls.filter((call) => call.command === 'analyze_template_file').length;
     await click(/Добавить шаблоны/);
     const dialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
     await waitFor(() => expect(calls.some((c) => c.command === 'pick_template_files')).toBe(true));
-    await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(2));
+    await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(priorTemplateAnalyses + 2));
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Создать кнопки (2)' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Добавление шаблонов' })).toBeNull());
     await screen.findByRole('button', { name: 'Договор' });
@@ -428,6 +429,14 @@ describe('Полный прогон пользовательских сцена�
       { template_path: '/app-data/user-templates/contract.docx' },
       { template_path: '/app-data/user-templates/act.docx' },
     ] } });
+
+    // Text fallback remains explicitly reachable without cancelling the native picker.
+    await click(/Создать из текста/);
+    const manualDialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
+    fireEvent.change(within(manualDialog).getByPlaceholderText('Вставьте текст документа'), { target: { value: 'Договор № {{document.number}}' } });
+    fireEvent.click(within(manualDialog).getByRole('button', { name: 'Проверить шаблон' }));
+    await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template')).toBe(true));
+    fireEvent.click(within(manualDialog).getByRole('button', { name: 'Отмена' }));
 
     // HTTPS/site/API intake -> parse_web_source
     fireEvent.change(screen.getByLabelText('Адрес источника'), { target: { value: 'https://example.com/doc' } });

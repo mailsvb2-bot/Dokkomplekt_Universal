@@ -808,6 +808,16 @@ function AppContent() {
     setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
   }
 
+  function openTextTemplateSetup() {
+    setTemplateText('');
+    setButtonLabel('');
+    setImportedTemplatePath(null);
+    setPendingTemplates([]);
+    setDraftPopupFields([]);
+    setSetupOpen(true);
+    setStatus('Вставьте текст документа, проверьте название кнопки и создайте шаблон.');
+  }
+
   async function processTemplateFiles(files: File[]) {
     const accepted = files.filter((file) => /\.doc[xm]$/i.test(file.name));
     if (!accepted.length) {
@@ -1410,6 +1420,7 @@ function AppContent() {
             onRemove={removeActiveDocument}
             onApprove={approveActiveTemplate}
             onAdd={openTemplateSetup}
+            onAddFromText={openTextTemplateSetup}
             onToggleUtilities={() => setUtilityOpen((value) => !value)}
           />
         </div>

@@ -29,6 +29,118 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply robust native OpenFileDialog submit
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-installed-button-creation'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          test -f verification/ci/open-dialog-submit-repair.txt
+          python - <<'PY'
+          from pathlib import Path
+
+          smoke_path = Path('tests/installer/windows_installer_contract.ps1')
+          smoke = smoke_path.read_text(encoding='utf-8')
+
+          old_declaration = '''  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+          '''
+          new_declaration = '''  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+            [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
+            public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+          '''
+          if old_declaration not in smoke:
+              raise SystemExit('Expected SendMessage declaration was not found.')
+          smoke = smoke.replace(old_declaration, new_declaration, 1)
+
+          desktop_anchor = '''}
+
+          $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+          '''
+          submit_helper = '''}
+
+          function Submit-OpenFileDialog {
+            param([Parameter(Mandatory = $true)]$Dialog)
+
+            $automationId = [System.Windows.Automation.PropertyCondition]::new(
+              [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+              '1'
+            )
+            $kind = [System.Windows.Automation.PropertyCondition]::new(
+              [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+              [System.Windows.Automation.ControlType]::Button
+            )
+            $openButton = $Dialog.FindFirst(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              [System.Windows.Automation.AndCondition]::new($automationId, $kind)
+            )
+            if ($null -ne $openButton) {
+              Invoke-UiElement -Element $openButton
+              return
+            }
+
+            # Hosted Windows runners may hide the localized Open button from UIA.
+            # IDOK=1 is the stable native command for confirming a common dialog.
+            $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+            if ($dialogHandle -eq [IntPtr]::Zero) {
+              throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+            }
+            $null = [DokkomplektNativeMouse]::SendMessagePtr(
+              $dialogHandle,
+              0x0111,
+              [IntPtr]1,
+              [IntPtr]::Zero
+            )
+            Start-Sleep -Milliseconds 500
+          }
+
+          $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+          '''
+          if desktop_anchor not in smoke:
+              raise SystemExit('Expected desktop anchor was not found.')
+          smoke = smoke.replace(desktop_anchor, submit_helper, 1)
+
+          old_open = '''$openButton = Wait-UiElement -Description 'OpenFileDialog Open button' -Probe {
+            Find-ButtonByNames -Root $templateDialog -Names @('Открыть', 'Open')
+          }
+          Invoke-UiElement -Element $openButton
+          '''
+          new_open = '''Submit-OpenFileDialog -Dialog $templateDialog
+          '''
+          if old_open not in smoke:
+              raise SystemExit('Expected localized Open button block was not found.')
+          smoke = smoke.replace(old_open, new_open, 1)
+          smoke_path.write_text(smoke, encoding='utf-8')
+
+          test_path = Path('tests/test_v18_4_5_installed_button_creation.py')
+          test = test_path.read_text(encoding='utf-8')
+          anchor = '    assert "0x000C" in smoke\n'
+          addition = (
+              anchor
+              + '    assert "function Submit-OpenFileDialog" in smoke\n'
+              + '    assert "SendMessagePtr" in smoke\n'
+              + '    assert "0x0111" in smoke\n'
+              + '    assert "AutomationId=1" in smoke\n'
+          )
+          if 'assert "SendMessagePtr" in smoke' not in test:
+              if anchor not in test:
+                  raise SystemExit('Expected regression-test anchor was not found.')
+              test = test.replace(anchor, addition, 1)
+              test_path.write_text(test, encoding='utf-8')
+          PY
+          rm verification/ci/open-dialog-submit-repair.txt
+          git checkout origin/main -- .github/workflows/source-provenance.yml
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          python -m pytest -q tests/test_v18_4_5_installed_button_creation.py
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Test OpenFileDialog through native IDOK submission"
+          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

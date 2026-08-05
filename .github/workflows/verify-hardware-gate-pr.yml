@@ -54,23 +54,4 @@ jobs:
           assert workflow['name'] == 'Windows Hardware E2E'
           print('workflow YAML parsed')
           PY
-          pwsh -NoProfile -Command "$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'tests/windows/windows_hardware_e2e.ps1'), [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }; Write-Host 'PowerShell AST parsed'"
-      - name: Upload verifier evidence
-        if: always()
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
-        with:
-          name: hardware-gate-pr-verification
-          path: verification/ci/hardware-gate-pr-python.json
-          if-no-files-found: error
-      - name: Report failure
-        if: ${{ failure() }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          python - <<'PY'
-          import json, os, urllib.request
-          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/49/comments"
-          request = urllib.request.Request(url, data=json.dumps({'body': f"Trusted hardware-gate verification run {os.environ['RUN_ID']} failed; inspect the Actions log."}).encode(), headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'}, method='POST')
-          urllib.request.urlopen(request).read()
-          PY
+          pwsh -NoProfile -Command "$paths = @('tests/windows/windows_hardware_e2e.ps1', 'tests/windows/verify_sidecar_authenticode.ps1'); foreach ($path in $paths) { $tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count) { $errors | Format-List | Out-String | Write-Error; exit 1 }; Write-Host \"PowerShell AST parsed: $path\

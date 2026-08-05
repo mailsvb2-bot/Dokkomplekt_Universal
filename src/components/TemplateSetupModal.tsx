@@ -33,10 +33,6 @@ interface TemplateSetupModalProps {
 
 export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const hasBatch = props.pendingTemplates.length > 0;
-  const unmarkedTemplateCount = props.pendingTemplates.filter((item) => !hasConfirmedPlaceholder(item.extracted_text)).length;
-  const [allowStaticCopies, setAllowStaticCopies] = useState(false);
-  const batchReady = hasBatch && (unmarkedTemplateCount === 0 || allowStaticCopies);
-  const manualReady = hasConfirmedPlaceholder(props.templateText) || (allowStaticCopies && Boolean(props.templateText.trim()));
   const [scannerField, setScannerField] = useState('');
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
@@ -45,6 +41,10 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
     () => props.pendingTemplates.find((item) => item.document_id === activePendingId) ?? props.pendingTemplates[0] ?? null,
     [activePendingId, props.pendingTemplates],
   );
+  const invalidLabel = props.pendingTemplates.find((item) => !item.button_label.trim());
+  const batchReady = hasBatch && !invalidLabel;
+  const manualReady = Boolean(props.templateText.trim());
+  const confirmLabel = hasBatch ? `Создать кнопки (${props.pendingTemplates.length})` : 'Создать кнопку';
 
   useEffect(() => {
     if (!props.pendingTemplates.length) {
@@ -59,9 +59,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   useEffect(() => {
     for (const item of props.pendingTemplates) {
       const normalized = normalizeTemplateButtonLabel(item.button_label);
-      if (normalized !== item.button_label) {
-        props.onPendingTemplateLabelChange(item.document_id, normalized);
-      }
+      if (normalized !== item.button_label) props.onPendingTemplateLabelChange(item.document_id, normalized);
     }
   }, [props.pendingTemplates, props.onPendingTemplateLabelChange]);
 
@@ -80,9 +78,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
     const fieldId = scannerField.trim();
     const placeholder = `{{${fieldId}}}`;
     const replacement = action === 'replace' ? placeholder : `${selection.text}${placeholder}`;
-    props.onTemplateTextChange(
-      props.templateText.slice(0, selection.start) + replacement + props.templateText.slice(selection.end),
-    );
+    props.onTemplateTextChange(props.templateText.slice(0, selection.start) + replacement + props.templateText.slice(selection.end));
     rememberScannerQuestion(null, fieldId);
     setSelection(null);
   }
@@ -100,10 +96,6 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
     }
   }
 
-  const confirmLabel = hasBatch
-    ? `Создать кнопки (${props.pendingTemplates.length})`
-    : 'Создать кнопку';
-
   return (
     <div className="backdrop" role="dialog" aria-modal="true" aria-label="Добавление шаблонов">
       <div
@@ -115,25 +107,21 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           if (files.length) props.onDropFiles(files);
         }}
       >
-        <h2>Создать кнопки документов</h2>
-        <p className="hint">
-          Выберите свои DOCX или DOCM. Название каждого документа станет кнопкой на главном экране.
-        </p>
-        <p className="hint">
-          Шаблон задаёт форму и расположение полей. Данные нового документа берутся из исходного файла и подтверждённых ответов, а не копируются из текста обучающего шаблона.
-        </p>
+        <h2>Создать свои кнопки</h2>
+        <p className="hint">Выберите рабочие шаблоны Word. Каждый DOCX или DOCM сразу станет отдельной кнопкой.</p>
+        <p className="hint">Сначала создайте кнопки и начните работать. Автоматические поля, вопросы и разметку можно добавить позже для каждой кнопки.</p>
 
         {!hasBatch ? (
           <div className="emptyPackage templateFirstStep">
             <div><i className="ti ti-file-upload" /></div>
-            <h3>1. Выберите шаблоны</h3>
-            <p>Можно выбрать сразу несколько файлов. Если программа не найдёт места для заполнения, она попросит показать их в Word.</p>
+            <h3>Выберите шаблоны документов</h3>
+            <p>Можно выбрать сразу несколько файлов. Название документа программа предложит как название кнопки.</p>
             <label className="primaryBtn fileBtn largeAction">
               Выбрать DOCX/DOCM
               <input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} data-testid="template-file-input" style={{ display: 'none' }} />
             </label>
             <details className="manualScannerDetails">
-              <summary>Создать шаблон из вставленного текста</summary>
+              <summary>Создать одну кнопку из вставленного текста</summary>
               <textarea
                 value={props.templateText}
                 onChange={(event) => props.onTemplateTextChange(event.target.value)}
@@ -146,40 +134,14 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                 spellCheck={false}
                 placeholder="Вставьте текст документа"
               />
-              <table className="confirm">
-                <tbody>
-                  <tr><th>Документ</th><td>{props.previewTitle}</td></tr>
-                  <tr>
-                    <th>Название кнопки</th>
-                    <td><input value={props.buttonLabel} placeholder={props.previewTitle} onChange={(event) => props.onButtonLabelChange(event.target.value)} /></td>
-                  </tr>
-                </tbody>
-              </table>
-              <button className="softBtn" onClick={props.onAnalyze}>Анализировать</button>
-              {props.templateText.trim() && !hasConfirmedPlaceholder(props.templateText) ? (
-                <>
-                  <div className="readyMessage templateReadyMessage warning">
-                    <i className="ti ti-alert-triangle" aria-hidden="true" />
-                    <div>
-                      <strong>Не найдены места заполнения</strong>
-                      <span>Разметьте изменяемые значения либо подтвердите, что документ должен создаваться как неизменяемая копия.</span>
-                    </div>
-                  </div>
-                  <label className="checkLine staticCopyConsent">
-                    <input type="checkbox" checked={allowStaticCopies} onChange={(event) => setAllowStaticCopies(event.target.checked)} />
-                    <span>Это неизменяемый документ без автоматически заполняемых полей</span>
-                  </label>
-                </>
-              ) : null}
+              <table className="confirm"><tbody>
+                <tr><th>Документ</th><td>{props.previewTitle}</td></tr>
+                <tr><th>Название кнопки</th><td><input value={props.buttonLabel} placeholder={props.previewTitle} onChange={(event) => props.onButtonLabelChange(event.target.value)} /></td></tr>
+              </tbody></table>
+              <button className="softBtn" type="button" onClick={props.onAnalyze}>Проверить шаблон</button>
               <details className="manualScannerDetails">
                 <summary>Дополнительная разметка</summary>
-                <ScannerToolbar
-                  selection={selection?.text ?? ''}
-                  fieldId={scannerField}
-                  onFieldIdChange={setScannerField}
-                  onReplace={() => applyVisualMarkup('replace')}
-                  onInsert={() => applyVisualMarkup('insert_after')}
-                />
+                <ScannerToolbar selection={selection?.text ?? ''} fieldId={scannerField} onFieldIdChange={setScannerField} onReplace={() => applyVisualMarkup('replace')} onInsert={() => applyVisualMarkup('insert_after')} />
                 <PopupFieldEditor compact fields={props.draftPopupFields} onChange={props.onDraftPopupFieldsChange} />
               </details>
             </details>
@@ -187,22 +149,13 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         ) : (
           <>
             <div className="templateBatch" aria-label="Подготовленные шаблоны">
-              <div className="templateBatchHead">2. Проверьте названия кнопок</div>
+              <div className="templateBatchHead">Проверьте названия кнопок</div>
               {props.pendingTemplates.map((item) => (
                 <div className={activePending?.document_id === item.document_id ? 'templateBatchRow selected' : 'templateBatchRow'} key={item.document_id}>
-                  <button
-                    className="templateFileSelect"
-                    type="button"
-                    title="Открыть дополнительную настройку"
-                    onClick={() => { setActivePendingId(item.document_id); setSelection(null); }}
-                  >
+                  <button className="templateFileSelect" type="button" title="Открыть дополнительную настройку" onClick={() => { setActivePendingId(item.document_id); setSelection(null); }}>
                     {item.file_name}
                   </button>
-                  <input
-                    aria-label={`Название документа для ${item.file_name}`}
-                    value={item.button_label}
-                    onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)}
-                  />
+                  <input aria-label={`Название документа для ${item.file_name}`} value={item.button_label} onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)} />
                 </div>
               ))}
             </div>
@@ -210,39 +163,21 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             <div className={`readyMessage templateReadyMessage ${batchReady ? '' : 'warning'}`}>
               <i className={batchReady ? 'ti ti-circle-check' : 'ti ti-alert-triangle'} aria-hidden="true" />
               <div>
-                <strong>{batchReady ? '3. Всё готово' : '3. Нужна разметка или подтверждение'}</strong>
-                <span>
-                  {unmarkedTemplateCount === 0
-                    ? `Нажмите «${confirmLabel}». Шаблон задаёт форму, а значения будут взяты только из исходного документа и подтверждённых ответов.`
-                    : allowStaticCopies
-                      ? `${unmarkedTemplateCount} шаблон(ов) будут создаваться как неизменяемые копии. Данные исходного документа в них не подставляются.`
-                      : `В ${unmarkedTemplateCount} шаблон(ах) не найдены места заполнения. Покажите хотя бы одно место в Word или явно подтвердите, что это неизменяемые документы.`}
-                </span>
+                <strong>{batchReady ? 'Кнопки готовы к созданию' : 'Укажите название кнопки'}</strong>
+                <span>{batchReady ? 'Нажмите кнопку ниже. Неразмеченные шаблоны сохранят свою форму и будут доступны сразу.' : `Не заполнено название для ${invalidLabel?.file_name ?? 'одного шаблона'}.`}</span>
               </div>
             </div>
 
-            {unmarkedTemplateCount > 0 ? (
-              <label className="checkLine staticCopyConsent">
-                <input type="checkbox" checked={allowStaticCopies} onChange={(event) => setAllowStaticCopies(event.target.checked)} />
-                <span>Создавать неразмеченные шаблоны как неизменяемые копии</span>
-              </label>
-            ) : null}
-
             {activePending ? (
               <details className="manualScannerDetails templateAdvancedSetup">
-                <summary>Дополнительная настройка выбранного шаблона</summary>
+                <summary>Необязательно: настроить автоматическое заполнение</summary>
                 <div className="pendingCursorScanner">
                   <div className="guidedTemplateLaunch">
-                    <div>
-                      <strong>Показать места для автоматического заполнения</strong>
-                      <small>Для неразмеченного шаблона покажите хотя бы одно место заполнения.</small>
-                    </div>
-                    <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}>
-                      <i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место
-                    </button>
+                    <div><strong>Показать место для автоматического заполнения</strong><small>Этот шаг не нужен для создания кнопки. Его можно выполнить позже.</small></div>
+                    <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}><i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место</button>
                   </div>
                   <details className="manualScannerDetails">
-                    <summary>Ручная разметка для опытных пользователей</summary>
+                    <summary>Ручная разметка</summary>
                     <textarea
                       value={activePending.extracted_text}
                       readOnly
@@ -255,28 +190,14 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                       }}
                       spellCheck={false}
                     />
-                    <ScannerToolbar
-                      selection={selection?.text ?? ''}
-                      fieldId={scannerField}
-                      onFieldIdChange={setScannerField}
-                      disabled={marking}
-                      onReplace={() => void applyPendingVisualMarkup('replace')}
-                      onInsert={() => void applyPendingVisualMarkup('insert_after')}
-                    />
+                    <ScannerToolbar selection={selection?.text ?? ''} fieldId={scannerField} onFieldIdChange={setScannerField} disabled={marking} onReplace={() => void applyPendingVisualMarkup('replace')} onInsert={() => void applyPendingVisualMarkup('insert_after')} />
                   </details>
-                  <PopupFieldEditor
-                    compact
-                    fields={activePending.popup_fields}
-                    onChange={(fields) => props.onPendingPopupFieldsChange(activePending.document_id, fields)}
-                  />
+                  <PopupFieldEditor compact fields={activePending.popup_fields} onChange={(fields) => props.onPendingPopupFieldsChange(activePending.document_id, fields)} />
                 </div>
               </details>
             ) : null}
 
-            <label className="softBtn fileBtn">
-              Добавить ещё шаблоны
-              <input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} style={{ display: 'none' }} />
-            </label>
+            <label className="softBtn fileBtn">Добавить ещё шаблоны<input type="file" accept=".docx,.docm" multiple onChange={props.onPickFile} style={{ display: 'none' }} /></label>
           </>
         )}
 
@@ -288,9 +209,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>
-            {confirmLabel}
-          </button>
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -299,15 +218,8 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
 
 function normalizeTemplateButtonLabel(value: string): string {
   const trimmed = value.trim();
-  const normalized = trimmed
-    .replace(/\s+(?:№|N|#)\s*$/i, '')
-    .replace(/\s*[:;]\s*$/, '')
-    .trim();
+  const normalized = trimmed.replace(/\s+(?:№|N|#)\s*$/i, '').replace(/\s*[:;]\s*$/, '').trim();
   return normalized || trimmed;
-}
-
-function hasConfirmedPlaceholder(text: string): boolean {
-  return /\{\{\s*[a-zA-Z0-9_.-]+\s*\}\}/.test(text);
 }
 
 function ScannerToolbar(props: {

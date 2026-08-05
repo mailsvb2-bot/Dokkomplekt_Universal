@@ -1,1 +1,0 @@
-Add robust OpenFileDialog confirmation through AutomationId=1 and native WM_COMMAND/IDOK fallback.

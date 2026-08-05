@@ -85,6 +85,8 @@ public static class DokkomplektNativeMouse {
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+  [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
+  public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }
 "@
 
@@ -197,6 +199,41 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
+function Submit-OpenFileDialog {
+  param([Parameter(Mandatory = $true)]$Dialog)
+
+  $automationId = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1'
+  )
+  $kind = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+  )
+  $openButton = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.AndCondition]::new($automationId, $kind)
+  )
+  if ($null -ne $openButton) {
+    Invoke-UiElement -Element $openButton
+    return
+  }
+
+  # Hosted Windows runners may hide the localized Open button from UIA.
+  # IDOK=1 is the stable native command for confirming a common dialog.
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+  }
+  $null = [DokkomplektNativeMouse]::SendMessagePtr(
+    $dialogHandle,
+    0x0111,
+    [IntPtr]1,
+    [IntPtr]::Zero
+  )
+  Start-Sleep -Milliseconds 500
+}
+
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
 $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -238,10 +275,7 @@ $fileNameEdit = Wait-UiElement -Description 'OpenFileDialog file name field' -Pr
   $templateDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
 }
 Set-UiValue -Element $fileNameEdit -Value $plainTemplate
-$openButton = Wait-UiElement -Description 'OpenFileDialog Open button' -Probe {
-  Find-ButtonByNames -Root $templateDialog -Names @('Открыть', 'Open')
-}
-Invoke-UiElement -Element $openButton
+Submit-OpenFileDialog -Dialog $templateDialog
 Write-Host 'Native first-run template picker OK: real DOCX selected.'
 
 $createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) button' -TimeoutSeconds 40 -Probe {

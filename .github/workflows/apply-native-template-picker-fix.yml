@@ -3,8 +3,6 @@ name: Apply Native Template Picker Fix
 on:
   schedule:
     - cron: '*/5 * * * *'
-  issues:
-    types: [reopened]
   pull_request_target:
     types: [reopened]
 
@@ -14,7 +12,7 @@ permissions:
 
 jobs:
   apply-fix:
-    if: ${{ github.event_name == 'schedule' || github.event.issue.number == 48 || (github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ github.event_name == 'schedule' || (github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     env:
       SERVICE_ISSUE: '48'
@@ -93,12 +91,21 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, urllib.request
+          from pathlib import Path
+
+          patch = Path('.native-picker.patch')
+          diagnostic = ''
+          if patch.is_file():
+              lines = patch.read_text(encoding='utf-8', errors='replace').splitlines()
+              start, end = 84, min(len(lines), 108)
+              diagnostic = '\n```diff\n' + '\n'.join(f'{index + 1:04d}: {lines[index]}' for index in range(start, end)) + '\n```'
+          body = f"Native picker applicator run {os.environ['RUN_ID']} failed.{diagnostic}"
           url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
           request = urllib.request.Request(
               url,
-              data=json.dumps({"body": f"Native picker applicator run {os.environ['RUN_ID']} failed; inspect the Actions log before retrying."}).encode(),
-              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
-              method="POST",
+              data=json.dumps({'body': body}).encode(),
+              headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'},
+              method='POST',
           )
           urllib.request.urlopen(request).read()
           PY

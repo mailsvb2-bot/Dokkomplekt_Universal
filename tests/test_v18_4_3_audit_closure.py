@@ -59,6 +59,8 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "scripts\\prepackage_rust_gate.bat" in workflow
     assert "verify_sidecar_authenticode.ps1" in workflow
     assert "SIDECAR_AUTHENTICODE.json" in workflow
+    assert "function Test-PortableExecutable" in sidecar_signatures
+    assert "0x4D" in sidecar_signatures and "0x5A" in sidecar_signatures
     assert "Get-AuthenticodeSignature" in sidecar_signatures
     assert "Sidecar Authenticode signature is not valid" in sidecar_signatures
     assert "dokkomplekt.sidecar-authenticode.v1" in sidecar_signatures

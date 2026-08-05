@@ -27,57 +27,144 @@ jobs:
         run: |
           npm ci
           python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Update stale frontend contracts
+      - name: Repair product reachability and stale contracts
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           from textwrap import dedent
 
+          app_path = Path('src/App.tsx')
+          app = app_path.read_text(encoding='utf-8')
+          app_marker = """    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
+            }
+
+            async function processTemplateFiles(files: File[]) {
+          """.replace('            ', '  ')
+          app_replacement = """    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
+            }
+
+            function openTextTemplateSetup() {
+              setTemplateText('');
+              setButtonLabel('');
+              setImportedTemplatePath(null);
+              setPendingTemplates([]);
+              setDraftPopupFields([]);
+              setSetupOpen(true);
+              setStatus('Вставьте текст документа, проверьте название кнопки и создайте шаблон.');
+            }
+
+            async function processTemplateFiles(files: File[]) {
+          """.replace('            ', '  ')
+          if app.count(app_marker) != 1:
+              raise SystemExit('App manual-template insertion marker is not unique')
+          app = app.replace(app_marker, app_replacement, 1)
+          prop_marker = "            onAdd={openTemplateSetup}\n            onToggleUtilities="
+          if app.count(prop_marker) != 1:
+              raise SystemExit('DocumentRail prop marker is not unique')
+          app = app.replace(prop_marker, "            onAdd={openTemplateSetup}\n            onAddFromText={openTextTemplateSetup}\n            onToggleUtilities=", 1)
+          app_path.write_text(app, encoding='utf-8')
+
+          rail_path = Path('src/components/DocumentRail.tsx')
+          rail = rail_path.read_text(encoding='utf-8')
+          interface_marker = "  onAdd(): void;\n  onToggleUtilities(): void;"
+          if rail.count(interface_marker) != 1:
+              raise SystemExit('DocumentRail interface marker is not unique')
+          rail = rail.replace(interface_marker, "  onAdd(): void;\n  onAddFromText(): void;\n  onToggleUtilities(): void;", 1)
+          existing_action = '<button className="textBtn" onClick={props.onAdd} disabled={props.busy}>Добавить шаблоны</button>'
+          if rail.count(existing_action) != 1:
+              raise SystemExit('DocumentRail add action marker is not unique')
+          rail = rail.replace(existing_action, existing_action + '\n            <button className="textBtn" onClick={props.onAddFromText} disabled={props.busy}>Создать из текста</button>', 1)
+          first_run_action = '<button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd} disabled={props.busy}>Создать свои кнопки</button>'
+          if rail.count(first_run_action) != 1:
+              raise SystemExit('DocumentRail first-run marker is not unique')
+          rail = rail.replace(first_run_action, first_run_action + '\n          <button className="textBtn firstRunTextTemplate" onClick={props.onAddFromText} disabled={props.busy}>Создать кнопку из текста</button>', 1)
+          rail_path.write_text(rail, encoding='utf-8')
+
           scenario_path = Path('src/App.scenarios.test.tsx')
           scenario = scenario_path.read_text(encoding='utf-8')
           start = "    await click(/Добавить шаблоны/);\n    const dialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });\n"
-          replacement = "    const priorTemplateAnalyses = calls.filter((call) => call.command === 'analyze_template_file').length;\n" + start
           if scenario.count(start) != 1:
               raise SystemExit('native picker scenario start marker is not unique')
-          scenario = scenario.replace(start, replacement, 1)
+          scenario = scenario.replace(start, "    const priorTemplateAnalyses = calls.filter((call) => call.command === 'analyze_template_file').length;\n" + start, 1)
           assertion = "await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(2));"
-          repaired_assertion = "await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(priorTemplateAnalyses + 2));"
           if scenario.count(assertion) != 1:
               raise SystemExit('native picker analysis assertion is not unique')
-          scenario_path.write_text(scenario.replace(assertion, repaired_assertion, 1), encoding='utf-8')
+          scenario = scenario.replace(assertion, "await waitFor(() => expect(calls.filter((c) => c.command === 'analyze_template_file')).toHaveLength(priorTemplateAnalyses + 2));", 1)
+          native_end = """    expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
+                { template_path: '/app-data/user-templates/contract.docx' },
+                { template_path: '/app-data/user-templates/act.docx' },
+              ] } });
+
+              // HTTPS/site/API intake -> parse_web_source
+          """.replace('              ', '    ')
+          manual_flow = """    expect(parsePayload(calls, 'prepare_template_setup')).toMatchObject({ req: { candidates: [
+                { template_path: '/app-data/user-templates/contract.docx' },
+                { template_path: '/app-data/user-templates/act.docx' },
+              ] } });
+
+              // Text fallback remains explicitly reachable without cancelling the native picker.
+              await click(/Создать из текста/);
+              const manualDialog = await screen.findByRole('dialog', { name: 'Добавление шаблонов' });
+              fireEvent.change(within(manualDialog).getByPlaceholderText('Вставьте текст документа'), { target: { value: 'Договор № {{document.number}}' } });
+              fireEvent.click(within(manualDialog).getByRole('button', { name: 'Проверить шаблон' }));
+              await waitFor(() => expect(calls.some((c) => c.command === 'analyze_template')).toBe(true));
+              fireEvent.click(within(manualDialog).getByRole('button', { name: 'Отмена' }));
+
+              // HTTPS/site/API intake -> parse_web_source
+          """.replace('              ', '    ')
+          if scenario.count(native_end) != 1:
+              raise SystemExit('native picker scenario completion marker is not unique')
+          scenario_path.write_text(scenario.replace(native_end, manual_flow, 1), encoding='utf-8')
 
           runtime_path = Path('src/lib/runtimeValidation.test.ts')
           runtime = runtime_path.read_text(encoding='utf-8')
-          assertion = "    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(114);\n"
-          replacement = "    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(115);\n    expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');\n"
-          if runtime.count(assertion) != 1:
+          runtime_assertion = "    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(114);\n"
+          if runtime.count(runtime_assertion) != 1:
               raise SystemExit('runtime command-count assertion is not unique')
-          runtime_path.write_text(runtime.replace(assertion, replacement, 1), encoding='utf-8')
+          runtime_path.write_text(runtime.replace(runtime_assertion, "    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(115);\n    expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');\n", 1), encoding='utf-8')
 
-          modal_test = dedent('''\
+          rail_test_path = Path('src/components/DocumentRail.test.tsx')
+          rail_test = rail_test_path.read_text(encoding='utf-8')
+          if rail_test.count('    onAdd: vi.fn(),\n') != 1:
+              raise SystemExit('DocumentRail test props marker is not unique')
+          rail_test = rail_test.replace('    onAdd: vi.fn(),\n', '    onAdd: vi.fn(),\n    onAddFromText: vi.fn(),\n', 1)
+          old_first_test = dedent('''\
+            it('shows one clear first-run action when there are no buttons', () => {
+              const onAdd = vi.fn();
+              renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], onAdd });
+              expect(screen.getByText('Создайте кнопки документов')).toBeTruthy();
+              fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
+              expect(onAdd).toHaveBeenCalledOnce();
+            });
+          ''')
+          new_first_test = dedent('''\
+            it('keeps the native picker primary and exposes an explicit text fallback', () => {
+              const onAdd = vi.fn();
+              const onAddFromText = vi.fn();
+              renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], onAdd, onAddFromText });
+              expect(screen.getByText('Создайте кнопки документов')).toBeTruthy();
+              fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
+              fireEvent.click(screen.getByRole('button', { name: 'Создать кнопку из текста' }));
+              expect(onAdd).toHaveBeenCalledOnce();
+              expect(onAddFromText).toHaveBeenCalledOnce();
+            });
+          ''')
+          if rail_test.count(old_first_test) != 1:
+              raise SystemExit('DocumentRail first-run test marker is not unique')
+          rail_test_path.write_text(rail_test.replace(old_first_test, new_first_test, 1), encoding='utf-8')
+
+          Path('src/components/TemplateSetupModal.test.tsx').write_text(dedent('''\
           import { fireEvent, render, screen, waitFor } from '@testing-library/react';
           import { describe, expect, it, vi } from 'vitest';
           import { TemplateSetupModal } from './TemplateSetupModal';
 
           const base = {
-            templateText: '',
-            buttonLabel: '',
-            previewTitle: 'Документ',
-            pendingTemplates: [],
-            draftPopupFields: [],
-            onTemplateTextChange: vi.fn(),
-            onButtonLabelChange: vi.fn(),
-            onDraftPopupFieldsChange: vi.fn(),
-            onPendingTemplateLabelChange: vi.fn(),
-            onPendingPopupFieldsChange: vi.fn(),
-            onMarkupPendingTemplate: vi.fn(async () => undefined),
-            onStartGuidedPendingScanner: vi.fn(),
-            onAnalyze: vi.fn(),
-            onPickFile: vi.fn(),
-            onDropFiles: vi.fn(),
-            onCancel: vi.fn(),
-            onConfirm: vi.fn(),
+            templateText: '', buttonLabel: '', previewTitle: 'Документ', pendingTemplates: [], draftPopupFields: [],
+            onTemplateTextChange: vi.fn(), onButtonLabelChange: vi.fn(), onDraftPopupFieldsChange: vi.fn(),
+            onPendingTemplateLabelChange: vi.fn(), onPendingPopupFieldsChange: vi.fn(),
+            onMarkupPendingTemplate: vi.fn(async () => undefined), onStartGuidedPendingScanner: vi.fn(),
+            onAnalyze: vi.fn(), onPickFile: vi.fn(), onDropFiles: vi.fn(), onCancel: vi.fn(), onConfirm: vi.fn(),
           };
 
           describe('TemplateSetupModal', () => {
@@ -88,23 +175,19 @@ jobs:
               expect(screen.getByText('Создать одну кнопку из вставленного текста')).toBeTruthy();
               expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
             });
-
             it('allows a non-empty manual text template without mandatory markup', () => {
               const { rerender } = render(<TemplateSetupModal {...base} />);
               expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(true);
               rerender(<TemplateSetupModal {...base} templateText="Пример с Ивановым Иваном" />);
               expect((screen.getByRole('button', { name: 'Создать кнопку' }) as HTMLButtonElement).disabled).toBe(false);
             });
-
             it('cleans a dangling number mark from the suggested button label', async () => {
               const onPendingTemplateLabelChange = vi.fn();
               render(<TemplateSetupModal {...base} onPendingTemplateLabelChange={onPendingTemplateLabelChange} pendingTemplates={[{
-                document_id: 'd1', file_name: 'Счёт на оплату.docx', button_label: 'Счёт на оплату №',
-                extracted_text: 'Счёт на оплату № {{document.number}}', popup_fields: [],
+                document_id: 'd1', file_name: 'Счёт на оплату.docx', button_label: 'Счёт на оплату №', extracted_text: 'Счёт № {{document.number}}', popup_fields: [],
               }]} />);
               await waitFor(() => expect(onPendingTemplateLabelChange).toHaveBeenCalledWith('d1', 'Счёт на оплату'));
             });
-
             it('creates every prepared template as a button', () => {
               const onConfirm = vi.fn();
               render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[
@@ -116,12 +199,10 @@ jobs:
               fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (2)' }));
               expect(onConfirm).toHaveBeenCalledOnce();
             });
-
             it('allows an unmarked DOCX as an immediately usable static-copy button', () => {
               const onConfirm = vi.fn();
               render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{
-                document_id: 'd1', file_name: 'Пример.docx', button_label: 'Пример',
-                extracted_text: 'Пример документа с Ивановым Иваном Ивановичем', popup_fields: [],
+                document_id: 'd1', file_name: 'Пример.docx', button_label: 'Пример', extracted_text: 'Пример документа', popup_fields: [],
               }]} />);
               expect(screen.getByText(/Неразмеченные шаблоны сохранят свою форму и будут доступны сразу/)).toBeTruthy();
               const confirm = screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement;
@@ -130,12 +211,11 @@ jobs:
               expect(onConfirm).toHaveBeenCalledOnce();
             });
           });
-          ''')
-          Path('src/components/TemplateSetupModal.test.tsx').write_text(modal_test, encoding='utf-8')
+          '''), encoding='utf-8')
           PY
-      - name: Verify repaired contracts
+      - name: Verify full frontend and targeted backend contracts
         run: |
-          npx vitest run --config vitest.config.ts src/App.scenarios.test.tsx src/components/TemplateSetupModal.test.tsx src/lib/runtimeValidation.test.ts
+          npm run test
           npm run typecheck
           python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
           python -m pytest -q tests/test_v18_4_4_native_template_picker.py tests/test_v18_3_0_hardening_contracts.py
@@ -146,7 +226,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Test native template picker workflow contracts"
+          git commit -m "Restore text-template fallback and test picker contracts"
           git push origin HEAD:agent/fix-native-template-picker
       - name: Report failure
         if: ${{ failure() }}
@@ -157,7 +237,7 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          body = f"Native picker frontend-contract repair run {os.environ['RUN_ID']} failed; inspect its Actions log."
+          body = f"Native picker product-contract repair run {os.environ['RUN_ID']} failed; inspect its Actions log."
           url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues/{os.environ['SERVICE_ISSUE']}/comments"
           request = urllib.request.Request(url, data=json.dumps({'body': body}).encode(), headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'}, method='POST')
           urllib.request.urlopen(request).read()

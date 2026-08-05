@@ -5,6 +5,8 @@ on:
     - cron: '*/5 * * * *'
   issues:
     types: [reopened]
+  pull_request_target:
+    types: [reopened]
 
 permissions:
   contents: write
@@ -12,7 +14,7 @@ permissions:
 
 jobs:
   apply-fix:
-    if: ${{ github.event_name == 'schedule' || github.event.issue.number == 48 }}
+    if: ${{ github.event_name == 'schedule' || github.event.issue.number == 48 || (github.event.pull_request.number == 47 && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     env:
       SERVICE_ISSUE: '48'

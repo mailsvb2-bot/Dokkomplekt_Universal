@@ -36,4 +36,6 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
     assert "button-smoke.docx" in smoke
     assert "Проверочная кнопка" in smoke
     assert "Create button from a real unmarked DOCX" in smoke
+    assert "$application.FullName" not in smoke
+    assert smoke.count("Start-Process -FilePath $app.FullName -PassThru") == 2
     assert "Persisted template button survived application restart" in smoke

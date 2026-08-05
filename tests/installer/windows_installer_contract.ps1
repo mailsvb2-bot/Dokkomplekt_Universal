@@ -292,7 +292,7 @@ Write-Host 'Create button from a real unmarked DOCX OK.'
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
 Start-Sleep -Seconds 1
-$process = Start-Process -FilePath $application.FullName -PassThru
+$process = Start-Process -FilePath $app.FullName -PassThru
 $appWindow = Wait-UiElement -Description 'restarted installed Dokkomplekt window' -TimeoutSeconds 30 -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::ProcessIdProperty,

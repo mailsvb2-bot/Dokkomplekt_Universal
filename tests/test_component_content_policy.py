@@ -57,3 +57,12 @@ def test_component_and_content_paths_normalize_nested_backslashes(tmp_path: Path
 def test_component_catalog_base_url_reuses_production_url_policy(value: str) -> None:
     with pytest.raises(ValueError):
         build_component_packs.validate_public_https_url(value, "--base-url")
+
+
+def test_example_component_catalog_requires_an_explicit_real_download_host() -> None:
+    example = (ROOT / "components" / "components-catalog.example.json").read_text(
+        encoding="utf-8"
+    )
+    assert "downloads.example.com" not in example
+    assert '"allowed_hosts": ["REPLACE_WITH_PUBLIC_DOWNLOAD_HOST"]' in example
+    assert "https://REPLACE_WITH_PUBLIC_DOWNLOAD_HOST/" in example

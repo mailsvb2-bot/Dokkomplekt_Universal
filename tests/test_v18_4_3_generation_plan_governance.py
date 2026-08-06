@@ -55,7 +55,8 @@ def test_postgres_integration_is_mandatory_and_cannot_silently_skip() -> None:
     assert "postgres:16-alpine" in workflow
     assert "DATABASE_URL: postgresql://" in workflow
     assert "DOKKOMPLEKT_REQUIRE_POSTGRES_TESTS: '1'" in workflow
-    assert "cargo test --manifest-path crates/dokkomplekt-license-server/Cargo.toml" in workflow
+    assert "test -f crates/dokkomplekt-license-server/Cargo.lock" in workflow
+    assert "cargo test --locked --manifest-path crates/dokkomplekt-license-server/Cargo.toml" in workflow
     assert "postgres-integration" in workflow
     assert "DATABASE_URL is required because DOKKOMPLEKT_REQUIRE_POSTGRES_TESTS=1" in config
 

@@ -8,6 +8,10 @@ permissions:
   contents: write
   pull-requests: read
 
+concurrency:
+  group: trusted-signed-download-policy
+  cancel-in-progress: true
+
 jobs:
   apply:
     if: >-
@@ -72,11 +76,11 @@ jobs:
           python scripts/static_quality_gate.py --source-only
           python scripts/verify_source_manifest.py
           git diff --check
-      - name: Commit verified product tree
+      - name: Publish verified product tree
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m 'Harden signed download endpoints end to end'
-          git push origin HEAD:agent/harden-signed-download-endpoints
+          git push --force origin HEAD:agent/harden-signed-download-endpoints

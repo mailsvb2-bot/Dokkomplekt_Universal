@@ -4,18 +4,25 @@ on:
   push:
     branches:
       - agent/require-windows-gui-evidence-main
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   refresh-manifest:
-    if: ${{ !contains(github.event.head_commit.message, '[manifest-refresh]') }}
+    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[manifest-refresh]') }}
     runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+          ref: ${{ env.TARGET_BRANCH }}
       - name: Regenerate manifest and remove temporary workflow
         shell: bash
         run: |
@@ -28,5 +35,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml
           git commit -m "Synchronize GUI evidence source manifest [manifest-refresh]"
-          git push origin HEAD:${GITHUB_REF_NAME}
-# Second push intentionally triggers this temporary workflow.
+          git push origin HEAD:${TARGET_BRANCH}

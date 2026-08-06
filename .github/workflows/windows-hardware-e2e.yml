@@ -163,6 +163,9 @@ jobs:
       - name: Execute opt-in hardware E2E
         shell: pwsh
         run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
+      - name: Bind final hardware evidence index
+        shell: pwsh
+        run: scripts/write_windows_hardware_evidence_index.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
           name: Dokkomplekt-Windows-Hardware-E2E-Signed

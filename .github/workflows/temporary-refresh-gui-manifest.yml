@@ -2,7 +2,7 @@ name: Temporary Windows evidence finalizer
 
 on:
   workflow_run:
-    workflows: ["Quality Gate", "Source Provenance"]
+    workflows: ["Quality Gate", "Source Provenance", "Delete Merged Working Branch"]
     types: [completed]
   schedule:
     - cron: '*/5 * * * *'
@@ -15,7 +15,11 @@ permissions:
 
 jobs:
   finalize:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.id == 31077885576 || github.event.workflow_run.id == 31077885650
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.id == 31077885576 ||
+      github.event.workflow_run.id == 31077885650 ||
+      github.event.workflow_run.id == 31079849807
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955

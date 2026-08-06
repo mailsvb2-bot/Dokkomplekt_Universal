@@ -17,7 +17,7 @@ jobs:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.head_ref == 'agent/add-installed-generation-command' &&
-      github.base_ref == 'agent/harden-production-config-examples'
+      github.base_ref == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

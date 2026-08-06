@@ -3,7 +3,7 @@
     "schema": 1,
     "app_min_version": "18.3.0",
     "published_at": "2026-07-20T00:00:00Z",
-    "allowed_hosts": ["downloads.example.com"],
+    "allowed_hosts": ["REPLACE_WITH_PUBLIC_DOWNLOAD_HOST"],
     "components": [
       {
         "id": "ocr",
@@ -14,7 +14,7 @@
         "size_bytes": 44040192,
         "sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
         "files_manifest_sha256": "REPLACE_WITH_64_HEX_CHARACTERS",
-        "url": "https://downloads.example.com/dokkomplekt/18.3.0/ocr-windows-x86_64.zip"
+        "url": "https://REPLACE_WITH_PUBLIC_DOWNLOAD_HOST/dokkomplekt/18.3.0/ocr-windows-x86_64.zip"
       }
     ]
   },

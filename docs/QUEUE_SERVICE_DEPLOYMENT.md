@@ -53,7 +53,7 @@ python scripts/queue_mtls_service.py \
 ## Настройка desktop worker
 
 ```text
-DOKKOMPLEKT_QUEUE_MTLS_URL=https://queue.example.internal:9443
+DOKKOMPLEKT_QUEUE_MTLS_URL=https://queue.<YOUR_REAL_DOMAIN>:9443
 DOKKOMPLEKT_QUEUE_MTLS_CA_PEM=C:\ProgramData\Dokkomplekt\queue-ca.pem
 DOKKOMPLEKT_QUEUE_MTLS_IDENTITY_PEM=C:\ProgramData\Dokkomplekt\queue-client-combined.pem
 ```

@@ -30,7 +30,10 @@ pub fn validate_field_value(field_id: &str, value: &str) -> Result<(), String> {
             format!("{field_id}: дата должна быть в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД")
         })?;
     }
-    if id.contains("amount") || id.ends_with(".price") || id.ends_with(".total") {
+    if matches!(
+        crate::infer_input_kind(field_id),
+        crate::PromptInputKind::Money | crate::PromptInputKind::Number
+    ) {
         validate_decimal(v, field_id)?;
     }
     if id.ends_with("email") || id.ends_with(".email") {
@@ -547,6 +550,11 @@ mod tests {
         assert!(validate_field_value("document.issue_date", "31.02.2026").is_err());
         assert!(validate_field_value("invoice.total_amount", "12 345,67").is_ok());
         assert!(validate_field_value("invoice.total_amount", "NaN").is_err());
+        assert!(validate_field_value("employee.salary", "150 000,50").is_ok());
+        assert!(validate_field_value("employee.salary", "сто тысяч").is_err());
+        assert!(validate_field_value("amount.currency", "RUB").is_ok());
+        assert!(validate_field_value("accounting.currency", "USD").is_ok());
+        assert!(validate_field_value("custom.amount_description", "По договору").is_ok());
         assert!(validate_field_value("contact.email", "doctor@example.org").is_ok());
         assert!(validate_field_value("contact.email", "not-an-email").is_err());
         assert!(validate_field_value("contact.email", "a@b@c.example").is_err());

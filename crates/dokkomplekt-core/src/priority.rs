@@ -61,6 +61,10 @@ pub fn normalize_semantic_case_aliases(case: &mut SemanticCase) {
     for (_, value) in values {
         merge_value(case, value);
     }
+    case.skipped_fields = std::mem::take(&mut case.skipped_fields)
+        .into_iter()
+        .map(|field_id| canonical_storage_field_id(&field_id))
+        .collect();
 }
 
 pub fn set_user_value(
@@ -68,6 +72,8 @@ pub fn set_user_value(
     field_id: impl Into<String>,
     value: impl Into<String>,
 ) {
+    let field_id = field_id.into();
+    case.unskip(&field_id);
     merge_value(
         case,
         SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
@@ -98,6 +104,20 @@ mod tests {
         assert_eq!(case.get("medical.diagnosis_code"), Some("J45.0"));
         assert!(case.values.contains_key("medical.icd10"));
         assert!(!case.values.contains_key("medical.diagnosis_code"));
+    }
+
+    #[test]
+    fn explicit_skip_respects_aliases_without_hiding_an_independent_direct_value() {
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "accounting.invoice_number", "СЧ-10");
+        case.skip("accounting.invoice_number");
+        assert!(case.is_skipped("document.number"));
+        assert_eq!(case.get("document.number"), None);
+
+        set_user_value(&mut case, "document.number", "ДОК-20");
+        assert!(!case.is_skipped("document.number"));
+        assert_eq!(case.get("document.number"), Some("ДОК-20"));
+        assert!(case.is_skipped("accounting.invoice_number"));
     }
 
     #[test]

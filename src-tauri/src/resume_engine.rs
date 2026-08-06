@@ -48,6 +48,7 @@ fn template_tree_is_resume_safe(
 #[derive(Debug, Serialize)]
 struct DependencySnapshot {
     values: BTreeMap<String, Option<SemanticValue>>,
+    skipped_fields: BTreeSet<String>,
     collections: BTreeMap<String, Option<Vec<SemanticRecord>>>,
     blocks: BTreeMap<String, Option<String>>,
     asset_sha256: BTreeMap<String, Option<String>>,
@@ -91,6 +92,12 @@ pub(crate) fn document_input_fingerprint(
             )
         })
         .collect();
+    let skipped_fields = ids
+        .fields
+        .iter()
+        .filter(|field_id| semantic_case.is_skipped(field_id))
+        .cloned()
+        .collect();
     let collections = ids
         .collections
         .iter()
@@ -123,6 +130,7 @@ pub(crate) fn document_input_fingerprint(
         .collect();
     let snapshot = DependencySnapshot {
         values,
+        skipped_fields,
         collections,
         blocks,
         asset_sha256,
@@ -333,6 +341,42 @@ mod tests {
             document_input_fingerprint("doc", &template, "ФИО: {{subject.name}}", &case, None)
                 .unwrap();
         assert_eq!(first, second);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn explicit_skip_changes_only_referencing_document_fingerprint() {
+        let dir = test_directory("skip");
+        let template = dir.join("template.docx");
+        std::fs::write(&template, "Примечание: {{custom.note}}").unwrap();
+        let mut case = SemanticCase::default();
+        case.values.insert(
+            "custom.note".into(),
+            SemanticValue::new(
+                "custom.note",
+                "Исходное значение",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        let before = document_input_fingerprint(
+            "doc",
+            &template,
+            "Примечание: {{custom.note}}",
+            &case,
+            None,
+        )
+        .unwrap();
+        case.skip("custom.note");
+        let after = document_input_fingerprint(
+            "doc",
+            &template,
+            "Примечание: {{custom.note}}",
+            &case,
+            None,
+        )
+        .unwrap();
+        assert_ne!(before, after);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -72,11 +72,14 @@ pub fn apply_popup_answers(
         };
         let value = answer.value.trim();
         if value.is_empty() {
-            if prompt.required && !answer.continue_without_value {
+            if answer.continue_without_value {
+                next.skip(&prompt.field_id);
+            } else if prompt.required {
                 still_missing.push(prompt.clone());
             }
             continue;
         }
+        next.unskip(&prompt.field_id);
         let normalized_value = match normalize_prompt_value(prompt, value) {
             Ok(value) => value,
             Err(error) => {
@@ -393,6 +396,65 @@ mod tests {
             }],
         );
         assert!(result.accepted);
+        assert!(result.semantic_case.is_skipped("custom.note"));
+        let rendered =
+            crate::render_text_template("До {{custom.note}} после", &result.semantic_case, true);
+        assert_eq!(rendered.output_text, "До  после");
+        assert!(rendered.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn explicit_skip_hides_existing_value_until_user_supplies_a_replacement() {
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "custom.note", "Старое значение");
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![PromptSpec {
+                field_id: "custom.note".into(),
+                title: "Note".into(),
+                required: true,
+                current_value: Some("Старое значение".into()),
+                validation_hint: None,
+                input_kind: PromptInputKind::Text,
+                ask_mode: crate::PromptAskMode::Always,
+                options: Vec::new(),
+                allow_custom_option: false,
+                help_text: None,
+                section: None,
+                linked_to: None,
+                order: 500,
+            }],
+            blocked: false,
+            block_reasons: vec![],
+        };
+        let skipped = apply_popup_answers(
+            &case,
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.note".into(),
+                value: String::new(),
+                continue_without_value: true,
+            }],
+        );
+        assert!(skipped.accepted);
+        assert_eq!(skipped.semantic_case.get("custom.note"), None);
+        assert!(skipped.semantic_case.values.contains_key("custom.note"));
+
+        let replaced = apply_popup_answers(
+            &skipped.semantic_case,
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.note".into(),
+                value: "Новое значение".into(),
+                continue_without_value: false,
+            }],
+        );
+        assert!(replaced.accepted);
+        assert!(!replaced.semantic_case.is_skipped("custom.note"));
+        assert_eq!(
+            replaced.semantic_case.get("custom.note"),
+            Some("Новое значение")
+        );
     }
 
     #[test]

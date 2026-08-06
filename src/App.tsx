@@ -62,7 +62,7 @@ function AppContent() {
   const [plan, setPlan] = useState<WorkflowPlan | null>(null);
   const [preflightPlan, setPreflightPlan] = useState<WorkflowPlan | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string>>({}); const [skippedAnswers, setSkippedAnswers] = useState<Record<string, boolean>>({});
   const [sickLeave, setSickLeave] = useState(false);
 
   const [activeTemplateText, setActiveTemplateText] = useState('');
@@ -199,7 +199,7 @@ function AppContent() {
     if (!sourceReady || selectedDocIds.length === 0) {
       setPreflightPlan(null);
       setPreflightLoading(false);
-      setAnswers({});
+      setAnswers({}); setSkippedAnswers({});
       return () => { cancelled = true; };
     }
 
@@ -211,6 +211,7 @@ function AppContent() {
         setAnswers((previous) => Object.fromEntries(
           workflow.prompts.map((prompt) => [prompt.field_id, previous[prompt.field_id] ?? prompt.current_value ?? '']),
         ));
+        setSkippedAnswers((previous) => Object.fromEntries(workflow.prompts.filter((prompt) => previous[prompt.field_id]).map((prompt) => [prompt.field_id, true])));
       })
       .catch((error) => {
         if (!cancelled) {
@@ -308,7 +309,7 @@ function AppContent() {
     setWebSourceUrl('');
     setParsed(null);
     setSemantic(null);
-    setAnswers({});
+    setAnswers({}); setSkippedAnswers({});
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
@@ -346,7 +347,7 @@ function AppContent() {
       layoutRows: 0,
       tableRows: 0,
     });
-    setAnswers({});
+    setAnswers({}); setSkippedAnswers({});
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
@@ -381,7 +382,7 @@ function AppContent() {
       layoutRows: layoutItems.length,
       tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
     });
-    setAnswers({});
+    setAnswers({}); setSkippedAnswers({});
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
@@ -412,7 +413,7 @@ function AppContent() {
       layoutRows: 0,
       tableRows: 0,
     });
-    setAnswers({});
+    setAnswers({}); setSkippedAnswers({});
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
@@ -572,15 +573,15 @@ function AppContent() {
     }
 
     if (workflow.prompts.length) {
-      const missing = workflow.prompts.filter((prompt) => prompt.required && !(answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
+      const missing = workflow.prompts.filter((prompt) => prompt.required && !skippedAnswers[prompt.field_id] && !(answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
       if (missing.length) {
         setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`);
         return;
       }
       const payload = workflow.prompts.map((prompt) => ({
         field_id: prompt.field_id,
-        value: answers[prompt.field_id] ?? prompt.current_value ?? '',
-        continue_without_value: false,
+        value: skippedAnswers[prompt.field_id] ? '' : answers[prompt.field_id] ?? prompt.current_value ?? '',
+        continue_without_value: Boolean(skippedAnswers[prompt.field_id]),
       }));
       const applied = selectedDocIds.length === 1
         ? await run('apply_popup', () => applyPopup(selectedDocIds[0], sickLeave, payload))
@@ -718,12 +719,13 @@ function AppContent() {
   async function refreshPreflightPlan(documentIds = selectedDocIds) {
     if (!documentIds.length) {
       setPreflightPlan(null);
-      setAnswers({});
+      setAnswers({}); setSkippedAnswers({});
       return;
     }
     const workflow = await loadWorkflowPlan(documentIds);
     setPreflightPlan(workflow);
     setAnswers(Object.fromEntries(workflow.prompts.map((prompt) => [prompt.field_id, prompt.current_value ?? ''])));
+    setSkippedAnswers((previous) => Object.fromEntries(workflow.prompts.filter((prompt) => previous[prompt.field_id]).map((prompt) => [prompt.field_id, true])));
   }
 
   async function pinField(fieldId: string) {
@@ -1369,6 +1371,7 @@ function AppContent() {
             showSickLeaveOption={showSickLeaveOption}
             sickLeaveEnabled={sickLeave}
             answers={answers}
+            skippedAnswers={skippedAnswers}
             preview={preview}
             setWatchFolder={setWatchFolder}
             onPickWatchFolder={() => void chooseFolder(watchFolder, setWatchFolder, 'Рабочая папка')}
@@ -1381,6 +1384,7 @@ function AppContent() {
             setScannerText={setScannerText}
             setModelOutput={setModelOutput}
             setAnswers={setAnswers}
+            setSkippedAnswers={setSkippedAnswers}
             onSickLeaveChange={setSickLeave}
             onRunZeroTouch={runZeroTouch}
             onOpenLastOutput={openLastOutput}

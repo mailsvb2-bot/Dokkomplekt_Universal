@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -120,10 +120,74 @@ pub struct SemanticCase {
     pub collections: BTreeMap<String, Vec<SemanticRecord>>,
     #[serde(default)]
     pub blocks: BTreeMap<String, String>,
+    /// Fields the user explicitly chose to leave blank for the current case.
+    ///
+    /// They remain distinct from accidentally missing data: strict rendering may
+    /// omit an explicitly skipped scalar while still blocking every other absent
+    /// or unknown placeholder.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub skipped_fields: BTreeSet<String>,
 }
 
 impl SemanticCase {
+    fn direct_field_ids(field_id: &str) -> Vec<String> {
+        let canonical = crate::canonical_storage_field_id(field_id);
+        let equivalents = crate::storage_equivalent_field_ids(&canonical);
+        if equivalents.is_empty() {
+            vec![canonical]
+        } else {
+            equivalents
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect()
+        }
+    }
+
+    fn direct_value_exists(&self, field_id: &str) -> bool {
+        Self::direct_field_ids(field_id).iter().any(|candidate| {
+            self.values
+                .get(candidate)
+                .is_some_and(|value| !value.value.trim().is_empty())
+        })
+    }
+
+    /// Whether a scalar was deliberately omitted by the user rather than simply
+    /// not found. Read-only contextual fallbacks count only when the requested
+    /// field has no independent value of its own.
+    pub fn is_skipped(&self, field_id: &str) -> bool {
+        if Self::direct_field_ids(field_id)
+            .iter()
+            .any(|candidate| self.skipped_fields.contains(candidate))
+        {
+            return true;
+        }
+        if self.direct_value_exists(field_id) {
+            return false;
+        }
+        crate::contextual_fallback_field_ids(field_id)
+            .iter()
+            .any(|candidate| {
+                Self::direct_field_ids(candidate)
+                    .iter()
+                    .any(|id| self.skipped_fields.contains(id))
+            })
+    }
+
+    pub fn skip(&mut self, field_id: &str) {
+        self.skipped_fields
+            .insert(crate::canonical_storage_field_id(field_id));
+    }
+
+    pub fn unskip(&mut self, field_id: &str) {
+        for candidate in Self::direct_field_ids(field_id) {
+            self.skipped_fields.remove(&candidate);
+        }
+    }
+
     pub fn value(&self, field_id: &str) -> Option<&SemanticValue> {
+        if self.is_skipped(field_id) {
+            return None;
+        }
         let canonical = crate::canonical_storage_field_id(field_id);
         let equivalents = crate::storage_equivalent_field_ids(&canonical);
         if !equivalents.is_empty() {
@@ -150,6 +214,7 @@ impl SemanticCase {
 
         crate::contextual_fallback_field_ids(field_id)
             .iter()
+            .filter(|candidate| !self.is_skipped(candidate))
             .filter_map(|candidate| self.values.get(*candidate))
             .filter(|value| !value.value.trim().is_empty())
             .max_by(|left, right| {

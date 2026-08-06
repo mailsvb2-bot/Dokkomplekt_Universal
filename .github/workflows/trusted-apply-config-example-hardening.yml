@@ -51,6 +51,7 @@ jobs:
           git apply --check --whitespace=error-all "$patch_path"
           git apply --whitespace=error-all "$patch_path"
           git rm \
+            .github/patches/config-example-hardening.patch.gz.b64 \
             .github/patches/config-example-hardening.part-00 \
             .github/patches/config-example-hardening.part-01 \
             .github/patches/config-example-hardening.part-02 \

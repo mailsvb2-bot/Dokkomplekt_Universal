@@ -22,6 +22,11 @@ from urllib.parse import urlparse
 
 from ed25519_compat import SigningKey
 
+try:
+    from scripts._release_policy import validate_public_https_url, validate_relative_runtime_path
+except ModuleNotFoundError:
+    from _release_policy import validate_public_https_url, validate_relative_runtime_path
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
@@ -82,11 +87,7 @@ def zip_info(name: str, executable: bool = False) -> zipfile.ZipInfo:
 
 
 def safe_relative(raw: str) -> Path:
-    normalized = raw.replace("\\", "/")
-    path = Path(normalized)
-    if not normalized or path.is_absolute() or ".." in path.parts or ":" in normalized:
-        raise ValueError(f"unsafe component path: {raw}")
-    return path
+    return Path(validate_relative_runtime_path(raw, "unsafe component path"))
 
 
 def load_status(target: str) -> tuple[Path, dict[str, Any]]:
@@ -187,10 +188,8 @@ def main() -> int:
     selected = [item.strip() for item in args.components.split(",") if item.strip()]
     if not selected or any(not SAFE_COMPONENT.fullmatch(item) or item not in COMPONENTS for item in selected):
         raise ValueError("--components contains an unknown component")
-    base_url = args.base_url.rstrip("/")
+    base_url = validate_public_https_url(args.base_url.rstrip("/"), "--base-url")
     parsed = urlparse(base_url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
-        raise ValueError("--base-url must be credential-free HTTPS without fragment")
 
     target_dir, status = load_status(target)
     out = args.out.resolve()

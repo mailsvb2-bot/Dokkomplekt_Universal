@@ -207,3 +207,41 @@ def test_hardware_preflight_requires_printer_and_absolute_reboot_evidence(tmp_pa
         },
     )
     assert bad["ok"] is False
+
+
+def test_example_environment_lists_all_public_build_inputs_without_fake_endpoints() -> None:
+    env_path = Path(__file__).resolve().parents[1] / ".env.example"
+    values = {}
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+
+    for key in public_build_env():
+        assert key in values, f"{key} must be documented in .env.example"
+
+    for key in (
+        "DOKKOMPLEKT_UPDATE_MANIFEST_URL",
+        "DOKKOMPLEKT_COMPONENTS_CATALOG_URL",
+        "DOKKOMPLEKT_COMPONENTS_BASE_URL",
+        "DOKKOMPLEKT_REFDATA_URL",
+        "DOKKOMPLEKT_QUEUE_MTLS_URL",
+        "DOKKOMPLEKT_LICENSE_PUBLIC_URL",
+    ):
+        assert values[key] == "", f"{key} must stay blank until a real endpoint is supplied"
+
+    env = env_path.read_text(encoding="utf-8").lower()
+    for forbidden in ("updates.example.com", "licenses.example.com", "queue.example.internal"):
+        assert forbidden not in env
+
+
+def test_release_and_queue_docs_use_current_variable_names_and_explicit_placeholders() -> None:
+    root = Path(__file__).resolve().parents[1]
+    release = (root / "docs" / "PRODUCTION_RELEASE_BOOTSTRAP.md").read_text(encoding="utf-8")
+    queue = (root / "docs" / "QUEUE_SERVICE_DEPLOYMENT.md").read_text(encoding="utf-8")
+    assert "DOKKOMPLEKT_REFDATA_MANIFEST_URL" not in release
+    assert "DOKKOMPLEKT_REFDATA_URL" in release
+    assert "queue.example.internal" not in queue
+    assert "https://queue.<YOUR_REAL_DOMAIN>:9443" in queue

@@ -9,7 +9,7 @@ Required labels: `self-hosted`, `Windows`, `X64`, `dokkomplekt-runtime`.
 Configure repository secrets and variables used by `build-installers.yml`:
 
 - compile-time public trust anchors: `DOKKOMPLEKT_GATE_PUBKEY_B64`, `DOKKOMPLEKT_LICENSE_PUBKEY_B64`, `DOKKOMPLEKT_UPDATE_PUBKEY_B64`, `DOKKOMPLEKT_THRESHOLD_PUBKEY_B64`, `DOKKOMPLEKT_REFDATA_PUBKEY_B64` and `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64`;
-- real HTTPS endpoints: `DOKKOMPLEKT_UPDATE_MANIFEST_URL`, `DOKKOMPLEKT_REFDATA_MANIFEST_URL`, `DOKKOMPLEKT_COMPONENTS_CATALOG_URL` and `DOKKOMPLEKT_COMPONENTS_BASE_URL`;
+- real HTTPS endpoints: `DOKKOMPLEKT_UPDATE_MANIFEST_URL`, `DOKKOMPLEKT_REFDATA_URL`, `DOKKOMPLEKT_COMPONENTS_CATALOG_URL` and `DOKKOMPLEKT_COMPONENTS_BASE_URL`;
 - private signing material: the Authenticode PFX/password, runtime-signing key, update-signing key and gate-signing key;
 - timestamp server and an absolute runner-owned sidecar manifest path.
 

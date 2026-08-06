@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -r requirements-dev.txt
-          cargo fmt --all -- --check
+          cargo +1.85.1 fmt --all -- --check
           python -m py_compile scripts/generate_update_manifest.py
           python -m pytest -q \
             tests/test_update_manifest_policy.py \

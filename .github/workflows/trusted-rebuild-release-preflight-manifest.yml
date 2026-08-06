@@ -19,14 +19,14 @@ jobs:
         with:
           ref: agent/harden-production-release-preflight
           fetch-depth: 0
-      - name: Rebuild source manifest and remove trigger
+      - name: Remove trigger, rebuild source manifest and verify
         shell: bash
         run: |
           set -euo pipefail
           test -f .github/patches/rebuild-release-preflight-manifest.trigger
+          git rm .github/patches/rebuild-release-preflight-manifest.trigger
           python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest.txt" || true
           mv "$RUNNER_TEMP/source-manifest.txt" SOURCE_MANIFEST_SHA256.txt
-          git rm .github/patches/rebuild-release-preflight-manifest.trigger
           git add SOURCE_MANIFEST_SHA256.txt
           python scripts/verify_source_manifest.py
           git diff --check

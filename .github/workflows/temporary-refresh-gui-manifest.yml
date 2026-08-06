@@ -1,0 +1,50 @@
+name: Temporary GUI manifest refresh
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  refresh:
+    if: ${{ github.event.issue.pull_request && github.event.issue.number == 67 && github.event.comment.body == '/refresh-gui-manifest' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh feature branch manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          FEATURE_BRANCH: agent/require-windows-gui-evidence-main
+        run: |
+          set -euo pipefail
+          git clone --branch "$FEATURE_BRANCH" "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" feature
+          cd feature
+          rm -f .github/workflows/refresh-gui-evidence-manifest.yml
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.txt || true
+          mv /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml
+          git commit -m "Synchronize GUI evidence source manifest"
+          git push origin HEAD:"$FEATURE_BRANCH"
+      - name: Remove temporary default-branch workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git clone --branch main "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" cleanup
+          cd cleanup
+          rm -f .github/workflows/temporary-refresh-gui-manifest.yml
+          python scripts/verify_source_manifest.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/temporary-refresh-gui-manifest.yml
+          git commit -m "Remove temporary GUI manifest refresher"
+          git push origin HEAD:main

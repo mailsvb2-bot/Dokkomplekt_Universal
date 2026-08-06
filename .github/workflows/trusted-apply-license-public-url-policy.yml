@@ -54,11 +54,12 @@ jobs:
           set -euo pipefail
           python -m pip install -r requirements-dev.txt
           cargo +1.97.1 fmt --all
+          cargo +1.97.1 generate-lockfile --manifest-path crates/dokkomplekt-license-server/Cargo.toml
           python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest.txt" || true
           mv "$RUNNER_TEMP/source-manifest.txt" SOURCE_MANIFEST_SHA256.txt
           git add SOURCE_MANIFEST_SHA256.txt crates tests
           cargo +1.97.1 fmt --all -- --check
-          cargo +1.97.1 test --manifest-path crates/dokkomplekt-license-server/Cargo.toml -- --test-threads=1
+          cargo +1.97.1 test --locked --manifest-path crates/dokkomplekt-license-server/Cargo.toml -- --test-threads=1
           python -m pytest -q \
             tests/test_v18_0_7_security_update_popup_license_contracts.py \
             tests/test_v18_3_0_license_database_transport.py \

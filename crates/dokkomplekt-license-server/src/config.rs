@@ -297,6 +297,79 @@ pub(crate) fn strict_runtime_required() -> bool {
     !(development_mode && explicit_insecure_opt_in)
 }
 
+fn production_ipv4_is_forbidden(value: std::net::Ipv4Addr) -> bool {
+    let [first, second, third, _] = value.octets();
+    value.is_unspecified()
+        || value.is_loopback()
+        || value.is_private()
+        || value.is_link_local()
+        || value.is_multicast()
+        || value.is_broadcast()
+        || value.is_documentation()
+        || first == 0
+        || (first == 100 && (second & 0b1100_0000) == 64)
+        || (first == 192 && second == 0 && third == 0)
+        || (first == 198 && (second & 0b1111_1110) == 18)
+        || first >= 240
+}
+
+fn production_public_host_is_forbidden(host: &str, ip: Option<IpAddr>) -> bool {
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    const RESERVED_EXACT: &[&str] = &[
+        "localhost",
+        "localhost.localdomain",
+        "example.com",
+        "example.net",
+        "example.org",
+    ];
+    const RESERVED_SUFFIXES: &[&str] = &[
+        ".localhost",
+        ".invalid",
+        ".test",
+        ".example",
+        ".local",
+        ".example.com",
+        ".example.net",
+        ".example.org",
+    ];
+    if RESERVED_EXACT.contains(&normalized.as_str())
+        || RESERVED_SUFFIXES
+            .iter()
+            .any(|suffix| normalized.ends_with(suffix))
+    {
+        return true;
+    }
+    if ip.is_none()
+        && (!normalized.contains('.')
+            || normalized.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }))
+    {
+        return true;
+    }
+    ip.is_some_and(|address| match address {
+        IpAddr::V4(value) => production_ipv4_is_forbidden(value),
+        IpAddr::V6(value) => {
+            let segments = value.segments();
+            value.is_unspecified()
+                || value.is_loopback()
+                || value.is_unique_local()
+                || value.is_unicast_link_local()
+                || value.is_multicast()
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || value
+                    .to_ipv4_mapped()
+                    .is_some_and(production_ipv4_is_forbidden)
+        }
+    })
+}
+
 pub(crate) fn validate_public_base_url(
     raw_value: &str,
     production: bool,
@@ -322,15 +395,10 @@ pub(crate) fn validate_public_base_url(
         if url.scheme() != "https" || loopback {
             anyhow::bail!("production public base URL must use HTTPS and a non-loopback host");
         }
-        if ip.is_some_and(|address| {
-            address.is_unspecified()
-                || address.is_multicast()
-                || match address {
-                    IpAddr::V4(value) => value.is_private() || value.is_link_local(),
-                    IpAddr::V6(value) => value.is_unique_local() || value.is_unicast_link_local(),
-                }
-        }) {
-            anyhow::bail!("production public base URL must not use a private or service IP");
+        if production_public_host_is_forbidden(host, ip) {
+            anyhow::bail!(
+                "production public base URL must use a real public DNS name or globally routable IP"
+            );
         }
     } else if !matches!(url.scheme(), "http" | "https") || !loopback {
         anyhow::bail!("development public base URL must use an HTTP(S) loopback origin");
@@ -558,12 +626,31 @@ mod tests {
     #[test]
     fn public_base_url_is_https_origin_in_production_and_loopback_in_development() {
         assert_eq!(
-            validate_public_base_url("https://licenses.example.org/", true).unwrap(),
-            "https://licenses.example.org"
+            validate_public_base_url("https://licenses.dokkomplekt.ru/", true).unwrap(),
+            "https://licenses.dokkomplekt.ru"
         );
-        assert!(validate_public_base_url("http://licenses.example.org", true).is_err());
-        assert!(validate_public_base_url("https://127.0.0.1", true).is_err());
-        assert!(validate_public_base_url("https://licenses.example.org/path", true).is_err());
+        for invalid in [
+            "http://licenses.dokkomplekt.ru",
+            "https://127.0.0.1",
+            "https://10.0.0.9",
+            "https://192.0.2.1",
+            "https://198.18.0.1",
+            "https://100.64.0.1",
+            "https://[2001:db8::1]",
+            "https://[::ffff:127.0.0.1]",
+            "https://license-server",
+            "https://bad_host.dokkomplekt.ru",
+            "https://licenses.example.org",
+            "https://licenses.invalid",
+            "https://licenses.test",
+            "https://licenses.local",
+            "https://licenses.dokkomplekt.ru/path",
+        ] {
+            assert!(
+                validate_public_base_url(invalid, true).is_err(),
+                "{invalid}"
+            );
+        }
         assert!(validate_public_base_url("http://127.0.0.1:8787", false).is_ok());
         assert!(validate_public_base_url("http://192.0.2.1:8787", false).is_err());
     }

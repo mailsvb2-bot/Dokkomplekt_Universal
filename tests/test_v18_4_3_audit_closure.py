@@ -81,6 +81,8 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "AUTHENTICODE_SIGNATURES.json" in hardware
     assert "NSIS silent uninstall failed" in hardware
     assert "silent_uninstall_passed = $true" in hardware
+    assert "write_windows_hardware_evidence_index.ps1" in workflow
+    assert "WINDOWS_HARDWARE_EVIDENCE_INDEX.json" in text("scripts/write_windows_hardware_evidence_index.ps1")
 
     assert "environment: windows-production-signing" in release_workflow
     assert "verify_sidecar_authenticode.ps1" in release_workflow
@@ -107,7 +109,8 @@ def test_production_workflow_yaml_and_hardware_powershell_parse() -> None:
     parser_script = r"""
 $paths = @(
   'tests/windows/windows_hardware_e2e.ps1',
-  'tests/windows/verify_sidecar_authenticode.ps1'
+  'tests/windows/verify_sidecar_authenticode.ps1',
+  'scripts/write_windows_hardware_evidence_index.ps1'
 )
 foreach ($path in $paths) {
   $tokens = $null
@@ -149,3 +152,47 @@ def test_stale_versioned_ci_success_snapshot_is_removed() -> None:
     assert not (ROOT / "docs/provenance/GITHUB_ACTIONS_EVIDENCE_18_4_3.json").exists()
     policy = text("docs/provenance/PROVENANCE_POLICY.md")
     assert "Versioned `GITHUB_ACTIONS_EVIDENCE_*.json` snapshots are forbidden" in policy
+
+
+def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
+    script = text("scripts/write_windows_hardware_evidence_index.ps1")
+    workflow = text(".github/workflows/windows-hardware-e2e.yml")
+    assert "dokkomplekt.windows-hardware-evidence-index.v1" in script
+    assert "GITHUB_SHA must be the exact lowercase release commit SHA" in script
+    assert "Signed build evidence is not bound to the current source fingerprint" in script
+    assert "Hardware E2E evidence is not bound to the current source fingerprint" in script
+    assert "GUI evidence application" in script
+    assert "Hardware Authenticode application" in script
+    assert "Pinned runtime public key" in script
+    assert "Rust gate attestation" in script
+    assert "Rust gate signature" in script
+    assert "Hardware E2E required flag is not true" in script
+    assert "GUI evidence must contain two titled launches" in script
+    assert "Hardware E2E installer SHA-256 does not match" in script
+    assert "Expected exactly one offline runtime ZIP" in script
+    for required in (
+        "WINDOWS_SIGNED_BUILD_PASSED.json",
+        "WINDOWS_HARDWARE_E2E_PASSED.json",
+        "GUI_AND_CONSOLE_EVIDENCE.json",
+        "PRINT_EVENT_307.json",
+        "AUTHENTICODE_SIGNATURES.json",
+        "WINDOWS_REBOOT_E2E_PASSED.json",
+        "WATCHER_INSTALL.json",
+        "WATCHER_UNINSTALL.json",
+        "CARGO_GATE_ATTESTATION.json",
+        "CARGO_GATE_ATTESTATION.sig",
+        "production-build-preflight.json",
+        "windows-runtime-preflight.json",
+        "hardware-preflight.json",
+        "sidecar-status.json",
+        "SIDECAR_AUTHENTICODE.json",
+        "offline-runtime-probe.log",
+        "scanned-pdf-ocr.json",
+        "runtime-trusted-public.pem",
+    ):
+        assert required in script
+    assert "Bind final hardware evidence index" in workflow
+    assert "write_windows_hardware_evidence_index.ps1" in workflow
+    assert "verification/release/**" in workflow
+    assert ".cargo-gate/**" in workflow
+    assert ".release-gate/**" in workflow

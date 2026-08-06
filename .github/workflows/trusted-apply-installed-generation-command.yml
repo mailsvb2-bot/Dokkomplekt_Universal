@@ -1,7 +1,7 @@
 name: Trusted apply installed generation command
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -16,8 +16,8 @@ jobs:
   apply:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.head_ref == 'agent/add-installed-generation-command' &&
-      github.base_ref == 'main'
+      github.event.pull_request.head.ref == 'agent/add-installed-generation-command' &&
+      github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

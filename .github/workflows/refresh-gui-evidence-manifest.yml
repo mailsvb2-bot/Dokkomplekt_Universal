@@ -29,3 +29,4 @@ jobs:
           git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml
           git commit -m "Synchronize GUI evidence source manifest [manifest-refresh]"
           git push origin HEAD:${GITHUB_REF_NAME}
+# Second push intentionally triggers this temporary workflow.

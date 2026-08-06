@@ -11,9 +11,17 @@ import re
 from pathlib import Path
 
 try:
-    from scripts._release_policy import validate_public_https_url, validate_source_reference
+    from scripts._release_policy import (
+        validate_public_https_url,
+        validate_relative_runtime_path,
+        validate_source_reference,
+    )
 except ModuleNotFoundError:
-    from _release_policy import validate_public_https_url, validate_source_reference
+    from _release_policy import (
+        validate_public_https_url,
+        validate_relative_runtime_path,
+        validate_source_reference,
+    )
 
 PRODUCTION_BUILD_REQUIRED = (
     "DOKKOMPLEKT_GATE_PUBKEY_B64",
@@ -90,17 +98,7 @@ def resolve_manifest_file(manifest_path: Path, raw: object) -> Path:
 
 
 def safe_relative(raw: object) -> str:
-    normalized = str(raw or "").replace("\\", "/")
-    path = Path(normalized)
-    if (
-        path.is_absolute()
-        or normalized.startswith("//")
-        or re.match(r"^[A-Za-z]:", normalized)
-        or not path.parts
-        or ".." in path.parts
-    ):
-        raise ValueError("unsafe relative target")
-    return path.as_posix()
+    return validate_relative_runtime_path(raw, "runtime target")
 
 
 def validate_runner_manifest(path: Path) -> list[str]:

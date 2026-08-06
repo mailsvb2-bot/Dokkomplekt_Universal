@@ -18,6 +18,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts._release_policy import validate_relative_runtime_path
+except ModuleNotFoundError:
+    from _release_policy import validate_relative_runtime_path
+
 ROOT = Path(__file__).resolve().parents[1]
 DEST_ROOT = ROOT / "src-tauri" / "resources" / "tools"
 SUPPORTED_TOOLS = {
@@ -41,10 +46,7 @@ def sha256_file(path: Path) -> str:
 
 
 def safe_relative(value: str) -> Path:
-    rel = Path(value.replace("\\", "/"))
-    if rel.is_absolute() or ".." in rel.parts or not rel.parts:
-        raise ValueError(f"unsafe relative target: {value!r}")
-    return rel
+    return Path(validate_relative_runtime_path(value, "runtime target"))
 
 
 def load_manifest(path: Path) -> dict[str, Any]:

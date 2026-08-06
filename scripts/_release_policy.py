@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 _RESERVED_EXACT = {
@@ -76,6 +77,21 @@ def validate_public_https_url(value: str, label: str) -> str:
     host = _normalized_host(parsed.hostname, label)
     _reject_non_public_host(host, label)
     return value
+
+
+def validate_relative_runtime_path(value: object, label: str = "runtime path") -> str:
+    """Return a normalized POSIX relative path and reject cross-platform escapes."""
+    normalized = str(value or "").replace("\\", "/")
+    path = Path(normalized)
+    if (
+        path.is_absolute()
+        or normalized.startswith("//")
+        or re.match(r"^[A-Za-z]:", normalized)
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError(f"{label}: unsafe relative path")
+    return path.as_posix()
 
 
 def validate_source_reference(value: str, label: str) -> str:

@@ -93,14 +93,177 @@ if ($installedSignature.Status -ne 'Valid') { throw "Installed application is no
     }
 } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $releaseGate 'AUTHENTICODE_SIGNATURES.json') -Encoding utf8
 
-$first = Start-Process -FilePath $app -PassThru
-Start-Sleep -Seconds 5
-if ($first.HasExited) { throw "Installed app exited early: $($first.ExitCode)" }
-Stop-Process -Id $first.Id -Force
-$second = Start-Process -FilePath $app -PassThru
-Start-Sleep -Seconds 5
-if ($second.HasExited) { throw "Installed app failed to restart: $($second.ExitCode)" }
-Stop-Process -Id $second.Id -Force
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public sealed class DokkomplektWindowEvidence
+{
+    public long Handle { get; set; }
+    public uint ProcessId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string ClassName { get; set; } = string.Empty;
+}
+
+public static class DokkomplektWindowProbe
+{
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+    public static DokkomplektWindowEvidence[] GetVisibleWindows(uint processId)
+    {
+        var windows = new List<DokkomplektWindowEvidence>();
+        EnumWindows((hWnd, _) =>
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            GetWindowThreadProcessId(hWnd, out uint ownerProcessId);
+            if (processId != 0 && ownerProcessId != processId) return true;
+            var title = new StringBuilder(1024);
+            var className = new StringBuilder(256);
+            GetWindowText(hWnd, title, title.Capacity);
+            GetClassName(hWnd, className, className.Capacity);
+            windows.Add(new DokkomplektWindowEvidence
+            {
+                Handle = hWnd.ToInt64(),
+                ProcessId = ownerProcessId,
+                Title = title.ToString(),
+                ClassName = className.ToString()
+            });
+            return true;
+        }, IntPtr.Zero);
+        return windows.ToArray();
+    }
+}
+'@
+
+function Get-NewVisibleConsoleWindows {
+    param(
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.HashSet[long]] $BaselineHandles
+    )
+    $forbiddenProcessNames = @('cmd', 'powershell', 'pwsh', 'conhost', 'wscript', 'cscript')
+    $unexpected = [System.Collections.Generic.List[object]]::new()
+    foreach ($window in @([DokkomplektWindowProbe]::GetVisibleWindows(0))) {
+        if ($BaselineHandles.Contains([long] $window.Handle)) { continue }
+        $owner = Get-Process -Id ([int] $window.ProcessId) -ErrorAction SilentlyContinue
+        $ownerName = if ($null -eq $owner) { '' } else { $owner.ProcessName.ToLowerInvariant() }
+        if ($window.ClassName -eq 'ConsoleWindowClass' -or $forbiddenProcessNames -contains $ownerName) {
+            $unexpected.Add([ordered]@{
+                handle = [long] $window.Handle
+                process_id = [int] $window.ProcessId
+                process_name = $ownerName
+                class_name = [string] $window.ClassName
+                title = [string] $window.Title
+            })
+        }
+    }
+    return @($unexpected)
+}
+
+function Assert-NoNewVisibleConsoleWindows {
+    param(
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.HashSet[long]] $BaselineHandles
+    )
+    $unexpected = @(Get-NewVisibleConsoleWindows -BaselineHandles $BaselineHandles)
+    if ($unexpected.Count -gt 0) {
+        $summary = ($unexpected | ForEach-Object {
+            "$($_.process_name):$($_.process_id):$($_.class_name):$($_.title)"
+        }) -join ', '
+        throw "Unexpected visible console or script-host window appeared during installed GUI launch: $summary"
+    }
+}
+
+function Wait-VisibleApplicationWindow {
+    param(
+        [Parameter(Mandatory = $true)] [Diagnostics.Process] $Process,
+        [Parameter(Mandatory = $true)] [System.Collections.Generic.HashSet[long]] $BaselineHandles,
+        [int] $TimeoutSeconds = 20
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            throw "Installed application exited before a visible GUI window appeared: $($Process.ExitCode)"
+        }
+        Assert-NoNewVisibleConsoleWindows -BaselineHandles $BaselineHandles
+        $windows = @([DokkomplektWindowProbe]::GetVisibleWindows([uint32] $Process.Id))
+        $window = $windows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Title) } | Select-Object -First 1
+        if ($null -ne $window) { return $window }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "No visible titled GUI window appeared for process $($Process.Id) within $TimeoutSeconds seconds."
+}
+
+function Start-And-ProbeInstalledApplication {
+    param(
+        [Parameter(Mandatory = $true)] [string] $ApplicationPath,
+        [Parameter(Mandatory = $true)] [string] $LaunchLabel
+    )
+    $baselineHandles = [System.Collections.Generic.HashSet[long]]::new()
+    foreach ($existingWindow in @([DokkomplektWindowProbe]::GetVisibleWindows(0))) {
+        $baselineHandles.Add([long] $existingWindow.Handle) | Out-Null
+    }
+    $startedAt = [DateTime]::UtcNow
+    $process = Start-Process -FilePath $ApplicationPath -PassThru
+    try {
+        $window = Wait-VisibleApplicationWindow -Process $process -BaselineHandles $baselineHandles
+        $observationMilliseconds = 3000
+        $observationDeadline = [DateTime]::UtcNow.AddMilliseconds($observationMilliseconds)
+        do {
+            $process.Refresh()
+            if ($process.HasExited) {
+                throw "Installed application exited during GUI/console observation: $($process.ExitCode)"
+            }
+            Assert-NoNewVisibleConsoleWindows -BaselineHandles $baselineHandles
+            Start-Sleep -Milliseconds 200
+        } while ([DateTime]::UtcNow -lt $observationDeadline)
+        return [ordered]@{
+            launch = $LaunchLabel
+            process_id = $process.Id
+            started_at_utc = $startedAt.ToString('o')
+            observed_at_utc = [DateTime]::UtcNow.ToString('o')
+            visible_window_handle = [long] $window.Handle
+            visible_window_title = [string] $window.Title
+            visible_window_class = [string] $window.ClassName
+            console_observation_milliseconds = $observationMilliseconds
+            unexpected_visible_console_windows = @()
+        }
+    } finally {
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit(10000) | Out-Null
+        }
+    }
+}
+
+$guiConsoleEvidencePath = Join-Path $releaseGate 'GUI_AND_CONSOLE_EVIDENCE.json'
+$launchEvidence = @(
+    Start-And-ProbeInstalledApplication -ApplicationPath $app -LaunchLabel 'first-launch'
+    Start-And-ProbeInstalledApplication -ApplicationPath $app -LaunchLabel 'restart'
+)
+if ($launchEvidence.Count -ne 2) { throw 'Both initial launch and restart GUI evidence are required.' }
+[ordered]@{
+    schema = 'dokkomplekt.gui-console-evidence.v1'
+    created_at_utc = [DateTime]::UtcNow.ToString('o')
+    application_name = (Split-Path $app -Leaf)
+    application_sha256 = (Get-FileHash $app -Algorithm SHA256).Hash.ToLowerInvariant()
+    launches = $launchEvidence
+} | ConvertTo-Json -Depth 7 | Set-Content $guiConsoleEvidencePath -Encoding utf8
 
 $sourceSha256 = (python scripts/source_fingerprint.py).Trim()
 $watchFolder = Join-Path $env:TEMP ("DokkomplektHardwareE2E-" + [Guid]::NewGuid().ToString('N'))
@@ -172,8 +335,11 @@ if (Test-Path -LiteralPath $app -PathType Leaf) { throw 'Installed application s
 
 $printEvidencePath = Join-Path $releaseGate 'PRINT_EVENT_307.json'
 $signatureEvidencePath = Join-Path $releaseGate 'AUTHENTICODE_SIGNATURES.json'
+if (-not (Test-Path -LiteralPath $guiConsoleEvidencePath -PathType Leaf)) {
+    throw 'GUI and console evidence is missing.'
+}
 [ordered]@{
-    schema = 'dokkomplekt.windows-hardware-e2e.v2'
+    schema = 'dokkomplekt.windows-hardware-e2e.v3'
     completed_at_utc = [DateTime]::UtcNow.ToString('o')
     source_sha256 = $sourceSha256
     printer = $printer.Name
@@ -182,6 +348,9 @@ $signatureEvidencePath = Join-Path $releaseGate 'AUTHENTICODE_SIGNATURES.json'
     word_available = $true
     watcher_autostart_found = $true
     application_restart_passed = $true
+    gui_window_observed = $true
+    unexpected_console_windows_observed = $false
+    gui_console_evidence_sha256 = (Get-FileHash $guiConsoleEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
     operating_system_reboot_tested = $true
     watcher_started_after_reboot = $verifiedReboot.watcher_started_after_reboot
     post_reboot_case_completed = $verifiedReboot.post_reboot_case_completed

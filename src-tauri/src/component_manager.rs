@@ -673,10 +673,8 @@ fn guard_descriptor(
         .ok_or_else(|| "В URL компонента отсутствует host".to_string())?
         .trim_end_matches('.')
         .to_ascii_lowercase();
-    if matches!(host.as_str(), "localhost" | "localhost.localdomain")
-        || host.ends_with(".localhost")
-    {
-        return Err("Локальный адрес запрещён для компонентов".into());
+    if crate::is_forbidden_public_download_host(&host) {
+        return Err("Placeholder, local или некорректный host запрещён для компонентов".into());
     }
     let allowed = payload
         .allowed_hosts
@@ -1173,20 +1171,23 @@ mod tests {
             size_bytes: 1024,
             sha256: "a".repeat(64),
             files_manifest_sha256: "b".repeat(64),
-            url: "https://downloads.example.com/ocr.zip".into(),
+            url: "https://downloads.dokkomplekt.ru/ocr.zip".into(),
         };
         let payload = ComponentsCatalogPayload {
             schema: 1,
             app_min_version: env!("CARGO_PKG_VERSION").into(),
             published_at: "2026-07-20T00:00:00Z".into(),
-            allowed_hosts: vec!["downloads.example.com".into()],
+            allowed_hosts: vec!["downloads.dokkomplekt.ru".into()],
             components: vec![descriptor.clone()],
         };
         assert!(guard_descriptor(&payload, &descriptor).is_ok());
         assert!(guard_target_matches_platform(&descriptor).is_ok());
-        descriptor.url = "http://downloads.example.com/ocr.zip".into();
-        assert!(guard_descriptor(&payload, &descriptor).is_err());
         descriptor.url = "https://downloads.example.com/ocr.zip".into();
+        assert!(guard_descriptor(&payload, &descriptor).is_err());
+        descriptor.url = "https://downloads.dokkomplekt.ru/ocr.zip".into();
+        descriptor.url = "http://downloads.dokkomplekt.ru/ocr.zip".into();
+        assert!(guard_descriptor(&payload, &descriptor).is_err());
+        descriptor.url = "https://downloads.dokkomplekt.ru/ocr.zip".into();
         descriptor.target = "other-platform".into();
         assert!(guard_descriptor(&payload, &descriptor).is_ok());
         assert!(guard_target_matches_platform(&descriptor).is_err());

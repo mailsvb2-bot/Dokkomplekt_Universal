@@ -1,4 +1,4 @@
-name: Temporary GUI manifest refresh
+name: Temporary Windows evidence finalizer
 
 on:
   schedule:
@@ -7,223 +7,82 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
-  refresh:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: agent/require-windows-gui-evidence-main
           fetch-depth: 0
-      - name: Patch final evidence bindings
+      - name: Record trusted run start
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          set -euo pipefail
           python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str, label: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding='utf-8')
-              if old not in text:
-                  raise SystemExit(f'expected {label} block not found')
-              target.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          replace_once(
-              'scripts/write_windows_hardware_evidence_index.ps1',
-              """    $resolved = (Resolve-Path -LiteralPath $Path).Path
-              if (-not $resolved.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
-                  throw \"Evidence path escapes repository workspace: $resolved\"
-              }
-              return $resolved.Substring($repoRoot.Length).TrimStart([char[]]@('\\\\', '/')).Replace('\\\\', '/')
-          """,
-              """    $resolved = (Resolve-Path -LiteralPath $Path).Path
-              $repoPrefix = $repoRoot.TrimEnd([char[]]@('\\\\', '/')) + [IO.Path]::DirectorySeparatorChar
-              if (-not $resolved.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-                  throw \"Evidence path escapes repository workspace: $resolved\"
-              }
-              return $resolved.Substring($repoPrefix.Length).Replace('\\\\', '/')
-          """,
-              'repository boundary',
+          import json, os, urllib.request
+          url = f"https://api.github.com/repos/{os.environ['REPOSITORY']}/issues/67/comments"
+          body = {"body": f"Trusted Windows evidence finalizer started (Actions run {os.environ['RUN_ID']})."}
+          request = urllib.request.Request(
+              url,
+              data=json.dumps(body).encode(),
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+              method="POST",
           )
-
-          index_test = Path('tests/test_windows_hardware_evidence_index.py')
-          index_test_text = index_test.read_text(encoding='utf-8')
-          if 'def test_repository_boundary_requires_separator() -> None:' not in index_test_text:
-              index_test_text += """
-
-          def test_repository_boundary_requires_separator() -> None:
-              source = SCRIPT.read_text(encoding='utf-8')
-              assert '$repoPrefix = $repoRoot.TrimEnd' in source
-              assert '[IO.Path]::DirectorySeparatorChar' in source
-              assert '$resolved.StartsWith($repoPrefix' in source
-              assert '$resolved.StartsWith($repoRoot' not in source
-              assert "Read-RequiredJson $rebootPath 'dokkomplekt.windows-reboot-e2e.verified.v2'" in source
-              assert "Reboot evidence application" in source
-              assert "Reboot watcher executable" in source
-              assert "Reboot evidence file" in source
-          """
-
-          replace_once(
-              'tests/windows/verify_reboot_evidence.ps1',
-              """$archivedSourcePath = Normalize-PathValue $evidence.archived_source_path
-          $expectedArchivedPath = Join-Path (Split-Path -Parent $receiptPath) ([string] $receiptPayload.archived_name)
-          Require-PathEqual $archivedSourcePath $expectedArchivedPath 'Archived source'
-          """,
-              """$archivedSourcePath = Normalize-PathValue $evidence.archived_source_path
-          $expectedArchivedPath = Normalize-PathValue (Join-Path (Split-Path -Parent $receiptPath) ([string] $receiptPayload.archived_name))
-          if (-not $expectedArchivedPath.StartsWith($watchPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-              throw 'Archived source is outside the prepared watch folder.'
-          }
-          Require-PathEqual $archivedSourcePath $expectedArchivedPath 'Archived source'
-          """,
-              'archived source boundary',
-          )
-
-          reboot_test = Path('tests/test_windows_reboot_evidence_binding.py')
-          reboot_test_text = reboot_test.read_text(encoding='utf-8')
-          needle = '    assert "Archive receipt is not bound to the prepared payload" in verify\n'
-          addition = '    assert "Archived source is outside the prepared watch folder" in verify\n'
-          if addition not in reboot_test_text:
-              if needle not in reboot_test_text:
-                  raise SystemExit('expected reboot assertion anchor not found')
-              reboot_test.write_text(reboot_test_text.replace(needle, needle + addition, 1), encoding='utf-8')
-
-          replace_once(
-              'tests/windows/windows_hardware_e2e.ps1',
-              """$verifiedReboot = Get-Content -LiteralPath $verifiedRebootPath -Raw | ConvertFrom-Json
-
-          $finalCleanup = Start-Process""",
-              """$verifiedReboot = Get-Content -LiteralPath $verifiedRebootPath -Raw | ConvertFrom-Json
-          $currentApplicationSha256 = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ([string] $verifiedReboot.application_sha256 -ne $currentApplicationSha256) {
-              throw 'Verified reboot evidence belongs to a different installed application binary.'
-          }
-          if ([string] $verifiedReboot.watcher_executable_sha256 -ne $currentApplicationSha256) {
-              throw 'Verified reboot watcher belongs to a different installed application binary.'
-          }
-
-          $finalCleanup = Start-Process""",
-              'current reboot application binding',
-          )
-          replace_once(
-              'tests/windows/windows_hardware_e2e.ps1',
-              """    post_reboot_output_sha256 = $verifiedReboot.post_reboot_output_sha256
-              print_spooler_completion_observed = $true
-          """,
-              """    post_reboot_output_sha256 = $verifiedReboot.post_reboot_output_sha256
-              reboot_application_sha256 = $currentApplicationSha256
-              reboot_evidence_sha256 = (Get-FileHash -LiteralPath $verifiedRebootPath -Algorithm SHA256).Hash.ToLowerInvariant()
-              print_spooler_completion_observed = $true
-          """,
-              'hardware reboot evidence fields',
-          )
-
-          replace_once(
-              'scripts/write_windows_hardware_evidence_index.ps1',
-              """$gui = Read-RequiredJson $guiPath 'dokkomplekt.gui-console-evidence.v1'
-          $authenticode = Read-RequiredJson $authenticodePath 'dokkomplekt.authenticode-evidence.v1'
-          """,
-              """$gui = Read-RequiredJson $guiPath 'dokkomplekt.gui-console-evidence.v1'
-          $authenticode = Read-RequiredJson $authenticodePath 'dokkomplekt.authenticode-evidence.v1'
-          $reboot = Read-RequiredJson $rebootPath 'dokkomplekt.windows-reboot-e2e.verified.v2'
-          """,
-              'reboot JSON loading',
-          )
-          replace_once(
-              'scripts/write_windows_hardware_evidence_index.ps1',
-              """if ([string] $hardware.source_sha256 -ne $sourceSha256) {
-              throw 'Hardware E2E evidence is not bound to the current source fingerprint.'
-          }
-          $requiredTrueFlags""",
-              """if ([string] $hardware.source_sha256 -ne $sourceSha256) {
-              throw 'Hardware E2E evidence is not bound to the current source fingerprint.'
-          }
-          if ([string] $reboot.source_sha256 -ne $sourceSha256) {
-              throw 'Reboot evidence is not bound to the current source fingerprint.'
-          }
-          $requiredTrueFlags""",
-              'reboot source binding',
-          )
-          replace_once(
-              'scripts/write_windows_hardware_evidence_index.ps1',
-              """Assert-Sha256Equal $appRecord.sha256 ([string] $authenticode.installed_application.sha256) 'Hardware Authenticode application'
-
-          $guiRecord""",
-              """Assert-Sha256Equal $appRecord.sha256 ([string] $authenticode.installed_application.sha256) 'Hardware Authenticode application'
-          Assert-Sha256Equal $appRecord.sha256 ([string] $reboot.application_sha256) 'Reboot evidence application'
-          Assert-Sha256Equal $appRecord.sha256 ([string] $reboot.watcher_executable_sha256) 'Reboot watcher executable'
-          Assert-Sha256Equal $appRecord.sha256 ([string] $hardware.reboot_application_sha256) 'Hardware reboot application'
-
-          $guiRecord""",
-              'reboot application hashes',
-          )
-          replace_once(
-              'scripts/write_windows_hardware_evidence_index.ps1',
-              """Assert-Sha256Equal $authenticodeRecord.sha256 ([string] $hardware.authenticode_evidence_sha256) 'Authenticode evidence'
-
-          $installerFiles""",
-              """Assert-Sha256Equal $authenticodeRecord.sha256 ([string] $hardware.authenticode_evidence_sha256) 'Authenticode evidence'
-          $rebootEvidenceSha256 = (Get-FileHash -LiteralPath $rebootPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          Assert-Sha256Equal $rebootEvidenceSha256 ([string] $hardware.reboot_evidence_sha256) 'Reboot evidence file'
-
-          $installerFiles""",
-              'reboot evidence file hash',
-          )
-
-          hardware_test = index_test_text
-          old_fixture = """        hardware_path = release_root / \"WINDOWS_HARDWARE_E2E_PASSED.json\"
-                  write_json(
-                      hardware_path,
-          """
-          new_fixture = """        reboot_path = release_root / \"WINDOWS_REBOOT_E2E_PASSED.json\"
-                  write_json(
-                      reboot_path,
-                      {
-                          \"schema\": \"dokkomplekt.windows-reboot-e2e.verified.v2\",
-                          \"source_sha256\": source_sha,
-                          \"application_sha256\": sha256(application),
-                          \"watcher_executable_sha256\": sha256(application),
-                      },
-                  )
-                  hardware_path = release_root / \"WINDOWS_HARDWARE_E2E_PASSED.json\"
-                  write_json(
-                      hardware_path,
-          """
-          if old_fixture not in hardware_test:
-              raise SystemExit('expected hardware fixture anchor not found')
-          hardware_test = hardware_test.replace(old_fixture, new_fixture, 1)
-          hardware_test = hardware_test.replace(
-              '                \"authenticode_evidence_sha256\": sha256(authenticode_path),\n',
-              '                \"authenticode_evidence_sha256\": sha256(authenticode_path),\n'
-              '                \"reboot_application_sha256\": sha256(application),\n'
-              '                \"reboot_evidence_sha256\": sha256(reboot_path),\n',
-              1,
-          )
-          hardware_test = hardware_test.replace(
-              '        for name in (\n            \"WINDOWS_REBOOT_E2E_PASSED.json\",\n            \"WATCHER_INSTALL.json\",\n',
-              '        for name in (\n            \"WATCHER_INSTALL.json\",\n',
-              1,
-          )
-          index_test.write_text(hardware_test, encoding='utf-8')
+          urllib.request.urlopen(request).read()
           PY
-      - name: Refresh feature branch manifest
+      - name: Apply hardening and regenerate source manifest
+        run: python .github/patches/finalize-windows-evidence.py
+      - name: Run focused regression gates
         shell: bash
         run: |
           set -euo pipefail
-          test -f .github/patches/refresh-gui-manifest.trigger
-          rm -f .github/workflows/refresh-gui-evidence-manifest.yml
-          git rm .github/patches/refresh-gui-manifest.trigger
-          python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest.txt" || true
-          mv "$RUNNER_TEMP/source-manifest.txt" SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py
-          git diff --check
           python -m pip install --disable-pip-version-check -r requirements-dev.txt
-          python -m pytest -q tests/test_windows_hardware_evidence_index.py tests/test_v18_3_2_windows_regression_wall_contract.py tests/test_windows_reboot_evidence_binding.py
+          python -m pytest -q \
+            tests/test_windows_hardware_evidence_index.py \
+            tests/test_v18_3_2_windows_regression_wall_contract.py \
+            tests/test_windows_reboot_evidence_binding.py
+          git diff --check
+          python scripts/verify_source_manifest.py
+      - name: Commit finalized PR tree
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml scripts/write_windows_hardware_evidence_index.ps1 tests/test_windows_hardware_evidence_index.py tests/windows/verify_reboot_evidence.ps1 tests/test_windows_reboot_evidence_binding.py tests/windows/windows_hardware_e2e.ps1
+          git add -A
+          python - <<'PY'
+          import subprocess
+          expected = {
+              '.github/patches/finalize-windows-evidence.py',
+              '.github/patches/refresh-gui-manifest.trigger',
+              '.github/workflows/refresh-gui-evidence-manifest.yml',
+              'SOURCE_MANIFEST_SHA256.txt',
+              'scripts/write_windows_hardware_evidence_index.ps1',
+              'tests/test_v18_3_2_windows_regression_wall_contract.py',
+              'tests/test_v18_4_3_audit_closure.py',
+              'tests/test_windows_hardware_evidence_index.py',
+              'tests/test_windows_reboot_evidence_binding.py',
+              'tests/test_windows_reboot_evidence_execution.py',
+              'tests/windows/prepare_reboot_evidence.ps1',
+              'tests/windows/verify_reboot_evidence.ps1',
+              'tests/windows/windows_hardware_e2e.ps1',
+              '.github/workflows/windows-hardware-e2e.yml',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          if actual != expected:
+              raise SystemExit(f'unexpected finalized paths: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}')
+          PY
           git commit -m "Synchronize consolidated Windows evidence hardening"
           git push origin HEAD:agent/require-windows-gui-evidence-main
       - name: Remove temporary default-branch workflow
@@ -241,5 +100,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add .github/workflows/temporary-refresh-gui-manifest.yml
-          git commit -m "Remove temporary GUI manifest refresher"
+          git commit -m "Remove temporary Windows evidence finalizer"
           git push origin HEAD:main

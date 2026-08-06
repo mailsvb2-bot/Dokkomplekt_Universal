@@ -151,9 +151,18 @@ pub fn import_package_bytes(
 }
 
 pub fn automatic_feed_configured() -> bool {
-    reference_data_url()
-        .ok()
-        .is_some_and(|url| !url.contains(".invalid/"))
+    reference_data_url().ok().is_some_and(|raw| {
+        reqwest::Url::parse(&raw)
+            .ok()
+            .filter(|url| {
+                url.scheme() == "https"
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.fragment().is_none()
+            })
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .is_some_and(|host| !crate::is_forbidden_public_download_host(&host))
+    })
 }
 
 fn reference_data_url() -> Result<String, String> {
@@ -365,14 +374,25 @@ struct ValidatedUrl {
 
 fn validate_https_url(raw: &str) -> Result<ValidatedUrl, String> {
     let url = reqwest::Url::parse(raw).map_err(|_| "Некорректный URL календаря".to_string())?;
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-        return Err("Календарь разрешено загружать только по HTTPS без credentials".into());
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            "Календарь разрешено загружать только по HTTPS без credentials/fragment".into(),
+        );
     }
     let host = url
         .host_str()
         .ok_or_else(|| "В URL календаря отсутствует host".to_string())?
         .trim_end_matches('.')
         .to_ascii_lowercase();
+    if crate::is_forbidden_public_download_host(&host) {
+        return Err(
+            "Placeholder, local или некорректный host запрещён для календарного feed".into(),
+        );
+    }
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "Не определён HTTPS-порт календаря".to_string())?;
@@ -393,26 +413,7 @@ fn validate_https_url(raw: &str) -> Result<ValidatedUrl, String> {
 }
 
 fn forbidden_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.octets()[0] == 0
-                || ip.octets()[0] >= 224
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-        }
-    }
+    crate::is_forbidden_public_download_ip(ip)
 }
 
 fn canonical_json_bytes(value: &serde_json::Value) -> Result<Vec<u8>, String> {
@@ -466,7 +467,16 @@ mod tests {
     fn private_addresses_are_rejected() {
         assert!(forbidden_ip("127.0.0.1".parse().expect("ip")));
         assert!(forbidden_ip("10.0.0.1".parse().expect("ip")));
+        assert!(forbidden_ip("100.64.0.1".parse().expect("ip")));
+        assert!(forbidden_ip("198.18.0.1".parse().expect("ip")));
+        assert!(forbidden_ip("::ffff:127.0.0.1".parse().expect("ip")));
         assert!(!forbidden_ip("1.1.1.1".parse().expect("ip")));
+        assert!(crate::is_forbidden_public_download_host(
+            "updates.example.com"
+        ));
+        assert!(!crate::is_forbidden_public_download_host(
+            "updates.dokkomplekt.ru"
+        ));
     }
 
     #[test]

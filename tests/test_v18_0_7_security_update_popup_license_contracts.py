@@ -103,7 +103,7 @@ class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
             'url.scheme() != "https"',
             'url.username().is_empty()',
             'url.fragment().is_some()',
-            'is_forbidden_update_ip',
+            'is_forbidden_public_download_ip',
             'key.verify(&canonical, &signature)',
             'total != artifact.size_bytes',
             'actual_hash != expected_hash',

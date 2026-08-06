@@ -22,6 +22,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("cryptography is required: python -m pip install -r requirements-dev.txt") from exc
 
+try:
+    from scripts._release_policy import validate_public_https_url
+except ModuleNotFoundError:
+    from _release_policy import validate_public_https_url
+
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 PLATFORMS = {
     "windows-x86_64",
@@ -63,8 +68,10 @@ def parse_artifact(raw: str) -> dict[str, Any]:
         raise argparse.ArgumentTypeError(f"unsupported platform: {platform}")
     if not path.is_file():
         raise argparse.ArgumentTypeError(f"artifact does not exist: {path}")
-    if not url.startswith("https://") or "#" in url or "@" in url.split("/", 3)[2]:
-        raise argparse.ArgumentTypeError("artifact URL must be credential-free HTTPS without fragment")
+    try:
+        url = validate_public_https_url(url, "artifact URL")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
     size = path.stat().st_size
     if size <= 0 or size > MAX_ARTIFACT_BYTES:
         raise argparse.ArgumentTypeError(f"artifact size must be 1..{MAX_ARTIFACT_BYTES} bytes")

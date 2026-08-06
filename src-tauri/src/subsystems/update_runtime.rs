@@ -71,9 +71,48 @@ fn current_update_platform() -> &'static str {
     "unsupported"
 }
 
-fn is_forbidden_update_ip(ip: IpAddr) -> bool {
+pub(crate) fn is_forbidden_public_download_host(host: &str) -> bool {
+    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+    if let Ok(ip) = normalized.parse::<IpAddr>() {
+        return is_forbidden_public_download_ip(ip);
+    }
+    const RESERVED_EXACT: &[&str] = &[
+        "localhost",
+        "localhost.localdomain",
+        "example.com",
+        "example.net",
+        "example.org",
+    ];
+    const RESERVED_SUFFIXES: &[&str] = &[
+        ".localhost",
+        ".invalid",
+        ".test",
+        ".example",
+        ".local",
+        ".example.com",
+        ".example.net",
+        ".example.org",
+    ];
+    RESERVED_EXACT.contains(&normalized.as_str())
+        || RESERVED_SUFFIXES
+            .iter()
+            .any(|suffix| normalized.ends_with(suffix))
+        || !normalized.contains('.')
+        || normalized.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+pub(crate) fn is_forbidden_public_download_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
+            let [first, second, third, _] = ip.octets();
             ip.is_private()
                 || ip.is_loopback()
                 || ip.is_link_local()
@@ -81,8 +120,11 @@ fn is_forbidden_update_ip(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_broadcast()
                 || ip.is_documentation()
-                || ip.octets()[0] == 0
-                || ip.octets()[0] >= 224
+                || first == 0
+                || (first == 100 && (second & 0b1100_0000) == 64)
+                || (first == 192 && second == 0 && third == 0)
+                || (first == 198 && (second & 0b1111_1110) == 18)
+                || first >= 240
         }
         IpAddr::V6(ip) => {
             let octets = ip.octets();
@@ -95,6 +137,9 @@ fn is_forbidden_update_ip(ip: IpAddr) -> bool {
                     && octets[1] == 0x01
                     && octets[2] == 0x0d
                     && octets[3] == 0xb8)
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| is_forbidden_public_download_ip(IpAddr::V4(mapped)))
         }
     }
 }
@@ -122,10 +167,8 @@ fn validate_update_url(raw: &str) -> Result<ValidatedUpdateUrl, String> {
         .ok_or_else(|| "В URL обновления отсутствует host".to_string())?
         .trim_end_matches('.')
         .to_ascii_lowercase();
-    if matches!(host.as_str(), "localhost" | "localhost.localdomain")
-        || host.ends_with(".localhost")
-    {
-        return Err("Локальный адрес запрещён для обновлений".to_string());
+    if is_forbidden_public_download_host(&host) {
+        return Err("Placeholder, local или некорректный host запрещён для обновлений".to_string());
     }
     let port = url
         .port_or_known_default()
@@ -139,7 +182,7 @@ fn validate_update_url(raw: &str) -> Result<ValidatedUpdateUrl, String> {
     if addresses.is_empty()
         || addresses
             .iter()
-            .any(|address| is_forbidden_update_ip(address.ip()))
+            .any(|address| is_forbidden_public_download_ip(address.ip()))
     {
         return Err("Private, loopback и служебные IP запрещены для обновлений".to_string());
     }

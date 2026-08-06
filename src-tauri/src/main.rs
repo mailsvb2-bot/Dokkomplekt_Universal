@@ -2378,11 +2378,11 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_json_bytes, current_year_utc, is_forbidden_update_ip,
-        load_or_create_local_data_key, normalized_picker_output, parse_semver, pdf_print_settings,
-        plan_label, reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
-        validate_printable_file, validate_update_url, write_trust_report, SourceProvenance,
-        TrustReportContext,
+        canonical_json_bytes, current_year_utc, is_forbidden_public_download_host,
+        is_forbidden_public_download_ip, load_or_create_local_data_key, normalized_picker_output,
+        parse_semver, pdf_print_settings, plan_label, reject_parent_traversal,
+        safe_update_file_name, signed_plan_to_product_plan, validate_printable_file,
+        validate_update_url, write_trust_report, SourceProvenance, TrustReportContext,
     };
     use base64::Engine as _;
 
@@ -2419,16 +2419,47 @@ mod tests {
             "10.0.0.1",
             "169.254.1.1",
             "192.0.2.1",
+            "198.18.0.1",
+            "100.64.0.1",
+            "::ffff:127.0.0.1",
+            "2001:db8::1",
             "::1",
             "fc00::1",
         ] {
             let ip = raw.parse().unwrap();
             assert!(
-                is_forbidden_update_ip(ip),
+                is_forbidden_public_download_ip(ip),
                 "address must be rejected: {raw}"
             );
         }
-        assert!(!is_forbidden_update_ip("1.1.1.1".parse().unwrap()));
+        assert!(!is_forbidden_public_download_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn update_url_rejects_placeholder_and_non_dns_hosts_before_resolution() {
+        for host in [
+            "localhost",
+            "updates.invalid",
+            "updates.test",
+            "updates.example",
+            "updates.local",
+            "example.com",
+            "downloads.example.com",
+            "single-label",
+            "bad_host.dokkomplekt.ru",
+        ] {
+            assert!(
+                is_forbidden_public_download_host(host),
+                "host must be rejected: {host}"
+            );
+        }
+        for host in ["updates.dokkomplekt.ru", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(
+                !is_forbidden_public_download_host(host),
+                "host must be accepted: {host}"
+            );
+        }
+        assert!(validate_update_url("https://downloads.example.com/app.exe").is_err());
     }
 
     #[test]

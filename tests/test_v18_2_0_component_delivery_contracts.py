@@ -129,7 +129,7 @@ class ComponentDeliveryContracts(unittest.TestCase):
                 "--target", target,
                 "--components", "ocr",
                 "--app-min-version", "18.3.2",
-                "--base-url", "https://downloads.example.com/dokkomplekt/18.3.0",
+                "--base-url", "https://downloads.dokkomplekt.ru/dokkomplekt/18.3.0",
                 "--out", str(output_dir),
                 "--require-trusted-public-key",
             ]

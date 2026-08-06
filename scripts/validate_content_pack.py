@@ -11,6 +11,11 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+try:
+    from scripts._release_policy import validate_relative_runtime_path
+except ModuleNotFoundError:
+    from _release_policy import validate_relative_runtime_path
+
 FIELD_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 FIELD_TOKEN_RE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+")
 PLACEHOLDER_RE = re.compile(r"{{\s*([^{}]+?)\s*}}")
@@ -29,9 +34,7 @@ def sha256_file(path: Path) -> str:
 
 
 def safe_file(root: Path, value: str) -> Path:
-    relative = Path(value.replace("\\", "/"))
-    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-        raise ValueError(f"unsafe template path: {value!r}")
+    relative = Path(validate_relative_runtime_path(value, "template path"))
     resolved = (root / relative).resolve()
     if root.resolve() not in resolved.parents:
         raise ValueError(f"template escapes pack root: {value!r}")

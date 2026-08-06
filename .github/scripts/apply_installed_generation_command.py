@@ -8,8 +8,9 @@ from pathlib import Path
 import subprocess
 import sys
 
-EXPECTED_PARENT = "a3ac690963010b5df0df21bfd3e063965e0418f2"
+EXPECTED_PARENT = "eaf00795e1f56a0c79b87eae40e2fa714f7ad4ad"
 EXPECTED_TRIGGER = ".github/ci-sync/installed-generation.trigger"
+BRANCH_WORKFLOW = ".github/workflows/apply-installed-generation-command.yml"
 PATCH_SHA256 = "27eaac06015a74eb0c053a9e6be4550dea4f827787ef0d01821d626dc42274ef"
 GZIP_SHA256 = "ae304ff06b162635044db2e262070d4f051b6d7f7760347a566b855eb04c3a04"
 MAIN_BLOB = "1b7472e35b2afa6da6f75da82079a963472e73e2"
@@ -78,6 +79,8 @@ def main() -> None:
     test_path = Path("tests/test_v18_4_6_installed_app_generation_hardware.py")
     test_path.write_bytes(blob_bytes(TEST_BLOB))
     Path(EXPECTED_TRIGGER).unlink()
+    require(Path(BRANCH_WORKFLOW).is_file(), "temporary branch workflow is missing")
+    Path(BRANCH_WORKFLOW).unlink()
 
     candidate = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "SOURCE_MANIFEST_SHA256.txt"
     subprocess.run([sys.executable, "scripts/verify_source_manifest.py", "--candidate", str(candidate)], check=False)

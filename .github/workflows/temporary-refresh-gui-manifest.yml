@@ -1,6 +1,9 @@
 name: Temporary Windows evidence finalizer
 
 on:
+  workflow_run:
+    workflows: ["Quality Gate"]
+    types: [completed]
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
@@ -12,6 +15,7 @@ permissions:
 
 jobs:
   finalize:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.id == 31077885576
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955

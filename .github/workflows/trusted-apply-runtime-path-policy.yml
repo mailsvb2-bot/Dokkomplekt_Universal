@@ -36,7 +36,7 @@ jobs:
           path.write_text(text.replace(old, "new_test = r'''", 1), encoding='utf-8')
           PY
           python .github/patches/apply_runtime_path_policy.py
-          git rm \
+          git rm -f \
             .github/patches/apply_runtime_path_policy.py \
             .github/patches/runtime-policy.retry
           python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest.txt" || true

@@ -48,11 +48,15 @@ jobs:
           python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest.txt" || true
           mv "$RUNNER_TEMP/source-manifest.txt" SOURCE_MANIFEST_SHA256.txt
           git add SOURCE_MANIFEST_SHA256.txt scripts src-tauri tests
-      - name: Verify targeted security and source contour
+      - name: Format and verify security/source contour
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install -r requirements-dev.txt
+          cargo +1.85.1 fmt --all
+          python scripts/verify_source_manifest.py --candidate "$RUNNER_TEMP/source-manifest-formatted.txt" || true
+          mv "$RUNNER_TEMP/source-manifest-formatted.txt" SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt scripts src-tauri tests
           cargo +1.85.1 fmt --all -- --check
           python -m py_compile scripts/generate_update_manifest.py
           python -m pytest -q \

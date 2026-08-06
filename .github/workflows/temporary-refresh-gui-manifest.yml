@@ -16,37 +16,36 @@ jobs:
         with:
           ref: agent/require-windows-gui-evidence-main
           fetch-depth: 0
-      - name: Patch repository-boundary validation
+      - name: Patch final path-boundary validation
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          script = Path('scripts/write_windows_hardware_evidence_index.ps1')
-          text = script.read_text(encoding='utf-8')
-          old = """    $resolved = (Resolve-Path -LiteralPath $Path).Path
+          index_script = Path('scripts/write_windows_hardware_evidence_index.ps1')
+          index_text = index_script.read_text(encoding='utf-8')
+          old_index = """    $resolved = (Resolve-Path -LiteralPath $Path).Path
               if (-not $resolved.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
                   throw \"Evidence path escapes repository workspace: $resolved\"
               }
               return $resolved.Substring($repoRoot.Length).TrimStart([char[]]@('\\\\', '/')).Replace('\\\\', '/')
           """
-          new = """    $resolved = (Resolve-Path -LiteralPath $Path).Path
+          new_index = """    $resolved = (Resolve-Path -LiteralPath $Path).Path
               $repoPrefix = $repoRoot.TrimEnd([char[]]@('\\\\', '/')) + [IO.Path]::DirectorySeparatorChar
               if (-not $resolved.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
                   throw \"Evidence path escapes repository workspace: $resolved\"
               }
               return $resolved.Substring($repoPrefix.Length).Replace('\\\\', '/')
           """
-          if old not in text:
+          if old_index not in index_text:
               raise SystemExit('expected repository-boundary block not found')
-          script.write_text(text.replace(old, new, 1), encoding='utf-8')
+          index_script.write_text(index_text.replace(old_index, new_index, 1), encoding='utf-8')
 
-          test = Path('tests/test_windows_hardware_evidence_index.py')
-          test_text = test.read_text(encoding='utf-8')
-          marker = 'def test_repository_boundary_requires_separator() -> None:'
-          if marker not in test_text:
-              test_text += """
+          index_test = Path('tests/test_windows_hardware_evidence_index.py')
+          index_test_text = index_test.read_text(encoding='utf-8')
+          if 'def test_repository_boundary_requires_separator() -> None:' not in index_test_text:
+              index_test_text += """
 
           def test_repository_boundary_requires_separator() -> None:
               source = SCRIPT.read_text(encoding='utf-8')
@@ -55,7 +54,34 @@ jobs:
               assert '$resolved.StartsWith($repoPrefix' in source
               assert '$resolved.StartsWith($repoRoot' not in source
           """
-              test.write_text(test_text, encoding='utf-8')
+              index_test.write_text(index_test_text, encoding='utf-8')
+
+          reboot_script = Path('tests/windows/verify_reboot_evidence.ps1')
+          reboot_text = reboot_script.read_text(encoding='utf-8')
+          old_reboot = """$archivedSourcePath = Normalize-PathValue $evidence.archived_source_path
+          $expectedArchivedPath = Join-Path (Split-Path -Parent $receiptPath) ([string] $receiptPayload.archived_name)
+          Require-PathEqual $archivedSourcePath $expectedArchivedPath 'Archived source'
+          """
+          new_reboot = """$archivedSourcePath = Normalize-PathValue $evidence.archived_source_path
+          $expectedArchivedPath = Normalize-PathValue (Join-Path (Split-Path -Parent $receiptPath) ([string] $receiptPayload.archived_name))
+          if (-not $expectedArchivedPath.StartsWith($watchPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Archived source is outside the prepared watch folder.'
+          }
+          Require-PathEqual $archivedSourcePath $expectedArchivedPath 'Archived source'
+          """
+          if old_reboot not in reboot_text:
+              raise SystemExit('expected archived-source block not found')
+          reboot_script.write_text(reboot_text.replace(old_reboot, new_reboot, 1), encoding='utf-8')
+
+          reboot_test = Path('tests/test_windows_reboot_evidence_binding.py')
+          reboot_test_text = reboot_test.read_text(encoding='utf-8')
+          needle = '    assert "Archive receipt is not bound to the prepared payload" in verify\n'
+          addition = '    assert "Archived source is outside the prepared watch folder" in verify\n'
+          if addition not in reboot_test_text:
+              if needle not in reboot_test_text:
+                  raise SystemExit('expected reboot assertion anchor not found')
+              reboot_test_text = reboot_test_text.replace(needle, needle + addition, 1)
+              reboot_test.write_text(reboot_test_text, encoding='utf-8')
           PY
       - name: Refresh feature branch manifest
         shell: bash
@@ -72,7 +98,7 @@ jobs:
           python -m pytest -q tests/test_windows_hardware_evidence_index.py tests/test_v18_3_2_windows_regression_wall_contract.py tests/test_windows_reboot_evidence_binding.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml scripts/write_windows_hardware_evidence_index.ps1 tests/test_windows_hardware_evidence_index.py
+          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml scripts/write_windows_hardware_evidence_index.ps1 tests/test_windows_hardware_evidence_index.py tests/windows/verify_reboot_evidence.ps1 tests/test_windows_reboot_evidence_binding.py
           git commit -m "Synchronize consolidated Windows evidence hardening"
           git push origin HEAD:agent/require-windows-gui-evidence-main
       - name: Remove temporary default-branch workflow

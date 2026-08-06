@@ -16,16 +16,18 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+try:
+    from scripts._release_policy import validate_relative_runtime_path
+except ModuleNotFoundError:
+    from _release_policy import validate_relative_runtime_path
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
 TIMEOUT_SECONDS = 20
 
 
-def safe_relative(raw: str) -> Path:
-    path = Path(raw.replace("\\", "/"))
-    if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise ValueError(f"unsafe staged path: {raw!r}")
-    return path
+def safe_relative(value: str) -> Path:
+    return Path(validate_relative_runtime_path(value, "staged runtime path"))
 
 
 def load_status(target: str) -> tuple[Path, dict]:

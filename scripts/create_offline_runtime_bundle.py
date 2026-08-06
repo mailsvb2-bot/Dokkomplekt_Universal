@@ -19,6 +19,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts._release_policy import validate_relative_runtime_path
+except ModuleNotFoundError:
+    from _release_policy import validate_relative_runtime_path
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
@@ -87,9 +92,7 @@ def create_bundle(
     output_dir.mkdir(parents=True, exist_ok=True)
     entries = []
     for raw in status["files"]:
-        relative = Path(str(raw["path"]).replace("\\", "/"))
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError(f"unsafe staged path: {relative}")
+        relative = Path(validate_relative_runtime_path(raw["path"], "staged runtime path"))
         source = target_dir / relative
         actual = sha256_file(source)
         if actual != raw["sha256"]:
@@ -113,9 +116,7 @@ def create_bundle(
         if not license_path or license_path in seen_licenses:
             continue
         seen_licenses.add(license_path)
-        relative = Path(str(license_path).replace("\\", "/"))
-        if relative.is_absolute() or ".." in relative.parts:
-            raise ValueError(f"unsafe staged license path: {relative}")
+        relative = Path(validate_relative_runtime_path(license_path, "staged license path"))
         source = target_dir / relative
         actual = sha256_file(source)
         if actual != item.get("license_sha256"):

@@ -17,7 +17,11 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+
+try:
+    from scripts._release_policy import validate_relative_runtime_path, validate_source_reference
+except ModuleNotFoundError:
+    from _release_policy import validate_relative_runtime_path, validate_source_reference
 
 SUPPORTED_TOOLS = {
     "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip",
@@ -49,10 +53,7 @@ def resolve(base: Path, value: Any, title: str) -> Path:
 
 
 def safe_relative(value: Any) -> str:
-    path = Path(str(value or "").replace("\\", "/"))
-    if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise ValueError(f"unsafe target path: {value!r}")
-    return path.as_posix()
+    return validate_relative_runtime_path(value, "runtime target")
 
 
 def required_text(raw: dict[str, Any], key: str, index: int) -> str:
@@ -64,18 +65,7 @@ def required_text(raw: dict[str, Any], key: str, index: int) -> str:
 
 def validated_source_url(raw: dict[str, Any], index: int) -> str:
     value = required_text(raw, "source_url", index)
-    parsed = urlparse(value)
-    if parsed.scheme == "https":
-        if not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
-            raise ValueError(f"artifacts[{index}].source_url must be a clean HTTPS URL")
-    elif parsed.scheme == "urn":
-        if not parsed.path:
-            raise ValueError(f"artifacts[{index}].source_url contains an empty URN")
-    else:
-        raise ValueError(
-            f"artifacts[{index}].source_url must use https:// or an approved urn: identifier"
-        )
-    return value
+    return validate_source_reference(value, f"artifacts[{index}].source_url")
 
 
 def build_distribution_review(

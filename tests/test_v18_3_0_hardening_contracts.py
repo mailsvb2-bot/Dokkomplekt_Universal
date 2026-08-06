@@ -173,7 +173,7 @@ class V1830HardeningContracts(unittest.TestCase):
                     "target": runtime_target,
                     "executable": executable,
                     "version": "1.0.0-test",
-                    "source_url": "https://example.invalid/reviewed-artifact",
+                    "source_url": "https://downloads.dokkomplekt.ru/reviewed-artifact",
                     "license": "Test-License",
                     "license_file": str(license_file),
                 })

@@ -16,6 +16,47 @@ jobs:
         with:
           ref: agent/require-windows-gui-evidence-main
           fetch-depth: 0
+      - name: Patch repository-boundary validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          script = Path('scripts/write_windows_hardware_evidence_index.ps1')
+          text = script.read_text(encoding='utf-8')
+          old = """    $resolved = (Resolve-Path -LiteralPath $Path).Path
+              if (-not $resolved.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                  throw \"Evidence path escapes repository workspace: $resolved\"
+              }
+              return $resolved.Substring($repoRoot.Length).TrimStart([char[]]@('\\\\', '/')).Replace('\\\\', '/')
+          """
+          new = """    $resolved = (Resolve-Path -LiteralPath $Path).Path
+              $repoPrefix = $repoRoot.TrimEnd([char[]]@('\\\\', '/')) + [IO.Path]::DirectorySeparatorChar
+              if (-not $resolved.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                  throw \"Evidence path escapes repository workspace: $resolved\"
+              }
+              return $resolved.Substring($repoPrefix.Length).Replace('\\\\', '/')
+          """
+          if old not in text:
+              raise SystemExit('expected repository-boundary block not found')
+          script.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('tests/test_windows_hardware_evidence_index.py')
+          test_text = test.read_text(encoding='utf-8')
+          marker = 'def test_repository_boundary_requires_separator() -> None:'
+          if marker not in test_text:
+              test_text += """
+
+          def test_repository_boundary_requires_separator() -> None:
+              source = SCRIPT.read_text(encoding='utf-8')
+              assert '$repoPrefix = $repoRoot.TrimEnd' in source
+              assert '[IO.Path]::DirectorySeparatorChar' in source
+              assert '$resolved.StartsWith($repoPrefix' in source
+              assert '$resolved.StartsWith($repoRoot' not in source
+          """
+              test.write_text(test_text, encoding='utf-8')
+          PY
       - name: Refresh feature branch manifest
         shell: bash
         run: |
@@ -27,10 +68,11 @@ jobs:
           mv "$RUNNER_TEMP/source-manifest.txt" SOURCE_MANIFEST_SHA256.txt
           python scripts/verify_source_manifest.py
           git diff --check
+          python -m pytest -q tests/test_windows_hardware_evidence_index.py tests/test_v18_3_2_windows_regression_wall_contract.py tests/test_windows_reboot_evidence_binding.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml
-          git commit -m "Synchronize GUI evidence source manifest"
+          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/refresh-gui-evidence-manifest.yml scripts/write_windows_hardware_evidence_index.ps1 tests/test_windows_hardware_evidence_index.py
+          git commit -m "Synchronize consolidated Windows evidence hardening"
           git push origin HEAD:agent/require-windows-gui-evidence-main
       - name: Remove temporary default-branch workflow
         shell: bash

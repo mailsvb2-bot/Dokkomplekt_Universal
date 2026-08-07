@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: finalize-windows-evidence-pr
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   finalize:
@@ -28,14 +28,18 @@ jobs:
           python-version: '3.12'
       - name: Install Python test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Apply final fail-closed fixes and rebuild manifest
-        run: python .github/patches/finalize-windows-evidence.py
+      - name: Apply consolidated fail-closed fixes
+        run: |
+          python .github/patches/finalize-windows-evidence.py
+          python .github/patches/finalize-windows-evidence-after-ci.py
       - name: Run full Python regression wall
         run: python -m pytest -q
       - name: Run source gates
         run: |
           python scripts/verify_source_manifest.py
           python scripts/source_quality_gate.py
+          python scripts/verify_starter_content_packs.py
+          python scripts/check_reference_data_freshness.py
           python -m compileall -q scripts tests
           git diff --check
       - name: Verify final PR file set
@@ -45,6 +49,7 @@ jobs:
           import subprocess
           allowed = {
               '.github/patches/finalize-windows-evidence.py',
+              '.github/patches/finalize-windows-evidence-after-ci.py',
               '.github/patches/refresh-gui-manifest.trigger',
               '.github/workflows/finalize-windows-evidence-pr.yml',
               'SOURCE_MANIFEST_SHA256.txt',
@@ -60,6 +65,7 @@ jobs:
               raise SystemExit(f'unexpected finalizer paths: {sorted(unexpected)}')
           for temporary in (
               '.github/patches/finalize-windows-evidence.py',
+              '.github/patches/finalize-windows-evidence-after-ci.py',
               '.github/patches/refresh-gui-manifest.trigger',
               '.github/workflows/finalize-windows-evidence-pr.yml',
           ):

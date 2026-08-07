@@ -42,10 +42,17 @@ jobs:
           python scripts/check_reference_data_freshness.py
           python -m compileall -q scripts tests
           git diff --check
-      - name: Verify final PR file set
+      - name: Commit finalized branch without racing provenance sync
+        shell: bash
         run: |
-          git add -A
-          python - <<'PY'
+          set -euo pipefail
+          branch='agent/require-windows-gui-evidence-main'
+          base_commit="$(git rev-parse HEAD)"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          verify_staged() {
+            python - <<'PY'
           import subprocess
           allowed = {
               '.github/patches/finalize-windows-evidence.py',
@@ -72,9 +79,46 @@ jobs:
               if temporary not in actual:
                   raise SystemExit(f'temporary path was not removed: {temporary}')
           PY
-      - name: Commit finalized branch
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "Finalize Windows production evidence hardening [final-windows-evidence]"
-          git push origin HEAD:agent/require-windows-gui-evidence-main
+          }
+
+          reapply_latest() {
+            python .github/patches/finalize-windows-evidence.py
+            python .github/patches/finalize-windows-evidence-after-ci.py
+            python -m pytest -q \
+              tests/test_source_manifest_integrity.py \
+              tests/test_windows_hardware_evidence_index.py \
+              tests/test_windows_reboot_evidence_binding.py \
+              tests/test_windows_reboot_evidence_execution.py
+            python scripts/verify_source_manifest.py
+            python scripts/source_quality_gate.py
+            git diff --check
+            git add -A
+            verify_staged
+          }
+
+          git add -A
+          verify_staged
+
+          for attempt in 1 2 3 4; do
+            git fetch origin "$branch"
+            remote_sha="$(git rev-parse "origin/$branch")"
+            if [ "$(git rev-parse HEAD)" != "$remote_sha" ]; then
+              mapfile -t remote_changes < <(git diff --name-only "$base_commit" "$remote_sha")
+              for path in "${remote_changes[@]}"; do
+                if [ "$path" != 'SOURCE_MANIFEST_SHA256.txt' ]; then
+                  echo "Remote branch changed outside provenance manifest while finalizing: $path" >&2
+                  exit 1
+                fi
+              done
+              git reset --hard "$remote_sha"
+              reapply_latest
+            fi
+
+            git commit -m "Finalize Windows production evidence hardening [final-windows-evidence]"
+            if git push origin HEAD:"$branch"; then
+              exit 0
+            fi
+            echo "Branch advanced during final push; retrying from latest trusted head ($attempt/4)." >&2
+          done
+          echo 'Unable to publish finalized branch without overwriting concurrent changes.' >&2
+          exit 1

@@ -2,6 +2,12 @@
 
 Dokkomplekt treats document publication, commercial usage accounting, and template publication as durable state transitions rather than best-effort file writes.
 
+## Live source stability
+
+Watcher intake first captures the source into a private active-session snapshot and proves that the bytes before, during, and after the copy are identical. Recognition, trust-report hashing and optional source-copy publication all use that immutable snapshot. The live source is checked again before publication and after the patient directory becomes visible; a changed source aborts the stale publication and rolls back explicit reservations. Snapshot capture retries only boundedly and fails closed rather than silently processing a file that remains in motion. After a successful publication, destructive archive/delete hygiene is skipped when the live source no longer matches the processed SHA-256, so a newly replaced source is never deleted as if it were the old case.
+
+The live-file stability boundary is isolated in `universal_intake/source_snapshot.rs`; archive and web intake keep their own explicit I/O/hash dependencies instead of inheriting them accidentally through the parent module. This keeps the source-snapshot invariant independently testable and prevents future intake refactors from silently coupling live-file verification to unrelated format handlers.
+
 ## Generated documents
 
 A single generated document is rendered into a hidden same-directory staging file. The user-visible final name is created only after rendering has completed, using atomic create-if-absent publication. A failed or interrupted render must not leave a partial file under a final-looking DOCX name.

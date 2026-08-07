@@ -5,10 +5,9 @@ use dokkomplekt_docx::extract_docx_text;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::Serialize;
-use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Cursor, Read as _, Write as _};
+use std::io::{Cursor, Read as _};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -19,11 +18,13 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 mod archive;
+mod source_snapshot;
 mod web;
 
 use archive::{normalize_external_archive, normalize_zip};
 #[cfg(test)]
 use archive::{parse_7z_technical_listing, validate_archive_relative_path};
+pub use source_snapshot::{capture_stable_source, current_source_matches};
 pub use web::fetch_web_source;
 #[cfg(test)]
 use web::is_public_ip;

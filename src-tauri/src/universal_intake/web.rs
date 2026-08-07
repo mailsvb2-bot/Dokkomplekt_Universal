@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest as _, Sha256};
 
 #[derive(Debug, Clone)]
 struct ValidatedWebUrl {

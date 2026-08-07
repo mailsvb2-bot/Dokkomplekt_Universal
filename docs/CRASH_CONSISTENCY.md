@@ -16,4 +16,6 @@ Rollback accounting uses the persisted SQLite reservation row as the source of t
 
 A candidate `DocumentPack`, desktop state snapshot, and all associated template-version records are committed in one SQLite transaction. The in-memory active pack is replaced only after that transaction commits. Template archive files may be prepared before the transaction, but an archive file alone does not make a template active.
 
+The storage API represents this boundary with a typed `DesktopSnapshotPublication` request, keeping the transaction contract explicit without a long positional-argument interface.
+
 These invariants are covered by storage and Tauri regression tests and are expected to remain fail-closed when a publication primitive or persistence operation cannot guarantee them.

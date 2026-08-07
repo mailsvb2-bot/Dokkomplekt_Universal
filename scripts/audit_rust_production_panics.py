@@ -21,6 +21,7 @@ PATTERNS = (
     re.compile(r"\bunimplemented!\s*\("),
     re.compile(r"\bunreachable!\s*\("),
 )
+CFG_TEST_MODULE = re.compile(r"\bmod\s+[A-Za-z_][A-Za-z0-9_]*\b")
 
 
 def test_only_file(path: Path) -> bool:
@@ -40,10 +41,18 @@ def production_lines(path: Path):
         stripped = line.strip()
         if stripped.startswith("#[cfg(test)]"):
             cfg_test_pending = True
+            # A compact one-line `#[cfg(test)] mod name { ... }` is entirely
+            # test-only and needs no depth tracking beyond this skipped line.
+            if CFG_TEST_MODULE.search(stripped):
+                depth = line.count("{") - line.count("}")
+                test_depth = depth if depth > 0 else None
+                cfg_test_pending = False
             continue
-        if cfg_test_pending and re.search(r"\bmod\s+tests?\b", stripped):
+        if cfg_test_pending and CFG_TEST_MODULE.search(stripped):
             test_depth = line.count("{") - line.count("}")
             cfg_test_pending = False
+            if test_depth <= 0:
+                test_depth = None
             continue
         if test_depth is not None:
             test_depth += line.count("{") - line.count("}")

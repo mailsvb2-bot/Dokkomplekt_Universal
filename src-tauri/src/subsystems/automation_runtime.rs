@@ -185,9 +185,14 @@ fn ensure_generation_inputs_current(
     source: &Path,
     source_sha256: &str,
     template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+    processing_guard: Option<&ProcessingGuard>,
 ) -> Result<(), String> {
     ensure_source_snapshot_current(source, source_sha256)?;
-    template_snapshot::ensure_all_current(template_snapshots)
+    template_snapshot::ensure_all_current(template_snapshots)?;
+    if let Some(guard) = processing_guard {
+        guard.ensure_current()?;
+    }
+    Ok(())
 }
 
 fn perform_created_documents_intake(
@@ -283,7 +288,7 @@ fn perform_created_documents_intake(
             });
         }
     };
-    let _processing_guard = if central_queue_lease.is_some() {
+    let processing_guard = if central_queue_lease.is_some() {
         None
     } else {
         match ProcessingGuard::acquire(&source, &processing_job_sha256)? {
@@ -1074,7 +1079,12 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
-            if let Err(error) = ensure_generation_inputs_current(&source, &source_sha256, &template_snapshots) {
+            if let Err(error) = ensure_generation_inputs_current(
+                &source,
+                &source_sha256,
+                &template_snapshots,
+                processing_guard.as_ref(),
+            ) {
                 let _ = std::fs::remove_dir_all(&stage);
                 rollback_counter_reservations(app, &counter_reservations);
                 rollback_generation_access(app, state, &permit);
@@ -1101,7 +1111,12 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
-            if let Err(error) = ensure_generation_inputs_current(&source, &source_sha256, &template_snapshots) {
+            if let Err(error) = ensure_generation_inputs_current(
+                &source,
+                &source_sha256,
+                &template_snapshots,
+                processing_guard.as_ref(),
+            ) {
                 let _ = std::fs::remove_dir_all(&patient_dir);
                 rollback_counter_reservations(app, &counter_reservations);
                 rollback_generation_access(app, state, &permit);

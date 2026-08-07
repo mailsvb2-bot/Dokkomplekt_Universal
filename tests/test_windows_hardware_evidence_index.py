@@ -119,6 +119,16 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
                 },
             },
         )
+        reboot_path = release_root / "WINDOWS_REBOOT_E2E_PASSED.json"
+        write_json(
+            reboot_path,
+            {
+                "schema": "dokkomplekt.windows-reboot-e2e.verified.v2",
+                "source_sha256": source_sha,
+                "application_sha256": sha256(application),
+                "watcher_executable_sha256": sha256(application),
+            },
+        )
         hardware_path = release_root / "WINDOWS_HARDWARE_E2E_PASSED.json"
         write_json(
             hardware_path,
@@ -143,7 +153,6 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
             },
         )
         for name in (
-            "WINDOWS_REBOOT_E2E_PASSED.json",
             "WATCHER_INSTALL.json",
             "WATCHER_UNINSTALL.json",
         ):
@@ -180,7 +189,7 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         assert index["release_sha"] == "a" * 40
         assert index["source_sha256"] == source_sha
         assert index["record_count"] == len(index["records"])
-        assert index["record_count"] >= 25
+        assert index["record_count"] == 24
         paths = {record["path"] for record in index["records"]}
         assert len(paths) == index["record_count"]
         assert all("\\" not in path for path in paths)
@@ -189,3 +198,16 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         failed = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
         assert failed.returncode != 0
         assert "Signed application SHA-256 mismatch" in failed.stdout + failed.stderr
+
+
+
+def test_repository_boundary_requires_separator() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "$repoPrefix = $repoRoot.TrimEnd" in source
+    assert "[IO.Path]::DirectorySeparatorChar" in source
+    assert "$resolved.StartsWith($repoPrefix" in source
+    assert "$resolved.StartsWith($repoRoot" not in source
+    assert "Read-RequiredJson $rebootPath 'dokkomplekt.windows-reboot-e2e.verified.v2'" in source
+    assert "Reboot evidence application" in source
+    assert "Reboot watcher executable" in source
+    assert "@{ Path = $rebootPath; Kind = 'hardware-evidence' }" in source

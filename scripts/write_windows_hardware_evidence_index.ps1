@@ -21,10 +21,11 @@ function Resolve-RequiredFile {
 function Get-RelativeRepositoryPath {
     param([Parameter(Mandatory = $true)] [string] $Path)
     $resolved = (Resolve-Path -LiteralPath $Path).Path
-    if (-not $resolved.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    $repoPrefix = $repoRoot.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Evidence path escapes repository workspace: $resolved"
     }
-    return $resolved.Substring($repoRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+    return $resolved.Substring($repoPrefix.Length).Replace('\', '/')
 }
 
 function Get-FileRecord {
@@ -94,12 +95,16 @@ $signedBuild = Read-RequiredJson $signedBuildPath 'dokkomplekt.windows-signed-bu
 $hardware = Read-RequiredJson $hardwarePath 'dokkomplekt.windows-hardware-e2e.v3'
 $gui = Read-RequiredJson $guiPath 'dokkomplekt.gui-console-evidence.v1'
 $authenticode = Read-RequiredJson $authenticodePath 'dokkomplekt.authenticode-evidence.v1'
+$reboot = Read-RequiredJson $rebootPath 'dokkomplekt.windows-reboot-e2e.verified.v2'
 
 if ([string] $signedBuild.source_sha256 -ne $sourceSha256) {
     throw 'Signed build evidence is not bound to the current source fingerprint.'
 }
 if ([string] $hardware.source_sha256 -ne $sourceSha256) {
     throw 'Hardware E2E evidence is not bound to the current source fingerprint.'
+}
+if ([string] $reboot.source_sha256 -ne $sourceSha256) {
+    throw 'Reboot evidence is not bound to the current source fingerprint.'
 }
 $requiredTrueFlags = @(
     'word_available',
@@ -132,6 +137,8 @@ $appRecord = Get-FileRecord $ApplicationPath 'application'
 Assert-Sha256Equal $appRecord.sha256 ([string] $signedBuild.application.sha256) 'Signed application'
 Assert-Sha256Equal $appRecord.sha256 ([string] $gui.application_sha256) 'GUI evidence application'
 Assert-Sha256Equal $appRecord.sha256 ([string] $authenticode.installed_application.sha256) 'Hardware Authenticode application'
+Assert-Sha256Equal $appRecord.sha256 ([string] $reboot.application_sha256) 'Reboot evidence application'
+Assert-Sha256Equal $appRecord.sha256 ([string] $reboot.watcher_executable_sha256) 'Reboot watcher executable'
 
 $guiRecord = Get-FileRecord $guiPath 'hardware-evidence'
 $printRecord = Get-FileRecord $printPath 'hardware-evidence'
@@ -139,6 +146,7 @@ $authenticodeRecord = Get-FileRecord $authenticodePath 'hardware-evidence'
 Assert-Sha256Equal $guiRecord.sha256 ([string] $hardware.gui_console_evidence_sha256) 'GUI/console evidence'
 Assert-Sha256Equal $printRecord.sha256 ([string] $hardware.print_event_evidence_sha256) 'Print event evidence'
 Assert-Sha256Equal $authenticodeRecord.sha256 ([string] $hardware.authenticode_evidence_sha256) 'Authenticode evidence'
+$rebootEvidenceSha256 = (Get-FileHash -LiteralPath $rebootPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $installerFiles = @(Get-ChildItem -LiteralPath $InstallerRoot -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.msi') })
 if ($installerFiles.Count -eq 0) { throw 'No installer artifacts were found for the final evidence index.' }
@@ -176,9 +184,6 @@ Assert-Sha256Equal $cargoSignatureRecord.sha256 ([string] $signedBuild.rust_gate
 $requiredEvidence = @(
     @{ Path = $signedBuildPath; Kind = 'release-evidence' },
     @{ Path = $hardwarePath; Kind = 'hardware-evidence' },
-    @{ Path = $guiPath; Kind = 'hardware-evidence' },
-    @{ Path = $printPath; Kind = 'hardware-evidence' },
-    @{ Path = $authenticodePath; Kind = 'hardware-evidence' },
     @{ Path = $rebootPath; Kind = 'hardware-evidence' },
     @{ Path = $watcherInstallPath; Kind = 'hardware-evidence' },
     @{ Path = $watcherUninstallPath; Kind = 'hardware-evidence' },

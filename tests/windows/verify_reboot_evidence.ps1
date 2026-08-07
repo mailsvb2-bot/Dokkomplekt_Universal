@@ -101,7 +101,10 @@ if ([int] $receiptPayload.schema -ne 1 -or $receiptPayload.sha256 -ne $payloadSh
     throw 'Archive receipt is not bound to the prepared payload.'
 }
 $archivedSourcePath = Normalize-PathValue $evidence.archived_source_path
-$expectedArchivedPath = Join-Path (Split-Path -Parent $receiptPath) ([string] $receiptPayload.archived_name)
+$expectedArchivedPath = Normalize-PathValue (Join-Path (Split-Path -Parent $receiptPath) ([string] $receiptPayload.archived_name))
+if (-not $expectedArchivedPath.StartsWith($watchPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Archived source is outside the prepared watch folder.'
+}
 Require-PathEqual $archivedSourcePath $expectedArchivedPath 'Archived source'
 $archivedSourceSha = Require-FileHash $archivedSourcePath $payloadSha 'Archived source'
 if ($evidence.archived_source_sha256 -ne $archivedSourceSha) { throw 'Archived source evidence hash mismatch.' }
@@ -114,16 +117,16 @@ if ([Math]::Abs(($receiptItem.LastWriteTimeUtc - $receiptLastWrite.UtcDateTime).
 if ($evidence.post_reboot_case_completed -ne $true) { throw 'No post-reboot document case completed.' }
 $outputSha = Normalize-Sha256 $evidence.post_reboot_output_sha256 'Post-reboot output hash'
 if ($outputSha -eq $payloadSha) { throw 'Post-reboot output is the archived input payload, not a generated document.' }
-$outputPath = Normalize-PathValue $evidence.post_reboot_output_path
-if (-not $outputPath.StartsWith($watchPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+$generatedOutputPath = Normalize-PathValue $evidence.post_reboot_output_path
+if (-not $generatedOutputPath.StartsWith($watchPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Post-reboot output is outside the prepared watch folder.'
 }
-if ($outputPath -ieq (Normalize-PathValue $evidence.destination_path) -or $outputPath -ieq (Normalize-PathValue $pending.payload_path)) {
+if ($generatedOutputPath -ieq (Normalize-PathValue $evidence.destination_path) -or $generatedOutputPath -ieq (Normalize-PathValue $pending.payload_path)) {
     throw 'Post-reboot output aliases the input payload.'
 }
-if ([IO.Path]::GetExtension($outputPath) -notin @('.docx', '.pdf')) { throw 'Post-reboot output has an unsupported extension.' }
-$verifiedOutputSha = Require-FileHash $outputPath $outputSha 'Post-reboot output'
-$outputItem = Get-Item -LiteralPath $outputPath -Force
+if ([IO.Path]::GetExtension($generatedOutputPath) -notin @('.docx', '.pdf')) { throw 'Post-reboot output has an unsupported extension.' }
+$verifiedOutputSha = Require-FileHash $generatedOutputPath $outputSha 'Post-reboot output'
+$outputItem = Get-Item -LiteralPath $generatedOutputPath -Force
 if ([long] $evidence.post_reboot_output_size_bytes -ne [long] $outputItem.Length -or $outputItem.Length -le 0) {
     throw 'Post-reboot output size mismatch.'
 }
@@ -157,7 +160,7 @@ $normalized = [ordered]@{
     archived_source_sha256 = $archivedSourceSha
     case_started_at_utc = $evidence.case_started_at_utc
     post_reboot_case_completed = $true
-    post_reboot_output_path = $outputPath
+    post_reboot_output_path = $generatedOutputPath
     post_reboot_output_sha256 = $verifiedOutputSha
     post_reboot_output_size_bytes = [long] $outputItem.Length
     post_reboot_output_last_write_utc = $outputItem.LastWriteTimeUtc.ToString('o')

@@ -47,10 +47,13 @@ def test_reboot_evidence_v2_binds_exact_runtime_payload_and_output() -> None:
     assert "Watcher executable hash mismatch" in verify
     assert "Payload is not bound to the prepared source document" in verify
     assert "Archive receipt is not bound to the prepared payload" in verify
+    assert "Archived source is outside the prepared watch folder" in verify
     assert "Post-reboot output is the archived input payload" in verify
     assert "Post-reboot output is outside the prepared watch folder" in verify
+    assert "$generatedOutputPath = Normalize-PathValue $evidence.post_reboot_output_path" in verify
+    assert "post_reboot_output_path = $generatedOutputPath" in verify
     assert "Post-reboot output aliases the input payload" in verify
-    assert "Require-FileHash $outputPath $outputSha 'Post-reboot output'" in verify
+    assert "Require-FileHash $generatedOutputPath $outputSha 'Post-reboot output'" in verify
     assert "Post-reboot output timestamp mismatch" in verify
     assert "Remove-Item -LiteralPath $pending.post_script_path, $pending.payload_path, $pendingPath" in verify
 

@@ -69,6 +69,14 @@ pub struct TemplateVersionRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateVersionDraft {
+    pub document_id: String,
+    pub template_path: String,
+    pub template_sha256: String,
+    pub note: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaseRunRecord {
     pub case_id: String,
@@ -789,6 +797,117 @@ impl LocalRepository {
         )?;
         tx.commit()?;
         Ok(changed)
+    }
+
+    /// Atomically publishes the complete desktop snapshot together with all
+    /// template-version records that make the candidate pack auditable.
+    ///
+    /// Archive files are prepared by the caller before this transaction. SQLite is
+    /// the publication boundary: after a crash, callers can observe either the old
+    /// pack/version set or the new pack/version set, never a mixture of both.
+    pub fn save_desktop_snapshot_with_template_versions<T: serde::Serialize + ?Sized>(
+        &mut self,
+        case_id: &str,
+        pack_id: &str,
+        case: &SemanticCase,
+        pack: &DocumentPack,
+        state_key: &str,
+        state_value: &T,
+        versions: &[TemplateVersionDraft],
+    ) -> StorageResult<Vec<TemplateVersionRecord>> {
+        let case_json = serde_json::to_string_pretty(case)?;
+        let case_stored = self.encode_sensitive(&case_json)?;
+        let pack_json = serde_json::to_string_pretty(pack)?;
+        let pack_stored = self.encode_sensitive(&pack_json)?;
+        let state_json = serde_json::to_string(state_value)?;
+        let state_stored = self.encode_sensitive(&state_json)?;
+
+        let mut prepared = Vec::with_capacity(versions.len());
+        for draft in versions {
+            if draft.document_id.trim().is_empty() {
+                return Err(StorageError::Crypto("document_id cannot be empty".into()));
+            }
+            if draft.template_sha256.len() != 64
+                || !draft
+                    .template_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(StorageError::Crypto(
+                    "template_sha256 must be lowercase SHA-256".into(),
+                ));
+            }
+            prepared.push((
+                draft.clone(),
+                random_record_id("tpl")?,
+                self.encode_sensitive(&draft.template_path)?,
+                self.encode_sensitive(&draft.note)?,
+            ));
+        }
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![case_id, case_stored],
+        )?;
+        tx.execute(
+            "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![pack_id, pack_stored],
+        )?;
+        tx.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![state_key, state_stored],
+        )?;
+
+        let mut published_ids = Vec::with_capacity(prepared.len());
+        for (draft, version_id, encrypted_path, encrypted_note) in prepared {
+            let current: Option<(String, String)> = tx
+                .query_row(
+                    "SELECT version_id,template_sha256 FROM template_versions WHERE document_id=?1 AND status='published' ORDER BY version_number DESC LIMIT 1",
+                    params![draft.document_id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((current_id, current_sha256)) = current {
+                if current_sha256 == draft.template_sha256 {
+                    published_ids.push(current_id);
+                    continue;
+                }
+            }
+            let next: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(version_number),0)+1 FROM template_versions WHERE document_id=?1",
+                params![draft.document_id.as_str()],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "UPDATE template_versions SET status='archived' WHERE document_id=?1 AND status='published'",
+                params![draft.document_id.as_str()],
+            )?;
+            tx.execute(
+                "INSERT INTO template_versions(version_id,document_id,version_number,template_path,template_sha256,note,status) VALUES (?1,?2,?3,?4,?5,?6,'published')",
+                params![
+                    version_id.as_str(),
+                    draft.document_id.as_str(),
+                    next,
+                    encrypted_path,
+                    draft.template_sha256.as_str(),
+                    encrypted_note,
+                ],
+            )?;
+            published_ids.push(version_id);
+        }
+        tx.commit()?;
+
+        published_ids
+            .into_iter()
+            .map(|version_id| {
+                self.template_version_by_id(&version_id)?.ok_or_else(|| {
+                    StorageError::Crypto("atomically published template version disappeared".into())
+                })
+            })
+            .collect()
     }
 
     pub fn register_template_version(
@@ -1951,6 +2070,86 @@ mod tests {
         let details: serde_json::Value = serde_json::from_str(&resolved.details_json).unwrap();
         assert_eq!(details["original"]["field"], "person.full_name");
         assert_eq!(details["resolution"]["text"], "Проверено специалистом");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn desktop_snapshot_and_template_versions_publish_as_one_transaction() {
+        let path = temp_db("template-atomic-publish");
+        let mut repo = LocalRepository::open_with_key(&path, [21u8; 32]).unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "candidate".into(),
+            documents: Vec::new(),
+        };
+        let draft = TemplateVersionDraft {
+            document_id: "invoice".into(),
+            template_path: "C:/archive/invoice.docx".into(),
+            template_sha256: "a".repeat(64),
+            note: "atomic publish".into(),
+        };
+        let versions = repo
+            .save_desktop_snapshot_with_template_versions(
+                "current",
+                "default",
+                &case,
+                &candidate,
+                "license_document",
+                &Option::<String>::None,
+                &[draft],
+            )
+            .unwrap();
+        assert_eq!(repo.load_pack("default").unwrap(), Some(candidate));
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].status, "published");
+        assert_eq!(repo.list_template_versions("invoice").unwrap().len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_template_version_cannot_publish_candidate_pack() {
+        let path = temp_db("template-atomic-reject");
+        let mut repo = LocalRepository::open_with_key(&path, [22u8; 32]).unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "must-not-publish".into(),
+            documents: Vec::new(),
+        };
+        let invalid = TemplateVersionDraft {
+            document_id: "invoice".into(),
+            template_path: "C:/archive/invoice.docx".into(),
+            template_sha256: "NOT-A-SHA".into(),
+            note: "invalid".into(),
+        };
+        assert!(repo
+            .save_desktop_snapshot_with_template_versions(
+                "current",
+                "default",
+                &case,
+                &candidate,
+                "license_document",
+                &Option::<String>::None,
+                &[invalid],
+            )
+            .is_err());
+        assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
+        assert!(repo.list_template_versions("invoice").unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }
 

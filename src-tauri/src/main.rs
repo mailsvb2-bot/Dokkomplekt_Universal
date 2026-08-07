@@ -51,8 +51,8 @@ use dokkomplekt_license_core::{
 };
 use dokkomplekt_storage::{
     AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, CaseDocumentRecord,
-    CaseRunRecord, ClauseBlockRecord, CounterValue, LocalRepository, TemplateVersionRecord,
-    UsageReservation,
+    CaseRunRecord, ClauseBlockRecord, CounterValue, LocalRepository, TemplateVersionDraft,
+    TemplateVersionRecord, UsageReservation,
 };
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey};
 use notify::{RecursiveMode, Watcher as _};
@@ -671,6 +671,7 @@ struct AppState {
     retained_uploaded_source: Mutex<Option<universal_intake::RetainedUploadedSource>>,
     source_provenance: Mutex<Option<SourceProvenance>>,
     semantic_runtime: Mutex<Option<semantic_runtime::ManagedSemanticRuntime>>,
+    persistence_gate: Mutex<()>,
     persistence_blocked: AtomicBool,
     persistence_error: Mutex<Option<String>>,
 }
@@ -690,6 +691,7 @@ impl Default for AppState {
             retained_uploaded_source: Mutex::new(None),
             source_provenance: Mutex::new(None),
             semantic_runtime: Mutex::new(None),
+            persistence_gate: Mutex::new(()),
             persistence_blocked: AtomicBool::new(false),
             persistence_error: Mutex::new(None),
         }
@@ -1656,6 +1658,10 @@ fn ensure_persistence_available(state: &AppState) -> Result<(), String> {
 
 fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
     ensure_persistence_available(state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1674,6 +1680,10 @@ fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
 
 fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
     ensure_persistence_available(state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     let path = default_state_db_path(app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;

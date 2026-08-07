@@ -24,6 +24,7 @@ mod web;
 use archive::{normalize_external_archive, normalize_zip};
 #[cfg(test)]
 use archive::{parse_7z_technical_listing, validate_archive_relative_path};
+pub(crate) use source_snapshot::StableSourceSnapshot;
 pub use source_snapshot::{capture_stable_source, current_source_matches};
 pub use web::fetch_web_source;
 #[cfg(test)]

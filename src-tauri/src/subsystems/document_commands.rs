@@ -386,26 +386,32 @@ fn register_learned_template(
     if button_label.is_empty() {
         return Err("Укажите название кнопки.".into());
     }
-    let path = resolve_user_path(&app, &req.template_path)?;
-    let text = extract_docx_text(&path).map_err(|error| error.to_string())?;
+    let template_snapshot = template_snapshot::TemplateSnapshot::capture(
+        &app,
+        &req.template_path,
+        button_label,
+    )?;
+    let text = extract_docx_text(template_snapshot.path()).map_err(|error| error.to_string())?;
+    let live_template_path = template_snapshot.live_path().display().to_string();
     let mut document = dokkomplekt_core::create_button_from_template_text(
         &text,
         document_id,
-        &path.display().to_string(),
+        &live_template_path,
         Some(button_label),
     );
     if document.is_static_copy || document.placeholders.is_empty() {
         return Err("Обученная копия не содержит подтверждённых {{field.id}} и не может стать рабочей кнопкой.".into());
     }
     document.popup_fields = normalize_popup_fields(&document.popup_fields);
-    let (_, _, template_sha256) = file_content_signature(&path)?;
+    let template_sha256 = template_snapshot.sha256().to_string();
     let draft = prepare_template_version_draft(
         &app,
         document_id,
-        &path,
+        template_snapshot.path(),
         &template_sha256,
         "Публикация шаблона после подтверждённого Template Intelligence Wizard.",
     )?;
+    template_snapshot.ensure_current()?;
     let (result, _) = publish_pack_with_template_versions(&app, &state, &[draft], |pack| {
         pack.documents.retain(|item| item.id != document_id);
         if pack
@@ -427,7 +433,7 @@ fn register_learned_template(
         &serde_json::json!({
             "document_id": document_id,
             "button_label": button_label,
-            "template_path": path.display().to_string(),
+            "template_path": template_snapshot.live_path().display().to_string(),
             "explicit_confirmation": true,
         }),
     )?;
@@ -456,18 +462,32 @@ fn confirm_template_setup(
         return Err("У каждого шаблона должно быть название кнопки.".into());
     }
     let incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &req.rows).pack;
+    let template_snapshots = req
+        .rows
+        .iter()
+        .map(|row| {
+            template_snapshot::TemplateSnapshot::capture(
+                &app,
+                &row.template_path,
+                &row.editable_button_label,
+            )
+            .map(|snapshot| (row.document_id.clone(), snapshot))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let mut drafts = Vec::with_capacity(req.rows.len());
     for row in &req.rows {
-        let path = resolve_user_path(&app, &row.template_path)?;
-        let (_, _, template_sha256) = file_content_signature(&path)?;
+        let snapshot = template_snapshots
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
         drafts.push(prepare_template_version_draft(
             &app,
             &row.document_id,
-            &path,
-            &template_sha256,
+            snapshot.path(),
+            snapshot.sha256(),
             "Первичная публикация пользовательского шаблона.",
         )?);
     }
+    template_snapshot::ensure_all_current(&template_snapshots)?;
     let (result, _) = publish_pack_with_template_versions(&app, &state, &drafts, |pack| {
         merge_document_pack(pack, incoming);
         Ok(())
@@ -1178,9 +1198,13 @@ fn render_docx(
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
-    let template_text = template_text_for_document(&app, &doc)?;
+    let template_snapshot = template_snapshot::TemplateSnapshot::capture(
+        &app,
+        &doc.template_path,
+        &doc.button_label,
+    )?;
+    let template_text = extract_docx_text(template_snapshot.path()).map_err(|e| e.to_string())?;
     // Both paths are anchored: an installed app must not depend on the process CWD.
-    let template_path = resolve_user_path(&app, &doc.template_path)?;
     let desired_output = resolve_user_path(&app, &req.output_path)?;
     let reservation = UniqueFileReservation::acquire(&desired_output)?;
     let permit = reserve_generation_access(&app, &state, 1)?;
@@ -1198,7 +1222,7 @@ fn render_docx(
     };
     let render_result = render_docx_with_assets(
         &app,
-        &template_path,
+        template_snapshot.path(),
         &reservation.path,
         &hydrated.case,
         req.strict,
@@ -1212,6 +1236,11 @@ fn render_docx(
             return Err(error.to_string());
         }
     };
+    if let Err(error) = template_snapshot.ensure_current() {
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let output_path = match reservation.commit() {
         Ok(path) => path,
         Err(error) => {
@@ -1220,6 +1249,12 @@ fn render_docx(
             return Err(error);
         }
     };
+    if let Err(error) = template_snapshot.ensure_current() {
+        let _ = std::fs::remove_file(&output_path);
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     if let Err(error) = commit_generation_access(&app, &permit) {
         let _ = std::fs::remove_file(&output_path);
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
@@ -1289,6 +1324,17 @@ fn render_docx_batch(
                 .ok_or_else(|| format!("Документ не найден: {document_id}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let template_snapshots = documents
+        .iter()
+        .map(|document| {
+            template_snapshot::TemplateSnapshot::capture(
+                &app,
+                &document.template_path,
+                &document.button_label,
+            )
+            .map(|snapshot| (document.id.clone(), snapshot))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let base_case = state
         .semantic_case
         .lock()
@@ -1321,8 +1367,10 @@ fn render_docx_batch(
         let mut paths = Vec::new();
         let mut report_case = base_case.clone();
         for document in &documents {
-            let template_path = resolve_user_path(&app, &document.template_path)?;
-            let template_text = extract_docx_text(&template_path).map_err(|e| e.to_string())?;
+            let template_snapshot = template_snapshots
+                .get(&document.id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", document.button_label))?;
+            let template_text = extract_docx_text(template_snapshot.path()).map_err(|e| e.to_string())?;
             let hydrated = hydrate_case_with_persistent_template_data(
                 &app,
                 &base_case,
@@ -1333,7 +1381,8 @@ fn render_docx_batch(
                 report_case.values.insert(field_id.clone(), value.clone());
             }
             counter_reservations.extend(hydrated.counter_reservations);
-            let extension = template_path
+            let extension = template_snapshot
+                .path()
                 .extension()
                 .and_then(|value| value.to_str())
                 .filter(|value| value.eq_ignore_ascii_case("docm"))
@@ -1346,7 +1395,7 @@ fn render_docx_batch(
             let reservation = UniqueFileReservation::acquire(&desired_name)?;
             if let Err(error) = render_docx_with_assets(
                 &app,
-                &template_path,
+                template_snapshot.path(),
                 &reservation.path,
                 &hydrated.case,
                 req.strict,
@@ -1399,6 +1448,12 @@ fn render_docx_batch(
             return Err(error);
         }
     };
+    if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
+        let _ = std::fs::remove_dir_all(&stage);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let output_folder = match publish_stage_to_unique_directory(&stage, &desired_output_folder) {
         Ok(path) => path,
         Err(error) => {
@@ -1408,6 +1463,12 @@ fn render_docx_batch(
             return Err(error);
         }
     };
+    if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
+        let _ = std::fs::remove_dir_all(&output_folder);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     if let Err(error) = commit_generation_access(&app, &permit) {
         let _ = std::fs::remove_dir_all(&output_folder);
         rollback_counter_reservations(&app, &counter_reservations);

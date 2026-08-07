@@ -108,22 +108,19 @@ fn finalize_processed_source(
 fn automation_plan_fingerprint(
     app: &tauri::AppHandle,
     pack: &DocumentPack,
+    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
     req: &CreatedDocumentsIntakeRequest,
 ) -> Result<String, String> {
     let mut documents = pack.documents.clone();
     documents.sort_by(|left, right| left.id.cmp(&right.id));
     let mut templates = Vec::with_capacity(documents.len());
     for document in documents {
-        let template_path = resolve_user_path(app, &document.template_path)?;
-        let (_, _, template_sha256) = file_content_signature(&template_path).map_err(|error| {
-            format!(
-                "Не удалось вычислить fingerprint шаблона «{}»: {error}",
-                document.button_label
-            )
+        let snapshot = template_snapshots.get(&document.id).ok_or_else(|| {
+            format!("Не найден snapshot шаблона «{}».", document.button_label)
         })?;
         templates.push(serde_json::json!({
             "document": document,
-            "template_sha256": template_sha256,
+            "template_sha256": snapshot.sha256(),
         }));
     }
     let model_config = load_semantic_model_config(app)?;
@@ -184,6 +181,15 @@ fn ensure_source_snapshot_current(source: &Path, source_sha256: &str) -> Result<
     }
 }
 
+fn ensure_generation_inputs_current(
+    source: &Path,
+    source_sha256: &str,
+    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+) -> Result<(), String> {
+    ensure_source_snapshot_current(source, source_sha256)?;
+    template_snapshot::ensure_all_current(template_snapshots)
+}
+
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -203,7 +209,20 @@ fn perform_created_documents_intake(
     let source_sha256 = source_snapshot.sha256().to_string();
     let processed_markers = workspace_hygiene::processed_marker_candidates(&source);
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let processing_fingerprint = automation_plan_fingerprint(app, &pack, &req)?;
+    let template_snapshots = pack
+        .documents
+        .iter()
+        .map(|document| {
+            template_snapshot::TemplateSnapshot::capture(
+                app,
+                &document.template_path,
+                &document.button_label,
+            )
+            .map(|snapshot| (document.id.clone(), snapshot))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let processing_fingerprint =
+        automation_plan_fingerprint(app, &pack, &template_snapshots, &req)?;
     let processing_job_sha256 = processing_job_key(&source_sha256, &processing_fingerprint);
     let completed_in_history = repository_for(&default_state_db_path(app)?)?
         .completed_case_exists_for_source_and_plan(&source_sha256, &processing_fingerprint)
@@ -720,8 +739,10 @@ fn perform_created_documents_intake(
         if !selected_document_ids.contains(&doc.id) {
             continue;
         }
-        let template_path = resolve_user_path(app, &doc.template_path)?;
-        let template_text = extract_docx_text(&template_path)
+        let template_snapshot = template_snapshots
+            .get(&doc.id)
+            .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", doc.button_label))?;
+        let template_text = extract_docx_text(template_snapshot.path())
             .map_err(|e| format!("Шаблон «{}» не читается: {e}", doc.button_label))?;
         configured.push(ConfiguredDocument {
             spec: doc.clone(),
@@ -931,7 +952,9 @@ fn perform_created_documents_intake(
                         .find(|d| d.id == out.document_id)
                         .ok_or_else(|| "document not found".to_string())?;
                     let out_path = stage.join(&out.file_name);
-                    let template_path = resolve_user_path(app, &doc.template_path)?;
+                    let template_snapshot = template_snapshots
+                        .get(&doc.id)
+                        .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", doc.button_label))?;
                     let template_text = configured
                         .iter()
                         .find(|configured| configured.spec.id == out.document_id)
@@ -945,7 +968,7 @@ fn perform_created_documents_intake(
                     )?;
                     let input_fingerprint = resume_engine::document_input_fingerprint(
                         &out.document_id,
-                        &template_path,
+                        template_snapshot.path(),
                         &template_text,
                         &fingerprint_case.case,
                         permit.watermark.as_deref(),
@@ -981,7 +1004,7 @@ fn perform_created_documents_intake(
                         counter_reservations.extend(hydrated.counter_reservations);
                         render_docx_with_assets(
                             app,
-                            &template_path,
+                            template_snapshot.path(),
                             &out_path,
                             &hydrated.case,
                             true,
@@ -1051,7 +1074,7 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
-            if let Err(error) = ensure_source_snapshot_current(&source, &source_sha256) {
+            if let Err(error) = ensure_generation_inputs_current(&source, &source_sha256, &template_snapshots) {
                 let _ = std::fs::remove_dir_all(&stage);
                 rollback_counter_reservations(app, &counter_reservations);
                 rollback_generation_access(app, state, &permit);
@@ -1078,7 +1101,7 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
-            if let Err(error) = ensure_source_snapshot_current(&source, &source_sha256) {
+            if let Err(error) = ensure_generation_inputs_current(&source, &source_sha256, &template_snapshots) {
                 let _ = std::fs::remove_dir_all(&patient_dir);
                 rollback_counter_reservations(app, &counter_reservations);
                 rollback_generation_access(app, state, &permit);

@@ -43,7 +43,24 @@ jobs:
       - name: Compile Tauri tests
         run: cargo check -p dokkomplekt-tauri --tests
       - name: Clippy Tauri tests
-        run: cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
+        shell: bash
+        run: |
+          set +e
+          cargo clippy -p dokkomplekt-tauri --tests -- -D warnings 2>&1 | tee /tmp/processing-guard-clippy.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            mkdir -p .github/diagnostics
+            cp /tmp/processing-guard-clippy.log .github/diagnostics/processing-guard-clippy.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/diagnostics/processing-guard-clippy.txt
+            git commit -m "Capture processing guard clippy diagnostic"
+            git fetch origin agent/fix-processing-guard-fencing
+            git rebase --autostash origin/agent/fix-processing-guard-fencing
+            git push origin HEAD:agent/fix-processing-guard-fencing
+          fi
+          exit "$status"
       - name: Run exactly-once and governance contracts
         run: >-
           python -m pytest -q
@@ -56,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/patches/agent-processing-guard-fencing.py .github/workflows/agent-processing-guard-fencing.yml
+          rm -f .github/patches/agent-processing-guard-fencing.py .github/workflows/agent-processing-guard-fencing.yml .github/diagnostics/processing-guard-clippy.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A

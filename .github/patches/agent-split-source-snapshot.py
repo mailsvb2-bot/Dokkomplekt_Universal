@@ -30,6 +30,16 @@ if first_test < 0 or next_test < 0 or next_test <= first_test:
     raise SystemExit("snapshot regression test block mismatch")
 text = text[:first_test] + text[next_test:]
 
+# These imports belonged only to the snapshot implementation moved below.
+sha_import = "use sha2::{Digest as _, Sha256};\n"
+if text.count(sha_import) != 1:
+    raise SystemExit("snapshot sha2 import mismatch")
+text = text.replace(sha_import, "", 1)
+io_import = "use std::io::{Cursor, Read as _, Write as _};\n"
+if text.count(io_import) != 1:
+    raise SystemExit("snapshot write import mismatch")
+text = text.replace(io_import, "use std::io::{Cursor, Read as _};\n", 1)
+
 path.write_text(text, encoding="utf-8")
 
 module = r'''use super::{

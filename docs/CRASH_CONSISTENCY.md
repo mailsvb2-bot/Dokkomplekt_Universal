@@ -4,7 +4,7 @@ Dokkomplekt treats document publication, commercial usage accounting, and templa
 
 ## Live source stability
 
-Watcher intake first captures the source into a private active-session snapshot and proves that the bytes before, during, and after the copy are identical. Recognition, trust-report hashing and optional source-copy publication all use that immutable snapshot. The live source is checked again before publication and after the patient directory becomes visible; a changed source aborts the stale publication and rolls back explicit reservations. After a successful publication, destructive archive/delete hygiene is skipped when the live source no longer matches the processed SHA-256, so a newly replaced source is never deleted as if it were the old case.
+Watcher intake first captures the source into a private active-session snapshot and proves that the bytes before, during, and after the copy are identical. Recognition, trust-report hashing and optional source-copy publication all use that immutable snapshot. The live source is checked again before publication and after the patient directory becomes visible; a changed source aborts the stale publication and rolls back explicit reservations. Snapshot capture retries only boundedly and fails closed rather than silently processing a file that remains in motion. After a successful publication, destructive archive/delete hygiene is skipped when the live source no longer matches the processed SHA-256, so a newly replaced source is never deleted as if it were the old case.
 
 ## Generated documents
 

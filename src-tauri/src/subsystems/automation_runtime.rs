@@ -34,6 +34,12 @@ fn finalize_processed_source(
     privacy: &PrivacyPreferences,
     preserve_source_after_success: bool,
 ) -> Result<serde_json::Value, String> {
+    if !universal_intake::current_source_matches(source, source_sha256)? {
+        return Ok(serde_json::json!({
+            "action": "source_changed_or_missing_after_publication_preserved",
+            "expected_source_sha256": source_sha256,
+        }));
+    }
     let marker = workspace_hygiene::processed_marker_path(source);
     if preserve_source_after_success {
         for candidate in workspace_hygiene::processed_marker_candidates(source) {
@@ -165,6 +171,19 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hex::encode(hasher.finalize())
 }
 
+fn ensure_source_snapshot_current(source: &Path, source_sha256: &str) -> Result<(), String> {
+    match universal_intake::current_source_matches(source, source_sha256) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(
+            "Исходный файл изменился во время обработки. Устаревший комплект не опубликован; новая версия будет обработана отдельно."
+                .into(),
+        ),
+        Err(error) => Err(format!(
+            "Не удалось повторно проверить исходный файл перед публикацией: {error}"
+        )),
+    }
+}
+
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -173,8 +192,16 @@ fn perform_created_documents_intake(
     let intake_started = std::time::Instant::now();
     let source = resolve_user_path(app, &req.source_path)?;
     let privacy = load_privacy_preferences(app)?;
+    let workspace = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("intake-work");
+    let source_snapshot = universal_intake::capture_stable_source(&source, &workspace)?;
+    let source_size = source_snapshot.size_bytes();
+    let source_modified_ms = source_snapshot.modified_unix_ms();
+    let source_sha256 = source_snapshot.sha256().to_string();
     let processed_markers = workspace_hygiene::processed_marker_candidates(&source);
-    let (source_size, source_modified_ms, source_sha256) = file_content_signature(&source)?;
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let processing_fingerprint = automation_plan_fingerprint(app, &pack, &req)?;
     let processing_job_sha256 = processing_job_key(&source_sha256, &processing_fingerprint);
@@ -291,13 +318,9 @@ fn perform_created_documents_intake(
     }
 
     // Each dropped source is an independent case. Every accepted format is first
-    // normalized into one bounded text representation; no previous case values are reused.
-    let workspace = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("intake-work");
-    let normalized = universal_intake::normalize_path(&source, &workspace, 0)?;
+    // normalized from the immutable private snapshot, never from a live file that
+    // Word, a scanner or a sync client may still be replacing underneath us.
+    let normalized = universal_intake::normalize_path(source_snapshot.path(), &workspace, 0)?;
     case_run.transition("recognizing")?;
     if let Some(lease) = central_queue_lease.as_mut() {
         lease.renew()?;
@@ -999,8 +1022,8 @@ fn perform_created_documents_intake(
                     names.push(out.file_name.clone());
                 }
                 if privacy.copy_source_to_output {
-                    std::fs::copy(&source, stage.join(&source_target_name))
-                        .map_err(|e| format!("Не удалось скопировать исходник в комплект: {e}"))?;
+                    std::fs::copy(source_snapshot.path(), stage.join(&source_target_name))
+                        .map_err(|e| format!("Не удалось скопировать snapshot исходника в комплект: {e}"))?;
                 }
                 if privacy.write_trust_report {
                     write_trust_report(
@@ -1028,6 +1051,19 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
+            if let Err(error) = ensure_source_snapshot_current(&source, &source_sha256) {
+                let _ = std::fs::remove_dir_all(&stage);
+                rollback_counter_reservations(app, &counter_reservations);
+                rollback_generation_access(app, state, &permit);
+                let _ = case_run.finish("superseded", None, &[], &[], Some(&error));
+                let _ = append_audit_event(
+                    app,
+                    "intake_source_superseded",
+                    &source_sha256,
+                    &serde_json::json!({ "stage": "before_publication", "error": &error }),
+                );
+                return Err(error);
+            }
             case_run.transition("publishing")?;
             if let Some(lease) = central_queue_lease.as_mut() {
                 lease.renew()?;
@@ -1042,6 +1078,19 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
+            if let Err(error) = ensure_source_snapshot_current(&source, &source_sha256) {
+                let _ = std::fs::remove_dir_all(&patient_dir);
+                rollback_counter_reservations(app, &counter_reservations);
+                rollback_generation_access(app, state, &permit);
+                let _ = case_run.finish("superseded", None, &[], &[], Some(&error));
+                let _ = append_audit_event(
+                    app,
+                    "intake_source_superseded",
+                    &source_sha256,
+                    &serde_json::json!({ "stage": "after_directory_publish", "error": &error }),
+                );
+                return Err(error);
+            }
             if let Err(error) = commit_generation_access(app, &permit) {
                 let _ = std::fs::remove_dir_all(&patient_dir);
                 rollback_counter_reservations(app, &counter_reservations);

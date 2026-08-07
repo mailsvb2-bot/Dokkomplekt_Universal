@@ -42,6 +42,28 @@ class RustPanicAuditTests(unittest.TestCase):
             self.assertEqual(len(found), 1)
             self.assertIn("src/lib.rs:1", found[0])
 
+    def test_multiline_cfg_test_module_with_custom_name_is_ignored(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(
+                "fn production() -> Option<u8> { Some(1) }\n"
+                "#[cfg(test)]\n"
+                "mod processing_guard_fencing_tests {\n"
+                "    #[test]\n"
+                "    fn ok() { Some(1).expect(\"test-only assertion\"); }\n"
+                "}\n",
+                "utf-8",
+            )
+            old_root = module.ROOT
+            module.ROOT = root
+            try:
+                found = module.violations(root)
+            finally:
+                module.ROOT = old_root
+            self.assertEqual(found, [])
+
 
 if __name__ == "__main__":
     unittest.main()

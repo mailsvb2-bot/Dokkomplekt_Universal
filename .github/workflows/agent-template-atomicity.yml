@@ -25,7 +25,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply atomic publication patch
-        run: python .github/patches/agent-template-atomicity.py
+        run: |
+          python .github/patches/agent-template-atomicity.py
+          python .github/patches/agent-template-atomicity-fixture-fix.py
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -59,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f .github/patches/agent-template-atomicity.py
+          rm -f .github/patches/agent-template-atomicity-fixture-fix.py
           rm -f .github/workflows/agent-template-atomicity.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

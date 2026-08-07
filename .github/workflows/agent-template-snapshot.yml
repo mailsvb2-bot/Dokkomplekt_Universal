@@ -23,7 +23,9 @@ jobs:
           ref: agent/fix-template-snapshot-race
           fetch-depth: 0
       - name: Apply template snapshot patch
-        run: python .github/patches/agent-template-snapshot.py
+        run: |
+          python .github/patches/agent-template-snapshot.py
+          python .github/patches/agent-template-snapshot-clippy.py
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
@@ -46,7 +48,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/patches/agent-template-snapshot.py .github/workflows/agent-template-snapshot.yml
+          rm -f .github/patches/agent-template-snapshot.py .github/patches/agent-template-snapshot-clippy.py .github/workflows/agent-template-snapshot.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A

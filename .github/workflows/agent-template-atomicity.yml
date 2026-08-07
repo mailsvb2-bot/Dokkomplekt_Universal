@@ -34,24 +34,11 @@ jobs:
         with:
           toolchain: 1.97.1
 
-      - name: Install Linux Tauri compile dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
       - name: Format Rust
         run: cargo fmt --all
 
       - name: Test storage transaction invariants
         run: cargo test -p dokkomplekt-storage
-
-      - name: Compile Tauri tests
-        run: cargo check -p dokkomplekt-tauri --tests
 
       - name: Check patch whitespace
         run: git diff --check

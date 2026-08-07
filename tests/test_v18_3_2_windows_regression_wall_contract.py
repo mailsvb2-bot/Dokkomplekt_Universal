@@ -30,3 +30,20 @@ def test_hardware_gate_requires_real_reboot_and_post_reboot_case() -> None:
     assert "watcher_started_after_reboot = `$watcherStarted" in prepare
     assert "post_reboot_case_completed = `$completed" in prepare
     assert "No operating-system reboot was demonstrated" in verifier
+
+
+def test_hardware_gate_requires_visible_gui_and_no_console_shell_descendants() -> None:
+    script = text("tests/windows/windows_hardware_e2e.ps1")
+    assert "Wait-VisibleApplicationWindow" in script
+    assert "Get-NewVisibleConsoleWindows" in script
+    assert "ConsoleWindowClass" in script
+    assert "GUI_AND_CONSOLE_EVIDENCE.json" in script
+    assert "dokkomplekt.gui-console-evidence.v1" in script
+    assert "application_sha256" in script
+    assert "No visible titled GUI window appeared" in script
+    assert "Unexpected visible console or script-host window" in script
+    assert "console_observation_milliseconds" in script
+    assert "gui_window_observed = $true" in script
+    assert "unexpected_console_windows_observed = $false" in script
+    assert "gui_console_evidence_sha256" in script
+    assert "dokkomplekt.windows-hardware-e2e.v3" in script

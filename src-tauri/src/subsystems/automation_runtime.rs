@@ -2278,7 +2278,7 @@ fn import_template_file(
         let _ = std::fs::remove_file(&target);
         format!("Файл не распознан как DOCX: {e}")
     })?;
-    let target = reservation.commit();
+    let target = reservation.commit()?;
     Ok(ImportTemplateFileResponse {
         template_path: target.display().to_string(),
         extracted_text,
@@ -2442,7 +2442,7 @@ fn export_files_to_pdf(
                 return Err(format!("Не удалось сохранить PDF: {error}"));
             }
             let _ = std::fs::remove_dir_all(&temporary_dir);
-            Ok(reservation.commit())
+            reservation.commit()
         })();
         match result {
             Ok(output) => created_files.push(output.display().to_string()),
@@ -2557,7 +2557,7 @@ fn create_kedo_package(
                 copied?;
             }
             verify_pdf_signature(&destination)?;
-            let destination = reservation.commit();
+            let destination = reservation.commit()?;
             let (size_bytes, _, sha256) = file_content_signature(&destination)?;
             let file_name = destination
                 .file_name()

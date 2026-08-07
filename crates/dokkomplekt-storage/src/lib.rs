@@ -733,32 +733,48 @@ impl LocalRepository {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let status: Option<String> = tx
+        // The SQLite reservation row is authoritative. Never trust the caller's
+        // month/count/trial fields when refunding usage: a stale or malformed
+        // in-memory object must not be able to decrement unrelated accounting.
+        let persisted: Option<(String, i64, i64, String)> = tx
             .query_row(
-                "SELECT status FROM usage_reservations WHERE reservation_id=?1",
+                "SELECT month_key,documents,trial,status FROM usage_reservations WHERE reservation_id=?1",
                 params![reservation.reservation_id.as_str()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        if status.as_deref() != Some("reserved") {
+        let Some((month_key, documents, trial, status)) = persisted else {
+            tx.commit()?;
+            return Ok(false);
+        };
+        if status != "reserved" {
             tx.commit()?;
             return Ok(false);
         }
-        let count = i64::from(reservation.documents);
+        if documents <= 0 {
+            return Err(StorageError::Crypto(
+                "persisted usage reservation has invalid document count".into(),
+            ));
+        }
         tx.execute(
             "UPDATE commercial_usage SET created_documents=MAX(0,created_documents-?2),trial_documents=MAX(0,trial_documents-?3),updated_at=CURRENT_TIMESTAMP WHERE month_key=?1",
-            params![reservation.month_key.as_str(), count, if reservation.trial { count } else { 0 }],
+            params![month_key, documents, if trial != 0 { documents } else { 0 }],
         )?;
         tx.execute(
-            "UPDATE usage_reservations SET status='rolled_back',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1",
+            "UPDATE usage_reservations SET status='rolled_back',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1 AND status='reserved'",
             params![reservation.reservation_id.as_str()],
         )?;
         tx.commit()?;
         Ok(true)
     }
 
-    /// Rolls back reservations left by a process that could not complete. A long
-    /// grace period prevents an active large batch from being reclaimed.
+    /// Finalizes old ambiguous reservations conservatively after a hard crash.
+    ///
+    /// Usage is incremented when a reservation is created. A process can die after
+    /// publishing a complete document but before it flips the reservation to
+    /// `committed`; automatically subtracting such a row later creates a quota-bypass
+    /// window. Explicit, observed generation failures still call `rollback_usage` and
+    /// are refunded. Ambiguous crash leftovers are therefore finalized without a refund.
     pub fn recover_stale_usage_reservations(
         &mut self,
         max_age_minutes: u32,
@@ -767,32 +783,12 @@ impl LocalRepository {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let stale = {
-            let mut statement = tx.prepare(
-                "SELECT reservation_id,month_key,documents,trial FROM usage_reservations WHERE status='reserved' AND created_at <= datetime('now', ?1)",
-            )?;
-            let mapped = statement.query_map(params![modifier], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            })?;
-            mapped.collect::<Result<Vec<_>, _>>()?
-        };
-        for (reservation_id, month_key, documents, trial) in &stale {
-            tx.execute(
-                "UPDATE commercial_usage SET created_documents=MAX(0,created_documents-?2),trial_documents=MAX(0,trial_documents-?3),updated_at=CURRENT_TIMESTAMP WHERE month_key=?1",
-                params![month_key, documents, if *trial != 0 { *documents } else { 0 }],
-            )?;
-            tx.execute(
-                "UPDATE usage_reservations SET status='rolled_back_stale',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1 AND status='reserved'",
-                params![reservation_id],
-            )?;
-        }
+        let changed = tx.execute(
+            "UPDATE usage_reservations SET status='committed_after_crash',updated_at=CURRENT_TIMESTAMP WHERE status='reserved' AND created_at <= datetime('now', ?1)",
+            params![modifier],
+        )?;
         tx.commit()?;
-        Ok(stale.len())
+        Ok(changed)
     }
 
     pub fn register_template_version(
@@ -1881,7 +1877,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_usage_reservations_are_rolled_back_atomically() {
+    fn stale_usage_reservations_are_finalized_without_ambiguous_refund() {
         let path = temp_db("usage-stale");
         let mut repo = LocalRepository::open(&path).unwrap();
         let reservation = repo.reserve_usage("2026-07", 2, true, 30, 30).unwrap();
@@ -1892,8 +1888,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(repo.recover_stale_usage_reservations(30).unwrap(), 1);
-        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 0);
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 2);
+        let status: String = repo
+            .conn
+            .query_row(
+                "SELECT status FROM usage_reservations WHERE reservation_id=?1",
+                params![reservation.reservation_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "committed_after_crash");
         assert!(!repo.rollback_usage(&reservation).unwrap());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn usage_rollback_uses_persisted_reservation_fields_as_source_of_truth() {
+        let path = temp_db("usage-persisted-source-of-truth");
+        let mut repo = LocalRepository::open(&path).unwrap();
+        let reservation = repo.reserve_usage("2026-07", 3, true, 30, 30).unwrap();
+        let forged = UsageReservation {
+            reservation_id: reservation.reservation_id.clone(),
+            month_key: "2099-12".into(),
+            documents: 30,
+            trial: false,
+        };
+        assert!(repo.rollback_usage(&forged).unwrap());
+        let july = repo.usage_snapshot("2026-07").unwrap();
+        assert_eq!(july.created_documents, 0);
+        assert_eq!(july.trial_documents_total, 0);
+        assert_eq!(repo.usage_snapshot("2099-12").unwrap().created_documents, 0);
         let _ = std::fs::remove_file(path);
     }
 

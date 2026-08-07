@@ -1163,7 +1163,14 @@ fn render_docx(
             return Err(error.to_string());
         }
     };
-    let output_path = reservation.commit();
+    let output_path = match reservation.commit() {
+        Ok(path) => path,
+        Err(error) => {
+            rollback_counter_reservations(&app, &hydrated.counter_reservations);
+            rollback_generation_access(&app, &state, &permit);
+            return Err(error);
+        }
+    };
     if let Err(error) = commit_generation_access(&app, &permit) {
         let _ = std::fs::remove_file(&output_path);
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
@@ -1298,7 +1305,7 @@ fn render_docx_batch(
             ) {
                 return Err(format!("Не создан «{}»: {error}", document.button_label));
             }
-            paths.push(reservation.commit());
+            paths.push(reservation.commit()?);
         }
         let generated_names = paths
             .iter()

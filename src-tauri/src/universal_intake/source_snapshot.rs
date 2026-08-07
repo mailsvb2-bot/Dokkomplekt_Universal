@@ -1,48 +1,4 @@
-from pathlib import Path
-
-path = Path("src-tauri/src/universal_intake.rs")
-text = path.read_text(encoding="utf-8")
-
-module_marker = "mod archive;\nmod web;\n"
-module_replacement = "mod archive;\nmod source_snapshot;\nmod web;\n"
-if text.count(module_marker) != 1:
-    raise SystemExit("module marker mismatch")
-text = text.replace(module_marker, module_replacement, 1)
-
-export_marker = "pub use web::fetch_web_source;\n"
-export_replacement = (
-    "pub use source_snapshot::{capture_stable_source, current_source_matches, StableSourceSnapshot};\n"
-    "pub use web::fetch_web_source;\n"
-)
-if text.count(export_marker) != 1:
-    raise SystemExit("export marker mismatch")
-text = text.replace(export_marker, export_replacement, 1)
-
-start = text.find("#[derive(Debug)]\nstruct SourceFileSignature {")
-end = text.find("fn read_file_limited(path: &Path, limit: usize, label: &str) -> Result<Vec<u8>, String> {")
-if start < 0 or end < 0 or end <= start:
-    raise SystemExit("snapshot implementation block mismatch")
-text = text[:start] + text[end:]
-
-first_test = text.find("    #[test]\n    fn stable_source_snapshot_is_immutable_and_detects_live_replacement() {")
-next_test = text.find("    #[test]\n    fn supported_formats_cover_requested_universal_intake() {", first_test)
-if first_test < 0 or next_test < 0 or next_test <= first_test:
-    raise SystemExit("snapshot regression test block mismatch")
-text = text[:first_test] + text[next_test:]
-
-# These imports belonged only to the snapshot implementation moved below.
-sha_import = "use sha2::{Digest as _, Sha256};\n"
-if text.count(sha_import) != 1:
-    raise SystemExit("snapshot sha2 import mismatch")
-text = text.replace(sha_import, "", 1)
-io_import = "use std::io::{Cursor, Read as _, Write as _};\n"
-if text.count(io_import) != 1:
-    raise SystemExit("snapshot write import mismatch")
-text = text.replace(io_import, "use std::io::{Cursor, Read as _};\n", 1)
-
-path.write_text(text, encoding="utf-8")
-
-module = r'''use super::{
+use super::{
     create_sensitive_session, restrict_file_permissions, safe_file_name, validate_source_file_size,
     UploadedSourceSession, MAX_SOURCE_FILE_BYTES,
 };
@@ -304,8 +260,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 }
-'''
-module_path = Path("src-tauri/src/universal_intake/source_snapshot.rs")
-if module_path.exists():
-    raise SystemExit("source_snapshot.rs already exists")
-module_path.write_text(module, encoding="utf-8")

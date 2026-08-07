@@ -16,6 +16,7 @@ class V1810ProductionPilotContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.main = text("src-tauri/src/main.rs")
+        cls.document_commands = text("src-tauri/src/subsystems/document_commands.rs")
         cls.storage = text("crates/dokkomplekt-storage/src/lib.rs")
         cls.semantic = text("crates/dokkomplekt-core/src/semantic_llm.rs")
         cls.template = text("crates/dokkomplekt-core/src/template_engine.rs")
@@ -47,11 +48,13 @@ class V1810ProductionPilotContracts(unittest.TestCase):
     def test_template_versions_are_encrypted_and_rollback_publishes_new_version(self) -> None:
         self.assertIn("CREATE TABLE IF NOT EXISTS template_versions", self.storage)
         self.assertIn("encode_sensitive(template_path)", self.storage)
-        self.assertIn("register_template_version", self.main)
-        self.assertIn("rollback_template_version", self.main)
-        self.assertIn("Rollback к версии", self.main)
-        self.assertIn("archive_template_version_source", self.main)
-        self.assertIn("template-versions", self.main)
+        self.assertIn("save_desktop_snapshot_with_template_versions", self.storage)
+        self.assertIn("publish_pack_with_template_versions", self.document_commands)
+        self.assertIn("prepare_template_version_draft", self.document_commands)
+        self.assertIn("rollback_template_version", self.document_commands)
+        self.assertIn("Rollback к версии", self.document_commands)
+        self.assertIn("archive_template_version_source", self.document_commands)
+        self.assertIn("template-versions", self.document_commands)
 
     def test_sidecars_are_hash_verified_and_runtime_discoverable(self) -> None:
         staging = text("scripts/prepare_sidecars.py")

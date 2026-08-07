@@ -1,0 +1,54 @@
+name: Validate stable source snapshot
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-source-snapshot-race
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/fix-source-snapshot-race
+          fetch-depth: 0
+      - name: Apply bounded source snapshot patch
+        run: python .github/patches/agent-source-snapshot.py
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: cargo fmt --all
+      - name: Run stable-source regression tests
+        run: cargo test -p dokkomplekt-tauri stable_source_snapshot -- --nocapture
+      - name: Compile Tauri tests
+        run: cargo check -p dokkomplekt-tauri --tests
+      - name: Clippy Tauri tests
+        run: cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
+      - run: git diff --check
+      - name: Commit validated fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/patches/agent-source-snapshot.py .github/workflows/agent-source-snapshot.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix live source snapshot race"
+          git fetch origin agent/fix-source-snapshot-race
+          git rebase origin/agent/fix-source-snapshot-race
+          git push origin HEAD:agent/fix-source-snapshot-race

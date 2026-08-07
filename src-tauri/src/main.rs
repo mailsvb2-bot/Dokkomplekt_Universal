@@ -4,6 +4,7 @@ mod reference_data_update;
 mod resume_engine;
 mod semantic_model;
 mod semantic_runtime;
+mod template_snapshot;
 mod threshold_calibration;
 mod universal_intake;
 mod workspace_hygiene;
@@ -1632,13 +1633,6 @@ fn rollback_counter_reservations(app: &tauri::AppHandle, reservations: &[Counter
     for reservation in reservations.iter().rev() {
         let _ = repo.rollback_counter(reservation);
     }
-}
-
-fn template_text_for_document(
-    app: &tauri::AppHandle,
-    document: &DocumentTemplateSpec,
-) -> Result<String, String> {
-    extract_docx_text(&resolve_user_path(app, &document.template_path)?).map_err(|e| e.to_string())
 }
 
 fn ensure_persistence_available(state: &AppState) -> Result<(), String> {

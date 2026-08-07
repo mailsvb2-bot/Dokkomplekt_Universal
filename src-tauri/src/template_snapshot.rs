@@ -28,9 +28,8 @@ impl TemplateSnapshot {
                 live_path.display()
             ));
         }
-        let metadata = std::fs::metadata(&live_path).map_err(|error| {
-            format!("Не удалось прочитать шаблон «{label}»: {error}")
-        })?;
+        let metadata = std::fs::metadata(&live_path)
+            .map_err(|error| format!("Не удалось прочитать шаблон «{label}»: {error}"))?;
         if !metadata.is_file() {
             return Err(format!(
                 "Шаблон «{label}» не является файлом: {}",
@@ -52,9 +51,8 @@ impl TemplateSnapshot {
     }
 
     fn capture_path(live_path: &Path, workspace: &Path, label: &str) -> Result<Self, String> {
-        let snapshot = universal_intake::capture_stable_source(live_path, workspace).map_err(
-            |error| format!("Не удалось стабилизировать шаблон «{label}»: {error}"),
-        )?;
+        let snapshot = universal_intake::capture_stable_source(live_path, workspace)
+            .map_err(|error| format!("Не удалось стабилизировать шаблон «{label}»: {error}"))?;
         Ok(Self {
             live_path: live_path.to_path_buf(),
             snapshot,
@@ -112,12 +110,18 @@ mod tests {
         std::fs::write(&live, b"template-version-one").unwrap();
 
         let snapshot = TemplateSnapshot::capture_path(&live, &workspace, "Тест").unwrap();
-        assert_eq!(std::fs::read(snapshot.path()).unwrap(), b"template-version-one");
+        assert_eq!(
+            std::fs::read(snapshot.path()).unwrap(),
+            b"template-version-one"
+        );
         snapshot.ensure_current().unwrap();
 
         std::fs::write(&live, b"template-version-two").unwrap();
         assert!(snapshot.ensure_current().is_err());
-        assert_eq!(std::fs::read(snapshot.path()).unwrap(), b"template-version-one");
+        assert_eq!(
+            std::fs::read(snapshot.path()).unwrap(),
+            b"template-version-one"
+        );
 
         drop(snapshot);
         let _ = std::fs::remove_dir_all(root);

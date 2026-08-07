@@ -24,11 +24,25 @@ jobs:
           fetch-depth: 0
       - name: Apply processing guard fencing patch
         run: python .github/patches/agent-processing-guard-fencing.py
+      - name: Remove superseded nonce verifier binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src-tauri/src/main.rs')
+          text = path.read_text(encoding='utf-8')
+          stale = '                    let expected_nonce = format!("nonce={nonce}");\n'
+          count = text.count(stale)
+          if count != 1:
+              raise SystemExit(f'expected exactly one superseded expected_nonce binding, found {count}')
+          path.write_text(text.replace(stale, '', 1), encoding='utf-8')
+          PY
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/setup-python@a26af69be951213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
       - name: Install Python contract dependencies

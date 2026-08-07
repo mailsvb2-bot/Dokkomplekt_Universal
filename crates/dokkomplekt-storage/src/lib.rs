@@ -77,6 +77,16 @@ pub struct TemplateVersionDraft {
     pub note: String,
 }
 
+pub struct DesktopSnapshotPublication<'a, T: ?Sized> {
+    pub case_id: &'a str,
+    pub pack_id: &'a str,
+    pub case: &'a SemanticCase,
+    pub pack: &'a DocumentPack,
+    pub state_key: &'a str,
+    pub state_value: &'a T,
+    pub versions: &'a [TemplateVersionDraft],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaseRunRecord {
     pub case_id: String,
@@ -807,14 +817,17 @@ impl LocalRepository {
     /// pack/version set or the new pack/version set, never a mixture of both.
     pub fn save_desktop_snapshot_with_template_versions<T: serde::Serialize + ?Sized>(
         &mut self,
-        case_id: &str,
-        pack_id: &str,
-        case: &SemanticCase,
-        pack: &DocumentPack,
-        state_key: &str,
-        state_value: &T,
-        versions: &[TemplateVersionDraft],
+        publication: DesktopSnapshotPublication<'_, T>,
     ) -> StorageResult<Vec<TemplateVersionRecord>> {
+        let DesktopSnapshotPublication {
+            case_id,
+            pack_id,
+            case,
+            pack,
+            state_key,
+            state_value,
+            versions,
+        } = publication;
         let case_json = serde_json::to_string_pretty(case)?;
         let case_stored = self.encode_sensitive(&case_json)?;
         let pack_json = serde_json::to_string_pretty(pack)?;
@@ -2097,15 +2110,15 @@ mod tests {
             note: "atomic publish".into(),
         };
         let versions = repo
-            .save_desktop_snapshot_with_template_versions(
-                "current",
-                "default",
-                &case,
-                &candidate,
-                "license_document",
-                &Option::<String>::None,
-                &[draft],
-            )
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[draft],
+            })
             .unwrap();
         assert_eq!(repo.load_pack("default").unwrap(), Some(candidate));
         assert_eq!(versions.len(), 1);
@@ -2138,15 +2151,15 @@ mod tests {
             note: "invalid".into(),
         };
         assert!(repo
-            .save_desktop_snapshot_with_template_versions(
-                "current",
-                "default",
-                &case,
-                &candidate,
-                "license_document",
-                &Option::<String>::None,
-                &[invalid],
-            )
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[invalid],
+            })
             .is_err());
         assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
         assert!(repo.list_template_versions("invoice").unwrap().is_empty());

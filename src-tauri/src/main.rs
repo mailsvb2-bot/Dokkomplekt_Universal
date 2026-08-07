@@ -51,8 +51,8 @@ use dokkomplekt_license_core::{
 };
 use dokkomplekt_storage::{
     AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, CaseDocumentRecord,
-    CaseRunRecord, ClauseBlockRecord, CounterValue, LocalRepository, TemplateVersionDraft,
-    TemplateVersionRecord, UsageReservation,
+    CaseRunRecord, ClauseBlockRecord, CounterValue, DesktopSnapshotPublication, LocalRepository,
+    TemplateVersionDraft, TemplateVersionRecord, UsageReservation,
 };
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey};
 use notify::{RecursiveMode, Watcher as _};

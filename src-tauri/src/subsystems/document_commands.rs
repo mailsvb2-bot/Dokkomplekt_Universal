@@ -347,15 +347,15 @@ where
     }
     let mut repo = repository_for(&path)?;
     let versions = repo
-        .save_desktop_snapshot_with_template_versions(
-            "current",
-            "default",
-            &case,
-            &candidate,
-            "license_document",
-            &license,
-            drafts,
-        )
+        .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+            case_id: "current",
+            pack_id: "default",
+            case: &case,
+            pack: &candidate,
+            state_key: "license_document",
+            state_value: &license,
+            versions: drafts,
+        })
         .map_err(|error| error.to_string())?;
     *pack_guard = candidate.clone();
     Ok((candidate, versions))

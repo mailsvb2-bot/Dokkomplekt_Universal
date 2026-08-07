@@ -168,28 +168,6 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hex::encode(hasher.finalize())
 }
 
-fn ensure_source_snapshot_current(source: &Path, source_sha256: &str) -> Result<(), String> {
-    match universal_intake::current_source_matches(source, source_sha256) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(
-            "Исходный файл изменился во время обработки. Устаревший комплект не опубликован; новая версия будет обработана отдельно."
-                .into(),
-        ),
-        Err(error) => Err(format!(
-            "Не удалось повторно проверить исходный файл перед публикацией: {error}"
-        )),
-    }
-}
-
-fn ensure_generation_inputs_current(
-    source: &Path,
-    source_sha256: &str,
-    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
-) -> Result<(), String> {
-    ensure_source_snapshot_current(source, source_sha256)?;
-    template_snapshot::ensure_all_current(template_snapshots)
-}
-
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -283,7 +261,7 @@ fn perform_created_documents_intake(
             });
         }
     };
-    let _processing_guard = if central_queue_lease.is_some() {
+    let processing_guard = if central_queue_lease.is_some() {
         None
     } else {
         match ProcessingGuard::acquire(&source, &processing_job_sha256)? {
@@ -1074,7 +1052,12 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
-            if let Err(error) = ensure_generation_inputs_current(&source, &source_sha256, &template_snapshots) {
+            if let Err(error) = ensure_generation_inputs_current(
+                &source,
+                &source_sha256,
+                &template_snapshots,
+                processing_guard.as_ref(),
+            ) {
                 let _ = std::fs::remove_dir_all(&stage);
                 rollback_counter_reservations(app, &counter_reservations);
                 rollback_generation_access(app, state, &permit);
@@ -1101,7 +1084,12 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
-            if let Err(error) = ensure_generation_inputs_current(&source, &source_sha256, &template_snapshots) {
+            if let Err(error) = ensure_generation_inputs_current(
+                &source,
+                &source_sha256,
+                &template_snapshots,
+                processing_guard.as_ref(),
+            ) {
                 let _ = std::fs::remove_dir_all(&patient_dir);
                 rollback_counter_reservations(app, &counter_reservations);
                 rollback_generation_access(app, state, &permit);

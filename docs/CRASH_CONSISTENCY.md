@@ -12,6 +12,8 @@ The live-file stability boundary is isolated in `universal_intake/source_snapsho
 
 Every generation run captures each configured template into a private immutable snapshot before planning. The same bytes drive template SHA-256 fingerprints, placeholder extraction, resume fingerprints and DOCX rendering. Live template paths are revalidated before publication and again before commercial commit; replacement of a template during a run aborts stale output and rolls back explicit reservations. Template registration and bulk first-run confirmation likewise analyze, hash and version-copy one captured snapshot rather than reopening a mutable live path between phases.
 
+The template stability boundary is isolated in `template_snapshot.rs`: callers retain the live path only for revalidation and user-facing provenance, while all content-consuming phases use the private snapshot path. Snapshot lifetime is scoped to the operation, so later runs must capture and validate their own template version rather than reusing stale bytes.
+
 ## Generated documents
 
 A single generated document is rendered into a hidden same-directory staging file. The user-visible final name is created only after rendering has completed, using atomic create-if-absent publication. A failed or interrupted render must not leave a partial file under a final-looking DOCX name.

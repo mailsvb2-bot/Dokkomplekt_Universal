@@ -37,7 +37,7 @@ jobs:
       - name: Run source gates
         run: |
           python scripts/verify_source_manifest.py
-          python scripts/source_quality_gate.py
+          python scripts/static_quality_gate.py --source-only
           python scripts/verify_starter_content_packs.py
           python scripts/check_reference_data_freshness.py
           python -m compileall -q scripts tests
@@ -90,7 +90,7 @@ jobs:
               tests/test_windows_reboot_evidence_binding.py \
               tests/test_windows_reboot_evidence_execution.py
             python scripts/verify_source_manifest.py
-            python scripts/source_quality_gate.py
+            python scripts/static_quality_gate.py --source-only
             git diff --check
             git add -A
             verify_staged

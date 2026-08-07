@@ -24,8 +24,10 @@ jobs:
           ref: agent/fix-critical-crash-consistency
           fetch-depth: 0
 
-      - name: Apply focused source patch
-        run: python .github/patches/agent-critical-crash-fix.py
+      - name: Apply focused source patches
+        run: |
+          python .github/patches/agent-critical-crash-fix.py
+          python .github/patches/agent-critical-crash-fix-automation.py
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -63,6 +65,7 @@ jobs:
           set -euo pipefail
           rm -f .agent-critical-fix-trigger
           rm -f .github/patches/agent-critical-crash-fix.py
+          rm -f .github/patches/agent-critical-crash-fix-automation.py
           rm -f .github/workflows/agent-critical-crash-fix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

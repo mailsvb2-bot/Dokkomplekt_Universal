@@ -69,6 +69,24 @@ pub struct TemplateVersionRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateVersionDraft {
+    pub document_id: String,
+    pub template_path: String,
+    pub template_sha256: String,
+    pub note: String,
+}
+
+pub struct DesktopSnapshotPublication<'a, T: ?Sized> {
+    pub case_id: &'a str,
+    pub pack_id: &'a str,
+    pub case: &'a SemanticCase,
+    pub pack: &'a DocumentPack,
+    pub state_key: &'a str,
+    pub state_value: &'a T,
+    pub versions: &'a [TemplateVersionDraft],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaseRunRecord {
     pub case_id: String,
@@ -733,32 +751,48 @@ impl LocalRepository {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let status: Option<String> = tx
+        // The SQLite reservation row is authoritative. Never trust the caller's
+        // month/count/trial fields when refunding usage: a stale or malformed
+        // in-memory object must not be able to decrement unrelated accounting.
+        let persisted: Option<(String, i64, i64, String)> = tx
             .query_row(
-                "SELECT status FROM usage_reservations WHERE reservation_id=?1",
+                "SELECT month_key,documents,trial,status FROM usage_reservations WHERE reservation_id=?1",
                 params![reservation.reservation_id.as_str()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        if status.as_deref() != Some("reserved") {
+        let Some((month_key, documents, trial, status)) = persisted else {
+            tx.commit()?;
+            return Ok(false);
+        };
+        if status != "reserved" {
             tx.commit()?;
             return Ok(false);
         }
-        let count = i64::from(reservation.documents);
+        if documents <= 0 {
+            return Err(StorageError::Crypto(
+                "persisted usage reservation has invalid document count".into(),
+            ));
+        }
         tx.execute(
             "UPDATE commercial_usage SET created_documents=MAX(0,created_documents-?2),trial_documents=MAX(0,trial_documents-?3),updated_at=CURRENT_TIMESTAMP WHERE month_key=?1",
-            params![reservation.month_key.as_str(), count, if reservation.trial { count } else { 0 }],
+            params![month_key, documents, if trial != 0 { documents } else { 0 }],
         )?;
         tx.execute(
-            "UPDATE usage_reservations SET status='rolled_back',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1",
+            "UPDATE usage_reservations SET status='rolled_back',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1 AND status='reserved'",
             params![reservation.reservation_id.as_str()],
         )?;
         tx.commit()?;
         Ok(true)
     }
 
-    /// Rolls back reservations left by a process that could not complete. A long
-    /// grace period prevents an active large batch from being reclaimed.
+    /// Finalizes old ambiguous reservations conservatively after a hard crash.
+    ///
+    /// Usage is incremented when a reservation is created. A process can die after
+    /// publishing a complete document but before it flips the reservation to
+    /// `committed`; automatically subtracting such a row later creates a quota-bypass
+    /// window. Explicit, observed generation failures still call `rollback_usage` and
+    /// are refunded. Ambiguous crash leftovers are therefore finalized without a refund.
     pub fn recover_stale_usage_reservations(
         &mut self,
         max_age_minutes: u32,
@@ -767,32 +801,126 @@ impl LocalRepository {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let stale = {
-            let mut statement = tx.prepare(
-                "SELECT reservation_id,month_key,documents,trial FROM usage_reservations WHERE status='reserved' AND created_at <= datetime('now', ?1)",
+        let changed = tx.execute(
+            "UPDATE usage_reservations SET status='committed_after_crash',updated_at=CURRENT_TIMESTAMP WHERE status='reserved' AND created_at <= datetime('now', ?1)",
+            params![modifier],
+        )?;
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// Atomically publishes the complete desktop snapshot together with all
+    /// template-version records that make the candidate pack auditable.
+    ///
+    /// Archive files are prepared by the caller before this transaction. SQLite is
+    /// the publication boundary: after a crash, callers can observe either the old
+    /// pack/version set or the new pack/version set, never a mixture of both.
+    pub fn save_desktop_snapshot_with_template_versions<T: serde::Serialize + ?Sized>(
+        &mut self,
+        publication: DesktopSnapshotPublication<'_, T>,
+    ) -> StorageResult<Vec<TemplateVersionRecord>> {
+        let DesktopSnapshotPublication {
+            case_id,
+            pack_id,
+            case,
+            pack,
+            state_key,
+            state_value,
+            versions,
+        } = publication;
+        let case_json = serde_json::to_string_pretty(case)?;
+        let case_stored = self.encode_sensitive(&case_json)?;
+        let pack_json = serde_json::to_string_pretty(pack)?;
+        let pack_stored = self.encode_sensitive(&pack_json)?;
+        let state_json = serde_json::to_string(state_value)?;
+        let state_stored = self.encode_sensitive(&state_json)?;
+
+        let mut prepared = Vec::with_capacity(versions.len());
+        for draft in versions {
+            if draft.document_id.trim().is_empty() {
+                return Err(StorageError::Crypto("document_id cannot be empty".into()));
+            }
+            if draft.template_sha256.len() != 64
+                || !draft
+                    .template_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(StorageError::Crypto(
+                    "template_sha256 must be lowercase SHA-256".into(),
+                ));
+            }
+            prepared.push((
+                draft.clone(),
+                random_record_id("tpl")?,
+                self.encode_sensitive(&draft.template_path)?,
+                self.encode_sensitive(&draft.note)?,
+            ));
+        }
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![case_id, case_stored],
+        )?;
+        tx.execute(
+            "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![pack_id, pack_stored],
+        )?;
+        tx.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![state_key, state_stored],
+        )?;
+
+        let mut published_ids = Vec::with_capacity(prepared.len());
+        for (draft, version_id, encrypted_path, encrypted_note) in prepared {
+            let current: Option<(String, String)> = tx
+                .query_row(
+                    "SELECT version_id,template_sha256 FROM template_versions WHERE document_id=?1 AND status='published' ORDER BY version_number DESC LIMIT 1",
+                    params![draft.document_id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((current_id, current_sha256)) = current {
+                if current_sha256 == draft.template_sha256 {
+                    published_ids.push(current_id);
+                    continue;
+                }
+            }
+            let next: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(version_number),0)+1 FROM template_versions WHERE document_id=?1",
+                params![draft.document_id.as_str()],
+                |row| row.get(0),
             )?;
-            let mapped = statement.query_map(params![modifier], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            })?;
-            mapped.collect::<Result<Vec<_>, _>>()?
-        };
-        for (reservation_id, month_key, documents, trial) in &stale {
             tx.execute(
-                "UPDATE commercial_usage SET created_documents=MAX(0,created_documents-?2),trial_documents=MAX(0,trial_documents-?3),updated_at=CURRENT_TIMESTAMP WHERE month_key=?1",
-                params![month_key, documents, if *trial != 0 { *documents } else { 0 }],
+                "UPDATE template_versions SET status='archived' WHERE document_id=?1 AND status='published'",
+                params![draft.document_id.as_str()],
             )?;
             tx.execute(
-                "UPDATE usage_reservations SET status='rolled_back_stale',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1 AND status='reserved'",
-                params![reservation_id],
+                "INSERT INTO template_versions(version_id,document_id,version_number,template_path,template_sha256,note,status) VALUES (?1,?2,?3,?4,?5,?6,'published')",
+                params![
+                    version_id.as_str(),
+                    draft.document_id.as_str(),
+                    next,
+                    encrypted_path,
+                    draft.template_sha256.as_str(),
+                    encrypted_note,
+                ],
             )?;
+            published_ids.push(version_id);
         }
         tx.commit()?;
-        Ok(stale.len())
+
+        published_ids
+            .into_iter()
+            .map(|version_id| {
+                self.template_version_by_id(&version_id)?.ok_or_else(|| {
+                    StorageError::Crypto("atomically published template version disappeared".into())
+                })
+            })
+            .collect()
     }
 
     pub fn register_template_version(
@@ -1881,7 +2009,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_usage_reservations_are_rolled_back_atomically() {
+    fn stale_usage_reservations_are_finalized_without_ambiguous_refund() {
         let path = temp_db("usage-stale");
         let mut repo = LocalRepository::open(&path).unwrap();
         let reservation = repo.reserve_usage("2026-07", 2, true, 30, 30).unwrap();
@@ -1892,8 +2020,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(repo.recover_stale_usage_reservations(30).unwrap(), 1);
-        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 0);
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 2);
+        let status: String = repo
+            .conn
+            .query_row(
+                "SELECT status FROM usage_reservations WHERE reservation_id=?1",
+                params![reservation.reservation_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "committed_after_crash");
         assert!(!repo.rollback_usage(&reservation).unwrap());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn usage_rollback_uses_persisted_reservation_fields_as_source_of_truth() {
+        let path = temp_db("usage-persisted-source-of-truth");
+        let mut repo = LocalRepository::open(&path).unwrap();
+        let reservation = repo.reserve_usage("2026-07", 3, true, 30, 30).unwrap();
+        let forged = UsageReservation {
+            reservation_id: reservation.reservation_id.clone(),
+            month_key: "2099-12".into(),
+            documents: 30,
+            trial: false,
+        };
+        assert!(repo.rollback_usage(&forged).unwrap());
+        let july = repo.usage_snapshot("2026-07").unwrap();
+        assert_eq!(july.created_documents, 0);
+        assert_eq!(july.trial_documents_total, 0);
+        assert_eq!(repo.usage_snapshot("2099-12").unwrap().created_documents, 0);
         let _ = std::fs::remove_file(path);
     }
 
@@ -1927,6 +2083,86 @@ mod tests {
         let details: serde_json::Value = serde_json::from_str(&resolved.details_json).unwrap();
         assert_eq!(details["original"]["field"], "person.full_name");
         assert_eq!(details["resolution"]["text"], "Проверено специалистом");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn desktop_snapshot_and_template_versions_publish_as_one_transaction() {
+        let path = temp_db("template-atomic-publish");
+        let mut repo = LocalRepository::open_with_key(&path, [21u8; 32]).unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "candidate".into(),
+            documents: Vec::new(),
+        };
+        let draft = TemplateVersionDraft {
+            document_id: "invoice".into(),
+            template_path: "C:/archive/invoice.docx".into(),
+            template_sha256: "a".repeat(64),
+            note: "atomic publish".into(),
+        };
+        let versions = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[draft],
+            })
+            .unwrap();
+        assert_eq!(repo.load_pack("default").unwrap(), Some(candidate));
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].status, "published");
+        assert_eq!(repo.list_template_versions("invoice").unwrap().len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_template_version_cannot_publish_candidate_pack() {
+        let path = temp_db("template-atomic-reject");
+        let mut repo = LocalRepository::open_with_key(&path, [22u8; 32]).unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "must-not-publish".into(),
+            documents: Vec::new(),
+        };
+        let invalid = TemplateVersionDraft {
+            document_id: "invoice".into(),
+            template_path: "C:/archive/invoice.docx".into(),
+            template_sha256: "NOT-A-SHA".into(),
+            note: "invalid".into(),
+        };
+        assert!(repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[invalid],
+            })
+            .is_err());
+        assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
+        assert!(repo.list_template_versions("invoice").unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }
 

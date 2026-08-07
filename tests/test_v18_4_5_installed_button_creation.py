@@ -10,6 +10,7 @@ def text(path: str) -> str:
 
 def test_rust_backend_accepts_plain_word_templates_as_static_buttons() -> None:
     runtime = text("src-tauri/src/subsystems/document_commands.rs")
+    storage = text("crates/dokkomplekt-storage/src/lib.rs")
     start = runtime.index("fn confirm_template_setup(")
     end = runtime.index("struct RenameDocumentButtonRequest", start)
     command = runtime[start:end]
@@ -18,7 +19,8 @@ def test_rust_backend_accepts_plain_word_templates_as_static_buttons() -> None:
     assert "Шаблон не содержит размеченных полей" not in command
     assert 'return Err("Выберите хотя бы один шаблон Word."' in command
     assert "create_pack_from_confirmations" in command
-    assert "persist_default_state" in command
+    assert "publish_pack_with_template_versions" in command
+    assert "save_desktop_snapshot_with_template_versions" in storage
 
 
 def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart() -> None:

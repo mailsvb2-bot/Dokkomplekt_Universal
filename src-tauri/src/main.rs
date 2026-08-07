@@ -51,8 +51,8 @@ use dokkomplekt_license_core::{
 };
 use dokkomplekt_storage::{
     AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, CaseDocumentRecord,
-    CaseRunRecord, ClauseBlockRecord, CounterValue, LocalRepository, TemplateVersionRecord,
-    UsageReservation,
+    CaseRunRecord, ClauseBlockRecord, CounterValue, DesktopSnapshotPublication, LocalRepository,
+    TemplateVersionDraft, TemplateVersionRecord, UsageReservation,
 };
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey};
 use notify::{RecursiveMode, Watcher as _};
@@ -671,6 +671,7 @@ struct AppState {
     retained_uploaded_source: Mutex<Option<universal_intake::RetainedUploadedSource>>,
     source_provenance: Mutex<Option<SourceProvenance>>,
     semantic_runtime: Mutex<Option<semantic_runtime::ManagedSemanticRuntime>>,
+    persistence_gate: Mutex<()>,
     persistence_blocked: AtomicBool,
     persistence_error: Mutex<Option<String>>,
 }
@@ -690,6 +691,7 @@ impl Default for AppState {
             retained_uploaded_source: Mutex::new(None),
             source_provenance: Mutex::new(None),
             semantic_runtime: Mutex::new(None),
+            persistence_gate: Mutex::new(()),
             persistence_blocked: AtomicBool::new(false),
             persistence_error: Mutex::new(None),
         }
@@ -1656,6 +1658,10 @@ fn ensure_persistence_available(state: &AppState) -> Result<(), String> {
 
 fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
     ensure_persistence_available(state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1674,6 +1680,10 @@ fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
 
 fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
     ensure_persistence_available(state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     let path = default_state_db_path(app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -1748,42 +1758,68 @@ fn numbered_candidate(path: &Path, index: u32) -> PathBuf {
 }
 
 struct UniqueFileReservation {
+    /// Hidden staging file used by the renderer. It is never the user-visible name.
     path: PathBuf,
+    desired_path: PathBuf,
     committed: bool,
 }
 
 impl UniqueFileReservation {
     fn acquire(path: &Path) -> Result<Self, String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        for index in 1..=10_000 {
-            let candidate = numbered_candidate(path, index);
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        for _ in 0..128 {
+            let staging = parent.join(format!(
+                ".dokkomplekt-file-stage-{}-{}.tmp",
+                std::process::id(),
+                Uuid::new_v4()
+            ));
             match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(&candidate)
+                .open(&staging)
             {
                 Ok(_) => {
                     return Ok(Self {
-                        path: candidate,
+                        path: staging,
+                        desired_path: path.to_path_buf(),
                         committed: false,
                     })
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
                     return Err(format!(
-                        "Не удалось зарезервировать уникальное имя файла: {error}"
+                        "Не удалось создать скрытый staging-файл результата: {error}"
+                    ))
+                }
+            }
+        }
+        Err("Не удалось создать уникальный staging-файл результата.".into())
+    }
+
+    /// Atomically exposes a fully-rendered file under a unique final name.
+    ///
+    /// `hard_link` is used as an atomic create-if-absent primitive. If the
+    /// destination filesystem cannot provide this guarantee, publication fails
+    /// closed instead of leaving a partial/corrupt file under a final DOCX name.
+    fn commit(mut self) -> Result<PathBuf, String> {
+        for index in 1..=10_000 {
+            let candidate = numbered_candidate(&self.desired_path, index);
+            match std::fs::hard_link(&self.path, &candidate) {
+                Ok(()) => {
+                    self.committed = true;
+                    let _ = std::fs::remove_file(&self.path);
+                    return Ok(candidate);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Файловая система не поддержала безопасную атомарную публикацию результата: {error}"
                     ))
                 }
             }
         }
         Err("Не удалось подобрать уникальное имя после 10000 попыток.".into())
-    }
-
-    fn commit(mut self) -> PathBuf {
-        self.committed = true;
-        self.path.clone()
     }
 }
 
@@ -2583,6 +2619,32 @@ mod tests {
             assert_eq!(signed_plan_to_product_plan(&signed), product);
             assert_eq!(plan_label(&signed), wire);
         }
+    }
+
+    #[test]
+    fn unique_file_reservation_hides_incomplete_output_until_commit() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-unique-file-reservation-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let desired = root.join("result.docx");
+        let reservation = super::UniqueFileReservation::acquire(&desired).unwrap();
+        assert!(
+            !desired.exists(),
+            "final name must stay invisible while rendering"
+        );
+        assert!(reservation
+            .path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.starts_with(".dokkomplekt-file-stage-")));
+        std::fs::write(&reservation.path, b"complete-docx-bytes").unwrap();
+        let published = reservation.commit().unwrap();
+        assert_eq!(published, desired);
+        assert_eq!(std::fs::read(&published).unwrap(), b"complete-docx-bytes");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

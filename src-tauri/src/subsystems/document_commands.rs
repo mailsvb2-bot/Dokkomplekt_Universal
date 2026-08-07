@@ -314,6 +314,53 @@ fn apply_template_learning_map(
     Ok(report)
 }
 
+fn publish_pack_with_template_versions<F>(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    drafts: &[TemplateVersionDraft],
+    mutate: F,
+) -> Result<(DocumentPack, Vec<TemplateVersionRecord>), String>
+where
+    F: FnOnce(&mut DocumentPack) -> Result<(), String>,
+{
+    ensure_persistence_available(state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let case = state
+        .semantic_case
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .clone();
+    let license = state
+        .license_document
+        .lock()
+        .map_err(|_| "license state lock failed")?
+        .clone();
+    let mut pack_guard = state.pack.lock().map_err(|_| "state lock failed")?;
+    let mut candidate = pack_guard.clone();
+    mutate(&mut candidate)?;
+    let path = default_state_db_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut repo = repository_for(&path)?;
+    let versions = repo
+        .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+            case_id: "current",
+            pack_id: "default",
+            case: &case,
+            pack: &candidate,
+            state_key: "license_document",
+            state_value: &license,
+            versions: drafts,
+        })
+        .map_err(|error| error.to_string())?;
+    *pack_guard = candidate.clone();
+    Ok((candidate, versions))
+}
+
 #[derive(Debug, Deserialize)]
 struct RegisterLearnedTemplateRequest {
     document_id: String,
@@ -329,7 +376,11 @@ fn register_learned_template(
 ) -> Result<DocumentPack, String> {
     let document_id = req.document_id.trim();
     let button_label = req.button_label.trim();
-    if document_id.is_empty() || !document_id.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')) {
+    if document_id.is_empty()
+        || !document_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
         return Err("Укажите безопасный идентификатор документа.".into());
     }
     if button_label.is_empty() {
@@ -347,27 +398,28 @@ fn register_learned_template(
         return Err("Обученная копия не содержит подтверждённых {{field.id}} и не может стать рабочей кнопкой.".into());
     }
     document.popup_fields = normalize_popup_fields(&document.popup_fields);
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        pack.documents.retain(|item| item.id != document_id);
-        if pack.documents.iter().any(|item| item.button_label.eq_ignore_ascii_case(button_label)) {
-            return Err("Кнопка с таким названием уже существует.".into());
-        }
-        pack.documents.push(document);
-        pack.documents.sort_by(|left, right| left.button_label.cmp(&right.button_label));
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
     let (_, _, template_sha256) = file_content_signature(&path)?;
-    let mut repo = repository_for(&default_state_db_path(&app)?)?;
-    register_template_snapshot(
+    let draft = prepare_template_version_draft(
         &app,
-        &mut repo,
         document_id,
         &path,
         &template_sha256,
         "Публикация шаблона после подтверждённого Template Intelligence Wizard.",
     )?;
+    let (result, _) = publish_pack_with_template_versions(&app, &state, &[draft], |pack| {
+        pack.documents.retain(|item| item.id != document_id);
+        if pack
+            .documents
+            .iter()
+            .any(|item| item.button_label.eq_ignore_ascii_case(button_label))
+        {
+            return Err("Кнопка с таким названием уже существует.".into());
+        }
+        pack.documents.push(document);
+        pack.documents
+            .sort_by(|left, right| left.button_label.cmp(&right.button_label));
+        Ok(())
+    })?;
     append_audit_event(
         &app,
         "learned_template_registered",
@@ -404,25 +456,22 @@ fn confirm_template_setup(
         return Err("У каждого шаблона должно быть название кнопки.".into());
     }
     let incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &req.rows).pack;
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        merge_document_pack(&mut pack, incoming);
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    let mut repo = repository_for(&default_state_db_path(&app)?)?;
+    let mut drafts = Vec::with_capacity(req.rows.len());
     for row in &req.rows {
         let path = resolve_user_path(&app, &row.template_path)?;
         let (_, _, template_sha256) = file_content_signature(&path)?;
-        register_template_snapshot(
+        drafts.push(prepare_template_version_draft(
             &app,
-            &mut repo,
             &row.document_id,
             &path,
             &template_sha256,
             "Первичная публикация пользовательского шаблона.",
-        )?;
+        )?);
     }
+    let (result, _) = publish_pack_with_template_versions(&app, &state, &drafts, |pack| {
+        merge_document_pack(pack, incoming);
+        Ok(())
+    })?;
     Ok(result)
 }
 
@@ -1163,7 +1212,14 @@ fn render_docx(
             return Err(error.to_string());
         }
     };
-    let output_path = reservation.commit();
+    let output_path = match reservation.commit() {
+        Ok(path) => path,
+        Err(error) => {
+            rollback_counter_reservations(&app, &hydrated.counter_reservations);
+            rollback_generation_access(&app, &state, &permit);
+            return Err(error);
+        }
+    };
     if let Err(error) = commit_generation_access(&app, &permit) {
         let _ = std::fs::remove_file(&output_path);
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
@@ -1298,7 +1354,7 @@ fn render_docx_batch(
             ) {
                 return Err(format!("Не создан «{}»: {error}", document.button_label));
             }
-            paths.push(reservation.commit());
+            paths.push(reservation.commit()?);
         }
         let generated_names = paths
             .iter()
@@ -2054,8 +2110,15 @@ fn update_document_template(
     if updated.is_static_copy {
         return Err("Размеченная копия не содержит ни одного поля {{field.id}}.".into());
     }
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
+    let (_, _, template_sha256) = file_content_signature(&path)?;
+    let draft = prepare_template_version_draft(
+        &app,
+        &req.document_id,
+        &path,
+        &template_sha256,
+        "Шаблон опубликован после проверенной разметки.",
+    )?;
+    let (result, versions) = publish_pack_with_template_versions(&app, &state, &[draft], |pack| {
         let existing = pack
             .documents
             .iter_mut()
@@ -2079,19 +2142,12 @@ fn update_document_template(
         updated.required_fields.sort();
         updated.required_fields.dedup();
         *existing = updated;
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    let (_, _, template_sha256) = file_content_signature(&path)?;
-    let mut repo = repository_for(&default_state_db_path(&app)?)?;
-    let version = register_template_snapshot(
-        &app,
-        &mut repo,
-        &req.document_id,
-        &path,
-        &template_sha256,
-        "Шаблон опубликован после проверенной разметки.",
-    )?;
+        Ok(())
+    })?;
+    let version = versions
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Атомарная публикация не вернула версию шаблона.".to_string())?;
     let _ = append_audit_event(
         &app,
         "template_version_published",
@@ -2166,34 +2222,21 @@ fn archive_template_version_source(
     }
 }
 
-fn register_template_snapshot(
+fn prepare_template_version_draft(
     app: &tauri::AppHandle,
-    repo: &mut LocalRepository,
     document_id: &str,
     source: &Path,
     template_sha256: &str,
     note: &str,
-) -> Result<TemplateVersionRecord, String> {
-    if let Some(current) = repo
-        .list_template_versions(document_id)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .next()
-        .filter(|version| {
-            version.status == "published" && version.template_sha256 == template_sha256
-        })
-    {
-        return Ok(current);
-    }
+) -> Result<TemplateVersionDraft, String> {
     let archived_path =
         archive_template_version_source(app, document_id, source, template_sha256)?;
-    repo.register_template_version(
-        document_id,
-        &archived_path.display().to_string(),
-        template_sha256,
-        note,
-    )
-    .map_err(|error| error.to_string())
+    Ok(TemplateVersionDraft {
+        document_id: document_id.to_string(),
+        template_path: archived_path.display().to_string(),
+        template_sha256: template_sha256.to_string(),
+        note: note.to_string(),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -2241,8 +2284,15 @@ fn rollback_template_version(
     if restored.is_static_copy {
         return Err("Архивная версия больше не содержит размеченных полей.".into());
     }
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
+    let rollback_note = format!("Rollback к версии {}.", record.version_number);
+    let draft = prepare_template_version_draft(
+        &app,
+        &record.document_id,
+        &path,
+        &record.template_sha256,
+        &rollback_note,
+    )?;
+    let (result, versions) = publish_pack_with_template_versions(&app, &state, &[draft], |pack| {
         let existing = pack
             .documents
             .iter_mut()
@@ -2253,22 +2303,18 @@ fn rollback_template_version(
         restored.role_id = existing.role_id.clone();
         restored.popup_fields = existing.popup_fields.clone();
         restored.popup_configured = existing.popup_configured;
-        restored.required_fields.extend(existing.required_fields.iter().cloned());
+        restored
+            .required_fields
+            .extend(existing.required_fields.iter().cloned());
         restored.required_fields.sort();
         restored.required_fields.dedup();
         *existing = restored;
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    let mut repo = repository_for(&default_state_db_path(&app)?)?;
-    let published = repo
-        .register_template_version(
-            &record.document_id,
-            &record.template_path,
-            &record.template_sha256,
-            &format!("Rollback к версии {}.", record.version_number),
-        )
-        .map_err(|error| error.to_string())?;
+        Ok(())
+    })?;
+    let published = versions
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Атомарный rollback не вернул опубликованную версию.".to_string())?;
     append_audit_event(
         &app,
         "template_version_rollback",

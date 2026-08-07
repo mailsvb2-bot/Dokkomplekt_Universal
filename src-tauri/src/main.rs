@@ -121,6 +121,7 @@ const DEFAULT_STATE_DB: &str = "dokkomplekt-user-state.sqlite";
 const MAX_DOCX_BYTES: usize = 50 * 1024 * 1024;
 
 include!("subsystems/update_runtime.rs");
+include!("subsystems/automation_consistency.rs");
 
 struct WatcherHandle {
     stop: Arc<AtomicBool>,

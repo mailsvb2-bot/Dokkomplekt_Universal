@@ -168,33 +168,6 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hex::encode(hasher.finalize())
 }
 
-fn ensure_source_snapshot_current(source: &Path, source_sha256: &str) -> Result<(), String> {
-    match universal_intake::current_source_matches(source, source_sha256) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(
-            "Исходный файл изменился во время обработки. Устаревший комплект не опубликован; новая версия будет обработана отдельно."
-                .into(),
-        ),
-        Err(error) => Err(format!(
-            "Не удалось повторно проверить исходный файл перед публикацией: {error}"
-        )),
-    }
-}
-
-fn ensure_generation_inputs_current(
-    source: &Path,
-    source_sha256: &str,
-    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
-    processing_guard: Option<&ProcessingGuard>,
-) -> Result<(), String> {
-    ensure_source_snapshot_current(source, source_sha256)?;
-    template_snapshot::ensure_all_current(template_snapshots)?;
-    if let Some(guard) = processing_guard {
-        guard.ensure_current()?;
-    }
-    Ok(())
-}
-
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,

@@ -35,7 +35,7 @@ function Get-FileRecord {
     )
     $resolved = Resolve-RequiredFile $Path
     $file = Get-Item -LiteralPath $resolved -ErrorAction Stop
-    return [ordered]@{
+    return [pscustomobject][ordered]@{
         kind = $Kind
         path = Get-RelativeRepositoryPath $resolved
         sha256 = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -207,6 +207,9 @@ $allRecords = @(
     $trustedKeyRecord
     $cargoAttestationRecord
     $cargoSignatureRecord
+    $guiRecord
+    $printRecord
+    $authenticodeRecord
     $evidenceRecords
 ) | Sort-Object path
 $duplicates = @($allRecords | Group-Object path | Where-Object { $_.Count -ne 1 })

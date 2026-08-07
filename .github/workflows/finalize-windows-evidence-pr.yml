@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: finalize-windows-evidence-pr
@@ -122,3 +123,26 @@ jobs:
           done
           echo 'Unable to publish finalized branch without overwriting concurrent changes.' >&2
           exit 1
+      - name: Report finalizer failure to PR
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          url = f"https://api.github.com/repos/{os.environ['REPOSITORY']}/issues/67/comments"
+          body = {"body": f"Windows evidence finalizer failed in Actions run `{os.environ['RUN_ID']}`. Inspecting this run before merge."}
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(body).encode(),
+              headers={
+                  'Authorization': f"Bearer {os.environ['GH_TOKEN']}",
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              },
+              method='POST',
+          )
+          urllib.request.urlopen(req).read()
+          PY

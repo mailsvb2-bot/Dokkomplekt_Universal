@@ -1,7 +1,8 @@
 name: Prune six stale branches
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
     branches:
       - main
 
@@ -12,7 +13,7 @@ jobs:
   prune:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete verified stale branches and self
+      - name: Delete verified stale branches and trigger branches
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -27,6 +28,7 @@ jobs:
             "agent/installed-app-generation-print"
             "agent/require-windows-gui-evidence"
             "chore/prune-six-stale-branches"
+            "chore/prune-trigger"
           )
 
           for branch in "${branches[@]}"; do

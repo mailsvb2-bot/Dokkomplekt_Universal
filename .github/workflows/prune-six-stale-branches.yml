@@ -3,7 +3,7 @@ name: Prune six stale branches
 on:
   push:
     branches:
-      - chore/prune-six-stale-branches
+      - main
 
 permissions:
   contents: write

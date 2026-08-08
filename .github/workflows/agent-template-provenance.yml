@@ -55,7 +55,26 @@ jobs:
       - name: Run source architecture gate
         run: python scripts/static_quality_gate.py --source-only
       - name: Check patch whitespace
-        run: git diff --check
+        shell: bash
+        run: |
+          set -uo pipefail
+          log=/tmp/template-provenance-diff-check.log
+          set +e
+          git diff --check >"$log" 2>&1
+          rc=$?
+          set -e
+          cat "$log"
+          if [ "$rc" -ne 0 ]; then
+            mkdir -p .github/diagnostics
+            cp "$log" .github/diagnostics/template-provenance-diff-check.log
+            git config user.name "openai-agent"
+            git config user.email "openai-agent@users.noreply.github.com"
+            git add .github/diagnostics/template-provenance-diff-check.log
+            git commit -m "Record template provenance diff-check failure"
+            git pull --rebase origin agent/bind-active-template-version
+            git push origin HEAD:agent/bind-active-template-version
+            exit "$rc"
+          fi
       - name: Publish validated product changes and self-clean validator
         shell: bash
         run: |
@@ -65,6 +84,7 @@ jobs:
           git fetch origin main agent/bind-active-template-version
           rm -f .github/patches/agent-template-provenance.py
           rm -f .github/workflows/agent-template-provenance.yml
+          rm -f .github/diagnostics/template-provenance-diff-check.log
           git add -A
           git commit -m "Bind active templates to published archive versions"
           git pull --rebase origin agent/bind-active-template-version

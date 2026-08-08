@@ -1,0 +1,1 @@
+Trigger final release gates after mail-merge post-publication template fencing and provenance sync.

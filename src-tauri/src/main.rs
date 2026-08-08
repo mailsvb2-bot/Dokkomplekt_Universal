@@ -122,6 +122,7 @@ const MAX_DOCX_BYTES: usize = 50 * 1024 * 1024;
 
 include!("subsystems/update_runtime.rs");
 include!("subsystems/automation_consistency.rs");
+include!("subsystems/automation_mail_merge.rs");
 
 struct WatcherHandle {
     stop: Arc<AtomicBool>,

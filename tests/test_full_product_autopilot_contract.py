@@ -43,6 +43,7 @@ def test_matrix_covers_product_boundaries_not_just_unit_tests() -> None:
 
 def test_one_button_workflow_dispatches_existing_authoritative_gates() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    source = SCRIPT.read_text(encoding="utf-8")
     assert "name: FULL DOKKOMPLEKT AUTOPILOT" in workflow
     assert "workflow_dispatch:" in workflow
     assert "production-hardware" in workflow
@@ -55,9 +56,19 @@ def test_one_button_workflow_dispatches_existing_authoritative_gates() -> None:
         "unsigned-preview.yml",
         "windows-hardware-e2e.yml",
     ):
-        assert authoritative in SCRIPT.read_text(encoding="utf-8")
+        assert authoritative in source
     assert "FULL_AUTOPILOT_REPORT.json" in workflow
     assert "FULL_AUTOPILOT_REPORT.md" in workflow
+
+
+def test_first_main_landing_runs_software_autopilot_without_starting_hardware() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "push:\n    branches: [main]" in workflow
+    assert "github.event_name == 'workflow_dispatch' || github.event_name == 'push'" in workflow
+    assert "github.event_name == 'workflow_dispatch' && inputs.scope || 'software'" in workflow
+    # Write privilege is scoped to the orchestration job rather than the PR coverage job.
+    assert "coverage-contract:\n    name: Capability coverage contract" in workflow
+    assert "full-autopilot:\n    name: Dispatch, wait and aggregate full product verification" in workflow
 
 
 def test_software_pass_cannot_be_misrepresented_as_production_hardware_pass() -> None:

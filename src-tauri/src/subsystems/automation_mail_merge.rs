@@ -1,7 +1,7 @@
 /// Immutable template material used by one entire mail-merge operation.
 ///
 /// Text extraction and DOCX rendering both read the same snapshot. The live
-/// template is consulted again only at the publication boundary.
+/// template is consulted again only at publication and commercial-commit boundaries.
 struct MailMergeTemplateSnapshot {
     button_label: String,
     snapshot: template_snapshot::TemplateSnapshot,
@@ -189,6 +189,12 @@ fn render_mail_merge(
             return Err(e);
         }
     };
+    if let Err(error) = ensure_mail_merge_templates_current(&template_inputs) {
+        let _ = std::fs::remove_dir_all(&published);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     if let Err(error) = commit_generation_access(&app, &permit) {
         let _ = std::fs::remove_dir_all(&published);
         rollback_counter_reservations(&app, &counter_reservations);
@@ -206,4 +212,3 @@ fn render_mail_merge(
         created_files,
     })
 }
-

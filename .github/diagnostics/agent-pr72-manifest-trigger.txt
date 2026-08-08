@@ -1,0 +1,1 @@
+Trigger Source Provenance after validated mail-merge applicator cleanup.

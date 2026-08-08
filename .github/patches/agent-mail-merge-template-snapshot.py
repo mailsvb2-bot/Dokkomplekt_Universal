@@ -1,53 +1,20 @@
 from pathlib import Path
 
-consistency_path = Path("src-tauri/src/subsystems/automation_consistency.rs")
-consistency = consistency_path.read_text(encoding="utf-8")
-helper = r'''
-
-/// Immutable template material used by one entire mail-merge operation.
-///
-/// Text extraction and DOCX rendering both read the same snapshot. The live
-/// template is consulted again only at the publication boundary.
-struct MailMergeTemplateSnapshot {
-    button_label: String,
-    snapshot: template_snapshot::TemplateSnapshot,
-    text: String,
-}
-
-fn capture_mail_merge_template_snapshot(
-    app: &tauri::AppHandle,
-    button_label: &str,
-    configured_path: &str,
-) -> Result<MailMergeTemplateSnapshot, String> {
-    let snapshot =
-        template_snapshot::TemplateSnapshot::capture(app, configured_path, button_label)?;
-    let text = extract_docx_text(snapshot.path()).map_err(|error| {
-        format!(
-            "Не удалось прочитать стабилизированный шаблон «{button_label}»: {error}"
-        )
-    })?;
-    Ok(MailMergeTemplateSnapshot {
-        button_label: button_label.to_string(),
-        snapshot,
-        text,
-    })
-}
-
-fn ensure_mail_merge_templates_current(
-    templates: &[MailMergeTemplateSnapshot],
-) -> Result<(), String> {
-    for template in templates {
-        template.snapshot.ensure_current()?;
-    }
-    Ok(())
-}
-'''
-if "struct MailMergeTemplateSnapshot" in consistency:
-    raise SystemExit("mail-merge snapshot helper already exists")
-consistency_path.write_text(consistency.rstrip() + helper + "\n", encoding="utf-8")
-
 runtime_path = Path("src-tauri/src/subsystems/automation_runtime.rs")
 runtime = runtime_path.read_text(encoding="utf-8")
+mail_merge_path = Path("src-tauri/src/subsystems/automation_mail_merge.rs")
+if mail_merge_path.exists():
+    raise SystemExit("automation_mail_merge.rs already exists")
+
+start_marker = "#[derive(Debug, Deserialize)]\nstruct RenderMailMergeRequest"
+end_marker = "#[derive(Debug, Deserialize)]\nstruct ImportTemplateFileRequest"
+if runtime.count(start_marker) != 1 or runtime.count(end_marker) != 1:
+    raise SystemExit("mail-merge extraction markers are not unique")
+prefix, remainder = runtime.split(start_marker, 1)
+mail_merge_tail, suffix = remainder.split(end_marker, 1)
+mail_merge = start_marker + mail_merge_tail
+runtime = prefix.rstrip() + "\n\n" + end_marker + suffix
+runtime_path.write_text(runtime, encoding="utf-8")
 
 needle = '''    let count = documents
         .len()
@@ -67,9 +34,9 @@ replacement = '''    let template_inputs = documents
         .len()
         .checked_mul(table.rows.len())
 '''
-if runtime.count(needle) != 1:
-    raise SystemExit(f"template capture insertion marker mismatch: {runtime.count(needle)}")
-runtime = runtime.replace(needle, replacement, 1)
+if mail_merge.count(needle) != 1:
+    raise SystemExit(f"template capture insertion marker mismatch: {mail_merge.count(needle)}")
+mail_merge = mail_merge.replace(needle, replacement, 1)
 
 old_loop = '''            for doc in &documents {
                 let template_path = resolve_user_path(&app, &doc.template_path)?;
@@ -136,9 +103,9 @@ new_loop = '''            for template in &template_inputs {
                 files.push(out);
             }
 '''
-if runtime.count(old_loop) != 1:
-    raise SystemExit(f"live template loop marker mismatch: {runtime.count(old_loop)}")
-runtime = runtime.replace(old_loop, new_loop, 1)
+if mail_merge.count(old_loop) != 1:
+    raise SystemExit(f"live template loop marker mismatch: {mail_merge.count(old_loop)}")
+mail_merge = mail_merge.replace(old_loop, new_loop, 1)
 
 publish_marker = '''    let desired = root.join(format!(
         "Пакетная генерация {}",
@@ -156,10 +123,57 @@ publish_guard = '''    if let Err(error) = ensure_mail_merge_templates_current(&
         OffsetDateTime::now_utc().date()
     ));
 '''
-if runtime.count(publish_marker) != 1:
-    raise SystemExit(f"publication marker mismatch: {runtime.count(publish_marker)}")
-runtime = runtime.replace(publish_marker, publish_guard, 1)
-runtime_path.write_text(runtime, encoding="utf-8")
+if mail_merge.count(publish_marker) != 1:
+    raise SystemExit(f"publication marker mismatch: {mail_merge.count(publish_marker)}")
+mail_merge = mail_merge.replace(publish_marker, publish_guard, 1)
+
+helper = r'''/// Immutable template material used by one entire mail-merge operation.
+///
+/// Text extraction and DOCX rendering both read the same snapshot. The live
+/// template is consulted again only at the publication boundary.
+struct MailMergeTemplateSnapshot {
+    button_label: String,
+    snapshot: template_snapshot::TemplateSnapshot,
+    text: String,
+}
+
+fn capture_mail_merge_template_snapshot(
+    app: &tauri::AppHandle,
+    button_label: &str,
+    configured_path: &str,
+) -> Result<MailMergeTemplateSnapshot, String> {
+    let snapshot =
+        template_snapshot::TemplateSnapshot::capture(app, configured_path, button_label)?;
+    let text = extract_docx_text(snapshot.path()).map_err(|error| {
+        format!(
+            "Не удалось прочитать стабилизированный шаблон «{button_label}»: {error}"
+        )
+    })?;
+    Ok(MailMergeTemplateSnapshot {
+        button_label: button_label.to_string(),
+        snapshot,
+        text,
+    })
+}
+
+fn ensure_mail_merge_templates_current(
+    templates: &[MailMergeTemplateSnapshot],
+) -> Result<(), String> {
+    for template in templates {
+        template.snapshot.ensure_current()?;
+    }
+    Ok(())
+}
+'''
+mail_merge_path.write_text(helper.rstrip() + "\n\n" + mail_merge.lstrip(), encoding="utf-8")
+
+main_path = Path("src-tauri/src/main.rs")
+main = main_path.read_text(encoding="utf-8")
+include_marker = 'include!("subsystems/automation_consistency.rs");\n'
+include_replacement = include_marker + 'include!("subsystems/automation_mail_merge.rs");\n'
+if main.count(include_marker) != 1:
+    raise SystemExit(f"mail-merge include marker mismatch: {main.count(include_marker)}")
+main_path.write_text(main.replace(include_marker, include_replacement, 1), encoding="utf-8")
 
 test_path = Path("tests/test_v18_4_6_mail_merge_snapshot_consistency.py")
 if test_path.exists():
@@ -168,14 +182,20 @@ test_path.write_text(r'''from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "src-tauri" / "src" / "subsystems" / "automation_runtime.rs"
-CONSISTENCY = ROOT / "src-tauri" / "src" / "subsystems" / "automation_consistency.rs"
+MAIL_MERGE = ROOT / "src-tauri" / "src" / "subsystems" / "automation_mail_merge.rs"
+MAIN = ROOT / "src-tauri" / "src" / "main.rs"
 
 
 def _mail_merge_body() -> str:
-    text = RUNTIME.read_text(encoding="utf-8")
-    return text.split("fn render_mail_merge(", 1)[1].split(
-        "struct ImportTemplateFileRequest", 1
-    )[0]
+    text = MAIL_MERGE.read_text(encoding="utf-8")
+    return text.split("fn render_mail_merge(", 1)[1]
+
+
+def test_mail_merge_is_split_out_of_runtime_and_included_once() -> None:
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    main = MAIN.read_text(encoding="utf-8")
+    assert "fn render_mail_merge(" not in runtime
+    assert main.count('include!("subsystems/automation_mail_merge.rs");') == 1
 
 
 def test_mail_merge_captures_templates_before_row_loop_and_never_rereads_live_paths() -> None:
@@ -200,8 +220,8 @@ def test_mail_merge_revalidates_all_live_templates_before_atomic_publish() -> No
 
 
 def test_mail_merge_snapshot_helper_extracts_text_from_immutable_snapshot() -> None:
-    consistency = CONSISTENCY.read_text(encoding="utf-8")
-    helper = consistency.split("fn capture_mail_merge_template_snapshot(", 1)[1].split(
+    text = MAIL_MERGE.read_text(encoding="utf-8")
+    helper = text.split("fn capture_mail_merge_template_snapshot(", 1)[1].split(
         "fn ensure_mail_merge_templates_current", 1
     )[0]
     assert "TemplateSnapshot::capture(app, configured_path, button_label)" in helper

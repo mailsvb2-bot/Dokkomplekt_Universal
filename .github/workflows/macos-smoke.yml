@@ -54,8 +54,10 @@ jobs:
         run: |
           set -uo pipefail
           log=/tmp/workspace-publication-clippy.log
+          set +e
           cargo clippy -p dokkomplekt-tauri --tests -- -D warnings >"$log" 2>&1
           rc=$?
+          set -e
           cat "$log"
           if [ "$rc" -ne 0 ]; then
             mkdir -p .github/diagnostics

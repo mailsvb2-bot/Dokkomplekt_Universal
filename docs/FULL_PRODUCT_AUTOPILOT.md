@@ -15,13 +15,18 @@ When the Autopilot implementation itself is changed and lands on `main`, the wor
 
 ## Executable product oracles
 
-Before it is allowed to dispatch the broader CI contour, Autopilot runs two output-level checks itself:
+Before it is allowed to dispatch the broader CI contour, Autopilot runs output-level checks itself:
 
 1. **DOCX visual oracle**
    - validates OOXML package integrity and internal relationships for the controlled document corpus;
    - renders every golden DOCX through LibreOffice to PDF and then to page images with Poppler;
    - rejects missing/blank pages, page-count changes, dimension changes and visual-hash drift beyond the controlled tolerance.
-2. **Synthetic semantic corpus**
+2. **Image-only PDF OCR fixture**
+   - installs controlled hosted Poppler and Tesseract with Russian and English language data;
+   - proves that the PDF fixture has no text layer;
+   - rasterizes the PDF, performs real `rus+eng` OCR and reconstructs table rows;
+   - requires the expected grounded tokens and minimum table structure before the software contour can pass.
+3. **Synthetic semantic corpus**
    - generates 500 deterministic cases across accounting, HR, legal, medical and education using the real Rust `build_corpus_entry` path;
    - measures each domain through the shipped `measure_domain.py` implementation;
    - requires 100 cases per domain, real field/high-risk observations, field accuracy of at least 0.75 and exact kit completeness.
@@ -45,7 +50,8 @@ The Autopilot dispatches and waits for these existing workflows on the same comm
    - checked-in source manifest;
    - deterministic clean source archive;
    - Cargo metadata from extracted archive;
-   - portable Git history bundle.
+   - portable Git history bundle;
+   - `workflow_dispatch` checks out the immutable event SHA and verifies `HEAD == GITHUB_SHA`, rather than resolving a potentially newer moving branch when the runner starts.
 3. `macos-smoke.yml`
    - native `.app` and DMG build/verification.
 4. `unsigned-preview.yml`
@@ -98,7 +104,7 @@ Only when every hosted workflow and the hardware workflow complete successfully 
 - an evidence path disappears;
 - the software or hardware coverage floor drops unexpectedly.
 
-`tests/test_full_product_autopilot_contract.py` makes this governance part of the normal Python regression wall.
+`tests/test_full_product_autopilot_contract.py` makes this governance part of the normal Python regression wall and also guards executable OCR coverage, the explicit Rust corpus toolchain and immutable source-provenance dispatch checkout.
 
 ## Reports
 
@@ -107,7 +113,7 @@ Each run writes and uploads:
 - `verification/autopilot/FULL_AUTOPILOT_REPORT.json` — machine-readable verdict;
 - `verification/autopilot/FULL_AUTOPILOT_REPORT.md` — human-readable report shown in the GitHub job summary;
 - the feature matrix and coverage report;
-- synthetic corpus and per-domain metric artifacts from the document-oracle job.
+- OCR evidence, synthetic corpus and per-domain metric artifacts from the document-oracle job.
 
 The final report contains the exact commit SHA and links to every dispatched workflow run. A timeout, missing run, cancellation, skipped required gate or non-success conclusion makes the Autopilot fail.
 

@@ -82,18 +82,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
-      - name: Install controlled document-render dependencies
+      - name: Install controlled document-render and OCR dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice-writer poppler-utils fonts-dejavu-core fonts-liberation
+          sudo apt-get install -y \
+            libreoffice-writer \
+            poppler-utils \
+            tesseract-ocr \
+            tesseract-ocr-eng \
+            tesseract-ocr-rus \
+            fonts-dejavu-core \
+            fonts-liberation
           python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Render DOCX corpus and enforce visual golden pages
         run: python scripts/verify_docx_visual_goldens.py
+      - name: Execute image-only PDF OCR fixture
+        run: >-
+          python scripts/verify_scanned_pdf_fixture.py
+          --output-json verification/autopilot/oracles/scanned-pdf-ocr.json
       - name: Generate 500 semantic cases through the real Rust corpus builder
         shell: bash
         run: |
           mkdir -p verification/autopilot/oracles
-          cargo run --locked -p dokkomplekt-core --example corpus_simulation -- 100 > verification/autopilot/oracles/synthetic-corpus.json
+          # Use the already-installed named toolchain explicitly. A bare `cargo` makes
+          # rustup re-process rust-toolchain.toml components and can conflict with
+          # pre-existing cargo-fmt/clippy files on GitHub-hosted runner images.
+          cargo +1.97.1 run --locked -p dokkomplekt-core --example corpus_simulation -- 100 > verification/autopilot/oracles/synthetic-corpus.json
       - name: Measure every domain and enforce corpus sanity
         shell: bash
         run: |
@@ -111,6 +125,10 @@ jobs:
           corpus = json.loads((root / 'synthetic-corpus.json').read_text(encoding='utf-8'))
           assert corpus['schema'] == 'dokkomplekt.ground-truth-corpus.v1'
           assert len(corpus['entries']) == 500, len(corpus['entries'])
+          ocr = json.loads((root / 'scanned-pdf-ocr.json').read_text(encoding='utf-8'))
+          assert ocr['schema'] == 'dokkomplekt.scanned-table-smoke.v1'
+          assert ocr['result'] == 'passed'
+          assert ocr['table_row_count'] > 0
           for domain in ('accounting', 'hr', 'legal', 'medical', 'education'):
               report = json.loads((root / f'{domain}-metrics.json').read_text(encoding='utf-8'))
               assert report['entry_count'] == 100, (domain, report['entry_count'])
@@ -118,7 +136,7 @@ jobs:
               assert report['high_risk_observations'] > 0, domain
               assert report['field_accuracy'] is not None and report['field_accuracy'] >= 0.75, (domain, report['field_accuracy'])
               assert report['kit_completeness'] == 1.0, (domain, report['kit_completeness'])
-          print('SYNTHETIC CORPUS ORACLE PASSED: 500 cases across 5 domains')
+          print('OCR + SYNTHETIC CORPUS ORACLES PASSED: 500 cases across 5 domains')
           PY
       - name: Upload document and corpus oracle evidence
         if: always()

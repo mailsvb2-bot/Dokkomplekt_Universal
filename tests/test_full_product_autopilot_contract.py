@@ -61,13 +61,26 @@ def test_one_button_workflow_dispatches_existing_authoritative_gates() -> None:
     assert "FULL_AUTOPILOT_REPORT.md" in workflow
 
 
+def test_document_oracles_are_executed_not_merely_registered() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "document-oracles:\n    name: Document visual oracle and synthetic corpus" in workflow
+    assert "python scripts/verify_docx_visual_goldens.py" in workflow
+    assert "cargo run --locked -p dokkomplekt-core --example corpus_simulation -- 100" in workflow
+    assert "python scripts/measure_domain.py" in workflow
+    assert "assert len(corpus['entries']) == 500" in workflow
+    assert "assert report['field_accuracy'] is not None and report['field_accuracy'] >= 0.75" in workflow
+    assert "assert report['kit_completeness'] == 1.0" in workflow
+    assert "needs: [coverage-contract, document-oracles]" in workflow
+
+
 def test_first_main_landing_runs_software_autopilot_without_starting_hardware() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "push:\n    branches: [main]" in workflow
     assert "github.event_name == 'workflow_dispatch' || github.event_name == 'push'" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.scope || 'software'" in workflow
-    # Write privilege is scoped to the orchestration job rather than the PR coverage job.
+    # Write privilege is scoped to the orchestration job rather than the PR coverage/oracle jobs.
     assert "coverage-contract:\n    name: Capability coverage contract" in workflow
+    assert "document-oracles:\n    name: Document visual oracle and synthetic corpus" in workflow
     assert "full-autopilot:\n    name: Dispatch, wait and aggregate full product verification" in workflow
 
 

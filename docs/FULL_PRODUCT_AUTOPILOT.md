@@ -11,6 +11,8 @@ Choose one scope:
 - `software` — the normal full automated contour available on GitHub-hosted infrastructure.
 - `production-hardware` — everything in `software` plus the protected self-hosted Windows hardware/signing acceptance gate.
 
+When the Autopilot implementation itself is changed and lands on `main`, the workflow automatically performs a `software` run. This gives the implementation an end-to-end self-test without ever starting production signing, a physical printer or a reboot by accident. Ordinary product commits continue to use the repository's existing per-PR gates; the complete Autopilot remains available as one explicit button whenever a full re-check is wanted.
+
 ## What `software` requires
 
 The Autopilot dispatches and waits for these existing workflows on the same commit SHA:

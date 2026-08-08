@@ -50,7 +50,24 @@ jobs:
       - name: Compile all Tauri tests
         run: cargo check -p dokkomplekt-tauri --tests
       - name: Clippy Tauri tests
-        run: cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
+        shell: bash
+        run: |
+          set -uo pipefail
+          log=/tmp/workspace-publication-clippy.log
+          cargo clippy -p dokkomplekt-tauri --tests -- -D warnings >"$log" 2>&1
+          rc=$?
+          cat "$log"
+          if [ "$rc" -ne 0 ]; then
+            mkdir -p .github/diagnostics
+            cp "$log" .github/diagnostics/workspace-publication-clippy.log
+            git config user.name "openai-agent"
+            git config user.email "openai-agent@users.noreply.github.com"
+            git add .github/diagnostics/workspace-publication-clippy.log
+            git commit -m "Record workspace publication clippy failure"
+            git pull --rebase origin agent/harden-workspace-publication
+            git push origin HEAD:agent/harden-workspace-publication
+            exit "$rc"
+          fi
       - name: Run source architecture gate
         run: python scripts/static_quality_gate.py --source-only
       - name: Check patch whitespace
@@ -64,6 +81,7 @@ jobs:
           git fetch origin main agent/harden-workspace-publication
           git checkout origin/main -- .github/workflows/macos-smoke.yml
           rm -f .github/patches/agent-workspace-publication.py
+          rm -f .github/diagnostics/workspace-publication-clippy.log
           git add -A
           git commit -m "Harden workspace archive publication"
           git pull --rebase origin agent/harden-workspace-publication

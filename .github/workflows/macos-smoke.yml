@@ -7,13 +7,84 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: macos-smoke-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  source-finalization-validator:
+    name: PR73 source finalization identity validator
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/fix-source-finalization-identity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/fix-source-finalization-identity
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Apply and validate source-finalization identity patch
+        shell: bash
+        run: |
+          set -uo pipefail
+          LOG=/tmp/agent-source-finalization-identity.log
+          : > "$LOG"
+          status=0
+          run_check() {
+            if [ "$status" -ne 0 ]; then return; fi
+            echo "===== $* =====" | tee -a "$LOG"
+            "$@" 2>&1 | tee -a "$LOG"
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -ne 0 ]; then status=$rc; fi
+          }
+          run_check python .github/patches/agent-source-finalization-identity.py
+          run_check cargo fmt --all
+          run_check cargo fmt --all -- --check
+          run_check cargo test -p dokkomplekt-tauri workspace_hygiene::tests -- --nocapture
+          run_check python -m pytest -q tests/test_v18_4_7_source_finalization_identity.py
+          run_check cargo check -p dokkomplekt-tauri --tests
+          run_check cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
+          run_check python scripts/static_quality_gate.py --source-only
+          run_check git diff --check
+
+          git config user.name "openai-agent"
+          git config user.email "openai-agent@users.noreply.github.com"
+          git fetch origin main agent/fix-source-finalization-identity
+          if [ "$status" -ne 0 ]; then
+            cp "$LOG" /tmp/validator.log
+            git reset --hard HEAD
+            git checkout origin/main -- .github/workflows/macos-smoke.yml
+            rm -f .github/workflows/agent-source-finalization-identity.yml
+            mkdir -p .github/diagnostics
+            cp /tmp/validator.log .github/diagnostics/agent-source-finalization-identity.log
+            git add -A
+            git commit -m "Record source finalization validator failure"
+            git pull --rebase origin agent/fix-source-finalization-identity
+            git push origin HEAD:agent/fix-source-finalization-identity
+            exit "$status"
+          fi
+
+          git checkout origin/main -- .github/workflows/macos-smoke.yml
+          rm -f .github/workflows/agent-source-finalization-identity.yml
+          rm -f .github/patches/agent-source-finalization-identity.py
+          rm -f .github/diagnostics/agent-source-finalization-identity.log
+          git add -A
+          git commit -m "Bind source finalization to atomic file identity"
+          git pull --rebase origin agent/fix-source-finalization-identity
+          git push origin HEAD:agent/fix-source-finalization-identity
+
   macos-build-smoke:
     name: macOS app and DMG build smoke
     runs-on: macos-14

@@ -61,7 +61,7 @@ fn finalize_processed_source(
     }
 
     if privacy.copy_source_to_output {
-        match std::fs::remove_file(source) {
+        match workspace_hygiene::delete_processed_source_if_matches(source, source_sha256) {
             Ok(()) => {
                 let _ = std::fs::remove_file(&marker);
                 Ok(serde_json::json!({
@@ -73,8 +73,7 @@ fn finalize_processed_source(
                 std::fs::write(
                     &marker,
                     format!(
-                        "sha256={source_sha256}\nstatus=published_source_delete_delayed\nerror_kind={:?}\n",
-                        error.kind()
+                        "sha256={source_sha256}\nstatus=published_source_delete_delayed\nerror={error}\n"
                     ),
                 )
                 .map_err(|marker_error| {
@@ -85,7 +84,7 @@ fn finalize_processed_source(
                 Ok(serde_json::json!({
                     "action": "source_delete_delayed",
                     "marker": marker.display().to_string(),
-                    "error_kind": format!("{:?}", error.kind()),
+                    "error": error,
                 }))
             }
         }

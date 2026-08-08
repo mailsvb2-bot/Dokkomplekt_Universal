@@ -1,0 +1,41 @@
+name: Prune six stale branches
+
+on:
+  push:
+    branches:
+      - chore/prune-six-stale-branches
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete verified stale branches and self
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          branches=(
+            "agent/add-installed-generation-command"
+            "agent/bind-final-windows-evidence-index"
+            "agent/bind-reboot-evidence-v2"
+            "agent/bind-watcher-output-receipt"
+            "agent/installed-app-generation-print"
+            "agent/require-windows-gui-evidence"
+            "chore/prune-six-stale-branches"
+          )
+
+          for branch in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
+              git push "$remote" --delete "$branch"
+            fi
+          done
+
+          mapfile -t remaining < <(git ls-remote --heads "$remote" | awk '{print $2}' | sort)
+          printf 'Remaining branches:\n%s\n' "${remaining[*]}"
+          test "${#remaining[@]}" -eq 1
+          test "${remaining[0]}" = "refs/heads/main"

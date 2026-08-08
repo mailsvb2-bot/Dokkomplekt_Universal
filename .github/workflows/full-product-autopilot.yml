@@ -11,6 +11,14 @@ on:
         options:
           - software
           - production-hardware
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/full-product-autopilot.yml'
+      - 'scripts/full_product_autopilot.py'
+      - 'verification/autopilot/**'
+      - 'tests/test_full_product_autopilot_contract.py'
+      - 'docs/FULL_PRODUCT_AUTOPILOT.md'
   pull_request:
     paths:
       - '.github/workflows/full-product-autopilot.yml'
@@ -62,7 +70,7 @@ jobs:
 
   full-autopilot:
     name: Dispatch, wait and aggregate full product verification
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     needs: coverage-contract
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -85,7 +93,7 @@ jobs:
           --repository "${GITHUB_REPOSITORY}"
           --ref "${GITHUB_REF_NAME}"
           --sha "${GITHUB_SHA}"
-          --scope "${{ inputs.scope }}"
+          --scope "${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'software' }}"
           --json-report verification/autopilot/FULL_AUTOPILOT_REPORT.json
           --markdown-report verification/autopilot/FULL_AUTOPILOT_REPORT.md
       - name: Always publish unified verdict

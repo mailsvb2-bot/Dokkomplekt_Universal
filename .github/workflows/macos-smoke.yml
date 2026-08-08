@@ -39,6 +39,25 @@ jobs:
           sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Apply workspace publication hardening
         run: python .github/patches/agent-workspace-publication.py
+      - name: Apply clippy-safe policy initializer
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src-tauri/src/workspace_hygiene.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        let mut policy = WorkspaceRetentionPolicy::default();
+                  policy.archived_source_retention_days = 0;
+          '''
+          new = '''        let policy = WorkspaceRetentionPolicy {
+                      archived_source_retention_days: 0,
+                      ..WorkspaceRetentionPolicy::default()
+                  };
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'clippy initializer marker mismatch: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Format Rust
         run: cargo fmt --all
       - name: Verify Rust formatting
@@ -50,26 +69,7 @@ jobs:
       - name: Compile all Tauri tests
         run: cargo check -p dokkomplekt-tauri --tests
       - name: Clippy Tauri tests
-        shell: bash
-        run: |
-          set -uo pipefail
-          log=/tmp/workspace-publication-clippy.log
-          set +e
-          cargo clippy -p dokkomplekt-tauri --tests -- -D warnings >"$log" 2>&1
-          rc=$?
-          set -e
-          cat "$log"
-          if [ "$rc" -ne 0 ]; then
-            mkdir -p .github/diagnostics
-            cp "$log" .github/diagnostics/workspace-publication-clippy.log
-            git config user.name "openai-agent"
-            git config user.email "openai-agent@users.noreply.github.com"
-            git add .github/diagnostics/workspace-publication-clippy.log
-            git commit -m "Record workspace publication clippy failure"
-            git pull --rebase origin agent/harden-workspace-publication
-            git push origin HEAD:agent/harden-workspace-publication
-            exit "$rc"
-          fi
+        run: cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
       - name: Run source architecture gate
         run: python scripts/static_quality_gate.py --source-only
       - name: Check patch whitespace

@@ -1,1 +1,1 @@
-one-time branch prune trigger
+one-time branch prune trigger v2

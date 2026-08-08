@@ -33,7 +33,7 @@ jobs:
 
           for branch in "${branches[@]}"; do
             if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
-              git push "$remote" --delete "$branch"
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
             fi
           done
 

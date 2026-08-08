@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "verification" / "autopilot" / "feature-matrix.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "full-product-autopilot.yml"
+PROVENANCE_WORKFLOW = ROOT / ".github" / "workflows" / "source-provenance.yml"
 SCRIPT = ROOT / "scripts" / "full_product_autopilot.py"
 
 
@@ -36,6 +37,8 @@ def test_matrix_covers_product_boundaries_not_just_unit_tests() -> None:
     assert "tests/installer/windows_installer_contract.ps1" in features["button-creation"]["evidence"]
     assert features["docx-oracle"]["level"] == "golden"
     assert features["postgres-concurrency"]["level"] == "real-db"
+    assert features["ocr-image-pdf"]["scope"] == "software"
+    assert features["ocr-image-pdf"]["level"] == "fixture-e2e"
     assert features["word-print"]["level"] == "hardware-e2e"
     assert features["reboot-watcher"]["level"] == "hardware-e2e"
     assert features["authenticode"]["scope"] == "production-hardware"
@@ -65,6 +68,10 @@ def test_document_oracles_are_executed_not_merely_registered() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "document-oracles:\n    name: Document visual oracle and synthetic corpus" in workflow
     assert "python scripts/verify_docx_visual_goldens.py" in workflow
+    assert "tesseract-ocr-rus" in workflow
+    assert "python scripts/verify_scanned_pdf_fixture.py" in workflow
+    assert "verification/autopilot/oracles/scanned-pdf-ocr.json" in workflow
+    assert "assert ocr['result'] == 'passed'" in workflow
     assert "cargo +1.97.1 run --locked -p dokkomplekt-core --example corpus_simulation -- 100" in workflow
     assert "cargo run --locked -p dokkomplekt-core --example corpus_simulation -- 100" not in workflow
     assert "python scripts/measure_domain.py" in workflow
@@ -72,6 +79,14 @@ def test_document_oracles_are_executed_not_merely_registered() -> None:
     assert "assert report['field_accuracy'] is not None and report['field_accuracy'] >= 0.75" in workflow
     assert "assert report['kit_completeness'] == 1.0" in workflow
     assert "needs: [coverage-contract, document-oracles]" in workflow
+
+
+def test_dispatched_source_provenance_checks_out_immutable_event_sha() -> None:
+    provenance = PROVENANCE_WORKFLOW.read_text(encoding="utf-8")
+    assert "github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name" in provenance
+    assert "Verify immutable dispatch checkout identity" in provenance
+    assert 'test "$actual" = "${GITHUB_SHA}"' in provenance
+    assert "github.event_name == 'workflow_dispatch' && inputs.audit_sha" not in provenance
 
 
 def test_first_main_landing_runs_software_autopilot_without_starting_hardware() -> None:

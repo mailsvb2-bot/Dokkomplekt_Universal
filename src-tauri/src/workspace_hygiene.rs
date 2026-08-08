@@ -14,6 +14,9 @@ const FINALIZING_PREFIX: &str = ".dokkomplekt-finalizing-";
 const FINALIZING_SUFFIX: &str = ".pending";
 const FINALIZING_CLAIM_GRACE: Duration = Duration::from_secs(30 * 60);
 const RECOVERED_SOURCE_PREFIX: &str = "ВОССТАНОВЛЕННЫЙ ИСХОДНИК";
+const ARCHIVE_STAGE_PREFIX: &str = ".dokkomplekt-archive-stage-";
+const RECOVERY_STAGE_PREFIX: &str = ".dokkomplekt-recovery-stage-";
+const RECEIPT_STAGE_PREFIX: &str = ".dokkomplekt-receipt-stage-";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -73,6 +76,7 @@ pub struct WorkspaceHygieneReport {
     pub removed_expired_archived_files: Vec<String>,
     pub removed_queue_receipts: Vec<String>,
     pub recovered_finalizing_sources: Vec<String>,
+    pub removed_stale_staging_files: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -219,6 +223,20 @@ pub fn cleanup_workspace_folder(
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
+        if is_workspace_staging_name(name) {
+            if file_age(&path, now).is_some_and(|age| age >= FINALIZING_CLAIM_GRACE) {
+                match fs::remove_file(&path) {
+                    Ok(()) => report
+                        .removed_stale_staging_files
+                        .push(path.display().to_string()),
+                    Err(error) => report.warnings.push(format!(
+                        "Не удалось удалить stale workspace staging {}: {error}",
+                        path.display()
+                    )),
+                }
+            }
+            continue;
+        }
         if is_finalizing_claim_name(name) {
             match finalizing_claim_timestamp(name) {
                 Some(claimed_at) if finalizing_claim_is_stale(claimed_at, now) => {
@@ -326,9 +344,10 @@ pub fn cleanup_workspace_folder(
         }
     }
 
-    if policy.archived_source_retention_days > 0 && archive_root.exists() {
-        let retention =
-            Duration::from_secs(u64::from(policy.archived_source_retention_days) * 86_400);
+    if archive_root.exists() {
+        let retention = (policy.archived_source_retention_days > 0).then(|| {
+            Duration::from_secs(u64::from(policy.archived_source_retention_days) * 86_400)
+        });
         match ensure_real_directory_below(folder, &archive_root) {
             Ok(archive_root_canonical) => cleanup_expired_archive_files(
                 &archive_root,
@@ -468,10 +487,7 @@ fn copy_claim_to_unique_archive(
 ) -> Result<PathBuf, String> {
     for _ in 0..=10_000u32 {
         let destination = unique_destination(folder, original_source, &claim.verified_sha256)?;
-        let staging = folder.join(format!(
-            ".dokkomplekt-archive-stage-{}.pending",
-            Uuid::new_v4()
-        ));
+        let staging = staging_path(folder, ARCHIVE_STAGE_PREFIX);
         let mut output = match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -642,10 +658,7 @@ fn recover_finalizing_claim(claim: &Path) -> Result<PathBuf, String> {
             .map(|ext| format!("{stem}.{ext}"))
             .unwrap_or(stem);
         let destination = parent.join(name);
-        let staging = parent.join(format!(
-            ".dokkomplekt-recovery-stage-{}.pending",
-            Uuid::new_v4()
-        ));
+        let staging = staging_path(parent, RECOVERY_STAGE_PREFIX);
         let mut output = match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -835,37 +848,30 @@ fn unique_destination(
 }
 
 fn move_to_unique_folder(source: &Path, folder: &Path) -> Result<PathBuf, String> {
+    // Service files use the same identity-safe claim protocol as processed sources.
+    // A replacement that reuses `source` after the initial hash is recovered rather
+    // than deleted, and the visible archive destination is create-if-absent.
     let hash = sha256_file(source)?;
-    let destination = unique_destination(folder, source, &hash)?;
-    move_file_safely(source, &destination)?;
-    Ok(destination)
-}
-
-fn move_file_safely(source: &Path, destination: &Path) -> Result<(), String> {
-    match fs::rename(source, destination) {
-        Ok(()) => Ok(()),
-        Err(rename_error) => {
-            fs::copy(source, destination).map_err(|copy_error| {
-                format!(
-                    "Не удалось переместить {} в {}: rename={rename_error}; copy={copy_error}",
-                    source.display(),
-                    destination.display()
-                )
-            })?;
-            let copied_hash = sha256_file(destination)?;
-            let source_hash = sha256_file(source)?;
-            if copied_hash != source_hash {
-                let _ = fs::remove_file(destination);
-                return Err("Контрольная сумма архивной копии не совпала с источником.".into());
-            }
-            fs::remove_file(source).map_err(|error| {
-                format!(
-                    "Архивная копия создана, но исходник {} не удалён: {error}",
-                    source.display()
-                )
-            })
+    let claim = claim_matching_source(source, &hash)?;
+    let destination = match copy_claim_to_unique_archive(&claim, folder, source) {
+        Ok(path) => path,
+        Err(error) => {
+            let recovery = recover_finalizing_claim(&claim.path);
+            return Err(with_recovery_detail(error, recovery));
         }
+    };
+    if let Err(error) = fs::remove_file(&claim.path) {
+        let _ = fs::remove_file(&destination);
+        let recovery = recover_finalizing_claim(&claim.path);
+        return Err(with_recovery_detail(
+            format!(
+                "Архивная копия служебного файла подготовлена, но захваченный источник {} не удалён: {error}",
+                claim.path.display()
+            ),
+            recovery,
+        ));
     }
+    Ok(destination)
 }
 
 fn write_receipt(
@@ -882,14 +888,98 @@ fn write_receipt(
         "archived_at_unix": OffsetDateTime::now_utc().unix_timestamp(),
     });
     let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
+    publish_bytes_create_new(receipt, &bytes, RECEIPT_STAGE_PREFIX)
+}
+
+fn publish_bytes_create_new(
+    destination: &Path,
+    bytes: &[u8],
+    stage_prefix: &str,
+) -> Result<(), String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "У публикуемого файла нет родительской папки.".to_string())?;
+    let staging = staging_path(parent, stage_prefix);
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(receipt)
-        .map_err(|error| format!("Не удалось создать квитанцию архива: {error}"))?;
-    file.write_all(&bytes)
-        .map_err(|error| format!("Не удалось записать квитанцию архива: {error}"))?;
-    file.sync_all().map_err(|error| error.to_string())
+        .open(&staging)
+        .map_err(|error| {
+            format!(
+                "Не удалось создать скрытый staging {}: {error}",
+                staging.display()
+            )
+        })?;
+    if let Err(error) = file.write_all(bytes) {
+        drop(file);
+        let _ = fs::remove_file(&staging);
+        return Err(format!("Не удалось записать скрытый staging: {error}"));
+    }
+    if let Err(error) = file.sync_all() {
+        drop(file);
+        let _ = fs::remove_file(&staging);
+        return Err(format!(
+            "Не удалось синхронизировать скрытый staging: {error}"
+        ));
+    }
+    drop(file);
+
+    let staged = match fs::read(&staging) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = fs::remove_file(&staging);
+            return Err(format!("Не удалось проверить скрытый staging: {error}"));
+        }
+    };
+    if staged != bytes {
+        let _ = fs::remove_file(&staging);
+        return Err("Содержимое staging изменилось до публикации.".into());
+    }
+
+    match fs::hard_link(&staging, destination) {
+        Ok(()) => {}
+        Err(error) => {
+            let _ = fs::remove_file(&staging);
+            return Err(format!(
+                "Не удалось атомарно опубликовать {} без перезаписи существующего файла: {error}",
+                destination.display()
+            ));
+        }
+    }
+    if let Err(error) = fs::remove_file(&staging) {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "Файл опубликован, но staging {} не удалён; публикация отменена: {error}",
+            staging.display()
+        ));
+    }
+    let published = match fs::read(destination) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = fs::remove_file(destination);
+            return Err(format!("Не удалось проверить опубликованный файл: {error}"));
+        }
+    };
+    if published != bytes {
+        let _ = fs::remove_file(destination);
+        return Err("Опубликованный файл не совпадает с проверенным staging.".into());
+    }
+    Ok(())
+}
+
+fn staging_path(folder: &Path, prefix: &str) -> PathBuf {
+    folder.join(format!("{prefix}{}{FINALIZING_SUFFIX}", Uuid::new_v4()))
+}
+
+fn is_workspace_staging_name(name: &str) -> bool {
+    name.ends_with(FINALIZING_SUFFIX)
+        && [
+            ARCHIVE_STAGE_PREFIX,
+            RECOVERY_STAGE_PREFIX,
+            RECEIPT_STAGE_PREFIX,
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 fn marker_sha256(marker: &Path) -> Option<String> {
@@ -1071,7 +1161,7 @@ fn cleanup_expired_archive_files(
     folder: &Path,
     archive_root_canonical: &Path,
     now: SystemTime,
-    retention: Duration,
+    retention: Option<Duration>,
     report: &mut WorkspaceHygieneReport,
 ) -> Result<(), String> {
     let entries = fs::read_dir(folder).map_err(|error| error.to_string())?;
@@ -1125,15 +1215,37 @@ fn cleanup_expired_archive_files(
             let _ = fs::remove_dir(&canonical);
             continue;
         }
-        if metadata.is_file() && file_age(&canonical, now).is_some_and(|age| age >= retention) {
-            match fs::remove_file(&canonical) {
-                Ok(()) => report
-                    .removed_expired_archived_files
-                    .push(canonical.display().to_string()),
-                Err(error) => report.warnings.push(format!(
-                    "Не удалось удалить архивный файл {}: {error}",
-                    canonical.display()
-                )),
+        if metadata.is_file() {
+            let name = canonical
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("");
+            if is_workspace_staging_name(name)
+                && file_age(&canonical, now).is_some_and(|age| age >= FINALIZING_CLAIM_GRACE)
+            {
+                match fs::remove_file(&canonical) {
+                    Ok(()) => report
+                        .removed_stale_staging_files
+                        .push(canonical.display().to_string()),
+                    Err(error) => report.warnings.push(format!(
+                        "Не удалось удалить stale archive staging {}: {error}",
+                        canonical.display()
+                    )),
+                }
+                continue;
+            }
+            if retention.is_some_and(|retention| {
+                file_age(&canonical, now).is_some_and(|age| age >= retention)
+            }) {
+                match fs::remove_file(&canonical) {
+                    Ok(()) => report
+                        .removed_expired_archived_files
+                        .push(canonical.display().to_string()),
+                    Err(error) => report.warnings.push(format!(
+                        "Не удалось удалить архивный файл {}: {error}",
+                        canonical.display()
+                    )),
+                }
             }
         }
     }
@@ -1313,6 +1425,94 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with(FINALIZING_PREFIX)));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn receipt_publication_never_overwrites_existing_final_file() {
+        let root = temp_root("receipt-no-overwrite");
+        let receipt = root.join("receipt.json");
+        let original = root.join("case.docx");
+        let archived = root.join("archived.docx");
+        fs::write(&receipt, b"existing-receipt").unwrap();
+        let error =
+            write_receipt(&receipt, &original, &archived, &hash_bytes(b"document")).unwrap_err();
+        assert!(error.contains("без перезаписи"));
+        assert_eq!(fs::read(&receipt).unwrap(), b"existing-receipt");
+        assert!(!fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(RECEIPT_STAGE_PREFIX)
+            }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn receipt_publication_is_complete_and_leaves_no_staging_file() {
+        let root = temp_root("receipt-complete");
+        let receipt = root.join("receipt.json");
+        let original = root.join("case.docx");
+        let archived = root.join("archived.docx");
+        write_receipt(&receipt, &original, &archived, &hash_bytes(b"document")).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(parsed["schema"], 1);
+        assert!(!fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(RECEIPT_STAGE_PREFIX)
+            }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn service_archive_preserves_existing_destination_without_overwrite() {
+        let root = temp_root("service-no-overwrite");
+        let source = root.join("case_ТРЕБУЕТ_ВНИМАНИЯ.txt");
+        fs::write(&source, b"new-service-note").unwrap();
+        let folder = root
+            .join("_обработано")
+            .join("_служебные")
+            .join(current_month());
+        fs::create_dir_all(&folder).unwrap();
+        let existing = folder.join(source.file_name().unwrap());
+        fs::write(&existing, b"existing-service-note").unwrap();
+
+        let archived = move_to_unique_folder(&source, &folder).unwrap();
+        assert_eq!(fs::read(&existing).unwrap(), b"existing-service-note");
+        assert_eq!(fs::read(&archived).unwrap(), b"new-service-note");
+        assert_ne!(archived, existing);
+        assert!(!source.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_nested_staging_is_removed_even_with_indefinite_archive_retention() {
+        let root = temp_root("stale-stage-indefinite");
+        let archive = root.join("_обработано").join("2026-08");
+        fs::create_dir_all(&archive).unwrap();
+        let staging = archive.join(format!("{RECEIPT_STAGE_PREFIX}old{FINALIZING_SUFFIX}"));
+        let retained = archive.join("keep.docx");
+        fs::write(&staging, b"stale").unwrap();
+        fs::write(&retained, b"keep").unwrap();
+        let policy = WorkspaceRetentionPolicy {
+            archived_source_retention_days: 0,
+            ..WorkspaceRetentionPolicy::default()
+        };
+        let now = UNIX_EPOCH + Duration::from_secs(4_000_000_000);
+
+        let report = cleanup_workspace_folder(&root, &policy, now).unwrap();
+        assert!(!staging.exists());
+        assert!(retained.exists());
+        assert_eq!(report.removed_stale_staging_files.len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -31,3 +31,7 @@ A candidate `DocumentPack`, desktop state snapshot, and all associated template-
 The storage API represents this boundary with a typed `DesktopSnapshotPublication` request, keeping the transaction contract explicit without a long positional-argument interface.
 
 These invariants are covered by storage and Tauri regression tests and are expected to remain fail-closed when a publication primitive or persistence operation cannot guarantee them.
+
+## Workspace archive and receipt publication
+
+Workspace housekeeping follows the same no-partial-final rule as generated documents. Service-note moves first claim the source identity and then publish a verified archive copy with create-if-absent semantics. Archive receipts are written to hidden same-directory staging files, flushed and byte-verified before a visible `.dokkomplekt-receipt.json` name is created. Existing destinations are never overwritten. Crash-left hidden staging files are disposable copies and are removed after the finalization grace period, including when normal archive retention is configured as indefinite.

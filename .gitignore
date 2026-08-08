@@ -22,3 +22,4 @@ __pycache__/
 /verification/autopilot/coverage-report.md
 /verification/autopilot/FULL_AUTOPILOT_REPORT.json
 /verification/autopilot/FULL_AUTOPILOT_REPORT.md
+/verification/autopilot/oracles/

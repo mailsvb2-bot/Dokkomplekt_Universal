@@ -93,7 +93,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p verification/autopilot/oracles
-          cargo run --locked -p dokkomplekt-core --example corpus_simulation -- 100 > verification/autopilot/oracles/synthetic-corpus.json
+          # Use the already-installed named toolchain explicitly. A bare `cargo` makes
+          # rustup re-process rust-toolchain.toml components and can conflict with
+          # pre-existing cargo-fmt/clippy files on GitHub-hosted runner images.
+          cargo +1.97.1 run --locked -p dokkomplekt-core --example corpus_simulation -- 100 > verification/autopilot/oracles/synthetic-corpus.json
       - name: Measure every domain and enforce corpus sanity
         shell: bash
         run: |

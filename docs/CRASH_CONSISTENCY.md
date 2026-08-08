@@ -35,3 +35,11 @@ These invariants are covered by storage and Tauri regression tests and are expec
 ## Workspace archive and receipt publication
 
 Workspace housekeeping follows the same no-partial-final rule as generated documents. Service-note moves first claim the source identity and then publish a verified archive copy with create-if-absent semantics. Archive receipts are written to hidden same-directory staging files, flushed and byte-verified before a visible `.dokkomplekt-receipt.json` name is created. Existing destinations are never overwritten. Crash-left hidden staging files are disposable copies and are removed after the finalization grace period, including when normal archive retention is configured as indefinite.
+
+## Published template identity across launches
+
+A confirmed template is no longer executed from the mutable user-selected source path. Registration, bulk confirmation, update and rollback publish content-addressed bytes under `app_data/template-versions/<document_id>/` and bind the active `DocumentTemplateSpec.template_path` to that archived version. Editing or replacing the original DOCX after publication therefore cannot silently change later generations.
+
+Existing installations are migrated during state restore before the loaded pack becomes live: every document with a published version is rebound to the latest published archive only after the archive bytes match the stored SHA-256. A missing or modified published archive fails closed instead of falling back to the mutable original. User-selected backup databases are rebound in memory but are not rewritten as a side effect of inspection/recovery.
+
+Template updates use one immutable candidate snapshot for regression comparison, placeholder extraction, SHA-256 and archive copy, then revalidate the live candidate before atomic publication. This closes the remaining update-specific A→B race that could otherwise approve one revision and publish another.

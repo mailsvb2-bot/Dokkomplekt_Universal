@@ -214,6 +214,7 @@ pub fn is_temporary_source(path: &Path) -> bool {
         || name.ends_with(".tmp")
         || name.contains(".dokkomplekt-processing")
         || name.contains(".dokkomplekt-processed")
+        || name.contains(".dokkomplekt-finalizing-")
 }
 
 pub fn validate_source_file_size(path: &Path) -> Result<u64, String> {

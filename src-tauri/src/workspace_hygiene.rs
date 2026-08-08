@@ -5,10 +5,15 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 const PROCESSED_SUFFIX: &str = ".dokkomplekt-processed";
 const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";
 const UNREADABLE_SUFFIX: &str = " — НЕ ПРОЧИТАН.txt";
+const FINALIZING_PREFIX: &str = ".dokkomplekt-finalizing-";
+const FINALIZING_SUFFIX: &str = ".pending";
+const FINALIZING_CLAIM_GRACE: Duration = Duration::from_secs(30 * 60);
+const RECOVERED_SOURCE_PREFIX: &str = "ВОССТАНОВЛЕННЫЙ ИСХОДНИК";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -67,6 +72,7 @@ pub struct WorkspaceHygieneReport {
     pub removed_orphan_markers: Vec<String>,
     pub removed_expired_archived_files: Vec<String>,
     pub removed_queue_receipts: Vec<String>,
+    pub recovered_finalizing_sources: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -95,8 +101,27 @@ pub fn archive_processed_source(
             month_folder.display()
         )
     })?;
-    let destination = unique_destination(&month_folder, source, source_sha256)?;
-    move_file_safely(source, &destination)?;
+
+    // Bind destructive cleanup to the file identity that exists at this instant.
+    // A replacement created later at `source` is a different pathname and is never
+    // touched by the archive/delete phase below.
+    let claim = claim_matching_source(source, source_sha256)?;
+    let destination = match copy_claim_to_unique_archive(&claim, &month_folder, source) {
+        Ok(path) => path,
+        Err(error) => {
+            let recovery = recover_finalizing_claim(&claim.path);
+            return Err(with_recovery_detail(error, recovery));
+        }
+    };
+    let archived_sha256 = sha256_file(&destination)?;
+    if archived_sha256 != claim.verified_sha256 {
+        let _ = fs::remove_file(&destination);
+        let recovery = recover_finalizing_claim(&claim.path);
+        return Err(with_recovery_detail(
+            "Контрольная сумма архивной копии изменилась до фиксации квитанции.".into(),
+            recovery,
+        ));
+    }
 
     let receipt = destination.with_file_name(format!(
         "{}.dokkomplekt-receipt.json",
@@ -105,7 +130,25 @@ pub fn archive_processed_source(
             .and_then(|value| value.to_str())
             .unwrap_or("source")
     ));
-    write_receipt(&receipt, source, &destination, source_sha256)?;
+    if let Err(error) = write_receipt(&receipt, source, &destination, &archived_sha256) {
+        let _ = fs::remove_file(&destination);
+        let recovery = recover_finalizing_claim(&claim.path);
+        return Err(with_recovery_detail(error, recovery));
+    }
+
+    if let Err(error) = fs::remove_file(&claim.path) {
+        let _ = fs::remove_file(&receipt);
+        let _ = fs::remove_file(&destination);
+        let recovery = recover_finalizing_claim(&claim.path);
+        return Err(with_recovery_detail(
+            format!(
+                "Архивная копия подготовлена, но захваченный исходник {} не удалён: {error}",
+                claim.path.display()
+            ),
+            recovery,
+        ));
+    }
+
     let marker_removed = if marker.exists() {
         fs::remove_file(&marker).is_ok()
     } else {
@@ -116,6 +159,40 @@ pub fn archive_processed_source(
         archived_source: Some(destination.display().to_string()),
         receipt_path: Some(receipt.display().to_string()),
         marker_removed,
+    })
+}
+
+pub fn delete_processed_source_if_matches(
+    source: &Path,
+    source_sha256: &str,
+) -> Result<(), String> {
+    let claim = claim_matching_source(source, source_sha256)?;
+    let final_sha256 = match sha256_file(&claim.path) {
+        Ok(hash) => hash,
+        Err(error) => {
+            let recovery = recover_finalizing_claim(&claim.path);
+            return Err(with_recovery_detail(
+                format!("Не удалось повторно проверить захваченный исходник: {error}"),
+                recovery,
+            ));
+        }
+    };
+    if final_sha256 != claim.verified_sha256 {
+        let recovery = recover_finalizing_claim(&claim.path);
+        return Err(with_recovery_detail(
+            "Захваченный исходник изменился перед удалением; удаление отменено.".into(),
+            recovery,
+        ));
+    }
+    fs::remove_file(&claim.path).map_err(|error| {
+        let recovery = recover_finalizing_claim(&claim.path);
+        with_recovery_detail(
+            format!(
+                "Не удалось удалить проверенный захваченный исходник {}: {error}",
+                claim.path.display()
+            ),
+            recovery,
+        )
     })
 }
 
@@ -136,12 +213,33 @@ pub fn cleanup_workspace_folder(
         .map_err(|error| format!("Не удалось прочитать рабочую папку: {error}"))?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path == archive_root || !path.is_file() {
+        if path == archive_root {
             continue;
         }
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
+        if is_finalizing_claim_name(name) {
+            match finalizing_claim_timestamp(name) {
+                Some(claimed_at) if finalizing_claim_is_stale(claimed_at, now) => {
+                    match recover_finalizing_claim(&path) {
+                        Ok(recovered) => report
+                            .recovered_finalizing_sources
+                            .push(recovered.display().to_string()),
+                        Err(error) => report.warnings.push(error),
+                    }
+                }
+                Some(_) => {}
+                None => report.warnings.push(format!(
+                    "Пропущен malformed finalization claim: {}",
+                    path.display()
+                )),
+            }
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
         let age = file_age(&path, now);
         if is_service_note(name)
             && age.is_some_and(|value| {
@@ -264,6 +362,410 @@ pub fn processed_marker_candidates(source: &Path) -> Vec<PathBuf> {
         vec![current]
     } else {
         vec![current, legacy]
+    }
+}
+
+#[derive(Debug)]
+struct FinalizingSourceClaim {
+    path: PathBuf,
+    verified_sha256: String,
+}
+
+fn normalize_expected_sha256(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("Ожидаемый SHA-256 источника имеет неверный формат.".into());
+    }
+    Ok(normalized)
+}
+
+fn finalizing_claim_path(source: &Path) -> Result<PathBuf, String> {
+    let parent = source
+        .parent()
+        .ok_or_else(|| "У источника нет родительской папки.".to_string())?;
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let base = format!("{FINALIZING_PREFIX}{timestamp}-{}", Uuid::new_v4());
+    let name = match source.extension().and_then(|value| value.to_str()) {
+        Some(extension) if !extension.is_empty() => {
+            format!("{base}.{extension}{FINALIZING_SUFFIX}")
+        }
+        _ => format!("{base}{FINALIZING_SUFFIX}"),
+    };
+    Ok(parent.join(name))
+}
+
+fn claim_matching_source(
+    source: &Path,
+    expected_sha256: &str,
+) -> Result<FinalizingSourceClaim, String> {
+    let expected_sha256 = normalize_expected_sha256(expected_sha256)?;
+    let before = fs::symlink_metadata(source).map_err(|error| {
+        format!(
+            "Не удалось проверить исходник перед безопасной финализацией {}: {error}",
+            source.display()
+        )
+    })?;
+    if metadata_is_link_or_reparse(&before) || !before.is_file() {
+        return Err(format!(
+            "Небезопасный исходник заблокирован перед финализацией: {}",
+            source.display()
+        ));
+    }
+
+    let claim_path = finalizing_claim_path(source)?;
+    if claim_path.exists() {
+        return Err("Не удалось подобрать уникальное имя для finalization claim.".into());
+    }
+    fs::rename(source, &claim_path).map_err(|error| {
+        format!(
+            "Не удалось атомарно захватить исходник {} для финализации: {error}",
+            source.display()
+        )
+    })?;
+
+    let claimed_metadata = fs::symlink_metadata(&claim_path).map_err(|error| {
+        format!(
+            "Исходник захвачен как {}, но не удалось проверить его тип: {error}",
+            claim_path.display()
+        )
+    })?;
+    if metadata_is_link_or_reparse(&claimed_metadata) || !claimed_metadata.is_file() {
+        return Err(format!(
+            "Захваченный исходник небезопасен; он сохранён без удаления: {}",
+            claim_path.display()
+        ));
+    }
+
+    let actual_sha256 = match sha256_file(&claim_path) {
+        Ok(hash) => hash,
+        Err(error) => {
+            let recovery = recover_finalizing_claim(&claim_path);
+            return Err(with_recovery_detail(
+                format!("Не удалось проверить SHA-256 захваченного исходника: {error}"),
+                recovery,
+            ));
+        }
+    };
+    if actual_sha256 != expected_sha256 {
+        let recovery = recover_finalizing_claim(&claim_path);
+        return Err(with_recovery_detail(
+            format!(
+                "Исходник был заменён между проверкой и финализацией: ожидался {expected_sha256}, захвачен {actual_sha256}."
+            ),
+            recovery,
+        ));
+    }
+    Ok(FinalizingSourceClaim {
+        path: claim_path,
+        verified_sha256: actual_sha256,
+    })
+}
+
+fn copy_claim_to_unique_archive(
+    claim: &FinalizingSourceClaim,
+    folder: &Path,
+    original_source: &Path,
+) -> Result<PathBuf, String> {
+    for _ in 0..=10_000u32 {
+        let destination = unique_destination(folder, original_source, &claim.verified_sha256)?;
+        let staging = folder.join(format!(
+            ".dokkomplekt-archive-stage-{}.pending",
+            Uuid::new_v4()
+        ));
+        let mut output = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось создать скрытый staging архива {}: {error}",
+                    staging.display()
+                ));
+            }
+        };
+
+        let before_sha256 = match sha256_file(&claim.path) {
+            Ok(hash) => hash,
+            Err(error) => {
+                drop(output);
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+        };
+        if before_sha256 != claim.verified_sha256 {
+            drop(output);
+            let _ = fs::remove_file(&staging);
+            return Err("Захваченный исходник изменился до архивирования.".into());
+        }
+
+        let mut input = match fs::File::open(&claim.path) {
+            Ok(file) => file,
+            Err(error) => {
+                drop(output);
+                let _ = fs::remove_file(&staging);
+                return Err(format!(
+                    "Не удалось открыть захваченный исходник для архивирования: {error}"
+                ));
+            }
+        };
+        if let Err(error) = std::io::copy(&mut input, &mut output) {
+            drop(output);
+            let _ = fs::remove_file(&staging);
+            return Err(format!(
+                "Не удалось скопировать захваченный исходник в staging архива: {error}"
+            ));
+        }
+        if let Err(error) = output.sync_all() {
+            drop(output);
+            let _ = fs::remove_file(&staging);
+            return Err(format!(
+                "Не удалось синхронизировать staging архива: {error}"
+            ));
+        }
+        drop(output);
+
+        let after_sha256 = match sha256_file(&claim.path) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+        };
+        let staged_sha256 = match sha256_file(&staging) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+        };
+        if after_sha256 != claim.verified_sha256 || staged_sha256 != claim.verified_sha256 {
+            let _ = fs::remove_file(&staging);
+            return Err("Контрольная сумма изменилась во время безопасного архивирования.".into());
+        }
+
+        match fs::hard_link(&staging, &destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&staging);
+                continue;
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(format!(
+                    "Файловая система не позволила атомарно опубликовать архив {}: {error}",
+                    destination.display()
+                ));
+            }
+        }
+        if let Err(error) = fs::remove_file(&staging) {
+            let _ = fs::remove_file(&destination);
+            return Err(format!(
+                "Архив опубликован, но staging {} не удалён; публикация отменена: {error}",
+                staging.display()
+            ));
+        }
+        let published_sha256 = match sha256_file(&destination) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_file(&destination);
+                return Err(error);
+            }
+        };
+        if published_sha256 != claim.verified_sha256 {
+            let _ = fs::remove_file(&destination);
+            return Err(
+                "Опубликованный архив не совпадает с проверенным SHA-256 исходника.".into(),
+            );
+        }
+        return Ok(destination);
+    }
+    Err("Не удалось подобрать уникальное имя для архивного источника.".into())
+}
+
+fn is_finalizing_claim_name(name: &str) -> bool {
+    name.starts_with(FINALIZING_PREFIX) && name.ends_with(FINALIZING_SUFFIX)
+}
+
+fn finalizing_claim_timestamp(name: &str) -> Option<i64> {
+    let body = name
+        .strip_prefix(FINALIZING_PREFIX)?
+        .strip_suffix(FINALIZING_SUFFIX)?;
+    let (timestamp, _) = body.split_once('-')?;
+    timestamp.parse().ok()
+}
+
+fn finalizing_claim_is_stale(claimed_at: i64, now: SystemTime) -> bool {
+    let Ok(now_since_epoch) = now.duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    let Ok(claimed_at) = u64::try_from(claimed_at) else {
+        return true;
+    };
+    now_since_epoch.as_secs().saturating_sub(claimed_at) >= FINALIZING_CLAIM_GRACE.as_secs()
+}
+
+fn finalizing_claim_extension(claim: &Path) -> Option<String> {
+    let name = claim.file_name()?.to_str()?;
+    let without_pending = name.strip_suffix(FINALIZING_SUFFIX)?;
+    Path::new(without_pending)
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn recover_finalizing_claim(claim: &Path) -> Result<PathBuf, String> {
+    let metadata = fs::symlink_metadata(claim).map_err(|error| {
+        format!(
+            "Не удалось проверить finalization claim {}: {error}",
+            claim.display()
+        )
+    })?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+        return Err(format!(
+            "Небезопасный finalization claim сохранён без обработки: {}",
+            claim.display()
+        ));
+    }
+    let parent = claim
+        .parent()
+        .ok_or_else(|| "У finalization claim нет родительской папки.".to_string())?;
+    let extension = finalizing_claim_extension(claim);
+
+    for _ in 0..256u16 {
+        let stem = format!("{RECOVERED_SOURCE_PREFIX} {}", Uuid::new_v4());
+        let name = extension
+            .as_deref()
+            .map(|ext| format!("{stem}.{ext}"))
+            .unwrap_or(stem);
+        let destination = parent.join(name);
+        let staging = parent.join(format!(
+            ".dokkomplekt-recovery-stage-{}.pending",
+            Uuid::new_v4()
+        ));
+        let mut output = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось создать скрытый staging recovery {}: {error}",
+                    staging.display()
+                ));
+            }
+        };
+
+        let before_sha256 = match sha256_file(claim) {
+            Ok(hash) => hash,
+            Err(error) => {
+                drop(output);
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+        };
+        let mut input = match fs::File::open(claim) {
+            Ok(file) => file,
+            Err(error) => {
+                drop(output);
+                let _ = fs::remove_file(&staging);
+                return Err(format!(
+                    "Не удалось открыть finalization claim для recovery: {error}"
+                ));
+            }
+        };
+        if let Err(error) = std::io::copy(&mut input, &mut output) {
+            drop(output);
+            let _ = fs::remove_file(&staging);
+            return Err(format!("Не удалось сохранить recovery staging: {error}"));
+        }
+        if let Err(error) = output.sync_all() {
+            drop(output);
+            let _ = fs::remove_file(&staging);
+            return Err(format!(
+                "Не удалось синхронизировать recovery staging: {error}"
+            ));
+        }
+        drop(output);
+
+        let after_sha256 = match sha256_file(claim) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+        };
+        let staged_sha256 = match sha256_file(&staging) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(error);
+            }
+        };
+        if before_sha256 != after_sha256 || before_sha256 != staged_sha256 {
+            let _ = fs::remove_file(&staging);
+            return Err(
+                "Finalization claim изменился во время recovery; исходник оставлен нетронутым."
+                    .into(),
+            );
+        }
+
+        match fs::hard_link(&staging, &destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&staging);
+                continue;
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                return Err(format!(
+                    "Файловая система не позволила атомарно опубликовать recovery {}: {error}",
+                    destination.display()
+                ));
+            }
+        }
+        if let Err(error) = fs::remove_file(&staging) {
+            let _ = fs::remove_file(&destination);
+            return Err(format!(
+                "Recovery опубликован, но staging {} не удалён; публикация отменена: {error}",
+                staging.display()
+            ));
+        }
+        let recovered_sha256 = match sha256_file(&destination) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = fs::remove_file(&destination);
+                return Err(error);
+            }
+        };
+        if recovered_sha256 != before_sha256 {
+            let _ = fs::remove_file(&destination);
+            return Err("Опубликованный recovery-файл не совпадает с finalization claim.".into());
+        }
+        if let Err(error) = fs::remove_file(claim) {
+            let _ = fs::remove_file(&destination);
+            return Err(format!(
+                "Recovery-копия подготовлена, но claim {} не удалён: {error}",
+                claim.display()
+            ));
+        }
+        return Ok(destination);
+    }
+    Err("Не удалось подобрать уникальное имя для recovery-файла.".into())
+}
+
+fn with_recovery_detail(message: String, recovery: Result<PathBuf, String>) -> String {
+    match recovery {
+        Ok(path) => format!(
+            "{message} Файл сохранён для повторной обработки: {}",
+            path.display()
+        ),
+        Err(error) => format!("{message} Recovery: {error}"),
     }
 }
 
@@ -737,6 +1239,121 @@ mod tests {
             .any(|warning| warning.contains("ссылку/reparse point")));
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
+    }
+
+    fn hash_bytes(bytes: &[u8]) -> String {
+        hex::encode(Sha256::digest(bytes))
+    }
+
+    fn recovered_files(root: &Path) -> Vec<PathBuf> {
+        fs::read_dir(root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.starts_with(RECOVERED_SOURCE_PREFIX))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn archive_never_archives_replacement_under_stale_sha() {
+        let root = temp_root("archive-replacement");
+        let source = root.join("case.docx");
+        fs::write(&source, b"replacement").unwrap();
+        let error = archive_processed_source(
+            &source,
+            &hash_bytes(b"processed-old-version"),
+            &WorkspaceRetentionPolicy::default(),
+        )
+        .unwrap_err();
+        assert!(error.contains("заменён"));
+        let recovered = recovered_files(&root);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(fs::read(&recovered[0]).unwrap(), b"replacement");
+        let receipts = fs::read_dir(root.join("_обработано"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_file())
+            .count();
+        assert_eq!(receipts, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_never_removes_replacement_under_stale_sha() {
+        let root = temp_root("delete-replacement");
+        let source = root.join("case.docx");
+        fs::write(&source, b"replacement").unwrap();
+        let error = delete_processed_source_if_matches(&source, &hash_bytes(b"old")).unwrap_err();
+        assert!(error.contains("заменён"));
+        let recovered = recovered_files(&root);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(fs::read(&recovered[0]).unwrap(), b"replacement");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_removes_only_matching_claimed_source() {
+        let root = temp_root("delete-matching");
+        let source = root.join("case.docx");
+        fs::write(&source, b"processed").unwrap();
+        let hash = sha256_file(&source).unwrap();
+        delete_processed_source_if_matches(&source, &hash).unwrap();
+        assert!(!source.exists());
+        assert!(recovered_files(&root).is_empty());
+        assert!(fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(FINALIZING_PREFIX)));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_receipt_uses_verified_archived_sha() {
+        let root = temp_root("archive-receipt-sha");
+        let source = root.join("case.docx");
+        fs::write(&source, b"processed").unwrap();
+        let hash = sha256_file(&source).unwrap();
+        let result =
+            archive_processed_source(&source, &hash, &WorkspaceRetentionPolicy::default()).unwrap();
+        let archived = PathBuf::from(result.archived_source.unwrap());
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&fs::read(result.receipt_path.unwrap()).unwrap()).unwrap();
+        assert_eq!(
+            receipt["sha256"].as_str(),
+            Some(sha256_file(&archived).unwrap().as_str())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cleanup_recovers_stale_finalization_claim_as_supported_source() {
+        let root = temp_root("stale-finalization-claim");
+        let claim = root.join(format!(
+            "{FINALIZING_PREFIX}1-{}.docx{FINALIZING_SUFFIX}",
+            Uuid::new_v4()
+        ));
+        fs::write(&claim, b"survives-crash").unwrap();
+        let now = UNIX_EPOCH + Duration::from_secs(4_000_000_000);
+        let report =
+            cleanup_workspace_folder(&root, &WorkspaceRetentionPolicy::default(), now).unwrap();
+        assert_eq!(report.recovered_finalizing_sources.len(), 1);
+        assert!(!claim.exists());
+        let recovered = PathBuf::from(&report.recovered_finalizing_sources[0]);
+        assert_eq!(
+            recovered.extension().and_then(|value| value.to_str()),
+            Some("docx")
+        );
+        assert_eq!(fs::read(&recovered).unwrap(), b"survives-crash");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - agent/fix-source-finalization-identity
+    paths-ignore:
+      - .github/diagnostics/agent-source-finalization-identity.log
 
 permissions:
   contents: write
@@ -36,30 +38,47 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - name: Apply identity-safe source finalization patch
-        run: python .github/patches/agent-source-finalization-identity.py
-      - name: Format Rust
-        run: cargo fmt --all -- --check
-      - name: Run workspace hygiene identity regressions
-        run: cargo test -p dokkomplekt-tauri workspace_hygiene::tests -- --nocapture
-      - name: Run source finalization contract
-        run: python -m pytest -q tests/test_v18_4_7_source_finalization_identity.py
-      - name: Compile all Tauri tests
-        run: cargo check -p dokkomplekt-tauri --tests
-      - name: Clippy Tauri tests
-        run: cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
-      - name: Run source architecture gate
-        run: python scripts/static_quality_gate.py --source-only
-      - name: Check patch whitespace
-        run: git diff --check
-      - name: Publish validated product changes and self-clean
+      - name: Apply, validate, publish or preserve exact diagnostics
         shell: bash
         run: |
-          set -euo pipefail
-          rm -f .github/patches/agent-source-finalization-identity.py
-          rm -f .github/workflows/agent-source-finalization-identity.yml
+          set -uo pipefail
+          LOG=.github/diagnostics/agent-source-finalization-identity.log
+          mkdir -p .github/diagnostics
+          : > "$LOG"
+          status=0
+          run_check() {
+            if [ "$status" -ne 0 ]; then
+              return
+            fi
+            echo "\n===== $* =====" | tee -a "$LOG"
+            "$@" 2>&1 | tee -a "$LOG"
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -ne 0 ]; then
+              status=$rc
+            fi
+          }
+          run_check python .github/patches/agent-source-finalization-identity.py
+          run_check cargo fmt --all
+          run_check cargo fmt --all -- --check
+          run_check cargo test -p dokkomplekt-tauri workspace_hygiene::tests -- --nocapture
+          run_check python -m pytest -q tests/test_v18_4_7_source_finalization_identity.py
+          run_check cargo check -p dokkomplekt-tauri --tests
+          run_check cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
+          run_check python scripts/static_quality_gate.py --source-only
+          run_check git diff --check
+
           git config user.name "openai-agent"
           git config user.email "openai-agent@users.noreply.github.com"
+          if [ "$status" -ne 0 ]; then
+            git add "$LOG"
+            git commit -m "Record source finalization validator failure" || true
+            git push origin HEAD:agent/fix-source-finalization-identity
+            exit "$status"
+          fi
+
+          rm -f "$LOG"
+          rm -f .github/patches/agent-source-finalization-identity.py
+          rm -f .github/workflows/agent-source-finalization-identity.yml
           git add -A
           if git diff --cached --quiet; then
             echo "No validated changes to publish"
@@ -67,5 +86,3 @@ jobs:
           fi
           git commit -m "Bind source finalization to atomic file identity"
           git push origin HEAD:agent/fix-source-finalization-identity
-
-# Connector-authored retrigger after provenance synchronization.

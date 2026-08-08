@@ -67,3 +67,5 @@ jobs:
           fi
           git commit -m "Bind source finalization to atomic file identity"
           git push origin HEAD:agent/fix-source-finalization-identity
+
+# Connector-authored retrigger after provenance synchronization.

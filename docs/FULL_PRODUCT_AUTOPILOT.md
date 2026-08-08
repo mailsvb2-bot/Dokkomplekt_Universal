@@ -1,6 +1,6 @@
 # FULL DOKKOMPLEKT AUTOPILOT
 
-`FULL DOKKOMPLEKT AUTOPILOT` is the single entry point for automated product verification. It does not replace the existing authoritative workflows; it dispatches them, waits for their exact commit results, and produces one fail-closed verdict.
+`FULL DOKKOMPLEKT AUTOPILOT` is the single entry point for automated product verification. It does not replace the existing authoritative workflows; it adds executable product oracles, dispatches the existing gates, waits for their exact commit results, and produces one fail-closed verdict.
 
 ## Run it
 
@@ -12,6 +12,21 @@ Choose one scope:
 - `production-hardware` — everything in `software` plus the protected self-hosted Windows hardware/signing acceptance gate.
 
 When the Autopilot implementation itself is changed and lands on `main`, the workflow automatically performs a `software` run. This gives the implementation an end-to-end self-test without ever starting production signing, a physical printer or a reboot by accident. Ordinary product commits continue to use the repository's existing per-PR gates; the complete Autopilot remains available as one explicit button whenever a full re-check is wanted.
+
+## Executable product oracles
+
+Before it is allowed to dispatch the broader CI contour, Autopilot runs two output-level checks itself:
+
+1. **DOCX visual oracle**
+   - validates OOXML package integrity and internal relationships for the controlled document corpus;
+   - renders every golden DOCX through LibreOffice to PDF and then to page images with Poppler;
+   - rejects missing/blank pages, page-count changes, dimension changes and visual-hash drift beyond the controlled tolerance.
+2. **Synthetic semantic corpus**
+   - generates 500 deterministic cases across accounting, HR, legal, medical and education using the real Rust `build_corpus_entry` path;
+   - measures each domain through the shipped `measure_domain.py` implementation;
+   - requires 100 cases per domain, real field/high-risk observations, field accuracy of at least 0.75 and exact kit completeness.
+
+The orchestration job depends on both the capability registry and these executable oracles, so a file merely existing in the repository cannot by itself satisfy the final product verdict.
 
 ## What `software` requires
 
@@ -91,7 +106,8 @@ Each run writes and uploads:
 
 - `verification/autopilot/FULL_AUTOPILOT_REPORT.json` — machine-readable verdict;
 - `verification/autopilot/FULL_AUTOPILOT_REPORT.md` — human-readable report shown in the GitHub job summary;
-- the feature matrix and coverage report.
+- the feature matrix and coverage report;
+- synthetic corpus and per-domain metric artifacts from the document-oracle job.
 
 The final report contains the exact commit SHA and links to every dispatched workflow run. A timeout, missing run, cancellation, skipped required gate or non-success conclusion makes the Autopilot fail.
 

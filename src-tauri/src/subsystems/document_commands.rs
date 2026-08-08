@@ -2632,7 +2632,7 @@ fn load_state_from(
     // Decode and validate every row before touching the live in-memory state.
     // A damaged late row can therefore never leave a mixed old/new snapshot.
     let loaded_case = repo.load_case("current").map_err(|error| error.to_string())?;
-    let mut loaded_pack = repo.load_pack("default").map_err(|error| error.to_string())?;
+    let loaded_pack = repo.load_pack("default").map_err(|error| error.to_string())?;
     let loaded_license = if load_commercial_state {
         repo.load_state_value::<Option<LicenseDocument>>("license_document")
             .map_err(|error| error.to_string())?
@@ -2643,12 +2643,15 @@ fn load_state_from(
         verify_license_document_now(document, &trusted_license_key()?)
             .map_err(|error| format!("Сохранённая лицензия недействительна: {error}"))?;
     }
-    if let Some(pack) = loaded_pack.as_mut() {
-        let rebound = bind_loaded_pack_to_published_template_versions(app, &repo, pack)?;
+    let loaded_pack = if let Some(mut pack) = loaded_pack {
+        let rebound = bind_loaded_pack_to_published_template_versions(app, &repo, &mut pack)?;
         if rebound > 0 && load_commercial_state {
-            repo.save_pack(pack).map_err(|error| error.to_string())?;
+            repo.save_pack(&pack).map_err(|error| error.to_string())?;
         }
-    }
+        Some(pack)
+    } else {
+        None
+    };
 
     let mut case_guard = state
         .semantic_case

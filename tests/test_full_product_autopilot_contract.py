@@ -65,7 +65,8 @@ def test_document_oracles_are_executed_not_merely_registered() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "document-oracles:\n    name: Document visual oracle and synthetic corpus" in workflow
     assert "python scripts/verify_docx_visual_goldens.py" in workflow
-    assert "cargo run --locked -p dokkomplekt-core --example corpus_simulation -- 100" in workflow
+    assert "cargo +1.97.1 run --locked -p dokkomplekt-core --example corpus_simulation -- 100" in workflow
+    assert "cargo run --locked -p dokkomplekt-core --example corpus_simulation -- 100" not in workflow
     assert "python scripts/measure_domain.py" in workflow
     assert "assert len(corpus['entries']) == 500" in workflow
     assert "assert report['field_accuracy'] is not None and report['field_accuracy'] >= 0.75" in workflow

@@ -39,6 +39,8 @@ jobs:
           sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Apply identity-safe source finalization patch
         run: python .github/patches/agent-source-finalization-identity.py
+      - name: Harden archive and recovery publication
+        run: python .github/patches/agent-source-finalization-publication.py
       - name: Format Rust
         run: cargo fmt --all
       - name: Verify Rust formatting
@@ -65,6 +67,7 @@ jobs:
           git checkout origin/main -- .github/workflows/macos-smoke.yml
           rm -f .github/workflows/agent-source-finalization-identity.yml
           rm -f .github/patches/agent-source-finalization-identity.py
+          rm -f .github/patches/agent-source-finalization-publication.py
           rm -f .github/diagnostics/agent-source-finalization-identity.log
           git add -A
           git commit -m "Bind source finalization to atomic file identity"

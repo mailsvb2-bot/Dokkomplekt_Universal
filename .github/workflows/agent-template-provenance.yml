@@ -42,6 +42,18 @@ jobs:
         run: cargo fmt --all
       - name: Verify Rust formatting
         run: cargo fmt --all -- --check
+      - name: Check patch whitespace
+        shell: bash
+        run: |
+          set -o pipefail
+          git diff --check 2>&1 | tee /tmp/template-provenance-diff-check.log
+      - name: Upload diff-check diagnostic
+        if: failure()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: template-provenance-diff-check
+          path: /tmp/template-provenance-diff-check.log
+          if-no-files-found: error
       - name: Run published-template binding regressions
         run: cargo test -p dokkomplekt-tauri published_template_binding_tests -- --nocapture
       - name: Run immutable template snapshot regressions
@@ -54,27 +66,6 @@ jobs:
         run: cargo clippy -p dokkomplekt-tauri --tests -- -D warnings
       - name: Run source architecture gate
         run: python scripts/static_quality_gate.py --source-only
-      - name: Check patch whitespace
-        shell: bash
-        run: |
-          set -uo pipefail
-          log=/tmp/template-provenance-diff-check.log
-          set +e
-          git diff --check >"$log" 2>&1
-          rc=$?
-          set -e
-          cat "$log"
-          if [ "$rc" -ne 0 ]; then
-            mkdir -p .github/diagnostics
-            cp "$log" .github/diagnostics/template-provenance-diff-check.log
-            git config user.name "openai-agent"
-            git config user.email "openai-agent@users.noreply.github.com"
-            git add .github/diagnostics/template-provenance-diff-check.log
-            git commit -m "Record template provenance diff-check failure"
-            git pull --rebase origin agent/bind-active-template-version
-            git push origin HEAD:agent/bind-active-template-version
-            exit "$rc"
-          fi
       - name: Publish validated product changes and self-clean validator
         shell: bash
         run: |

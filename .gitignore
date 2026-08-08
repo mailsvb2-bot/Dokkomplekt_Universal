@@ -18,3 +18,7 @@ __pycache__/
 /.nox/
 /coverage/
 /.coverage
+/verification/autopilot/coverage-report.json
+/verification/autopilot/coverage-report.md
+/verification/autopilot/FULL_AUTOPILOT_REPORT.json
+/verification/autopilot/FULL_AUTOPILOT_REPORT.md

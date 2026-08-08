@@ -2376,7 +2376,7 @@ fn main() {
             // and semantic values. Persistence is no longer a hidden utility action.
             if let Ok(db_path) = default_state_db_path(&handle) {
                 if db_path.exists() {
-                    if let Err(error) = load_state_from(&db_path, &state, true) {
+                    if let Err(error) = load_state_from(&handle, &db_path, &state, true) {
                         state.persistence_blocked.store(true, Ordering::SeqCst);
                         if let Ok(mut slot) = state.persistence_error.lock() {
                             *slot = Some(error.clone());

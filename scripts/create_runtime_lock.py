@@ -29,7 +29,7 @@ SUPPORTED_TOOLS = {
 }
 REQUIRED_TOOLS = {
     "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip",
-    "llama_cpp", "semantic_model",
+    "msgconvert", "llama_cpp", "semantic_model",
 }
 SAFE_TARGET = re.compile(r"^[A-Za-z0-9_-]+$")
 

@@ -1,0 +1,1 @@
+This marker intentionally keeps the two-runner trust-boundary contract in the source manifest and provenance contour.

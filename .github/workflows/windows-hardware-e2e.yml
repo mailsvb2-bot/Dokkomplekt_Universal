@@ -31,8 +31,8 @@ jobs:
     environment: windows-hardware-dispatch
     timeout-minutes: 250
     env:
-      DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY: ${{ vars.DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY }}
-      DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW: ${{ vars.DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW }}
+      DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY: mailsvb2-bot/Dokkomplekt_Hardware_Validation
+      DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW: windows-hardware-e2e.yml
       DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN: ${{ secrets.DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
@@ -68,7 +68,7 @@ jobs:
           python scripts/dispatch_private_hardware_validation.py
           --source-repository "$GITHUB_REPOSITORY"
           --target-repository "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"
-          --workflow "${DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW:-windows-hardware-e2e.yml}"
+          --workflow "$DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW"
           --target-ref main
           --release-sha "${{ inputs.release_sha }}"
           --reboot-phase "${{ inputs.reboot_phase }}"

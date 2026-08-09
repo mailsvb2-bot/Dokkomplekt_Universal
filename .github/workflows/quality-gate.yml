@@ -90,6 +90,9 @@ jobs:
           key: cargo-audit-${{ runner.os }}-0.22.2
       - name: Install current CVSS-4-compatible cargo-audit
         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
+      - name: Reset local RustSec advisory database checkout
+        shell: bash
+        run: rm -rf "${CARGO_HOME:-$HOME/.cargo}/advisory-db"
       - name: Audit locked Rust dependencies
         shell: bash
         run: |

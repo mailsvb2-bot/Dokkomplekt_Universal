@@ -4,175 +4,79 @@ on:
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Exact protected main commit SHA approved for production signing
+        description: Exact protected main commit SHA approved for production hardware validation
         required: true
         type: string
+      reboot_phase:
+        description: Prepare real reboot evidence first, then verify it after reboot
+        required: false
+        default: verify
+        type: choice
+        options:
+          - prepare
+          - verify
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-hardware-e2e
+  group: windows-hardware-e2e-${{ inputs.reboot_phase }}
   cancel-in-progress: false
 
 jobs:
-  word-printer-watcher-installer:
-    name: Word / printer / watcher / signed NSIS
+  dispatch-private-hardware-validation:
+    name: Dispatch private Windows hardware validation
     if: github.ref == 'refs/heads/main' && inputs.release_sha == github.sha
-    runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware-e2e]
-    environment: windows-production-signing
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    environment: windows-hardware-dispatch
+    timeout-minutes: 250
     env:
-      DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
-      DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
-      DOKKOMPLEKT_TEST_DUPLEX: ${{ vars.DOKKOMPLEKT_TEST_DUPLEX }}
-      DOKKOMPLEKT_TEST_TRAY: ${{ vars.DOKKOMPLEKT_TEST_TRAY }}
-      DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
-      DOKKOMPLEKT_SIDECAR_MANIFEST_PATH: ${{ vars.DOKKOMPLEKT_SIDECAR_MANIFEST_PATH }}
-      DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
-      DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
-      DOKKOMPLEKT_LICENSE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}
-      DOKKOMPLEKT_UPDATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_UPDATE_PUBKEY_B64 }}
-      DOKKOMPLEKT_THRESHOLD_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_THRESHOLD_PUBKEY_B64 }}
-      DOKKOMPLEKT_REFDATA_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_REFDATA_PUBKEY_B64 }}
-      DOKKOMPLEKT_UPDATE_MANIFEST_URL: ${{ vars.DOKKOMPLEKT_UPDATE_MANIFEST_URL }}
-      DOKKOMPLEKT_REFDATA_URL: ${{ vars.DOKKOMPLEKT_REFDATA_URL }}
-      DOKKOMPLEKT_COMPONENTS_CATALOG_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_CATALOG_URL }}
-      DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
-      DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
+      DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY: ${{ vars.DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY }}
+      DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW: ${{ vars.DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW }}
+      DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN: ${{ secrets.DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: ${{ inputs.release_sha }}
-          fetch-depth: 0
           persist-credentials: false
-      - name: Prove exact protected main source and pin signing implementation
-        shell: pwsh
-        env:
-          EXPECTED_SIGNING_SCRIPT_SHA256: ${{ vars.DOKKOMPLEKT_SIGNING_SCRIPT_SHA256 }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ('${{ inputs.release_sha }}' -notmatch '^[0-9a-f]{40}$') {
-            throw 'release_sha must be an exact lowercase 40-character commit SHA'
-          }
-          if ((git rev-parse HEAD).Trim() -ne '${{ inputs.release_sha }}') {
-            throw 'checkout does not match approved release_sha'
-          }
-          git fetch origin main --no-tags
-          git merge-base --is-ancestor '${{ inputs.release_sha }}' origin/main
-          if ($LASTEXITCODE -ne 0) {
-            throw 'approved release_sha is not reachable from protected main'
-          }
-          $expected = $env:EXPECTED_SIGNING_SCRIPT_SHA256.Trim().ToLowerInvariant()
-          if ($expected -notmatch '^[0-9a-f]{64}$') {
-            throw 'DOKKOMPLEKT_SIGNING_SCRIPT_SHA256 must pin the audited signing script'
-          }
-          $actual = (Get-FileHash scripts/sign_windows_release.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) {
-            throw "signing script hash mismatch: expected $expected, got $actual"
-          }
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: 1.97.1
-          components: rustfmt, clippy
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-          cache: npm
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Validate production, runtime and hardware trust boundaries
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
-          DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
-          DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64 }}
+      - name: Prove exact public source identity and private target configuration
+        shell: bash
         run: |
-          python scripts/release_environment_preflight.py --mode production-build --json-report verification/release/production-build-preflight.json
-          python scripts/release_environment_preflight.py --mode windows-runtime --json-report verification/release/windows-runtime-preflight.json
-          python scripts/release_environment_preflight.py --mode windows-hardware --json-report verification/release/hardware-preflight.json
-      - name: Stage exact runner-owned offline runtime
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          python scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean
-          if ($LASTEXITCODE -ne 0) { throw 'Sidecar staging failed.' }
-          New-Item -ItemType Directory -Force verification/release | Out-Null
-          Copy-Item src-tauri/resources/tools/windows-x86_64/sidecar-status.json verification/release/sidecar-status.json -Force
-      - run: npm ci
-      - run: cargo install cargo-audit --locked --version 0.22.2
-      - name: Execute signed Rust and RustSec release gate
-        shell: cmd
-        env:
-          DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
-        run: scripts\prepackage_rust_gate.bat
-      - run: python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
-      - name: Verify Authenticode signatures of all staged PE sidecars
-        shell: pwsh
-        run: tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
-      - name: Probe every staged offline runtime entry point
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $output = & python scripts/probe_offline_runtime.py --target windows-x86_64 2>&1
-          $exitCode = $LASTEXITCODE
-          $output | Tee-Object -FilePath verification/release/offline-runtime-probe.log
-          if ($exitCode -ne 0) { throw "Offline runtime probe failed with exit code $exitCode" }
-      - name: Verify image-only PDF table OCR with the staged runtime
-        run: python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
-      - name: Create signed offline runtime bundle and SBOM
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($null -eq (Get-Command openssl -ErrorAction SilentlyContinue)) { throw 'OpenSSL is required on the production runner.' }
-          New-Item -ItemType Directory -Force verification/release | Out-Null
-          $privateKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-private-" + [Guid]::NewGuid().ToString('N') + '.pem')
-          $trustedKey = (Resolve-Path verification/release).Path + '\runtime-trusted-public.pem'
-          try {
-            [IO.File]::WriteAllBytes($privateKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64))
-            [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
-            python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --output-dir release-runtime --require-semantic-model --require-supply-chain --signing-key $privateKey --trusted-public-key $trustedKey --require-signature
-            if ($LASTEXITCODE -ne 0) { throw 'Signed offline runtime bundle creation failed.' }
-          } finally {
-            Remove-Item -LiteralPath $privateKey -Force -ErrorAction SilentlyContinue
-          }
-          if (Test-Path -LiteralPath $privateKey) { throw 'Runtime signing private key cleanup failed.' }
-          "DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH=$trustedKey" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - run: npx tauri build --no-bundle
-      - name: Sign and verify application binary
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
-      - run: npx tauri bundle --bundles nsis
-      - name: Sign and verify NSIS installer
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
-      - name: Bind signed application, installer, runtime, SBOM and Rust gate evidence
-        shell: pwsh
-        run: scripts/write_windows_release_evidence.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey $env:DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH
-      - name: Execute opt-in hardware E2E
-        shell: pwsh
-        run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
-      - name: Bind final hardware evidence index
-        shell: pwsh
-        run: scripts/write_windows_hardware_evidence_index.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+          set -euo pipefail
+          if [[ '${{ inputs.release_sha }}' != "$(git rev-parse HEAD)" ]]; then
+            echo 'checkout does not match approved release_sha' >&2
+            exit 1
+          fi
+          if [[ ! "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" =~ ^[^/]+/[^/]+$ ]]; then
+            echo 'DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY must be owner/private-repository' >&2
+            exit 1
+          fi
+          if [[ "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" == "$GITHUB_REPOSITORY" ]]; then
+            echo 'hardware validation must not execute in the public source repository' >&2
+            exit 1
+          fi
+          if [[ -z "$DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" ]]; then
+            echo 'DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN is required in protected environment windows-hardware-dispatch' >&2
+            exit 1
+          fi
+      - name: Dispatch, wait and enforce private hardware verdict
+        shell: bash
+        run: >-
+          python scripts/dispatch_private_hardware_validation.py
+          --source-repository "$GITHUB_REPOSITORY"
+          --target-repository "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"
+          --workflow "${DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW:-windows-hardware-e2e.yml}"
+          --target-ref main
+          --release-sha "${{ inputs.release_sha }}"
+          --reboot-phase "${{ inputs.reboot_phase }}"
+          --json-report verification/release/PRIVATE_HARDWARE_DISPATCH.json
+      - name: Upload private hardware dispatch evidence
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
-          name: Dokkomplekt-Windows-Hardware-E2E-Signed
-          path: |
-            target/release/bundle/nsis/**
-            release-runtime/**
-            verification/release/**
-            .cargo-gate/**
-            .release-gate/**
-          if-no-files-found: error
+          name: Dokkomplekt-Private-Hardware-Dispatch-${{ inputs.reboot_phase }}
+          path: verification/release/PRIVATE_HARDWARE_DISPATCH.json
+          if-no-files-found: warn

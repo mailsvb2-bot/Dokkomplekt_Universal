@@ -99,10 +99,14 @@ class V1821ResumeQueueModularizationContracts(unittest.TestCase):
     def test_release_still_requires_real_rust_and_windows_gates(self) -> None:
         quality = text(".github/workflows/quality-gate.yml")
         installers = text(".github/workflows/build-installers.yml")
-        hardware = text(".github/workflows/windows-hardware-e2e.yml")
+        public_bridge = text(".github/workflows/windows-hardware-e2e.yml")
+        private_hardware = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
         self.assertIn("cargo audit --deny warnings", quality)
         self.assertIn("prepackage_rust_gate.sh", installers)
-        self.assertIn("self-hosted, Windows, X64, dokkomplekt-hardware-e2e", hardware)
+        self.assertIn("runs-on: ubuntu-latest", public_bridge)
+        self.assertNotIn("runs-on: [self-hosted", public_bridge)
+        self.assertIn("self-hosted, Windows, X64, dokkomplekt-hardware-e2e", private_hardware)
+        self.assertIn("environment: windows-production-signing", private_hardware)
         self.assertFalse((ROOT / ".cargo-gate/CARGO_GATE_PASSED.ok").exists())
 
 

@@ -28,7 +28,8 @@ def test_fixture_is_wired_to_rust_parser_and_windows_runtime_gate() -> None:
     intake = (ROOT / "src-tauri/src/universal_intake.rs").read_text("utf-8")
     verifier = (ROOT / "scripts/verify_scanned_pdf_fixture.py").read_text("utf-8")
     build = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
-    hardware = (ROOT / ".github/workflows/windows-hardware-e2e.yml").read_text("utf-8")
+    public_bridge = (ROOT / ".github/workflows/windows-hardware-e2e.yml").read_text("utf-8")
+    private_hardware = (ROOT / "ops/private-hardware-validation/windows-hardware-e2e.yml").read_text("utf-8")
     assert 'include_str!("../../tests/fixtures/ocr/scanned_table.tesseract.tsv")' in intake
     assert "parse_tesseract_tsv(tsv, 0)" in intake
     for invariant in [
@@ -42,4 +43,6 @@ def test_fixture_is_wired_to_rust_parser_and_windows_runtime_gate() -> None:
         assert invariant in verifier
     command = "python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64"
     assert command in build
-    assert command in hardware
+    assert command in private_hardware
+    assert "dispatch_private_hardware_validation.py" in public_bridge
+    assert "runs-on: [self-hosted" not in public_bridge

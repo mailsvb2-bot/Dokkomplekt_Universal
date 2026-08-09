@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILDER = ROOT / "scripts" / "build_windows_runtime_kit.py"
+STAGER = ROOT / "scripts" / "prepare_sidecars.py"
+VERIFIER = ROOT / "scripts" / "assert_offline_runtime_ready.py"
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write(path: Path, data: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def component_tree(root: Path, tool: str) -> Path:
+    tree = root / tool
+    fixtures: dict[str, dict[str, bytes]] = {
+        "tesseract": {
+            "tesseract.exe": b"MZ" + b"t" * 64,
+            "tessdata/rus.traineddata": b"rus",
+            "tessdata/eng.traineddata": b"eng",
+        },
+        "poppler": {
+            "bin/pdftotext.exe": b"MZ" + b"p" * 64,
+            "bin/pdftoppm.exe": b"MZ" + b"q" * 64,
+            "bin/poppler.dll": b"MZ" + b"d" * 64,
+        },
+        "libreoffice": {
+            "program/soffice.exe": b"MZ" + b"l" * 64,
+            "program/soffice.bin": b"bin",
+            "program/fundamental.ini": b"[Bootstrap]\n",
+        },
+        "sumatrapdf": {"SumatraPDF.exe": b"MZ" + b"s" * 64},
+        "7zip": {
+            "7z.exe": b"MZ" + b"7" * 64,
+            "7z.dll": b"MZ" + b"z" * 64,
+        },
+        "msgconvert": {"msgconvert.exe": b"MZ" + b"m" * 64},
+        "llama_cpp": {"llama-server.exe": b"MZ" + b"a" * 64},
+        "semantic_model": {"dokkomplekt-instruct.gguf": b"GGUF-test-model"},
+    }
+    for relative, payload in fixtures[tool].items():
+        write(tree / relative, payload)
+    return tree
+
+
+def make_spec(root: Path, *, omit: str | None = None) -> Path:
+    license_file = write(root / "licenses" / "RUNTIME-LICENSE.txt", b"fixture license\n")
+    tools = [
+        "tesseract",
+        "poppler",
+        "libreoffice",
+        "sumatrapdf",
+        "7zip",
+        "msgconvert",
+        "llama_cpp",
+        "semantic_model",
+    ]
+    components = []
+    for tool in tools:
+        if tool == omit:
+            continue
+        tree = component_tree(root / "components", tool)
+        components.append(
+            {
+                "tool": tool,
+                "root": str(tree),
+                "target_root": tool,
+                "version": "1.0.0-test",
+                "source_url": f"https://github.com/dokkomplekt-fixtures/{tool}/releases/tag/v1.0.0",
+                "license": "TEST-ONLY",
+                "license_file": str(license_file),
+            }
+        )
+    spec = {
+        "schema": 1,
+        "target": "windows-x86_64",
+        "review": {
+            "reviewer": "runtime-test",
+            "reviewed_at": "2026-01-01",
+            "scope": "complete synthetic portable trees",
+        },
+        "components": components,
+    }
+    path = root / "runtime-kit.json"
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    return path
+
+
+def test_builder_creates_lock_that_stages_and_verifies_end_to_end() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit")
+    stager = load_module(STAGER, "prepare_sidecars_runtime_kit_test")
+    verifier = load_module(VERIFIER, "assert_offline_runtime_ready_runtime_kit_test")
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root)
+        output = root / "output"
+        output.mkdir()
+
+        catalog, report = builder.build_catalog(spec, output)
+        catalog_path = output / "runtime-catalog.json"
+        builder.atomic_json(catalog_path, catalog)
+        lock = builder.build_lock(catalog_path)
+        lock_path = output / "windows-x86_64-manifest.json"
+        builder.atomic_json(lock_path, lock)
+
+        assert lock["supply_chain_locked"] is True
+        assert {entry["tool"] for entry in lock["files"]} == builder.REQUIRED_TOOLS
+        assert report["component_count"] == 8
+        assert report["file_count"] == len(lock["files"])
+        assert "msgconvert" in {entry["tool"] for entry in lock["files"]}
+
+        staged_root = root / "staged"
+        with mock.patch.object(stager, "DEST_ROOT", staged_root), mock.patch.object(
+            sys, "argv", ["prepare_sidecars.py", str(lock_path), "--clean"]
+        ):
+            assert stager.main() == 0
+
+        verifier.TOOLS_ROOT = staged_root
+        target_dir, status = verifier.load_status("windows-x86_64")
+        tools = verifier.verify_entries(target_dir, status)
+        verifier.verify_supply_chain(target_dir, status)
+        verifier.verify_required_runtime(tools, True)
+        verifier.verify_distribution_review(target_dir, status, tools)
+        assert "msgconvert" in tools
+
+
+def test_builder_fails_closed_when_msgconvert_component_is_missing() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_missing_msg")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root, omit="msgconvert")
+        with pytest.raises(ValueError, match="msgconvert"):
+            builder.build_catalog(spec, root / "output")
+
+
+def test_builder_rejects_placeholder_provenance() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_placeholder")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec_path = make_spec(root)
+        data = json.loads(spec_path.read_text(encoding="utf-8"))
+        data["components"][0]["version"] = "REPLACE_VERSION"
+        spec_path.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="placeholder"):
+            builder.build_catalog(spec_path, root / "output")
+
+
+def test_runtime_required_tool_set_includes_msgconvert() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_required_set")
+    verifier = load_module(VERIFIER, "assert_offline_runtime_ready_msgconvert_contract")
+    assert "msgconvert" in builder.REQUIRED_TOOLS
+    with pytest.raises(ValueError, match="msgconvert"):
+        verifier.verify_required_runtime(
+            {
+                "tesseract": [
+                    Path("tesseract/tesseract.exe"),
+                    Path("tesseract/tessdata/rus.traineddata"),
+                    Path("tesseract/tessdata/eng.traineddata"),
+                ],
+                "poppler": [Path("poppler/pdftotext.exe"), Path("poppler/pdftoppm.exe")],
+                "libreoffice": [Path("libreoffice/soffice.exe")],
+                "sumatrapdf": [Path("sumatrapdf/SumatraPDF.exe")],
+                "7zip": [Path("7zip/7z.exe")],
+                "llama_cpp": [Path("llama_cpp/llama-server.exe")],
+                "semantic_model": [Path("semantic_model/model.gguf")],
+            },
+            True,
+        )

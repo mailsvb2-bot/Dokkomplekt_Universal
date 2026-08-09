@@ -2,7 +2,7 @@
 
 This directory is intentionally stored in the public source repository only as audited, non-secret infrastructure code. The actual self-hosted runner and production signing secrets must live in a separate private repository.
 
-Recommended target repository:
+Production target repository:
 
 `mailsvb2-bot/Dokkomplekt_Hardware_Validation`
 
@@ -23,10 +23,11 @@ No Dokkomplekt application source needs to be copied to the private repository. 
 
 ## Public bridge settings
 
-The public source repository uses environment `windows-hardware-dispatch` with:
+The public source repository pins the private target directly in `.github/workflows/windows-hardware-e2e.yml`:
 
-- variable `DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY` pointing to this private repository;
-- optional variable `DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW=windows-hardware-e2e.yml`;
-- secret `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN` with only the minimum private-repository metadata/Actions access needed to dispatch and read workflow runs.
+- repository `mailsvb2-bot/Dokkomplekt_Hardware_Validation`;
+- workflow `windows-hardware-e2e.yml`.
 
-The public bridge refuses a non-private target before dispatching.
+Environment `windows-hardware-dispatch` therefore needs only secret `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN`, with the minimum private-repository metadata/Actions access needed to dispatch and read workflow runs.
+
+The public bridge still queries the GitHub API and refuses the target unless it reports `private=true` before dispatching.

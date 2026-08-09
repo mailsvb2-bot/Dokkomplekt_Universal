@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/windows-hardware-e2e.yml'
       - '.github/workflows/windows-hardware-runner-contract.yml'
+      - '.github/workflows/quality-gate.yml'
       - 'ops/private-hardware-validation/**'
       - 'scripts/bootstrap_windows_hardware_runner.ps1'
       - 'scripts/register_windows_hardware_runner.ps1'
@@ -18,6 +19,11 @@ on:
       - 'scripts/prepare_sidecars.py'
       - 'scripts/assert_offline_runtime_ready.py'
       - 'scripts/probe_offline_runtime.py'
+      - 'scripts/prepackage_rust_gate.sh'
+      - 'scripts/prepackage_rust_gate.bat'
+      - 'scripts/run_rustsec_audit.py'
+      - 'scripts/verify_rustsec_advisory_pin.py'
+      - 'verification/security/rustsec-advisory-db.json'
       - 'tests/windows/windows_hardware_e2e.ps1'
       - 'tests/windows/prepare_reboot_evidence.ps1'
       - 'tests/windows/verify_reboot_evidence.ps1'
@@ -25,6 +31,7 @@ on:
       - 'tests/test_windows_runtime_kit.py'
       - 'tests/test_windows_runtime_lock_approval.py'
       - 'tests/test_msgconvert_runtime_probe.py'
+      - 'tests/test_rustsec_advisory_pin.py'
       - 'tests/test_v18_1_1_offline_runtime.py'
       - 'docs/WINDOWS_HARDWARE_RUNNER.md'
       - 'docs/WINDOWS_RUNTIME_KIT.md'
@@ -93,7 +100,7 @@ jobs:
               assert isinstance(data, dict) and data.get('jobs'), path
               print(f'YAML parse PASS: {path}')
           '@ | python -
-      - name: Run hardware runner, runtime-kit and approval governance regressions
+      - name: Run hardware runner, runtime-kit, approval and RustSec governance regressions
         shell: pwsh
         run: >-
           python -m pytest -q
@@ -101,4 +108,5 @@ jobs:
           tests/test_windows_runtime_kit.py
           tests/test_windows_runtime_lock_approval.py
           tests/test_msgconvert_runtime_probe.py
+          tests/test_rustsec_advisory_pin.py
           tests/test_v18_1_1_offline_runtime.py

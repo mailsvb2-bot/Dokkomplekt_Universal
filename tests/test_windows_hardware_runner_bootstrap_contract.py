@@ -76,11 +76,22 @@ def test_new_hardware_evidence_preflight_has_no_runtime_manifest_dependency() ->
         "printservice-operational-log",
         "visual-studio-vctools",
         "webview2-runtime",
-        "runtime_manifest_present_on_hardware_host = $false",
+        "runtime-manifest-not-exposed",
+        "signing-secrets-not-exposed",
+        "runtime_manifest_env_exposed",
+        "signing_secret_env_exposed",
     ):
         assert required in text
-    assert "SidecarManifestPath" not in text
+    assert "[Parameter(Mandatory = $true)] [string] $SidecarManifestPath" not in text
     assert "runner-owned-sidecar-manifest" not in text
+    for forbidden in (
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+        "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
+        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
+        "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
+    ):
+        assert forbidden in text
 
 
 def test_public_workflow_never_targets_self_hosted_runner() -> None:
@@ -194,6 +205,7 @@ def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:
 def test_hardware_runner_runbook_describes_private_security_boundary() -> None:
     text = read(DOC)
     assert "windows-production-signing" in text
+    assert "windows-hardware-validation" in text
     assert "windows-hardware-dispatch" in text
     assert "private" in text.lower()
     assert "must **not** be registered" in text
@@ -201,6 +213,8 @@ def test_hardware_runner_runbook_describes_private_security_boundary() -> None:
     assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in text
     assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" in text
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" in text
-    assert "register_windows_hardware_runner.ps1" in text
+    assert "dokkomplekt-runtime" in text
+    assert "dokkomplekt-hardware" in text
+    assert "SIGNED_HANDOFF.json" in text
     assert "prepare" in text
     assert "production-hardware" in text

@@ -6,14 +6,14 @@ Dokkomplekt production hardware acceptance must run on a dedicated interactive W
 
 `mailsvb2-bot/Dokkomplekt_Universal` is public. The physical/self-hosted runner must **not** be registered in that repository. A persistent self-hosted runner attached to a public repository creates an unacceptable attack surface from public/fork workflows.
 
-Use a separate **private** repository, recommended name:
+Use the dedicated **private** repository:
 
 `mailsvb2-bot/Dokkomplekt_Hardware_Validation`
 
 Architecture:
 
 1. public `Dokkomplekt_Universal` contains source and the hosted `Windows Hardware E2E` dispatcher;
-2. the dispatcher is allowed to call only a configured private validation repository and first proves through the GitHub API that the target is private;
+2. the dispatcher is pinned to `mailsvb2-bot/Dokkomplekt_Hardware_Validation` and first proves through the GitHub API that the target is private;
 3. the private repository contains the real self-hosted workflow from `ops/private-hardware-validation/windows-hardware-e2e.yml`;
 4. the Windows runner is registered only to that private repository;
 5. Authenticode/runtime/update/gate private keys live only in the private repository environment `windows-production-signing`;
@@ -24,34 +24,36 @@ The public repository therefore never directly schedules untrusted repository jo
 
 ## Private validation repository bootstrap
 
-Create a private repository and copy:
+The private repository is:
 
-`ops/private-hardware-validation/windows-hardware-e2e.yml`
+`mailsvb2-bot/Dokkomplekt_Hardware_Validation`
 
-to:
+Its protected `main` branch must contain:
 
 `.github/workflows/windows-hardware-e2e.yml`
 
-on the private repository's protected `main` branch. Keep that repository private.
+from the audited scaffold `ops/private-hardware-validation/windows-hardware-e2e.yml`. Keep that repository private.
 
 The private workflow accepts four inputs: `source_repository`, `release_sha`, `reboot_phase`, and a correlation `request_id`. Its `run-name` includes the request id so the public hosted dispatcher can bind its verdict to exactly the run it created.
 
 ## Public dispatcher environment
 
-In public `Dokkomplekt_Universal`, create a protected environment named:
+In public `Dokkomplekt_Universal`, use the protected environment:
 
 `windows-hardware-dispatch`
 
-Set environment variable:
+The target is pinned directly in `.github/workflows/windows-hardware-e2e.yml`:
 
-- `DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY` = `mailsvb2-bot/Dokkomplekt_Hardware_Validation` (or the exact private repository you created);
-- optional `DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW` = `windows-hardware-e2e.yml`.
+- `DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY=mailsvb2-bot/Dokkomplekt_Hardware_Validation`;
+- `DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW=windows-hardware-e2e.yml`.
+
+No GitHub Actions variable is required for either value.
 
 Set environment secret:
 
-- `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN` — a narrowly scoped fine-grained credential able to read the private repository metadata, dispatch Actions workflows there and read their run status. Do not give it contents write, administration, packages, issues, pull-request or signing-secret permissions.
+- `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN` — a narrowly scoped fine-grained credential restricted to `Dokkomplekt_Hardware_Validation`, with Actions write permission so it can dispatch the private workflow and read the resulting run status. Do not give it Contents write, Administration, Packages, Issues, Pull requests or signing-secret permissions.
 
-The public `Windows Hardware E2E` workflow runs only on GitHub-hosted `ubuntu-latest`, requires `release_sha == github.sha` on public `main`, verifies the target repository reports `private=true`, dispatches the private workflow and waits for the exact correlation id. It contains no `runs-on: self-hosted` job.
+The public `Windows Hardware E2E` workflow runs only on GitHub-hosted `ubuntu-latest`, requires `release_sha == github.sha` on public `main`, verifies the pinned target repository reports `private=true`, dispatches the private workflow and waits for the exact correlation id. It contains no `runs-on: self-hosted` job.
 
 ## Required Windows host
 
@@ -80,7 +82,9 @@ Required labels:
 
 In the **private validation repository**, open **Settings → Actions → Runners → New self-hosted runner** and obtain a fresh short-lived registration token.
 
-Open an elevated interactive PowerShell as the dedicated runner user from a checkout of `Dokkomplekt_Universal` containing the bootstrap scripts:
+Preferred path: download/run `bootstrap-hardware-runner.ps1` from the private repository in an elevated interactive PowerShell window. It downloads the audited registration/bootstrap scripts from a pinned public source SHA and registers only to `Dokkomplekt_Hardware_Validation`.
+
+Direct source-checkout path:
 
 ```powershell
 .\scripts\register_windows_hardware_runner.ps1 `
@@ -109,7 +113,7 @@ Do not use the source placeholder as production evidence. The production manifes
 - `supply_chain_locked: true`;
 - SHA-256, version, source URL, license and license notice hashes for every file;
 - complete portable-tree inventory and distribution review;
-- complete Tesseract language data, Poppler, LibreOffice, SumatraPDF, 7-Zip, llama.cpp server and an approved GGUF semantic model;
+- complete Tesseract language data, Poppler, LibreOffice, SumatraPDF, 7-Zip, msgconvert, llama.cpp server and an approved GGUF semantic model;
 - any additional runtime entry required by the current release contour.
 
 `scripts/prepare_sidecars.py` stages only these reviewed local files and intentionally does not fetch production binaries from the internet.

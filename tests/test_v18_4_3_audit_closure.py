@@ -53,6 +53,7 @@ def test_signing_workflow_is_private_approval_and_commit_pinned() -> None:
     assert "dispatch_private_hardware_validation.py" in public_bridge
     assert "persist-credentials: false" in public_bridge
     assert "environment: windows-production-signing" in workflow
+    assert "environment: windows-hardware-validation" in workflow
     assert "release_sha:" in workflow
     assert "DOKKOMPLEKT_SIGNING_SCRIPT_SHA256" in workflow
     assert "git merge-base --is-ancestor" in workflow
@@ -62,6 +63,7 @@ def test_signing_workflow_is_private_approval_and_commit_pinned() -> None:
 
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
     workflow = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
+    handoff = text("scripts/windows_signed_handoff.py")
     release_workflow = text(".github/workflows/build-installers.yml")
     hardware = text("tests/windows/windows_hardware_e2e.ps1")
     sidecar_signatures = text("tests/windows/verify_sidecar_authenticode.ps1")
@@ -79,9 +81,13 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "create_offline_runtime_bundle.py" in workflow
     assert "--require-signature" in workflow
     assert "finally {" in workflow
-    assert "Runtime signing private key cleanup failed" in workflow
+    assert "Remove-Item -LiteralPath $privateKey -Force" in workflow
+    assert "Handoff private key cleanup failed" in workflow
+    assert "TRANSFERRED_GATE_DIRS" in handoff
+    assert "stage_repository_gate_evidence" in handoff
+    assert "restore_verified_build_evidence" in handoff
     assert "--output-json verification/release/scanned-pdf-ocr.json" in workflow
-    assert "source/release-runtime/**" in workflow
+    assert "source/signed-handoff/**" in workflow
     assert "source/verification/release/**" in workflow
     assert "$rebootEvidencePath = $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH" in hardware
     assert "PRINT_EVENT_307.json" in hardware
@@ -165,6 +171,7 @@ def test_stale_versioned_ci_success_snapshot_is_removed() -> None:
 def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
     script = text("scripts/write_windows_hardware_evidence_index.ps1")
     workflow = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
+    handoff = text("scripts/windows_signed_handoff.py")
     assert "dokkomplekt.windows-hardware-evidence-index.v1" in script
     assert "GITHUB_SHA must be the exact lowercase release commit SHA" in script
     assert "Signed build evidence is not bound to the current source fingerprint" in script
@@ -202,5 +209,8 @@ def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
     assert "Bind final hardware evidence index" in workflow
     assert "write_windows_hardware_evidence_index.ps1" in workflow
     assert "source/verification/release/**" in workflow
-    assert "source/.cargo-gate/**" in workflow
     assert "source/.release-gate/**" in workflow
+    assert '".cargo-gate": f"{BUILD_EVIDENCE_DIR}/cargo-gate"' in handoff
+    assert '".release-gate": f"{BUILD_EVIDENCE_DIR}/release-gate"' in handoff
+    assert "restore_verified_build_evidence(root)" in handoff
+    assert 'verification_destination = repository / "verification" / "release"' in handoff

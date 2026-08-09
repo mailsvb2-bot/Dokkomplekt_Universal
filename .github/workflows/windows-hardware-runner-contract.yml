@@ -17,15 +17,18 @@ on:
       - 'scripts/create_runtime_lock.py'
       - 'scripts/prepare_sidecars.py'
       - 'scripts/assert_offline_runtime_ready.py'
+      - 'scripts/probe_offline_runtime.py'
       - 'tests/windows/windows_hardware_e2e.ps1'
       - 'tests/windows/prepare_reboot_evidence.ps1'
       - 'tests/windows/verify_reboot_evidence.ps1'
       - 'tests/test_windows_hardware_runner_bootstrap_contract.py'
       - 'tests/test_windows_runtime_kit.py'
       - 'tests/test_windows_runtime_lock_approval.py'
+      - 'tests/test_msgconvert_runtime_probe.py'
       - 'tests/test_v18_1_1_offline_runtime.py'
       - 'docs/WINDOWS_HARDWARE_RUNNER.md'
       - 'docs/WINDOWS_RUNTIME_KIT.md'
+      - 'docs/WINDOWS_RUNTIME_LOCK_APPROVAL.md'
   workflow_dispatch:
 
 permissions:
@@ -97,4 +100,5 @@ jobs:
           tests/test_windows_hardware_runner_bootstrap_contract.py
           tests/test_windows_runtime_kit.py
           tests/test_windows_runtime_lock_approval.py
+          tests/test_msgconvert_runtime_probe.py
           tests/test_v18_1_1_offline_runtime.py

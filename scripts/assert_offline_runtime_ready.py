@@ -204,6 +204,7 @@ def verify_required_runtime(tool_files: dict[str, list[Path]], require_model: bo
     require_file(tool_files, "libreoffice", "soffice.exe", "soffice")
     require_file(tool_files, "sumatrapdf", "sumatrapdf.exe", "sumatrapdf")
     require_file(tool_files, "7zip", "7z.exe", "7zz.exe", "7z", "7zz")
+    require_file(tool_files, "msgconvert", "msgconvert.exe", "msgconvert", "msgconvert.pl")
 
     if require_model:
         require_file(

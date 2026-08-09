@@ -2,11 +2,11 @@
 
 The production Windows hardware contour does not download arbitrary binaries during the release job. Runtime components are runner-owned inputs: they are acquired and reviewed separately, then frozen into an immutable manifest before the hardware workflow is allowed to stage them.
 
-The preferred entry point is:
+The preferred Windows entry point is:
 
-`scripts/build_windows_runtime_kit.py`
+`scripts/prepare_windows_production_runtime.ps1`
 
-It turns eight reviewed local portable trees into a complete inventory, a provenance catalog and a `supply_chain_locked=true` manifest compatible with `scripts/prepare_sidecars.py`.
+It calls `scripts/build_windows_runtime_kit.py`, stages the resulting lock with `scripts/prepare_sidecars.py`, and immediately runs the fail-closed production verifier. The Python builder itself performs no network access and never downloads runtime components.
 
 ## Required component roots
 
@@ -137,15 +137,17 @@ Create `C:\DokkomplektRuntime\runtime-kit.json`. The structure is:
 
 The builder rejects empty values and `REPLACE_*` placeholders. `source_url` must be a real public HTTPS provenance URL or a non-empty reviewed URN accepted by the shared release policy.
 
-## Build the immutable lock
+## Build, stage and verify in one command
 
-From the exact public source SHA being prepared for production, run:
+From the exact public source SHA being prepared for production, open PowerShell and run:
 
 ```powershell
-python scripts\build_windows_runtime_kit.py `
-  C:\DokkomplektRuntime\runtime-kit.json `
-  --output-dir C:\DokkomplektRuntime\locked
+.\scripts\prepare_windows_production_runtime.ps1 `
+  -SpecPath 'C:\DokkomplektRuntime\runtime-kit.json' `
+  -OutputDir 'C:\DokkomplektRuntime\locked'
 ```
+
+The wrapper rejects relative or reparse-point input/output locations, invokes only local Python release scripts, stops on the first non-zero exit code, and prints the final manifest/report SHA-256 values only after the production verifier succeeds.
 
 The output directory contains:
 
@@ -156,11 +158,15 @@ The output directory contains:
 
 The manifest sets `supply_chain_locked=true` only after every file and license notice has been resolved and hashed and the complete inventory has been bound to the distribution review.
 
-## Stage and verify before registering the hardware runner
+## Equivalent explicit commands
 
-Use the generated manifest, never the checked-in source placeholder:
+For diagnosis, the one-command wrapper is equivalent to:
 
 ```powershell
+python scripts\build_windows_runtime_kit.py `
+  C:\DokkomplektRuntime\runtime-kit.json `
+  --output-dir C:\DokkomplektRuntime\locked
+
 python scripts\prepare_sidecars.py `
   C:\DokkomplektRuntime\locked\windows-x86_64-manifest.json `
   --clean
@@ -172,7 +178,7 @@ python scripts\assert_offline_runtime_ready.py `
   --production
 ```
 
-The production verifier additionally rejects implausibly small Windows executables, Tesseract language files and GGUF models, requires the complete reviewed LibreOffice/7-Zip structure, and now treats `msgconvert` as mandatory.
+The production verifier rejects implausibly small Windows executables, Tesseract language files and GGUF models, requires the complete reviewed LibreOffice/7-Zip structure, and treats `msgconvert` as mandatory.
 
 Only after this passes should the private repository variable `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH` and the runner bootstrap `-SidecarManifestPath` point to:
 

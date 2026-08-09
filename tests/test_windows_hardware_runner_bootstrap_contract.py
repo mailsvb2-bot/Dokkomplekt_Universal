@@ -4,8 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "scripts" / "bootstrap_windows_hardware_runner.ps1"
 PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_runner.ps1"
+CLEANUP = ROOT / "scripts" / "cleanup_windows_reboot_preparation.ps1"
 WORKFLOW = ROOT / ".github" / "workflows" / "windows-hardware-e2e.yml"
-HARDWARE_E2E = ROOT / "tests" / "windows" / "windows_hardware_e2e.ps1"
 DOC = ROOT / "docs" / "WINDOWS_HARDWARE_RUNNER.md"
 
 
@@ -57,15 +57,20 @@ def test_hardware_workflow_runs_host_preflight_and_has_two_phase_reboot() -> Non
     assert "verify" in text
     assert "DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT" in text
     assert "DOKKOMPLEKT_PREPARE_REBOOT_E2E" in text
+    assert "DOKKOMPLEKT_REBOOT_PREP_ROOT" in text
+    assert "cleanup_windows_reboot_preparation.ps1" in text
 
 
-def test_reboot_prepare_state_is_persistent_not_runner_temp() -> None:
-    text = read(HARDWARE_E2E)
-    assert "prepared-install-" in text
-    assert "prepared-watch-" in text
-    assert "ProgramData" in text
-    assert "RUNNER_TEMP" in text  # verify/non-prepare runs may still use disposable temp state
-    assert "prepared installation" in text.lower()
+def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:
+    workflow = read(WORKFLOW)
+    cleanup = read(CLEANUP)
+    assert "ProgramData" in workflow
+    assert "DokkomplektE2E" in workflow
+    assert "RUNNER_TEMP" in workflow
+    assert "TEMP" in workflow
+    assert "Assert-UnderDokkomplektProgramData" in cleanup
+    assert "--background-watch" in cleanup
+    assert "Prepared NSIS uninstall" in cleanup
 
 
 def test_hardware_runner_runbook_exists() -> None:

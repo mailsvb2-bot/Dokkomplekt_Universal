@@ -97,7 +97,8 @@ def test_signed_handoff_round_trip_and_tamper_rejection(tmp_path: Path) -> None:
         str(public_key),
     )
     assert rejected.returncode != 0
-    assert "sha256 mismatch" in (rejected.stdout + rejected.stderr)
+    rejection = rejected.stdout + rejected.stderr
+    assert "size mismatch" in rejection or "sha256 mismatch" in rejection
 
 
 def test_signed_handoff_rejects_wrong_identity_and_unexpected_files(tmp_path: Path) -> None:

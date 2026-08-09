@@ -11,11 +11,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_rustsec_advisory_pin.py"
+RUNNER = ROOT / "scripts" / "run_rustsec_audit.py"
 POLICY = ROOT / "verification" / "security" / "rustsec-advisory-db.json"
 
 
-def load_module():
-    spec = importlib.util.spec_from_file_location("verify_rustsec_advisory_pin", SCRIPT)
+def load_module(path: Path = SCRIPT, name: str = "verify_rustsec_advisory_pin"):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -56,3 +57,19 @@ def test_known_bad_commit_cannot_be_pinned() -> None:
                 path,
                 now=module.parse_utc(data["committed_at_utc"]),
             )
+
+
+def test_cargo_audit_uses_exact_db_without_stale_bypass() -> None:
+    runner = load_module(RUNNER, "run_rustsec_audit")
+    db = Path("/tmp/pinned-rustsec-db")
+    command = runner.build_audit_command(db, False)
+    assert command[:2] == ["cargo", "audit"]
+    assert command[command.index("--db") + 1] == str(db)
+    assert "--no-fetch" in command
+    assert command[command.index("--deny") + 1] == "warnings"
+    assert "--stale" not in command
+    assert "--json" not in command
+
+    json_command = runner.build_audit_command(db, True)
+    assert json_command[:-1] == command
+    assert json_command[-1] == "--json"

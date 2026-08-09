@@ -1,0 +1,9 @@
+{
+  "schema": "dokkomplekt.rustsec-advisory-db-pin.v1",
+  "repository": "https://github.com/RustSec/advisory-db.git",
+  "commit": "309ad29d8fe448bf986019e05d47b9e0e29a2218",
+  "committed_at_utc": "2026-08-09T12:34:06Z",
+  "max_age_hours": 168,
+  "blocked_upstream_commit": "e11d6b330dd033a9ed7476de71029cfb8f2d1095",
+  "reason": "Upstream commit e11d6b33 placed a package=gettext-sys placeholder advisory under crates/gettext-rs, which cargo-audit 0.22.2 correctly rejects as an inconsistent advisory database. This pin expires fail-closed and must be advanced to a validated upstream revision."
+}

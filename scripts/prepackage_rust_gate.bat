@@ -24,7 +24,7 @@ cargo audit --version >nul 2>nul || (
   exit /b 1
 )
 python scripts\check_commercial_rust_crates.py || exit /b 1
-cargo audit --deny warnings --json > .cargo-gate\RUSTSEC_AUDIT.json || exit /b 1
+python scripts\run_rustsec_audit.py --json-output .cargo-gate\RUSTSEC_AUDIT.json --pin-report .cargo-gate\RUSTSEC_DB_PIN.json || exit /b 1
 python scripts\write_rustsec_evidence.py || exit /b 1
 python scripts\write_cargo_gate_attestation.py || exit /b 1
 python scripts\assert_release_ready.py || exit /b 1

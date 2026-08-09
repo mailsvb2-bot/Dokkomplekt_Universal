@@ -90,7 +90,7 @@ jobs:
           key: cargo-audit-${{ runner.os }}-0.22.2
       - name: Install current CVSS-4-compatible cargo-audit
         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
-      - name: Audit locked Rust dependencies against validated advisory DB revision
+      - name: Audit locked Rust dependencies (cargo audit --deny warnings) against validated advisory DB revision
         shell: bash
         run: |
           set -o pipefail

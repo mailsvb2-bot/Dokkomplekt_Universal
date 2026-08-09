@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory = $true)] [string] $RepositoryUrl,
     [Parameter(Mandatory = $true)] [string] $PrinterName,
     [Parameter(Mandatory = $true)] [string] $SidecarManifestPath,
-    [string] $RepositoryUrl = 'https://github.com/mailsvb2-bot/Dokkomplekt_Universal',
     [string] $RunnerRoot = 'C:\actions-runner',
     [string] $RunnerName = '',
     [string] $RunnerLabel = 'dokkomplekt-hardware-e2e',
@@ -12,6 +12,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$publicSourceRepository = 'https://github.com/mailsvb2-bot/Dokkomplekt_Universal'
+$normalizedRepositoryUrl = $RepositoryUrl.Trim().TrimEnd('/')
+if ($normalizedRepositoryUrl -ieq $publicSourceRepository) {
+    throw 'Refusing to register a persistent hardware runner in the public Dokkomplekt_Universal repository. Use the dedicated private hardware-validation repository.'
+}
+if ($normalizedRepositoryUrl -notmatch '^https://github\.com/[^/]+/[^/]+$') {
+    throw 'RepositoryUrl must be a canonical GitHub repository URL such as https://github.com/owner/private-hardware-validation.'
+}
 
 $secureToken = Read-Host 'GitHub self-hosted runner registration token' -AsSecureString
 if ($secureToken.Length -eq 0) {
@@ -34,7 +43,7 @@ try {
         RegistrationToken = $plainToken
         PrinterName = $PrinterName
         SidecarManifestPath = $SidecarManifestPath
-        RepositoryUrl = $RepositoryUrl
+        RepositoryUrl = $normalizedRepositoryUrl
         RunnerRoot = $RunnerRoot
         RunnerName = $RunnerName
         RunnerLabel = $RunnerLabel

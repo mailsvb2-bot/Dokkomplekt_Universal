@@ -44,17 +44,24 @@ def test_payment_webhook_duplicate_is_atomic_and_order_bound() -> None:
     assert "provider_event_order_mismatch" in memory
 
 
-def test_signing_workflow_is_approval_and_commit_pinned() -> None:
-    workflow = text(".github/workflows/windows-hardware-e2e.yml")
+def test_signing_workflow_is_private_approval_and_commit_pinned() -> None:
+    public_bridge = text(".github/workflows/windows-hardware-e2e.yml")
+    workflow = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
+    assert "runs-on: ubuntu-latest" in public_bridge
+    assert "runs-on: [self-hosted" not in public_bridge
+    assert "environment: windows-hardware-dispatch" in public_bridge
+    assert "dispatch_private_hardware_validation.py" in public_bridge
+    assert "persist-credentials: false" in public_bridge
     assert "environment: windows-production-signing" in workflow
     assert "release_sha:" in workflow
-    assert "persist-credentials: false" in workflow
     assert "DOKKOMPLEKT_SIGNING_SCRIPT_SHA256" in workflow
     assert "git merge-base --is-ancestor" in workflow
+    assert "unexpected source repository" in workflow
+    assert "https://github.com/${{ inputs.source_repository }}.git" in workflow
 
 
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
-    workflow = text(".github/workflows/windows-hardware-e2e.yml")
+    workflow = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
     release_workflow = text(".github/workflows/build-installers.yml")
     hardware = text("tests/windows/windows_hardware_e2e.ps1")
     sidecar_signatures = text("tests/windows/verify_sidecar_authenticode.ps1")
@@ -74,8 +81,8 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "finally {" in workflow
     assert "Runtime signing private key cleanup failed" in workflow
     assert "--output-json verification/release/scanned-pdf-ocr.json" in workflow
-    assert "release-runtime/**" in workflow
-    assert "verification/release/**" in workflow
+    assert "source/release-runtime/**" in workflow
+    assert "source/verification/release/**" in workflow
     assert "$rebootEvidencePath = $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH" in hardware
     assert "PRINT_EVENT_307.json" in hardware
     assert "AUTHENTICODE_SIGNATURES.json" in hardware
@@ -97,6 +104,7 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
 def test_production_workflow_yaml_and_hardware_powershell_parse() -> None:
     expected_workflows = {
         ".github/workflows/windows-hardware-e2e.yml": "Windows Hardware E2E",
+        "ops/private-hardware-validation/windows-hardware-e2e.yml": "Dokkomplekt Private Windows Hardware E2E",
         ".github/workflows/build-installers.yml": "Build Signed Offline Installers",
     }
     for path, expected_name in expected_workflows.items():
@@ -156,7 +164,7 @@ def test_stale_versioned_ci_success_snapshot_is_removed() -> None:
 
 def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
     script = text("scripts/write_windows_hardware_evidence_index.ps1")
-    workflow = text(".github/workflows/windows-hardware-e2e.yml")
+    workflow = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
     assert "dokkomplekt.windows-hardware-evidence-index.v1" in script
     assert "GITHUB_SHA must be the exact lowercase release commit SHA" in script
     assert "Signed build evidence is not bound to the current source fingerprint" in script
@@ -193,6 +201,6 @@ def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
         assert required in script
     assert "Bind final hardware evidence index" in workflow
     assert "write_windows_hardware_evidence_index.ps1" in workflow
-    assert "verification/release/**" in workflow
-    assert ".cargo-gate/**" in workflow
-    assert ".release-gate/**" in workflow
+    assert "source/verification/release/**" in workflow
+    assert "source/.cargo-gate/**" in workflow
+    assert "source/.release-gate/**" in workflow

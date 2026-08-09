@@ -99,6 +99,53 @@ def locate_run(
     return matches[0]
 
 
+def queued_duration_seconds(run: dict[str, Any], current: dt.datetime) -> int:
+    if str(run.get("status", "")) != "queued":
+        return 0
+    created_raw = str(run.get("created_at", ""))
+    if not created_raw:
+        return 0
+    created = parse_time(created_raw)
+    return max(0, int((current - created).total_seconds()))
+
+
+def run_report(
+    args: argparse.Namespace,
+    request_id: str,
+    run: dict[str, Any] | None,
+    *,
+    result: str,
+    failure: str | None = None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "schema": SCHEMA,
+        "created_at_utc": iso(now_utc()),
+        "result": result,
+        "request_id": request_id,
+        "source_repository": args.source_repository,
+        "target_repository": args.target_repository,
+        "target_private": True,
+        "release_sha": args.release_sha,
+        "reboot_phase": args.reboot_phase,
+        "workflow": args.workflow,
+        "target_ref": args.target_ref,
+    }
+    if run is not None:
+        report.update(
+            {
+                "run_id": run.get("id"),
+                "run_number": run.get("run_number"),
+                "run_url": run.get("html_url"),
+                "status": run.get("status"),
+                "conclusion": run.get("conclusion"),
+                "display_title": run.get("display_title"),
+            }
+        )
+    if failure:
+        report["failure"] = failure
+    return report
+
+
 def write_report(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -115,6 +162,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise RuntimeError("release_sha must be an exact lowercase 40-character commit SHA")
     if args.reboot_phase not in {"prepare", "verify"}:
         raise RuntimeError("reboot_phase must be prepare or verify")
+    if args.poll_seconds <= 0:
+        raise RuntimeError("poll_seconds must be positive")
+    if args.timeout_seconds <= 0:
+        raise RuntimeError("timeout_seconds must be positive")
+    if args.queue_timeout_seconds < 0:
+        raise RuntimeError("queue_timeout_seconds must be zero or positive")
 
 
 def main() -> int:
@@ -127,6 +180,7 @@ def main() -> int:
     parser.add_argument("--reboot-phase", choices=["prepare", "verify"], required=True)
     parser.add_argument("--token-env", default="DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN")
     parser.add_argument("--poll-seconds", type=int, default=20)
+    parser.add_argument("--queue-timeout-seconds", type=int, default=900)
     parser.add_argument("--timeout-seconds", type=int, default=14400)
     parser.add_argument("--json-report", default="verification/release/PRIVATE_HARDWARE_DISPATCH.json")
     args = parser.parse_args()
@@ -154,12 +208,14 @@ def main() -> int:
         "reboot_phase": args.reboot_phase,
         "request_id": request_id,
     }
+    report_path = Path(args.json_report)
     print(
         f"Dispatching private hardware validation: target={args.target_repository} "
         f"release={args.release_sha} phase={args.reboot_phase} request={request_id}",
         flush=True,
     )
     api.dispatch(args.target_repository, args.workflow, args.target_ref, inputs)
+    write_report(report_path, run_report(args, request_id, None, result="dispatched"))
 
     deadline = time.monotonic() + args.timeout_seconds
     run: dict[str, Any] | None = None
@@ -175,52 +231,47 @@ def main() -> int:
         if candidate is not None:
             run = candidate
             status = str(run.get("status", ""))
+            queued_seconds = queued_duration_seconds(run, now_utc())
             print(
-                f"Private hardware run #{run.get('run_number')} status={status} "
-                f"conclusion={run.get('conclusion')}",
+                f"Private hardware run #{run.get('run_number')} id={run.get('id')} "
+                f"status={status} conclusion={run.get('conclusion')} url={run.get('html_url')}",
                 flush=True,
             )
+            write_report(report_path, run_report(args, request_id, run, result="pending"))
             if status == "completed":
                 break
+            if (
+                status == "queued"
+                and args.queue_timeout_seconds > 0
+                and queued_seconds >= args.queue_timeout_seconds
+            ):
+                failure = (
+                    f"private hardware workflow remained queued for {queued_seconds}s; "
+                    "verify that the dokkomplekt-runtime self-hosted Windows runner is online "
+                    "and registered in the private validation repository"
+                )
+                write_report(
+                    report_path,
+                    run_report(args, request_id, run, result="failure", failure=failure),
+                )
+                print(failure, file=sys.stderr)
+                return 1
         time.sleep(args.poll_seconds)
     else:
-        report = {
-            "schema": SCHEMA,
-            "created_at_utc": iso(now_utc()),
-            "result": "failure",
-            "failure": "timeout while waiting for private hardware workflow",
-            "request_id": request_id,
-            "source_repository": args.source_repository,
-            "target_repository": args.target_repository,
-            "release_sha": args.release_sha,
-            "reboot_phase": args.reboot_phase,
-        }
-        write_report(Path(args.json_report), report)
-        print(report["failure"], file=sys.stderr)
+        failure = "timeout while waiting for private hardware workflow"
+        write_report(
+            report_path,
+            run_report(args, request_id, run, result="failure", failure=failure),
+        )
+        print(failure, file=sys.stderr)
         return 1
 
     assert run is not None
     conclusion = str(run.get("conclusion", ""))
-    report = {
-        "schema": SCHEMA,
-        "created_at_utc": iso(now_utc()),
-        "result": "success" if conclusion == "success" else "failure",
-        "request_id": request_id,
-        "source_repository": args.source_repository,
-        "target_repository": args.target_repository,
-        "target_private": True,
-        "release_sha": args.release_sha,
-        "reboot_phase": args.reboot_phase,
-        "workflow": args.workflow,
-        "target_ref": args.target_ref,
-        "run_id": run.get("id"),
-        "run_number": run.get("run_number"),
-        "run_url": run.get("html_url"),
-        "status": run.get("status"),
-        "conclusion": run.get("conclusion"),
-        "display_title": run.get("display_title"),
-    }
-    write_report(Path(args.json_report), report)
+    final_result = "success" if conclusion == "success" else "failure"
+    failure = None if conclusion == "success" else f"private hardware validation concluded {conclusion or 'without a conclusion'}"
+    report = run_report(args, request_id, run, result=final_result, failure=failure)
+    write_report(report_path, report)
     if conclusion != "success":
         print(f"private hardware validation failed: {run.get('html_url')}", file=sys.stderr)
         return 1

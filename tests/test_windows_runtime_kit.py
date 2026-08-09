@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_windows_runtime_kit.py"
 STAGER = ROOT / "scripts" / "prepare_sidecars.py"
 VERIFIER = ROOT / "scripts" / "assert_offline_runtime_ready.py"
+WRAPPER = ROOT / "scripts" / "prepare_windows_production_runtime.ps1"
 
 
 def load_module(path: Path, name: str):
@@ -165,6 +167,20 @@ def test_builder_rejects_placeholder_provenance() -> None:
             builder.build_catalog(spec_path, root / "output")
 
 
+def test_builder_rejects_linklike_component_content() -> None:
+    if os.name == "nt":
+        pytest.skip("Creating Windows junction/symlink fixtures requires runner privileges")
+    builder = load_module(BUILDER, "build_windows_runtime_kit_symlink")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec_path = make_spec(root)
+        external = write(root / "external.bin", b"outside reviewed tree")
+        link = root / "components" / "tesseract" / "escape.bin"
+        link.symlink_to(external)
+        with pytest.raises(ValueError, match="symlink or junction"):
+            builder.build_catalog(spec_path, root / "output")
+
+
 def test_runtime_required_tool_set_includes_msgconvert() -> None:
     builder = load_module(BUILDER, "build_windows_runtime_kit_required_set")
     verifier = load_module(VERIFIER, "assert_offline_runtime_ready_msgconvert_contract")
@@ -186,3 +202,19 @@ def test_runtime_required_tool_set_includes_msgconvert() -> None:
             },
             True,
         )
+
+
+def test_one_command_wrapper_is_fail_closed_and_network_free() -> None:
+    text = WRAPPER.read_text(encoding="utf-8")
+    for required in (
+        "scripts/build_windows_runtime_kit.py",
+        "scripts/prepare_sidecars.py",
+        "scripts/assert_offline_runtime_ready.py",
+        "--require-semantic-model",
+        "--require-supply-chain",
+        "--production",
+        "windows-x86_64-manifest.json",
+    ):
+        assert required in text
+    for forbidden in ("Invoke-WebRequest", "Invoke-RestMethod", "curl.exe", "Start-BitsTransfer"):
+        assert forbidden not in text

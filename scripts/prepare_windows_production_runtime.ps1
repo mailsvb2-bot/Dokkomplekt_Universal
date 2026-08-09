@@ -74,10 +74,17 @@ $reportHash = if (Test-Path -LiteralPath $report -PathType Leaf) {
 } else {
     throw 'RUNTIME_KIT_REPORT.json is missing after successful preparation.'
 }
+$signature = "$manifest.sig"
+if (Test-Path -LiteralPath $signature -PathType Leaf) {
+    Remove-Item -LiteralPath $signature -Force
+    Write-Warning 'Removed a stale runtime-lock approval signature because the manifest was rebuilt. A fresh offline approval is required.'
+}
 
-Write-Host 'DOKKOMPLEKT WINDOWS PRODUCTION RUNTIME READY'
+Write-Host 'DOKKOMPLEKT WINDOWS PRODUCTION RUNTIME KIT VERIFIED'
 Write-Host "Manifest: $manifest"
 Write-Host "Manifest SHA-256: $manifestHash"
 Write-Host "Report: $report"
 Write-Host "Report SHA-256: $reportHash"
-Write-Host 'Use this exact manifest path for DOKKOMPLEKT_SIDECAR_MANIFEST_PATH and runner bootstrap.'
+Write-Host 'NEXT REQUIRED RELEASE STEP: obtain a fresh offline Ed25519 approval signature for this exact manifest.'
+Write-Host "Expected detached signature path on the runner: $signature"
+Write-Host 'Hardware validation will fail closed until the signature verifies against DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64.'

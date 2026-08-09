@@ -32,6 +32,7 @@ class OfflineRuntimeVerificationTests(unittest.TestCase):
             ("sumatrapdf", "sumatrapdf/SumatraPDF.exe"),
             ("7zip", "7zip/7z.exe"),
             ("7zip", "7zip/7z.dll"),
+            ("msgconvert", "msgconvert/msgconvert.exe"),
         ]
         if include_model:
             files.extend([

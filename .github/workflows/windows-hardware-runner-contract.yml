@@ -65,10 +65,10 @@ jobs:
             }
           }
           if ($failed) { throw 'Hardware runner PowerShell parser contract failed.' }
-      - name: Parse private hardware workflow YAML
+      - name: Parse public bridge and private hardware workflow YAML
         shell: pwsh
         run: |
-          python - <<'PY'
+          @'
           from pathlib import Path
           import yaml
           for path in (
@@ -78,7 +78,7 @@ jobs:
               data = yaml.safe_load(path.read_text(encoding='utf-8'))
               assert isinstance(data, dict) and data.get('jobs'), path
               print(f'YAML parse PASS: {path}')
-          PY
+          '@ | python -
       - name: Run hardware runner governance regression
         shell: pwsh
         run: python -m pytest -q tests/test_windows_hardware_runner_bootstrap_contract.py

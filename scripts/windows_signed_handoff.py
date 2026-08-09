@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import stat
 import uuid
 from datetime import datetime, timezone
@@ -80,6 +81,38 @@ def validate_identity(release_sha: str, request_id: str) -> None:
         fail("request_id must use canonical UUID form")
 
 
+def validate_host_id(value: str, label: str) -> str:
+    normalized = value.strip().lower()
+    if len(normalized) != 64 or any(ch not in "0123456789abcdef" for ch in normalized):
+        fail(f"{label} must be a lowercase SHA-256 host fingerprint")
+    return normalized
+
+
+def windows_host_fingerprint() -> str:
+    if os.name != "nt":
+        fail("Windows host fingerprint must be supplied explicitly outside Windows")
+    import winreg  # type: ignore[import-not-found]
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+            0,
+            winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0),
+        ) as key:
+            machine_guid = str(winreg.QueryValueEx(key, "MachineGuid")[0]).strip().lower()
+    except OSError as exc:
+        fail(f"cannot read Windows MachineGuid for trust-domain separation: {exc}")
+    computer = os.environ.get("COMPUTERNAME", "").strip().lower()
+    if not computer or not machine_guid:
+        fail("Windows host identity is incomplete")
+    return hashlib.sha256(f"{computer}\n{machine_guid}".encode("utf-8")).hexdigest()
+
+
+def resolved_host_id(explicit: str | None, label: str) -> str:
+    return validate_host_id(explicit, label) if explicit else windows_host_fingerprint()
+
+
 def manifest_bytes(payload: dict) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -89,6 +122,7 @@ def build(args: argparse.Namespace) -> int:
     if not root.is_dir():
         fail(f"handoff root is missing: {root}")
     validate_identity(args.release_sha, args.request_id)
+    producer_host_id = resolved_host_id(args.producer_host_id, "producer_host_id")
     entries = []
     for path in iter_payload_files(root):
         entries.append(
@@ -102,6 +136,7 @@ def build(args: argparse.Namespace) -> int:
         "schema": SCHEMA,
         "release_sha": args.release_sha,
         "request_id": args.request_id.lower(),
+        "producer_host_id": producer_host_id,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "files": entries,
     }
@@ -111,7 +146,17 @@ def build(args: argparse.Namespace) -> int:
     manifest.write_bytes(raw)
     private_key = load_private_key(Path(args.signing_key))
     signature.write_bytes(base64.b64encode(private_key.sign(raw)) + b"\n")
-    print(json.dumps({"ok": True, "manifest": str(manifest), "files": len(entries)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "manifest": str(manifest),
+                "files": len(entries),
+                "producer_host_id": producer_host_id,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
@@ -120,6 +165,7 @@ def verify(args: argparse.Namespace) -> int:
     if not root.is_dir():
         fail(f"handoff root is missing: {root}")
     validate_identity(args.release_sha, args.request_id)
+    consumer_host_id = resolved_host_id(args.consumer_host_id, "consumer_host_id")
     manifest = root / MANIFEST_NAME
     signature = root / SIGNATURE_NAME
     if not manifest.is_file() or not signature.is_file():
@@ -144,6 +190,9 @@ def verify(args: argparse.Namespace) -> int:
         fail("signed handoff release_sha mismatch")
     if payload.get("request_id") != args.request_id.lower():
         fail("signed handoff request_id mismatch")
+    producer_host_id = validate_host_id(str(payload.get("producer_host_id", "")), "producer_host_id")
+    if producer_host_id == consumer_host_id:
+        fail("runtime/signing producer and hardware consumer resolve to the same Windows host; physical trust-domain separation is required")
     declared = payload.get("files")
     if not isinstance(declared, list) or not declared:
         fail("signed handoff file inventory is empty")
@@ -180,6 +229,9 @@ def verify(args: argparse.Namespace) -> int:
         "ok": True,
         "release_sha": args.release_sha,
         "request_id": args.request_id.lower(),
+        "producer_host_id": producer_host_id,
+        "consumer_host_id": consumer_host_id,
+        "physical_host_separation": True,
         "files": len(actual),
         "verified_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -199,12 +251,14 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("--release-sha", required=True)
     b.add_argument("--request-id", required=True)
     b.add_argument("--signing-key", required=True)
+    b.add_argument("--producer-host-id")
     b.set_defaults(func=build)
     v = sub.add_parser("verify")
     v.add_argument("root")
     v.add_argument("--release-sha", required=True)
     v.add_argument("--request-id", required=True)
     v.add_argument("--trusted-public-key", required=True)
+    v.add_argument("--consumer-host-id")
     v.add_argument("--json-report")
     v.set_defaults(func=verify)
     return p

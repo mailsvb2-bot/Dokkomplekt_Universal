@@ -12,6 +12,7 @@ on:
       - 'scripts/cleanup_windows_reboot_preparation.ps1'
       - 'scripts/dispatch_private_hardware_validation.py'
       - 'scripts/build_windows_runtime_kit.py'
+      - 'scripts/prepare_windows_production_runtime.ps1'
       - 'scripts/create_runtime_lock.py'
       - 'scripts/prepare_sidecars.py'
       - 'scripts/assert_offline_runtime_ready.py'
@@ -50,6 +51,7 @@ jobs:
             'scripts/register_windows_hardware_runner.ps1',
             'scripts/verify_windows_hardware_runner.ps1',
             'scripts/cleanup_windows_reboot_preparation.ps1',
+            'scripts/prepare_windows_production_runtime.ps1',
             'tests/windows/windows_hardware_e2e.ps1',
             'tests/windows/prepare_reboot_evidence.ps1',
             'tests/windows/verify_reboot_evidence.ps1'

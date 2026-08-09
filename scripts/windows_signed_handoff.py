@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import stat
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +18,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 SCHEMA = "dokkomplekt.windows-signed-handoff.v1"
 MANIFEST_NAME = "SIGNED_HANDOFF.json"
 SIGNATURE_NAME = "SIGNED_HANDOFF.json.sig"
+BUILD_EVIDENCE_DIR = "build-evidence"
+TRANSFERRED_GATE_DIRS = {
+    ".cargo-gate": f"{BUILD_EVIDENCE_DIR}/cargo-gate",
+    ".release-gate": f"{BUILD_EVIDENCE_DIR}/release-gate",
+}
 
 
 def fail(message: str) -> None:
@@ -36,6 +42,90 @@ def is_reparse(path: Path) -> bool:
     attrs = getattr(st, "st_file_attributes", 0)
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     return bool(attrs & reparse)
+
+
+def assert_direct_tree_entry(path: Path) -> None:
+    if path.is_symlink() or is_reparse(path):
+        fail(f"handoff evidence contains symlink/reparse point: {path}")
+
+
+def copy_verified_tree(source: Path, destination: Path) -> None:
+    if not source.is_dir():
+        fail(f"required handoff evidence directory is missing: {source}")
+    if destination.exists():
+        fail(f"handoff evidence destination already exists: {destination}")
+    destination.mkdir(parents=True)
+    for path in sorted(source.rglob("*"), key=lambda p: p.relative_to(source).as_posix()):
+        assert_direct_tree_entry(path)
+        relative = path.relative_to(source)
+        target = destination / relative
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif path.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+        else:
+            fail(f"unsupported handoff evidence entry: {path}")
+
+
+def copy_verified_tree_into(source: Path, destination: Path) -> None:
+    if not source.is_dir():
+        fail(f"verified handoff evidence directory is missing: {source}")
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in sorted(source.rglob("*"), key=lambda p: p.relative_to(source).as_posix()):
+        assert_direct_tree_entry(path)
+        relative = path.relative_to(source)
+        target = destination / relative
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not path.is_file():
+            fail(f"unsupported verified handoff evidence entry: {path}")
+        if target.exists():
+            fail(f"refusing to overwrite pre-existing hardware evidence: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+
+
+def stage_repository_gate_evidence(root: Path) -> None:
+    repository = Path.cwd().resolve()
+    for source_name, target_relative in TRANSFERRED_GATE_DIRS.items():
+        source = repository / source_name
+        target = root / target_relative
+        copy_verified_tree(source, target)
+
+
+def restore_verified_build_evidence(root: Path) -> None:
+    repository = Path.cwd().resolve()
+    build_evidence = root / BUILD_EVIDENCE_DIR
+    if not build_evidence.is_dir():
+        fail("signed handoff is missing build-evidence")
+
+    for source_name, target_relative in TRANSFERRED_GATE_DIRS.items():
+        source = root / target_relative
+        destination = repository / source_name
+        copy_verified_tree(source, destination)
+
+    verification_source = build_evidence
+    verification_destination = repository / "verification" / "release"
+    verification_destination.mkdir(parents=True, exist_ok=True)
+    excluded = {Path(value).parts[-1] for value in TRANSFERRED_GATE_DIRS.values()}
+    for path in sorted(verification_source.iterdir(), key=lambda p: p.name):
+        if path.name in excluded:
+            continue
+        assert_direct_tree_entry(path)
+        target = verification_destination / path.name
+        if path.is_dir():
+            copy_verified_tree_into(path, target)
+        elif path.is_file():
+            if target.exists():
+                fail(f"refusing to overwrite pre-existing hardware evidence: {target}")
+            shutil.copy2(path, target)
+        else:
+            fail(f"unsupported build-evidence entry: {path}")
+
+    cargo_archive = verification_destination / "cargo-gate"
+    copy_verified_tree_into(repository / ".cargo-gate", cargo_archive)
 
 
 def iter_payload_files(root: Path) -> list[Path]:
@@ -123,6 +213,7 @@ def build(args: argparse.Namespace) -> int:
         fail(f"handoff root is missing: {root}")
     validate_identity(args.release_sha, args.request_id)
     producer_host_id = resolved_host_id(args.producer_host_id, "producer_host_id")
+    stage_repository_gate_evidence(root)
     entries = []
     for path in iter_payload_files(root):
         entries.append(
@@ -153,6 +244,7 @@ def build(args: argparse.Namespace) -> int:
                 "manifest": str(manifest),
                 "files": len(entries),
                 "producer_host_id": producer_host_id,
+                "gate_evidence_embedded": True,
             },
             ensure_ascii=False,
         )
@@ -224,6 +316,7 @@ def verify(args: argparse.Namespace) -> int:
             fail(f"handoff size mismatch: {rel}")
         if sha256_file(path) != digest:
             fail(f"handoff sha256 mismatch: {rel}")
+    restore_verified_build_evidence(root)
     report = {
         "schema": "dokkomplekt.windows-signed-handoff-verification.v1",
         "ok": True,
@@ -232,6 +325,7 @@ def verify(args: argparse.Namespace) -> int:
         "producer_host_id": producer_host_id,
         "consumer_host_id": consumer_host_id,
         "physical_host_separation": True,
+        "gate_evidence_restored": True,
         "files": len(actual),
         "verified_at_utc": datetime.now(timezone.utc).isoformat(),
     }

@@ -9,6 +9,7 @@ CLEANUP = ROOT / "scripts" / "cleanup_windows_reboot_preparation.ps1"
 DISPATCHER = ROOT / "scripts" / "dispatch_private_hardware_validation.py"
 PUBLIC_WORKFLOW = ROOT / ".github" / "workflows" / "windows-hardware-e2e.yml"
 PRIVATE_WORKFLOW = ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
+APPROVAL = ROOT / "scripts" / "windows_runtime_lock_approval.py"
 DOC = ROOT / "docs" / "WINDOWS_HARDWARE_RUNNER.md"
 
 
@@ -99,6 +100,22 @@ def test_private_workflow_owns_self_hosted_and_two_phase_reboot() -> None:
     assert "DOKKOMPLEKT_REBOOT_PREP_ROOT" in text
     assert "cleanup_windows_reboot_preparation.ps1" in text
     assert "https://github.com/${{ inputs.source_repository }}.git" in text
+
+
+def test_private_workflow_requires_offline_approved_runtime_lock_before_staging() -> None:
+    workflow = read(PRIVATE_WORKFLOW)
+    approval = read(APPROVAL)
+    assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64" in workflow
+    assert "windows_runtime_lock_approval.py verify" in workflow
+    assert "RUNTIME_LOCK_APPROVAL.json" in workflow
+    assert "Offline approval signature is missing" in workflow
+    assert workflow.index("windows_runtime_lock_approval.py verify") < workflow.index(
+        "prepare_sidecars.py"
+    )
+    assert "Ed25519PrivateKey" in approval
+    assert "Ed25519PublicKey" in approval
+    assert "private_key_present_on_runner" in approval
+    assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PRIVATE" not in workflow
 
 
 def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:

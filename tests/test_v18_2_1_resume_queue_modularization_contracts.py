@@ -105,8 +105,11 @@ class V1821ResumeQueueModularizationContracts(unittest.TestCase):
         self.assertIn("prepackage_rust_gate.sh", installers)
         self.assertIn("runs-on: ubuntu-latest", public_bridge)
         self.assertNotIn("runs-on: [self-hosted", public_bridge)
-        self.assertIn("self-hosted, Windows, X64, dokkomplekt-hardware-e2e", private_hardware)
+        self.assertIn("self-hosted, Windows, X64, dokkomplekt-runtime", private_hardware)
+        self.assertIn("self-hosted, Windows, X64, dokkomplekt-hardware", private_hardware)
         self.assertIn("environment: windows-production-signing", private_hardware)
+        self.assertIn("environment: windows-hardware-validation", private_hardware)
+        self.assertIn("needs: signed-runtime-build", private_hardware)
         self.assertFalse((ROOT / ".cargo-gate/CARGO_GATE_PASSED.ok").exists())
 
 

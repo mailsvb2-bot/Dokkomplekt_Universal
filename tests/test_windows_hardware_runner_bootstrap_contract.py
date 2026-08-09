@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REGISTER = ROOT / "scripts" / "register_windows_hardware_runner.ps1"
 BOOTSTRAP = ROOT / "scripts" / "bootstrap_windows_hardware_runner.ps1"
 PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_runner.ps1"
 CLEANUP = ROOT / "scripts" / "cleanup_windows_reboot_preparation.ps1"
@@ -12,6 +13,15 @@ DOC = ROOT / "docs" / "WINDOWS_HARDWARE_RUNNER.md"
 def read(path: Path) -> str:
     assert path.is_file(), f"missing required hardware-runner file: {path}"
     return path.read_text(encoding="utf-8")
+
+
+def test_registration_entrypoint_prompts_securely() -> None:
+    text = read(REGISTER)
+    assert "Read-Host 'GitHub self-hosted runner registration token' -AsSecureString" in text
+    assert "[Net.NetworkCredential]::new('', $secureToken)" in text
+    assert "bootstrap_windows_hardware_runner.ps1" in text
+    assert "$plainToken = $null" in text
+    assert "$secureToken.Dispose()" in text
 
 
 def test_bootstrap_forbids_service_mode_and_uses_interactive_task() -> None:
@@ -79,5 +89,6 @@ def test_hardware_runner_runbook_exists() -> None:
     assert "dokkomplekt-hardware-e2e" in text
     assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" in text
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" in text
+    assert "register_windows_hardware_runner.ps1" in text
     assert "prepare" in text
     assert "production-hardware" in text

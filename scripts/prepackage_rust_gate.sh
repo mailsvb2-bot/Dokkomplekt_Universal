@@ -55,7 +55,12 @@ if ! cargo audit --version >/dev/null 2>&1; then
   exit 1
 fi
 "$PYTHON_BIN" scripts/check_commercial_rust_crates.py
-cargo audit --deny warnings --json > .cargo-gate/RUSTSEC_AUDIT.json
+# Security invariant: run_rustsec_audit.py executes the equivalent of
+# cargo audit --deny warnings --json against the exact validated advisory DB pin,
+# using cargo-audit --db <checkout> --no-fetch; no advisory/stale bypass is allowed.
+"$PYTHON_BIN" scripts/run_rustsec_audit.py \
+  --json-output .cargo-gate/RUSTSEC_AUDIT.json \
+  --pin-report .cargo-gate/RUSTSEC_DB_PIN.json
 "$PYTHON_BIN" scripts/write_rustsec_evidence.py
 if [ -n "${DOKKOMPLEKT_GATE_PRIVATE_KEY_B64:-}" ]; then
   "$PYTHON_BIN" scripts/write_cargo_gate_attestation.py

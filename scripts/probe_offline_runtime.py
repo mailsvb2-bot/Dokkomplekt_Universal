@@ -53,6 +53,25 @@ def tool_path(target_dir: Path, status: dict, tool: str, names: Iterable[str]) -
     raise FileNotFoundError(f"runtime entry point is missing for {tool}: {sorted(expected)}")
 
 
+def msgconvert_probe_command(target_dir: Path, status: dict) -> list[str]:
+    """Return a launch command for a native wrapper or a locked local Perl tree.
+
+    A bare msgconvert.pl is not a portable Windows runtime. If the reviewed
+    component uses the Perl implementation, perl.exe and its modules must live
+    inside the same `msgconvert` component tree and therefore be represented in
+    the same locked inventory.
+    """
+    try:
+        executable = tool_path(
+            target_dir, status, "msgconvert", ["msgconvert.exe", "msgconvert"]
+        )
+        return [str(executable), "--help"]
+    except FileNotFoundError:
+        script = tool_path(target_dir, status, "msgconvert", ["msgconvert.pl"])
+        perl = tool_path(target_dir, status, "msgconvert", ["perl.exe", "perl"])
+        return [str(perl), str(script), "--help"]
+
+
 def run_probe(title: str, command: list[str], accepted_codes: set[int] | None = None) -> None:
     completed = subprocess.run(
         command,
@@ -85,16 +104,17 @@ def main() -> int:
 
     target_dir, status = load_status(args.target)
     probes = [
-        ("Tesseract", tool_path(target_dir, status, "tesseract", ["tesseract.exe"]), ["--version"], {0}),
-        ("Poppler pdftotext", tool_path(target_dir, status, "poppler", ["pdftotext.exe"]), ["-v"], {0, 1, 99}),
-        ("Poppler pdftoppm", tool_path(target_dir, status, "poppler", ["pdftoppm.exe"]), ["-v"], {0, 1, 99}),
-        ("LibreOffice", tool_path(target_dir, status, "libreoffice", ["soffice.exe"]), ["--headless", "--version"], {0}),
-        ("SumatraPDF", tool_path(target_dir, status, "sumatrapdf", ["sumatrapdf.exe"]), ["-help"], {0}),
-        ("7-Zip", tool_path(target_dir, status, "7zip", ["7z.exe", "7zz.exe"]), ["i"], {0}),
-        ("llama.cpp", tool_path(target_dir, status, "llama_cpp", ["llama-server.exe", "server.exe"]), ["--version"], {0}),
+        ("Tesseract", [str(tool_path(target_dir, status, "tesseract", ["tesseract.exe"])), "--version"], {0}),
+        ("Poppler pdftotext", [str(tool_path(target_dir, status, "poppler", ["pdftotext.exe"])), "-v"], {0, 1, 99}),
+        ("Poppler pdftoppm", [str(tool_path(target_dir, status, "poppler", ["pdftoppm.exe"])), "-v"], {0, 1, 99}),
+        ("LibreOffice", [str(tool_path(target_dir, status, "libreoffice", ["soffice.exe"])), "--headless", "--version"], {0}),
+        ("SumatraPDF", [str(tool_path(target_dir, status, "sumatrapdf", ["sumatrapdf.exe"])), "-help"], {0}),
+        ("7-Zip", [str(tool_path(target_dir, status, "7zip", ["7z.exe", "7zz.exe"])), "i"], {0}),
+        ("msgconvert", msgconvert_probe_command(target_dir, status), {0, 1, 2}),
+        ("llama.cpp", [str(tool_path(target_dir, status, "llama_cpp", ["llama-server.exe", "server.exe"])), "--version"], {0}),
     ]
-    for title, executable, arguments, accepted in probes:
-        run_probe(title, [str(executable), *arguments], accepted)
+    for title, command, accepted in probes:
+        run_probe(title, command, accepted)
     print(f"OFFLINE RUNTIME EXECUTION PROBE PASSED: target={args.target}; probes={len(probes)}")
     return 0
 

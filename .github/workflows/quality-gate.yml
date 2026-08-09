@@ -90,17 +90,19 @@ jobs:
           key: cargo-audit-${{ runner.os }}-0.22.2
       - name: Install current CVSS-4-compatible cargo-audit
         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version 0.22.2
-      - name: Audit locked Rust dependencies
+      - name: Audit locked Rust dependencies (cargo audit --deny warnings) against validated advisory DB revision
         shell: bash
         run: |
           set -o pipefail
-          cargo audit --deny warnings 2>&1 | tee rustsec-audit.log
+          python scripts/run_rustsec_audit.py --pin-report rustsec-advisory-db-pin.json 2>&1 | tee rustsec-audit.log
       - name: Upload RustSec diagnostics
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
           name: rustsec-audit-diagnostics
-          path: rustsec-audit.log
+          path: |
+            rustsec-audit.log
+            rustsec-advisory-db-pin.json
           if-no-files-found: error
 
   python-contracts:

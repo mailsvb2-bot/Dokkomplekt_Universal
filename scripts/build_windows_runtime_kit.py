@@ -4,8 +4,8 @@
 This command deliberately performs no network access and never downloads runtime
 components. A release engineer points it at complete local portable trees for
 each required component. The builder recursively inventories every regular file,
-rejects symlinks/path escapes, emits a create_runtime_lock.py compatible catalog
-and exact distribution inventory, then creates the immutable runner-owned
+rejects symlinks/junctions/path escapes, emits a create_runtime_lock.py compatible
+catalog and exact distribution inventory, then creates the immutable runner-owned
 manifest consumed by prepare_sidecars.py.
 """
 from __future__ import annotations
@@ -49,6 +49,14 @@ def atomic_json(path: Path, payload: object) -> None:
     os.replace(temporary, path)
 
 
+def is_linklike(path: Path) -> bool:
+    """Reject POSIX symlinks and Windows directory junction/reparse indirections."""
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction()) if callable(is_junction) else False
+
+
 def required_text(raw: dict[str, Any], key: str, label: str) -> str:
     value = str(raw.get(key, "")).strip()
     if not value or value.upper().startswith("REPLACE_"):
@@ -63,8 +71,8 @@ def resolve_path(base: Path, value: Any, label: str, *, directory: bool) -> Path
         path = (base / path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"{label} does not exist: {path}")
-    if path.is_symlink():
-        raise ValueError(f"{label} must not be a symlink: {path}")
+    if is_linklike(path):
+        raise ValueError(f"{label} must not be a symlink or junction: {path}")
     if directory:
         if not path.is_dir():
             raise ValueError(f"{label} must be a directory: {path}")
@@ -93,21 +101,24 @@ def enumerate_tree(root: Path, target_root: str, tool: str) -> list[tuple[Path, 
     output: list[tuple[Path, str]] = []
     root_resolved = root.resolve()
     for candidate in sorted(root.rglob("*"), key=lambda item: item.as_posix().lower()):
-        if candidate.is_symlink():
-            raise ValueError(f"{tool} portable tree contains a symlink: {candidate}")
+        if is_linklike(candidate):
+            raise ValueError(
+                f"{tool} portable tree contains a symlink or junction: {candidate}"
+            )
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(root_resolved)
+        except ValueError as exc:
+            raise ValueError(
+                f"{tool} portable tree escapes its reviewed root: {candidate}"
+            ) from exc
         if candidate.is_dir():
             continue
         if not candidate.is_file():
             raise ValueError(
                 f"{tool} portable tree contains a non-regular entry: {candidate}"
             )
-        resolved = candidate.resolve()
-        try:
-            relative = resolved.relative_to(root_resolved)
-        except ValueError as exc:
-            raise ValueError(
-                f"{tool} portable tree escapes its reviewed root: {candidate}"
-            ) from exc
+        relative = resolved.relative_to(root_resolved)
         target = validate_relative_runtime_path(
             (Path(target_root) / relative).as_posix(), f"{tool} runtime target"
         )

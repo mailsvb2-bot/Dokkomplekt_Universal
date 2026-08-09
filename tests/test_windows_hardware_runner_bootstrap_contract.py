@@ -5,11 +5,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTER = ROOT / "scripts" / "register_windows_hardware_runner.ps1"
 BOOTSTRAP = ROOT / "scripts" / "bootstrap_windows_hardware_runner.ps1"
 PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_runner.ps1"
+EVIDENCE_PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_evidence_host.ps1"
 CLEANUP = ROOT / "scripts" / "cleanup_windows_reboot_preparation.ps1"
 DISPATCHER = ROOT / "scripts" / "dispatch_private_hardware_validation.py"
 PUBLIC_WORKFLOW = ROOT / ".github" / "workflows" / "windows-hardware-e2e.yml"
 PRIVATE_WORKFLOW = ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
 APPROVAL = ROOT / "scripts" / "windows_runtime_lock_approval.py"
+HANDOFF = ROOT / "scripts" / "windows_signed_handoff.py"
 DOC = ROOT / "docs" / "WINDOWS_HARDWARE_RUNNER.md"
 
 
@@ -48,7 +50,7 @@ def test_bootstrap_pins_downloaded_runner_by_release_asset_digest() -> None:
     assert "GitHub runner package SHA-256 mismatch" in text
 
 
-def test_host_preflight_checks_real_hardware_dependencies() -> None:
+def test_host_preflight_checks_legacy_full_hardware_dependencies() -> None:
     text = read(PREFLIGHT)
     for required in (
         "interactive-user-session",
@@ -62,6 +64,34 @@ def test_host_preflight_checks_real_hardware_dependencies() -> None:
         "openssl",
     ):
         assert required in text
+
+
+def test_new_hardware_evidence_preflight_has_no_runtime_manifest_dependency() -> None:
+    text = read(EVIDENCE_PREFLIGHT)
+    for required in (
+        "interactive-user-session",
+        "actions-runner-not-service",
+        "microsoft-word-com",
+        "dedicated-real-printer",
+        "printservice-operational-log",
+        "visual-studio-vctools",
+        "webview2-runtime",
+        "runtime-manifest-not-exposed",
+        "signing-secrets-not-exposed",
+        "runtime_manifest_env_exposed",
+        "signing_secret_env_exposed",
+    ):
+        assert required in text
+    assert "[Parameter(Mandatory = $true)] [string] $SidecarManifestPath" not in text
+    assert "runner-owned-sidecar-manifest" not in text
+    for forbidden in (
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+        "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
+        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
+        "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
+    ):
+        assert forbidden in text
 
 
 def test_public_workflow_never_targets_self_hosted_runner() -> None:
@@ -85,37 +115,79 @@ def test_dispatcher_requires_a_separate_private_target_and_correlates_runs() -> 
     assert '"reboot_phase": args.reboot_phase' in text
 
 
-def test_private_workflow_owns_self_hosted_and_two_phase_reboot() -> None:
+def test_private_workflow_splits_signing_and_hardware_trust_domains() -> None:
     text = read(PRIVATE_WORKFLOW)
-    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware-e2e]" in text
+    assert "signed-runtime-build:" in text
+    assert "hardware-evidence:" in text
+    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]" in text
+    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" in text
     assert "environment: windows-production-signing" in text
-    assert "run-name:" in text and "inputs.request_id" in text
-    assert "source_repository:" in text
-    assert "release_sha:" in text
-    assert "reboot_phase:" in text
-    assert "request_id:" in text
-    assert "verify_windows_hardware_runner.ps1" in text
-    assert "DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT" in text
-    assert "DOKKOMPLEKT_PREPARE_REBOOT_E2E" in text
-    assert "DOKKOMPLEKT_REBOOT_PREP_ROOT" in text
-    assert "cleanup_windows_reboot_preparation.ps1" in text
-    assert "https://github.com/${{ inputs.source_repository }}.git" in text
+    assert "environment: windows-hardware-validation" in text
+    assert "needs: signed-runtime-build" in text
+    assert "Dokkomplekt-Windows-Signed-Handoff-" in text
+    assert "actions/upload-artifact@" in text
+    assert "actions/download-artifact@" in text
+
+    runtime_start = text.index("  signed-runtime-build:")
+    hardware_start = text.index("  hardware-evidence:")
+    runtime = text[runtime_start:hardware_start]
+    hardware = text[hardware_start:]
+    for secret_name in (
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+        "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
+        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
+        "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
+    ):
+        assert secret_name in runtime
+        assert secret_name not in hardware
+    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" in runtime
+    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in hardware
+    assert "verify_windows_hardware_evidence_host.ps1" in hardware
+    assert "verify_windows_hardware_runner.ps1" not in hardware
 
 
 def test_private_workflow_requires_offline_approved_runtime_lock_before_staging() -> None:
     workflow = read(PRIVATE_WORKFLOW)
     approval = read(APPROVAL)
-    assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64" in workflow
-    assert "windows_runtime_lock_approval.py verify" in workflow
-    assert "RUNTIME_LOCK_APPROVAL.json" in workflow
-    assert "Offline approval signature is missing" in workflow
-    assert workflow.index("windows_runtime_lock_approval.py verify") < workflow.index(
-        "prepare_sidecars.py"
-    )
+    runtime = workflow[workflow.index("  signed-runtime-build:"):workflow.index("  hardware-evidence:")]
+    assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64" in runtime
+    assert "windows_runtime_lock_approval.py verify" in runtime
+    assert "RUNTIME_LOCK_APPROVAL.json" in runtime
+    assert "Offline approval signature is missing" in runtime
+    assert runtime.index("windows_runtime_lock_approval.py verify") < runtime.index("prepare_sidecars.py")
     assert "Ed25519PrivateKey" in approval
     assert "Ed25519PublicKey" in approval
     assert "private_key_present_on_runner" in approval
     assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PRIVATE" not in workflow
+
+
+def test_signed_handoff_is_verified_before_hardware_execution() -> None:
+    workflow = read(PRIVATE_WORKFLOW)
+    handoff = read(HANDOFF)
+    hardware = workflow[workflow.index("  hardware-evidence:"):]
+    assert "windows_signed_handoff.py build" in workflow
+    assert "windows_signed_handoff.py verify" in hardware
+    assert "SIGNED_HANDOFF_VERIFICATION.json" in hardware
+    assert hardware.index("windows_signed_handoff.py verify") < hardware.index("windows_hardware_e2e.ps1")
+    assert "Get-AuthenticodeSignature" in hardware
+    assert "verify_offline_runtime_bundle.py" in hardware
+    assert "Ed25519PrivateKey" in handoff
+    assert "Ed25519PublicKey" in handoff
+    assert "handoff file set mismatch" in handoff
+    assert "handoff sha256 mismatch" in handoff
+
+
+def test_private_workflow_owns_two_phase_reboot_only_on_hardware_job() -> None:
+    text = read(PRIVATE_WORKFLOW)
+    hardware = text[text.index("  hardware-evidence:"):]
+    assert "run-name:" in text and "inputs.request_id" in text
+    assert "DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT" in hardware
+    assert "DOKKOMPLEKT_PREPARE_REBOOT_E2E" in hardware
+    assert "DOKKOMPLEKT_REBOOT_PREP_ROOT" in hardware
+    assert "cleanup_windows_reboot_preparation.ps1" in hardware
+    assert "signed_handoff_manifest_sha256" in hardware
+    assert "https://github.com/${{ inputs.source_repository }}.git" in text
 
 
 def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:
@@ -133,6 +205,7 @@ def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:
 def test_hardware_runner_runbook_describes_private_security_boundary() -> None:
     text = read(DOC)
     assert "windows-production-signing" in text
+    assert "windows-hardware-validation" in text
     assert "windows-hardware-dispatch" in text
     assert "private" in text.lower()
     assert "must **not** be registered" in text
@@ -140,6 +213,8 @@ def test_hardware_runner_runbook_describes_private_security_boundary() -> None:
     assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in text
     assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" in text
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" in text
-    assert "register_windows_hardware_runner.ps1" in text
+    assert "dokkomplekt-runtime" in text
+    assert "dokkomplekt-hardware" in text
+    assert "SIGNED_HANDOFF.json" in text
     assert "prepare" in text
     assert "production-hardware" in text

@@ -9,6 +9,9 @@ on:
       - 'ops/private-hardware-validation/**'
       - 'scripts/bootstrap_windows_hardware_runner.ps1'
       - 'scripts/register_windows_hardware_runner.ps1'
+      - 'scripts/bootstrap_private_windows_runner.ps1'
+      - 'scripts/register_windows_runtime_runner.ps1'
+      - 'scripts/register_windows_hardware_evidence_runner.ps1'
       - 'scripts/verify_windows_hardware_runner.ps1'
       - 'scripts/verify_windows_hardware_evidence_host.ps1'
       - 'scripts/cleanup_windows_reboot_preparation.ps1'
@@ -30,6 +33,7 @@ on:
       - 'tests/windows/prepare_reboot_evidence.ps1'
       - 'tests/windows/verify_reboot_evidence.ps1'
       - 'tests/test_two_runner_trust_boundary.py'
+      - 'tests/test_two_runner_bootstrap_roles.py'
       - 'tests/test_windows_hardware_runner_bootstrap_contract.py'
       - 'tests/test_windows_signed_handoff.py'
       - 'tests/test_windows_runtime_kit.py'
@@ -66,6 +70,9 @@ jobs:
           $scripts = @(
             'scripts/bootstrap_windows_hardware_runner.ps1',
             'scripts/register_windows_hardware_runner.ps1',
+            'scripts/bootstrap_private_windows_runner.ps1',
+            'scripts/register_windows_runtime_runner.ps1',
+            'scripts/register_windows_hardware_evidence_runner.ps1',
             'scripts/verify_windows_hardware_runner.ps1',
             'scripts/verify_windows_hardware_evidence_host.ps1',
             'scripts/cleanup_windows_reboot_preparation.ps1',
@@ -111,6 +118,7 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_two_runner_trust_boundary.py
+          tests/test_two_runner_bootstrap_roles.py
           tests/test_windows_hardware_runner_bootstrap_contract.py
           tests/test_windows_signed_handoff.py
           tests/test_windows_runtime_kit.py

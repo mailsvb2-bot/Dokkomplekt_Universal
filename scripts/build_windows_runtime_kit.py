@@ -30,6 +30,7 @@ SCHEMA = "dokkomplekt.windows-runtime-kit.v1"
 SPEC_SCHEMA = 1
 TARGET = "windows-x86_64"
 EXECUTABLE_SUFFIXES = {".exe", ".com", ".cmd", ".bat", ".ps1", ".pl"}
+PRODUCTION_REQUIRED_TOOLS = set(REQUIRED_TOOLS) | {"msgconvert"}
 
 
 def sha256_file(path: Path) -> str:
@@ -218,8 +219,8 @@ def build_catalog(
             }
         )
 
-    missing = sorted(REQUIRED_TOOLS - seen_tools)
-    extra = sorted(seen_tools - REQUIRED_TOOLS)
+    missing = sorted(PRODUCTION_REQUIRED_TOOLS - seen_tools)
+    extra = sorted(seen_tools - PRODUCTION_REQUIRED_TOOLS)
     if missing or extra:
         raise ValueError(
             "runtime-kit component set must exactly match production requirements; "

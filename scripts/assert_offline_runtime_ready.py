@@ -195,7 +195,11 @@ def verify_production_plausibility(target_dir: Path, tool_files: dict[str, list[
                     raise ValueError(f"production GGUF model is implausibly small: {relative}")
 
 
-def verify_required_runtime(tool_files: dict[str, list[Path]], require_model: bool) -> None:
+def verify_required_runtime(
+    tool_files: dict[str, list[Path]],
+    require_model: bool,
+    require_msgconvert: bool = False,
+) -> None:
     require_file(tool_files, "tesseract", "tesseract.exe", "tesseract")
     require_suffix(tool_files, "tesseract", "tessdata/rus.traineddata")
     require_suffix(tool_files, "tesseract", "tessdata/eng.traineddata")
@@ -204,7 +208,8 @@ def verify_required_runtime(tool_files: dict[str, list[Path]], require_model: bo
     require_file(tool_files, "libreoffice", "soffice.exe", "soffice")
     require_file(tool_files, "sumatrapdf", "sumatrapdf.exe", "sumatrapdf")
     require_file(tool_files, "7zip", "7z.exe", "7zz.exe", "7z", "7zz")
-    require_file(tool_files, "msgconvert", "msgconvert.exe", "msgconvert", "msgconvert.pl")
+    if require_msgconvert:
+        require_file(tool_files, "msgconvert", "msgconvert.exe", "msgconvert", "msgconvert.pl")
 
     if require_model:
         require_file(
@@ -237,7 +242,7 @@ def main() -> int:
     tools = verify_entries(target_dir, status)
     if args.require_supply_chain:
         verify_supply_chain(target_dir, status)
-    verify_required_runtime(tools, args.require_semantic_model)
+    verify_required_runtime(tools, args.require_semantic_model, args.production)
     if args.require_distribution_review or args.production:
         verify_distribution_review(target_dir, status, tools)
     if args.production:

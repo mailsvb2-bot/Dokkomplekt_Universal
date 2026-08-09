@@ -126,7 +126,7 @@ def test_builder_creates_lock_that_stages_and_verifies_end_to_end() -> None:
         builder.atomic_json(lock_path, lock)
 
         assert lock["supply_chain_locked"] is True
-        assert {entry["tool"] for entry in lock["files"]} == builder.REQUIRED_TOOLS
+        assert {entry["tool"] for entry in lock["files"]} == builder.PRODUCTION_REQUIRED_TOOLS
         assert report["component_count"] == 8
         assert report["file_count"] == len(lock["files"])
         assert "msgconvert" in {entry["tool"] for entry in lock["files"]}
@@ -141,7 +141,7 @@ def test_builder_creates_lock_that_stages_and_verifies_end_to_end() -> None:
         target_dir, status = verifier.load_status("windows-x86_64")
         tools = verifier.verify_entries(target_dir, status)
         verifier.verify_supply_chain(target_dir, status)
-        verifier.verify_required_runtime(tools, True)
+        verifier.verify_required_runtime(tools, True, True)
         verifier.verify_distribution_review(target_dir, status, tools)
         assert "msgconvert" in tools
 
@@ -184,7 +184,7 @@ def test_builder_rejects_linklike_component_content() -> None:
 def test_runtime_required_tool_set_includes_msgconvert() -> None:
     builder = load_module(BUILDER, "build_windows_runtime_kit_required_set")
     verifier = load_module(VERIFIER, "assert_offline_runtime_ready_msgconvert_contract")
-    assert "msgconvert" in builder.REQUIRED_TOOLS
+    assert "msgconvert" in builder.PRODUCTION_REQUIRED_TOOLS
     with pytest.raises(ValueError, match="msgconvert"):
         verifier.verify_required_runtime(
             {
@@ -200,6 +200,7 @@ def test_runtime_required_tool_set_includes_msgconvert() -> None:
                 "llama_cpp": [Path("llama_cpp/llama-server.exe")],
                 "semantic_model": [Path("semantic_model/model.gguf")],
             },
+            True,
             True,
         )
 

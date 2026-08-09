@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $EvidencePath,
-    [string] $OutputPath = 'verification/release/REBOOT_PREPARATION_CLEANUP.json'
+    [string] $OutputPath = 'verification/release/REBOOT_PREPARATION_CLEANUP.json',
+    [switch] $RemoveRawEvidence
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,12 +73,23 @@ if (Test-Path -LiteralPath $installRoot -PathType Container) {
     Remove-Item -LiteralPath $installRoot -Recurse -Force
 }
 
+$rawEvidenceSha256 = (Get-FileHash -LiteralPath $rawEvidence -Algorithm SHA256).Hash.ToLowerInvariant()
+$rawEvidenceRemoved = $false
+if ($RemoveRawEvidence) {
+    $rawEvidence = Assert-UnderDokkomplektProgramData -Path $rawEvidence -Label 'Raw reboot evidence'
+    Remove-Item -LiteralPath $rawEvidence -Force
+    $rawEvidenceRemoved = -not (Test-Path -LiteralPath $rawEvidence -PathType Leaf)
+    if (-not $rawEvidenceRemoved) { throw 'Raw reboot evidence could not be removed after archival.' }
+}
+
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 [ordered]@{
     schema = 'dokkomplekt.windows-reboot-preparation-cleanup.v1'
     cleaned_at_utc = [DateTime]::UtcNow.ToString('o')
     raw_evidence_path = $rawEvidence
+    raw_evidence_sha256 = $rawEvidenceSha256
+    raw_evidence_removed = $rawEvidenceRemoved
     prepared_application_path = $appPath
     prepared_install_root = $installRoot
     prepared_watch_root = $watchRoot

@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -150,6 +151,43 @@ def test_signed_handoff_rejects_same_physical_host(tmp_path: Path) -> None:
     assert same_host.returncode != 0
     assert "physical trust-domain separation is required" in (
         same_host.stdout + same_host.stderr
+    )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows MachineGuid")
+def test_windows_automatic_host_fingerprint_rejects_same_installation(tmp_path: Path) -> None:
+    root = tmp_path / "handoff"
+    root.mkdir()
+    (root / "artifact.bin").write_bytes(b"payload")
+    private_key, public_key = make_keys(tmp_path)
+    release_sha = "e" * 40
+    request_id = "87654321-4321-6789-abcd-0123456789ab"
+
+    built = run(
+        "build",
+        str(root),
+        "--release-sha",
+        release_sha,
+        "--request-id",
+        request_id,
+        "--signing-key",
+        str(private_key),
+    )
+    assert built.returncode == 0, built.stderr
+
+    same_windows_installation = run(
+        "verify",
+        str(root),
+        "--release-sha",
+        release_sha,
+        "--request-id",
+        request_id,
+        "--trusted-public-key",
+        str(public_key),
+    )
+    assert same_windows_installation.returncode != 0
+    assert "physical trust-domain separation is required" in (
+        same_windows_installation.stdout + same_windows_installation.stderr
     )
 
 

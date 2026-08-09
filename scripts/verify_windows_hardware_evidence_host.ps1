@@ -55,6 +55,22 @@ Add-Check -Name 'visual-studio-vctools' -Ok (-not [string]::IsNullOrWhiteSpace($
 $webViewCandidates = @(Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application" -Recurse -File -Filter 'msedgewebview2.exe' -ErrorAction SilentlyContinue)
 Add-Check -Name 'webview2-runtime' -Ok ($webViewCandidates.Count -gt 0) -Detail (if ($webViewCandidates.Count -gt 0) { $webViewCandidates[0].FullName } else { 'missing' })
 
+$runtimeManifestEnv = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_SIDECAR_MANIFEST_PATH', 'Process')
+$runtimeManifestNotExposed = [string]::IsNullOrWhiteSpace($runtimeManifestEnv)
+Add-Check -Name 'runtime-manifest-not-exposed' -Ok $runtimeManifestNotExposed -Detail (if ($runtimeManifestNotExposed) { 'DOKKOMPLEKT_SIDECAR_MANIFEST_PATH is absent from the hardware process' } else { 'DOKKOMPLEKT_SIDECAR_MANIFEST_PATH must not be exposed to the hardware trust domain' })
+
+$signingSecretNames = @(
+    'DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64',
+    'DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD',
+    'DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64',
+    'DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64',
+    'DOKKOMPLEKT_GATE_PRIVATE_KEY_B64'
+)
+$exposedSigningSecrets = @($signingSecretNames | Where-Object {
+    -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_, 'Process'))
+})
+Add-Check -Name 'signing-secrets-not-exposed' -Ok ($exposedSigningSecrets.Count -eq 0) -Detail (if ($exposedSigningSecrets.Count -eq 0) { 'no signing/private-key environment variables are exposed' } else { 'forbidden variables: ' + ($exposedSigningSecrets -join ', ') })
+
 $wordPath = ''
 try {
     $wordPath = [string] (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Winword.exe' -ErrorAction Stop).'(default)'
@@ -131,7 +147,8 @@ $report = [ordered]@{
     computer = $env:COMPUTERNAME
     user = $identity.Name
     session_id = $sessionId
-    runtime_manifest_present_on_hardware_host = $false
+    runtime_manifest_env_exposed = -not $runtimeManifestNotExposed
+    signing_secret_env_exposed = $exposedSigningSecrets
     ok = $failures.Count -eq 0
     checks = $checks
     failures = $failures

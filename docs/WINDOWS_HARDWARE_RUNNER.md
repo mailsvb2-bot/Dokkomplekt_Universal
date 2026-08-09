@@ -1,80 +1,131 @@
 # Windows Hardware Runner
 
-This is the production hardware acceptance host for Dokkomplekt Universal. It is intentionally different from the ordinary GitHub-hosted Windows packaging runner: it must prove real Microsoft Word automation, a real printer/spooler completion event, visible GUI behavior, signed binaries, a complete offline runtime, and watcher behavior across a real Windows reboot.
+Dokkomplekt production hardware acceptance must run on a dedicated interactive Windows host with real Microsoft Word, a real printer queue, signed binaries, a complete offline runtime and a genuine reboot. It is intentionally separate from ordinary GitHub-hosted CI.
 
-## Required host
+## Security boundary: never attach the production runner to the public source repo
 
-Use a dedicated Windows 11 Pro x64 machine or dedicated Windows 11 Pro x64 VM with an interactive desktop session and exclusive use for Dokkomplekt release evidence.
+`mailsvb2-bot/Dokkomplekt_Universal` is public. The physical/self-hosted runner must **not** be registered in that repository. A persistent self-hosted runner attached to a public repository creates an unacceptable attack surface from public/fork workflows.
 
-The runner account must be a dedicated Windows user with administrator rights for the test host. Keep this user logged in while hardware jobs execute. Do **not** install the GitHub Actions runner as a Windows service: Word COM and the visible-GUI evidence require an interactive user session, while Windows services execute in a noninteractive service session.
+Use a separate **private** repository, recommended name:
+
+`mailsvb2-bot/Dokkomplekt_Hardware_Validation`
+
+Architecture:
+
+1. public `Dokkomplekt_Universal` contains source and the hosted `Windows Hardware E2E` dispatcher;
+2. the dispatcher is allowed to call only a configured private validation repository and first proves through the GitHub API that the target is private;
+3. the private repository contains the real self-hosted workflow from `ops/private-hardware-validation/windows-hardware-e2e.yml`;
+4. the Windows runner is registered only to that private repository;
+5. Authenticode/runtime/update/gate private keys live only in the private repository environment `windows-production-signing`;
+6. the private workflow anonymously checks out the public source repository at the exact approved 40-character SHA, proves that SHA is on public `main`, and then executes the hardware contour;
+7. the public dispatcher waits for the correlated private workflow run and fails unless its conclusion is `success`.
+
+The public repository therefore never directly schedules untrusted repository jobs on the production Windows host and never stores production signing secrets.
+
+## Private validation repository bootstrap
+
+Create a private repository and copy:
+
+`ops/private-hardware-validation/windows-hardware-e2e.yml`
+
+to:
+
+`.github/workflows/windows-hardware-e2e.yml`
+
+on the private repository's protected `main` branch. Keep that repository private.
+
+The private workflow accepts four inputs: `source_repository`, `release_sha`, `reboot_phase`, and a correlation `request_id`. Its `run-name` includes the request id so the public hosted dispatcher can bind its verdict to exactly the run it created.
+
+## Public dispatcher environment
+
+In public `Dokkomplekt_Universal`, create a protected environment named:
+
+`windows-hardware-dispatch`
+
+Set environment variable:
+
+- `DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY` = `mailsvb2-bot/Dokkomplekt_Hardware_Validation` (or the exact private repository you created);
+- optional `DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW` = `windows-hardware-e2e.yml`.
+
+Set environment secret:
+
+- `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN` — a narrowly scoped fine-grained credential able to read the private repository metadata, dispatch Actions workflows there and read their run status. Do not give it contents write, administration, packages, issues, pull-request or signing-secret permissions.
+
+The public `Windows Hardware E2E` workflow runs only on GitHub-hosted `ubuntu-latest`, requires `release_sha == github.sha` on public `main`, verifies the target repository reports `private=true`, dispatches the private workflow and waits for the exact correlation id. It contains no `runs-on: self-hosted` job.
+
+## Required Windows host
+
+Use a dedicated Windows 11 Pro x64 physical machine, or a Windows 11 Pro x64 VM only if the printer and desktop/Word behavior are genuinely representative of the acceptance claim. The account must be a dedicated Windows user with administrator rights on this test host.
+
+Keep that user logged in while jobs execute. Do **not** install the Actions runner as a Windows service. The test requires visible GUI evidence and Word COM; service/Session 0 execution is rejected by the host preflight.
 
 Required host components:
 
-- licensed desktop Microsoft Word, activated for the dedicated runner user;
+- licensed and activated desktop Microsoft Word for the runner user;
 - Microsoft Edge WebView2 Runtime;
-- a dedicated real printer queue (not Microsoft Print to PDF/XPS/OneNote/Fax);
+- a dedicated real printer queue, not Microsoft Print to PDF/XPS/OneNote/Fax;
 - Git for Windows;
 - PowerShell 7;
-- Visual Studio 2022 Build Tools with `Microsoft.VisualStudio.Workload.VCTools`;
-- outbound HTTPS access to GitHub, Rust and npm infrastructure, plus the production Dokkomplekt component/reference/update endpoints;
+- Visual Studio Build Tools with the C++ VCTools workload;
+- OpenSSL available to the interactive runner;
+- outbound HTTPS to GitHub, Rust, npm and the production Dokkomplekt component/reference/update endpoints;
 - runner-owned production sidecar tree and manifest;
-- enough free disk space for Rust/Tauri builds, the semantic model and the offline runtime bundle.
+- enough disk for Rust/Tauri builds, LibreOffice, OCR assets, the semantic model and release bundles.
 
-The repository hardware workflow requires the runner labels:
+Required labels:
 
 `self-hosted`, `Windows`, `X64`, `dokkomplekt-hardware-e2e`
 
-## Runner-owned sidecar manifest
+## Register the runner — only in the private repository
 
-Do not use the source placeholder `src-tauri/resources/tools/windows-x86_64/sidecar-status.json` as production input. Production uses an absolute path owned by the runner, for example:
+In the **private validation repository**, open **Settings → Actions → Runners → New self-hosted runner** and obtain a fresh short-lived registration token.
 
-`C:\DokkomplektRuntime\windows-x86_64-manifest.json`
-
-The manifest must satisfy `scripts/release_environment_preflight.py`:
-
-- `schema: 1`;
-- `target: windows-x86_64`;
-- `supply_chain_locked: true`;
-- SHA-256 for every file and license notice;
-- version, source URL and license metadata for every entry;
-- complete portable-tree inventory and distribution review;
-- Tesseract including required language data, Poppler, LibreOffice, SumatraPDF, 7-Zip, llama.cpp server and an approved GGUF semantic model; include any additional runtime entries required by the current product contour.
-
-The runner manifest points only to local, reviewed files. `scripts/prepare_sidecars.py` deliberately does not download production binaries.
-
-## Register the GitHub runner
-
-In GitHub open repository **Settings → Actions → Runners → New self-hosted runner** and obtain a fresh repository registration token. The token is short-lived; use it immediately and never store it in the repository or in a script.
-
-Open an **elevated interactive PowerShell** window while logged in as the dedicated runner user. From a checkout of this repository run:
+Open an elevated interactive PowerShell as the dedicated runner user from a checkout of `Dokkomplekt_Universal` containing the bootstrap scripts:
 
 ```powershell
 .\scripts\register_windows_hardware_runner.ps1 `
+  -RepositoryUrl 'https://github.com/mailsvb2-bot/Dokkomplekt_Hardware_Validation' `
   -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
   -SidecarManifestPath 'C:\DokkomplektRuntime\windows-x86_64-manifest.json' `
   -InstallPrerequisites
 ```
 
-The registration entrypoint prompts for the GitHub token as `SecureString`; the plaintext token is not typed into the PowerShell command history. The bootstrap verifies the downloaded GitHub runner ZIP against the SHA-256 digest published in the GitHub release asset metadata, configures label `dokkomplekt-hardware-e2e`, and creates an **interactive AtLogOn scheduled task** instead of a Windows service.
+The registration script explicitly refuses `https://github.com/mailsvb2-bot/Dokkomplekt_Universal`. It prompts for the GitHub registration token as `SecureString`, verifies the downloaded GitHub Actions runner ZIP against the SHA-256 digest published with the release, registers label `dokkomplekt-hardware-e2e`, and starts the runner through an interactive **AtLogOn scheduled task**, not a Windows service.
 
-The bootstrap writes host evidence to:
+Bootstrap evidence is written to:
 
 `C:\ProgramData\DokkomplektE2E\HARDWARE_RUNNER_BOOTSTRAP.json`
 
-After registration, verify the repository Settings page shows the runner online and carrying the required custom label.
+## Runner-owned sidecar manifest
 
-## `windows-production-signing` environment
+Production input must be an absolute runner-owned manifest such as:
 
-Create or use the protected GitHub environment named `windows-production-signing`. Restrict deployment access to protected `main` according to the repository release policy. Do not expose signing secrets to pull-request jobs.
+`C:\DokkomplektRuntime\windows-x86_64-manifest.json`
 
-Environment variables required by the current workflow:
+Do not use the source placeholder as production evidence. The production manifest must satisfy `scripts/release_environment_preflight.py` and include:
 
-- `DOKKOMPLEKT_TEST_PRINTER` — exact dedicated printer queue name;
-- `DOKKOMPLEKT_TEST_DUPLEX` — test duplex setting used by the print contract;
-- `DOKKOMPLEKT_TEST_TRAY` — test tray setting used by the print contract;
-- `DOKKOMPLEKT_REBOOT_EVIDENCE_PATH` — use a persistent absolute path, recommended `C:\ProgramData\DokkomplektE2E\WINDOWS_REBOOT_E2E_RAW.json`;
-- `DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT` — absolute path to a stable real source fixture on the runner, outside temporary runner work directories;
-- `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH` — absolute runner-owned production manifest path;
+- `schema: 1`;
+- `target: windows-x86_64`;
+- `supply_chain_locked: true`;
+- SHA-256, version, source URL, license and license notice hashes for every file;
+- complete portable-tree inventory and distribution review;
+- complete Tesseract language data, Poppler, LibreOffice, SumatraPDF, 7-Zip, llama.cpp server and an approved GGUF semantic model;
+- any additional runtime entry required by the current release contour.
+
+`scripts/prepare_sidecars.py` stages only these reviewed local files and intentionally does not fetch production binaries from the internet.
+
+## Private `windows-production-signing` environment
+
+Create this environment **only in the private validation repository**. Restrict it to private protected `main`; using required reviewers for release signing is recommended.
+
+Variables required by the current private workflow:
+
+- `DOKKOMPLEKT_TEST_PRINTER`;
+- `DOKKOMPLEKT_TEST_DUPLEX`;
+- `DOKKOMPLEKT_TEST_TRAY`;
+- `DOKKOMPLEKT_REBOOT_EVIDENCE_PATH` — recommended `C:\ProgramData\DokkomplektE2E\WINDOWS_REBOOT_E2E_RAW.json`;
+- `DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT` — stable absolute real source fixture path on the runner;
+- `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH`;
 - `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64`;
 - `DOKKOMPLEKT_GATE_PUBKEY_B64`;
 - `DOKKOMPLEKT_LICENSE_PUBKEY_B64`;
@@ -86,11 +137,9 @@ Environment variables required by the current workflow:
 - `DOKKOMPLEKT_COMPONENTS_CATALOG_URL`;
 - `DOKKOMPLEKT_COMPONENTS_BASE_URL`;
 - `DOKKOMPLEKT_TIMESTAMP_SERVER`;
-- `DOKKOMPLEKT_SIGNING_SCRIPT_SHA256` — SHA-256 of the audited `scripts/sign_windows_release.ps1` from the approved release tree.
+- `DOKKOMPLEKT_SIGNING_SCRIPT_SHA256` — SHA-256 of the audited `scripts/sign_windows_release.ps1` from the approved public release tree.
 
-The update/reference/component URLs must be real public HTTPS production endpoints. Placeholder `.invalid` URLs are not acceptable.
-
-Environment secrets required by the workflow:
+Secrets required only in the private environment:
 
 - `DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64`;
 - `DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD`;
@@ -98,62 +147,51 @@ Environment secrets required by the workflow:
 - `DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64`;
 - `DOKKOMPLEKT_GATE_PRIVATE_KEY_B64`.
 
-Use a real Authenticode code-signing certificate whose private key is controlled as a production secret. Never commit PFX/private keys or sidecar signing keys to Git.
+Use a real Authenticode code-signing certificate. Never commit PFX/private keys or signing keys to either repository.
 
 ## Host preflight
 
-Every hardware workflow now runs `scripts/verify_windows_hardware_runner.ps1` before installing toolchains or touching signing secrets. It fails closed if the job is in Session 0/service mode, the interactive runner task is absent, Word COM fails, the printer is virtual/unavailable, PrintService logging is unavailable, Build Tools/WebView2/OpenSSL are missing, or the runner-owned sidecar manifest is not supply-chain locked.
+Before signing/building, the private workflow calls `scripts/verify_windows_hardware_runner.ps1` from the exact public release SHA. It fails closed if:
 
-For an explicit local preflight after the runner is registered:
+- the runner executes as SYSTEM or in Session 0;
+- an Actions runner Windows service exists;
+- the interactive scheduled task/listener is absent;
+- Word COM cannot start;
+- the configured printer is virtual/unavailable;
+- PrintService Operational logging is unavailable;
+- VCTools, WebView2, Git, PowerShell 7 or OpenSSL are missing;
+- the runner-owned sidecar manifest is not direct, absolute and supply-chain locked.
 
-```powershell
-.\scripts\verify_windows_hardware_runner.ps1 `
-  -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
-  -SidecarManifestPath 'C:\DokkomplektRuntime\windows-x86_64-manifest.json' `
-  -RebootEvidencePath 'C:\ProgramData\DokkomplektE2E\WINDOWS_REBOOT_E2E_RAW.json' `
-  -OutputPath 'C:\ProgramData\DokkomplektE2E\HARDWARE_RUNNER_HOST.json'
-```
+## Real reboot — two phases
 
-## Real reboot: two phases
+A real reboot cannot resume the same process, so validation is explicitly two-phase for the same public `release_sha`.
 
-A real reboot cannot happen in the middle of one ordinary GitHub Actions job and then magically resume the same process. The workflow therefore exposes two explicit phases for the same exact protected `main` SHA.
+### 1. `prepare`
 
-### Phase 1 — `prepare`
+Run public **Actions → Windows Hardware E2E → Run workflow** on `main` with the exact current `release_sha` and `reboot_phase=prepare`. The hosted public dispatcher invokes the private workflow. The private workflow builds/signs the exact source, creates persistent state under `C:\ProgramData\DokkomplektE2E`, installs the watcher and writes a post-reboot scheduled verifier.
 
-Run **Actions → Windows Hardware E2E → Run workflow** on `main` with:
+Perform a **real Windows restart**, then log into the same dedicated runner account. The watcher and Actions runner AtLogOn tasks start in the interactive session. The prepared verifier injects the source only after the new boot and writes reboot evidence.
 
-- `release_sha` = exact 40-character commit SHA to approve;
-- `reboot_phase` = `prepare`.
+### 2. `verify`
 
-The workflow builds and signs the candidate, installs the hardware-test copy into a persistent directory under `C:\ProgramData\DokkomplektE2E`, installs the watcher, pins app/source/PowerShell hashes, creates the post-reboot scheduled verification task and writes the pending plan. The workflow finishes with a successful prepare artifact rather than treating the intentional reboot boundary as a product failure.
+For the same public SHA, run the public bridge again with `reboot_phase=verify`. The private workflow verifies the new boot identity and prepared hashes, executes real Word COM `PrintOut`, requires PrintService Event 307 for the configured printer, checks signed runtime/app/installer, GUI/no-console behavior, exactly-once watcher output and uninstall, archives the raw reboot evidence and removes the persistent prepare installation.
 
-Then perform a **real Windows restart**. After boot, log into the same dedicated runner account. The Dokkomplekt watcher and the GitHub runner AtLogOn task must start in that interactive session. The post-reboot verifier injects the prepared document only after the new boot, waits for exactly-once watcher processing and writes raw evidence to `DOKKOMPLEKT_REBOOT_EVIDENCE_PATH`.
+`FULL DOKKOMPLEKT AUTOPILOT` with `scope=production-hardware` uses the public bridge in verification mode, so valid reboot evidence for that exact SHA must already exist.
 
-Do not fake the reboot by restarting a process or a service. `verify_reboot_evidence.ps1` binds the evidence to the Windows boot timestamp and the prepared nonce/hashes.
+## Production PASS
 
-### Phase 2 — `verify`
+A hardware production PASS requires evidence for all of the following:
 
-For the same `release_sha`, run **Windows Hardware E2E** again with `reboot_phase=verify`. The workflow rebuilds the exact source, verifies the raw reboot evidence against the current boot and release source fingerprint, executes Word COM PrintOut, requires PrintService Event 307 for the configured real printer, verifies signed application/installer/runtime, GUI/no-console behavior and uninstall, archives the raw reboot JSON and cleans the persistent prepare installation.
-
-The `FULL DOKKOMPLEKT AUTOPILOT` `production-hardware` scope dispatches the hardware workflow in its normal verification mode. Therefore the reboot evidence for that exact SHA must already have been prepared and produced before using Autopilot for final production acceptance.
-
-## What constitutes production PASS
-
-A production hardware PASS requires the final hardware artifact to contain evidence for, at minimum:
-
-- exact protected source SHA and signed Rust/RustSec gate;
+- exact protected public source SHA;
+- signed Rust/RustSec gate;
 - complete signed offline runtime and SBOM;
 - Authenticode-valid staged PE sidecars, application and NSIS installer;
-- real image-only PDF OCR;
-- visible installed GUI with no unexpected console/PowerShell windows;
-- real Microsoft Word COM PrintOut;
-- PrintService Event 307 for the dedicated printer;
-- a genuine Windows reboot with watcher start after reboot and exactly-once document processing;
+- image-only PDF OCR;
+- installed visible GUI without unexpected console/PowerShell windows;
+- licensed Microsoft Word COM `PrintOut`;
+- PrintService Event 307 for the dedicated real printer;
+- genuine Windows reboot, watcher start after reboot and exactly-once output;
 - silent install and clean uninstall;
-- hashes binding all final evidence.
+- hashes binding all evidence to the approved source.
 
-Only after this is green should issue #5 be considered for closure. A normal hosted `software` Autopilot PASS remains intentionally insufficient for these physical production claims.
-
-## Operational rules
-
-Keep the machine dedicated and boring: do not browse, develop or use it as a daily workstation. Do not leave another copy of the Actions runner installed as a service. Do not let Windows sleep during a release run. Keep Word activated for the runner account and the printer powered/reachable. Rotate the GitHub runner registration only when re-registering the host; production signing secrets remain in the protected GitHub environment, not on disk in the repository checkout.
+Only then can issue #5 be considered for closure. Hosted `software` Autopilot PASS is intentionally insufficient for these physical claims.

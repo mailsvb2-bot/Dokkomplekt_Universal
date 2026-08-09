@@ -7,6 +7,14 @@ on:
         description: Exact protected main commit SHA approved for production signing
         required: true
         type: string
+      reboot_phase:
+        description: Prepare real reboot evidence first, then verify it after reboot
+        required: false
+        default: verify
+        type: choice
+        options:
+          - prepare
+          - verify
 
 permissions:
   contents: read
@@ -28,6 +36,7 @@ jobs:
       DOKKOMPLEKT_TEST_DUPLEX: ${{ vars.DOKKOMPLEKT_TEST_DUPLEX }}
       DOKKOMPLEKT_TEST_TRAY: ${{ vars.DOKKOMPLEKT_TEST_TRAY }}
       DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
+      DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT: ${{ vars.DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT }}
       DOKKOMPLEKT_SIDECAR_MANIFEST_PATH: ${{ vars.DOKKOMPLEKT_SIDECAR_MANIFEST_PATH }}
       DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
@@ -71,6 +80,14 @@ jobs:
           if ($actual -ne $expected) {
             throw "signing script hash mismatch: expected $expected, got $actual"
           }
+      - name: Prove interactive Windows hardware runner host
+        shell: pwsh
+        run: |
+          scripts/verify_windows_hardware_runner.ps1 `
+            -PrinterName $env:DOKKOMPLEKT_TEST_PRINTER `
+            -SidecarManifestPath $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH `
+            -RebootEvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH `
+            -OutputPath verification/release/HARDWARE_RUNNER_HOST.json
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
@@ -160,15 +177,67 @@ jobs:
       - name: Bind signed application, installer, runtime, SBOM and Rust gate evidence
         shell: pwsh
         run: scripts/write_windows_release_evidence.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey $env:DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH
-      - name: Execute opt-in hardware E2E
+      - name: Prepare real reboot E2E state
+        if: inputs.reboot_phase == 'prepare'
+        shell: pwsh
+        env:
+          DOKKOMPLEKT_PREPARE_REBOOT_E2E: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT)) {
+            throw 'DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT must point to a real source fixture on the hardware runner.'
+          }
+          $persistentRoot = Join-Path $env:ProgramData 'DokkomplektE2E\prepare-${{ inputs.release_sha }}'
+          if (Test-Path -LiteralPath $persistentRoot) {
+            throw "Persistent reboot preparation already exists: $persistentRoot"
+          }
+          New-Item -ItemType Directory -Force -Path $persistentRoot | Out-Null
+          $env:DOKKOMPLEKT_REBOOT_PREP_ROOT = $persistentRoot
+          $env:RUNNER_TEMP = $persistentRoot
+          $env:TEMP = $persistentRoot
+          $env:TMP = $persistentRoot
+          try {
+            tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
+            throw 'Prepare phase unexpectedly completed without requesting a reboot.'
+          } catch {
+            if ($_.Exception.Message -notlike 'Reboot evidence preparation completed.*') { throw }
+            Write-Host $_.Exception.Message
+          }
+          $pending = Join-Path $env:ProgramData 'DokkomplektE2E\pending-reboot.json'
+          if (-not (Test-Path -LiteralPath $pending -PathType Leaf)) {
+            throw 'Prepare phase did not create the pending reboot plan.'
+          }
+          [ordered]@{
+            schema = 'dokkomplekt.windows-reboot-prepare-workflow.v1'
+            release_sha = '${{ inputs.release_sha }}'
+            prepared_at_utc = [DateTime]::UtcNow.ToString('o')
+            persistent_root = $persistentRoot
+            pending_reboot_plan = $pending
+            reboot_evidence_path = $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH
+          } | ConvertTo-Json -Depth 5 | Set-Content verification/release/WINDOWS_REBOOT_PREPARED.json -Encoding utf8
+          Write-Host 'PREPARE PHASE PASSED. Reboot Windows now; keep/log back into the dedicated runner account so watcher and runner start in the interactive session.'
+      - name: Execute opt-in hardware E2E and verify reboot evidence
+        if: inputs.reboot_phase == 'verify'
         shell: pwsh
         run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot target/release/bundle/nsis
+      - name: Archive raw reboot evidence and clean prepared installation
+        if: inputs.reboot_phase == 'verify'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force verification/release | Out-Null
+          Copy-Item -LiteralPath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -Destination verification/release/WINDOWS_REBOOT_E2E_RAW.json -Force
+          scripts/cleanup_windows_reboot_preparation.ps1 `
+            -EvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH `
+            -OutputPath verification/release/REBOOT_PREPARATION_CLEANUP.json `
+            -RemoveRawEvidence
       - name: Bind final hardware evidence index
+        if: inputs.reboot_phase == 'verify'
         shell: pwsh
         run: scripts/write_windows_hardware_evidence_index.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
-          name: Dokkomplekt-Windows-Hardware-E2E-Signed
+          name: Dokkomplekt-Windows-Hardware-E2E-Signed-${{ inputs.reboot_phase }}
           path: |
             target/release/bundle/nsis/**
             release-runtime/**

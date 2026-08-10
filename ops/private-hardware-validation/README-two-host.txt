@@ -1,0 +1,1 @@
+This marker intentionally keeps the audited private-hardware scaffold path-triggered while the two-host boundary is under review. Remove only if the enclosing ops/private-hardware-validation workflow remains covered by Windows Hardware Runner Contract.

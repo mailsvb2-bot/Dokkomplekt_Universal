@@ -82,7 +82,7 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "--require-signature" in workflow
     assert "finally {" in workflow
     assert "Remove-Item -LiteralPath $privateKey -Force" in workflow
-    assert "Handoff private key cleanup failed" in workflow
+    assert "if (Test-Path -LiteralPath $privateKey)" in workflow
     assert "TRANSFERRED_GATE_DIRS" in handoff
     assert "stage_repository_gate_evidence" in handoff
     assert "restore_verified_build_evidence" in handoff
@@ -213,8 +213,9 @@ def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
         "runtime-trusted-public.pem",
     ):
         assert required in script
-    assert "Bind final hardware evidence index" in workflow
     assert "write_windows_hardware_evidence_index.ps1" in workflow
+    assert "Copy-Item signed-handoff/SIGNED_HANDOFF.json verification/release/SIGNED_HANDOFF.json -Force" in workflow
+    assert "Copy-Item signed-handoff/SIGNED_HANDOFF.json.sig verification/release/SIGNED_HANDOFF.json.sig -Force" in workflow
     assert "source/verification/release/**" in workflow
     assert "source/.release-gate/**" in workflow
     assert '".cargo-gate": f"{BUILD_EVIDENCE_DIR}/cargo-gate"' in handoff

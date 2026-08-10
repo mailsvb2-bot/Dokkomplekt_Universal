@@ -71,9 +71,19 @@ function Assert-Sha256Equal {
     }
 }
 
-$releaseSha = [string] $env:GITHUB_SHA
-if ($releaseSha -notmatch '^[0-9a-f]{40}$') {
-    throw 'GITHUB_SHA must be the exact lowercase release commit SHA.'
+$identityOutput = @(python scripts/release_source_identity.py)
+if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve checked-out public release identity.' }
+try {
+    $sourceIdentity = (($identityOutput -join "`n") | ConvertFrom-Json)
+} catch {
+    throw "Invalid release source identity JSON: $($_.Exception.Message)"
+}
+$sourceRepository = [string] $sourceIdentity.source_repository
+$releaseSha = [string] $sourceIdentity.release_sha
+if ([string] $sourceIdentity.schema -ne 'dokkomplekt.release-source-identity.v1' -or
+    $sourceRepository -ne 'mailsvb2-bot/Dokkomplekt_Universal' -or
+    $releaseSha -notmatch '^[0-9a-f]{40}$') {
+    throw 'Release source identity is not canonical.'
 }
 $sourceSha256 = (python scripts/source_fingerprint.py).Trim()
 if ($LASTEXITCODE -ne 0 -or $sourceSha256 -notmatch '^[0-9a-f]{64}$') {
@@ -97,6 +107,12 @@ $gui = Read-RequiredJson $guiPath 'dokkomplekt.gui-console-evidence.v1'
 $authenticode = Read-RequiredJson $authenticodePath 'dokkomplekt.authenticode-evidence.v1'
 $reboot = Read-RequiredJson $rebootPath 'dokkomplekt.windows-reboot-e2e.verified.v2'
 
+if ([string] $signedBuild.source_repository -ne $sourceRepository) {
+    throw 'Signed build evidence is not bound to the checked-out source repository.'
+}
+if ([string] $signedBuild.release_sha -ne $releaseSha) {
+    throw 'Signed build evidence is not bound to the checked-out release SHA.'
+}
 if ([string] $signedBuild.source_sha256 -ne $sourceSha256) {
     throw 'Signed build evidence is not bound to the current source fingerprint.'
 }
@@ -220,6 +236,7 @@ if ($duplicates.Count -gt 0) {
 $index = [ordered]@{
     schema = 'dokkomplekt.windows-hardware-evidence-index.v1'
     generated_at_utc = [DateTime]::UtcNow.ToString('o')
+    source_repository = $sourceRepository
     release_sha = $releaseSha
     source_sha256 = $sourceSha256
     signed_build_evidence_sha256 = (Get-FileHash -LiteralPath $signedBuildPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -233,4 +250,4 @@ if (-not [string]::IsNullOrWhiteSpace($parent)) {
 }
 $index | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $OutputPath -Encoding utf8
 Read-RequiredJson $OutputPath 'dokkomplekt.windows-hardware-evidence-index.v1' | Out-Null
-Write-Host "WINDOWS HARDWARE EVIDENCE INDEX: $OutputPath; records=$($allRecords.Count); release_sha=$releaseSha"
+Write-Host "WINDOWS HARDWARE EVIDENCE INDEX: $OutputPath; records=$($allRecords.Count); release=$sourceRepository@$releaseSha"

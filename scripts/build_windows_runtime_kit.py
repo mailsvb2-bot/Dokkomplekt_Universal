@@ -31,6 +31,10 @@ SPEC_SCHEMA = 1
 TARGET = "windows-x86_64"
 EXECUTABLE_SUFFIXES = {".exe", ".com", ".cmd", ".bat", ".ps1", ".pl"}
 PRODUCTION_REQUIRED_TOOLS = set(REQUIRED_TOOLS) | {"msgconvert"}
+# Runtime-kit staging must match the layouts searched by the desktop resolver.
+# Keeping one canonical root per component prevents a reviewed/locked runtime
+# from being marked production-ready while the installed app cannot locate it.
+CANONICAL_TARGET_ROOTS = {tool: tool for tool in PRODUCTION_REQUIRED_TOOLS}
 
 
 def sha256_file(path: Path) -> str:
@@ -176,6 +180,14 @@ def build_catalog(
             required_text(raw, "target_root", f"components[{index}]"),
             f"components[{index}].target_root",
         )
+        canonical_root = CANONICAL_TARGET_ROOTS.get(tool)
+        if canonical_root is None:
+            raise ValueError(f"no desktop runtime layout contract exists for tool: {tool}")
+        if target_root.replace("\\", "/").rstrip("/").lower() != canonical_root.lower():
+            raise ValueError(
+                f"components[{index}].target_root for {tool} must be {canonical_root!r}; "
+                "arbitrary runtime roots are not discoverable by the desktop resolver"
+            )
         version = required_text(raw, "version", f"components[{index}]")
         source_url = validate_source_reference(
             required_text(raw, "source_url", f"components[{index}]"),

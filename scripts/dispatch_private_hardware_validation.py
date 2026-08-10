@@ -71,6 +71,9 @@ class GitHubApi:
         )
         return list((data or {}).get("workflow_runs", []))
 
+    def cancel_run(self, repository: str, run_id: int) -> None:
+        self.request("POST", f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/cancel")
+
 
 def parse_time(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -107,6 +110,24 @@ def queued_duration_seconds(run: dict[str, Any], current: dt.datetime) -> int:
         return 0
     created = parse_time(created_raw)
     return max(0, int((current - created).total_seconds()))
+
+
+def cancel_private_run(
+    api: GitHubApi,
+    repository: str,
+    run: dict[str, Any] | None,
+) -> tuple[bool, str | None]:
+    if run is None or str(run.get("status", "")) == "completed":
+        return False, None
+    try:
+        run_id = int(run.get("id"))
+    except (TypeError, ValueError):
+        return False, "private hardware run has no numeric id; cancellation could not be requested"
+    try:
+        api.cancel_run(repository, run_id)
+    except RuntimeError as exc:
+        return False, str(exc)
+    return True, None
 
 
 def run_report(
@@ -149,6 +170,25 @@ def run_report(
 def write_report(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_failure_with_cancellation(
+    api: GitHubApi,
+    args: argparse.Namespace,
+    request_id: str,
+    run: dict[str, Any] | None,
+    report_path: Path,
+    failure: str,
+) -> None:
+    report = run_report(args, request_id, run, result="failure", failure=failure)
+    cancel_requested, cancel_failure = cancel_private_run(api, args.target_repository, run)
+    report["cancel_requested"] = cancel_requested
+    if cancel_failure:
+        report["cancel_failure"] = cancel_failure
+    write_report(report_path, report)
+    print(failure, file=sys.stderr)
+    if cancel_failure:
+        print(f"private hardware cancellation failed: {cancel_failure}", file=sys.stderr)
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -250,20 +290,12 @@ def main() -> int:
                     "verify that the dokkomplekt-runtime self-hosted Windows runner is online "
                     "and registered in the private validation repository"
                 )
-                write_report(
-                    report_path,
-                    run_report(args, request_id, run, result="failure", failure=failure),
-                )
-                print(failure, file=sys.stderr)
+                write_failure_with_cancellation(api, args, request_id, run, report_path, failure)
                 return 1
         time.sleep(args.poll_seconds)
     else:
         failure = "timeout while waiting for private hardware workflow"
-        write_report(
-            report_path,
-            run_report(args, request_id, run, result="failure", failure=failure),
-        )
-        print(failure, file=sys.stderr)
+        write_failure_with_cancellation(api, args, request_id, run, report_path, failure)
         return 1
 
     assert run is not None

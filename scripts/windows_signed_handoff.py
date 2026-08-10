@@ -13,9 +13,10 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-SCHEMA = "dokkomplekt.windows-signed-handoff.v1"
+SCHEMA = "dokkomplekt.windows-signed-handoff.v2"
 MANIFEST_NAME = "SIGNED_HANDOFF.json"
 SIGNATURE_NAME = "SIGNED_HANDOFF.json.sig"
+HEX = set("0123456789abcdef")
 
 
 def fail(message: str) -> None:
@@ -70,7 +71,7 @@ def load_public_key(path: Path) -> Ed25519PublicKey:
 
 
 def validate_identity(release_sha: str, request_id: str) -> None:
-    if len(release_sha) != 40 or any(ch not in "0123456789abcdef" for ch in release_sha):
+    if len(release_sha) != 40 or any(ch not in HEX for ch in release_sha):
         fail("release_sha must be an exact lowercase 40-character SHA")
     try:
         parsed = uuid.UUID(request_id)
@@ -78,6 +79,20 @@ def validate_identity(release_sha: str, request_id: str) -> None:
         fail(f"request_id must be a UUID: {exc}")
     if str(parsed) != request_id.lower():
         fail("request_id must use canonical UUID form")
+
+
+def validate_host_id(value: str, label: str) -> str:
+    normalized = value.strip().lower()
+    if len(normalized) != 64 or any(ch not in HEX for ch in normalized):
+        fail(f"{label} must be a lowercase SHA-256 host fingerprint")
+    return normalized
+
+
+def validate_runner_name(value: str) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > 128 or any(ord(ch) < 32 for ch in normalized):
+        fail("producer_runner_name must be a non-empty printable value up to 128 characters")
+    return normalized
 
 
 def manifest_bytes(payload: dict) -> bytes:
@@ -89,20 +104,25 @@ def build(args: argparse.Namespace) -> int:
     if not root.is_dir():
         fail(f"handoff root is missing: {root}")
     validate_identity(args.release_sha, args.request_id)
-    entries = []
-    for path in iter_payload_files(root):
-        entries.append(
-            {
-                "path": path.relative_to(root).as_posix(),
-                "size": path.stat().st_size,
-                "sha256": sha256_file(path),
-            }
-        )
+    producer_host_id = validate_host_id(args.producer_host_id, "producer_host_id")
+    producer_runner_name = validate_runner_name(args.producer_runner_name)
+    entries = [
+        {
+            "path": path.relative_to(root).as_posix(),
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in iter_payload_files(root)
+    ]
     payload = {
         "schema": SCHEMA,
         "release_sha": args.release_sha,
         "request_id": args.request_id.lower(),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "producer": {
+            "host_fingerprint_sha256": producer_host_id,
+            "runner_name": producer_runner_name,
+        },
         "files": entries,
     }
     raw = manifest_bytes(payload)
@@ -111,7 +131,7 @@ def build(args: argparse.Namespace) -> int:
     manifest.write_bytes(raw)
     private_key = load_private_key(Path(args.signing_key))
     signature.write_bytes(base64.b64encode(private_key.sign(raw)) + b"\n")
-    print(json.dumps({"ok": True, "manifest": str(manifest), "files": len(entries)}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "manifest": str(manifest), "files": len(entries), "producer_host_id": producer_host_id}, ensure_ascii=False))
     return 0
 
 
@@ -120,6 +140,7 @@ def verify(args: argparse.Namespace) -> int:
     if not root.is_dir():
         fail(f"handoff root is missing: {root}")
     validate_identity(args.release_sha, args.request_id)
+    consumer_host_id = validate_host_id(args.consumer_host_id, "consumer_host_id")
     manifest = root / MANIFEST_NAME
     signature = root / SIGNATURE_NAME
     if not manifest.is_file() or not signature.is_file():
@@ -144,6 +165,13 @@ def verify(args: argparse.Namespace) -> int:
         fail("signed handoff release_sha mismatch")
     if payload.get("request_id") != args.request_id.lower():
         fail("signed handoff request_id mismatch")
+    producer = payload.get("producer")
+    if not isinstance(producer, dict):
+        fail("signed handoff producer identity is missing")
+    producer_host_id = validate_host_id(str(producer.get("host_fingerprint_sha256", "")), "producer.host_fingerprint_sha256")
+    producer_runner_name = validate_runner_name(str(producer.get("runner_name", "")))
+    if producer_host_id == consumer_host_id:
+        fail("runtime/signing and hardware evidence must run on distinct Windows hosts")
     declared = payload.get("files")
     if not isinstance(declared, list) or not declared:
         fail("signed handoff file inventory is empty")
@@ -160,7 +188,7 @@ def verify(args: argparse.Namespace) -> int:
             fail(f"duplicate handoff path: {rel}")
         if not isinstance(size, int) or size < 0:
             fail(f"invalid handoff size: {rel}")
-        if not isinstance(digest, str) or len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        if not isinstance(digest, str) or len(digest) != 64 or any(ch not in HEX for ch in digest):
             fail(f"invalid handoff sha256: {rel}")
         expected[rel] = (size, digest)
     actual_files = iter_payload_files(root)
@@ -176,10 +204,14 @@ def verify(args: argparse.Namespace) -> int:
         if sha256_file(path) != digest:
             fail(f"handoff sha256 mismatch: {rel}")
     report = {
-        "schema": "dokkomplekt.windows-signed-handoff-verification.v1",
+        "schema": "dokkomplekt.windows-signed-handoff-verification.v2",
         "ok": True,
         "release_sha": args.release_sha,
         "request_id": args.request_id.lower(),
+        "producer_host_fingerprint_sha256": producer_host_id,
+        "producer_runner_name": producer_runner_name,
+        "consumer_host_fingerprint_sha256": consumer_host_id,
+        "hosts_distinct": True,
         "files": len(actual),
         "verified_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -198,12 +230,15 @@ def parser() -> argparse.ArgumentParser:
     b.add_argument("root")
     b.add_argument("--release-sha", required=True)
     b.add_argument("--request-id", required=True)
+    b.add_argument("--producer-host-id", required=True)
+    b.add_argument("--producer-runner-name", required=True)
     b.add_argument("--signing-key", required=True)
     b.set_defaults(func=build)
     v = sub.add_parser("verify")
     v.add_argument("root")
     v.add_argument("--release-sha", required=True)
     v.add_argument("--request-id", required=True)
+    v.add_argument("--consumer-host-id", required=True)
     v.add_argument("--trusted-public-key", required=True)
     v.add_argument("--json-report")
     v.set_defaults(func=verify)

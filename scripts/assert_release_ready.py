@@ -10,10 +10,12 @@ ATTESTATION = ROOT / '.cargo-gate' / 'CARGO_GATE_ATTESTATION.json'
 SIGNATURE = ROOT / '.cargo-gate' / 'CARGO_GATE_ATTESTATION.sig'
 RUSTSEC = ROOT / '.cargo-gate' / 'RUSTSEC_EVIDENCE.json'
 RUSTSEC_REPORT = ROOT / '.cargo-gate' / 'RUSTSEC_AUDIT.json'
+RUSTSEC_PIN = ROOT / '.cargo-gate' / 'RUSTSEC_DB_PIN.json'
 COMMERCIAL = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_EVIDENCE.json'
 COMMERCIAL_LOCK = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_Cargo.lock'
 COMMERCIAL_AUDIT = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_RUSTSEC_AUDIT.json'
-missing = [str(path.relative_to(ROOT)) for path in (LOCK, ATTESTATION, SIGNATURE, RUSTSEC, RUSTSEC_REPORT, COMMERCIAL, COMMERCIAL_LOCK, COMMERCIAL_AUDIT) if not path.exists()]
+required = (LOCK, ATTESTATION, SIGNATURE, RUSTSEC, RUSTSEC_REPORT, RUSTSEC_PIN, COMMERCIAL, COMMERCIAL_LOCK, COMMERCIAL_AUDIT)
+missing = [str(path.relative_to(ROOT)) for path in required if not path.exists()]
 if missing:
     print('Release packaging is blocked. Missing signed Rust gate artifact(s):')
     for item in missing:
@@ -36,7 +38,7 @@ except (ValueError, json.JSONDecodeError, BadSignatureError) as error:
 
 actual_source = source_fingerprint()
 actual_lock = hashlib.sha256(LOCK.read_bytes()).hexdigest()
-if payload.get('schema') != 'dokkomplekt.cargo-gate.v3' or payload.get('result') != 'passed':
+if payload.get('schema') != 'dokkomplekt.cargo-gate.v4' or payload.get('result') != 'passed':
     print('Release packaging is blocked: unsupported or unsuccessful Cargo gate attestation.')
     sys.exit(1)
 
@@ -51,16 +53,20 @@ if payload.get('source_sha256') != actual_source or payload.get('cargo_lock_sha2
     sys.exit(1)
 try:
     rustsec = json.loads(RUSTSEC.read_text('utf-8'))
+    pin = json.loads(RUSTSEC_PIN.read_text('utf-8'))
 except (OSError, json.JSONDecodeError) as error:
-    print(f'Release packaging is blocked: invalid RustSec evidence: {error}')
+    print(f'Release packaging is blocked: invalid RustSec evidence or pin: {error}')
     sys.exit(1)
-if rustsec.get('schema') != 'dokkomplekt.rustsec-evidence.v1' or rustsec.get('result') != 'passed':
+if not isinstance(pin, dict):
+    print('Release packaging is blocked: RustSec audited pin report must be an object.')
+    sys.exit(1)
+if rustsec.get('schema') != 'dokkomplekt.rustsec-evidence.v2' or rustsec.get('result') != 'passed':
     print('Release packaging is blocked: unsuccessful RustSec evidence.')
     sys.exit(1)
 if rustsec.get('source_sha256') != actual_source or rustsec.get('cargo_lock_sha256') != actual_lock:
     print('Release packaging is blocked: RustSec evidence belongs to different sources or Cargo.lock.')
     sys.exit(1)
-if rustsec.get('audit_command') != 'cargo audit --deny warnings --json':
+if rustsec.get('audit_command') != 'cargo audit --db <exact-pinned-checkout> --no-fetch --deny warnings --json':
     print('Release packaging is blocked: RustSec audit command was not fail-closed.')
     sys.exit(1)
 if rustsec.get('advisory_database_dirty') is not False:
@@ -70,13 +76,25 @@ commit = str(rustsec.get('advisory_database_commit', '')).lower()
 if len(commit) != 40 or any(char not in '0123456789abcdef' for char in commit):
     print('Release packaging is blocked: RustSec advisory database commit is missing.')
     sys.exit(1)
+if str(pin.get('commit', '')).lower() != commit:
+    print('Release packaging is blocked: RustSec evidence does not match the exact audited pin commit.')
+    sys.exit(1)
+if rustsec.get('advisory_database_origin') != pin.get('repository'):
+    print('Release packaging is blocked: RustSec evidence does not match the exact audited pin repository.')
+    sys.exit(1)
+pin_hash = hashlib.sha256(RUSTSEC_PIN.read_bytes()).hexdigest()
+if rustsec.get('advisory_database_pin_report_sha256') != pin_hash:
+    print('Release packaging is blocked: RustSec audited pin report changed after audit.')
+    sys.exit(1)
 report_hash = hashlib.sha256(RUSTSEC_REPORT.read_bytes()).hexdigest()
 if rustsec.get('audit_report_sha256') != report_hash:
     print('Release packaging is blocked: RustSec JSON report changed after audit.')
     sys.exit(1)
 evidence_hash = hashlib.sha256(RUSTSEC.read_bytes()).hexdigest()
-if payload.get('rustsec_evidence_sha256') != evidence_hash or payload.get('rustsec_advisory_database_commit') != commit:
-    print('Release packaging is blocked: signed Cargo gate does not bind the RustSec evidence.')
+if (payload.get('rustsec_evidence_sha256') != evidence_hash
+        or payload.get('rustsec_pin_report_sha256') != pin_hash
+        or payload.get('rustsec_advisory_database_commit') != commit):
+    print('Release packaging is blocked: signed Cargo gate does not bind the exact RustSec evidence and pin.')
     sys.exit(1)
 try:
     commercial = json.loads(COMMERCIAL.read_text('utf-8'))

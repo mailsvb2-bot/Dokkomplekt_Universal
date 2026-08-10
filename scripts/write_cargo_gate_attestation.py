@@ -10,9 +10,12 @@ OUT = ROOT / '.cargo-gate' / 'CARGO_GATE_ATTESTATION.json'
 SIG = ROOT / '.cargo-gate' / 'CARGO_GATE_ATTESTATION.sig'
 RUSTSEC = ROOT / '.cargo-gate' / 'RUSTSEC_EVIDENCE.json'
 RUSTSEC_REPORT = ROOT / '.cargo-gate' / 'RUSTSEC_AUDIT.json'
+RUSTSEC_PIN = ROOT / '.cargo-gate' / 'RUSTSEC_DB_PIN.json'
 COMMERCIAL = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_EVIDENCE.json'
 COMMERCIAL_LOCK = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_Cargo.lock'
 COMMERCIAL_AUDIT = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_RUSTSEC_AUDIT.json'
+# Migration marker retained for older contract readers; emitted attestations are v4.
+PREVIOUS_SCHEMA = 'dokkomplekt.cargo-gate.v3'
 
 def canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
@@ -23,6 +26,15 @@ def sha(path: Path) -> str:
 def command(*args: str) -> str:
     return subprocess.check_output(args, cwd=ROOT, text=True).strip()
 
+def load_json(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text('utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f'{label} is missing or invalid: {exc}') from exc
+    if not isinstance(value, dict):
+        raise SystemExit(f'{label} must be a JSON object')
+    return value
+
 def main() -> int:
     raw = os.environ.get('DOKKOMPLEKT_GATE_PRIVATE_KEY_B64', '').strip()
     if not raw:
@@ -32,18 +44,25 @@ def main() -> int:
         raise SystemExit('DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 must contain a 32-byte Ed25519 seed')
     key = SigningKey(seed)
     source = command(sys.executable, 'scripts/source_fingerprint.py')
-    required = (RUSTSEC, RUSTSEC_REPORT, COMMERCIAL, COMMERCIAL_LOCK, COMMERCIAL_AUDIT)
+    required = (RUSTSEC, RUSTSEC_REPORT, RUSTSEC_PIN, COMMERCIAL, COMMERCIAL_LOCK, COMMERCIAL_AUDIT)
     if any(not path.is_file() for path in required):
         missing = ', '.join(str(path.relative_to(ROOT)) for path in required if not path.is_file())
         raise SystemExit(f'Rust and commercial-crate evidence is required before signing the Cargo gate: {missing}')
-    rustsec = json.loads(RUSTSEC.read_text('utf-8'))
+    rustsec = load_json(RUSTSEC, 'RustSec evidence')
+    pin = load_json(RUSTSEC_PIN, 'RustSec audited pin report')
     if rustsec.get('result') != 'passed' or rustsec.get('source_sha256') != source:
         raise SystemExit('RustSec evidence does not match the tested source tree')
     if rustsec.get('cargo_lock_sha256') != sha(ROOT / 'Cargo.lock'):
         raise SystemExit('RustSec evidence does not match Cargo.lock')
     if rustsec.get('audit_report_sha256') != sha(RUSTSEC_REPORT):
         raise SystemExit('RustSec report changed after the audit')
-    commercial = json.loads(COMMERCIAL.read_text('utf-8'))
+    if rustsec.get('advisory_database_pin_report_sha256') != sha(RUSTSEC_PIN):
+        raise SystemExit('RustSec audited pin report changed after the audit evidence was written')
+    if rustsec.get('advisory_database_commit') != str(pin.get('commit', '')).lower():
+        raise SystemExit('RustSec evidence commit does not match the exact audited pin')
+    if rustsec.get('advisory_database_origin') != pin.get('repository'):
+        raise SystemExit('RustSec evidence repository does not match the exact audited pin')
+    commercial = load_json(COMMERCIAL, 'Commercial Rust evidence')
     if commercial.get('result') != 'passed' or commercial.get('source_sha256') != source:
         raise SystemExit('Commercial Rust evidence does not match the tested source tree')
     if commercial.get('generated_lock_sha256') != sha(COMMERCIAL_LOCK):
@@ -51,7 +70,7 @@ def main() -> int:
     if commercial.get('audit_report_sha256') != sha(COMMERCIAL_AUDIT):
         raise SystemExit('Commercial RustSec report changed after the gate')
     payload = {
-        'schema': 'dokkomplekt.cargo-gate.v3',
+        'schema': 'dokkomplekt.cargo-gate.v4',
         'result': 'passed',
         'timestamp_utc': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'source_sha256': source,
@@ -65,6 +84,7 @@ def main() -> int:
         'runner_os': os.environ.get('RUNNER_OS', os.name),
         'runner_arch': os.environ.get('RUNNER_ARCH', ''),
         'rustsec_evidence_sha256': sha(RUSTSEC),
+        'rustsec_pin_report_sha256': sha(RUSTSEC_PIN),
         'rustsec_advisory_database_commit': rustsec['advisory_database_commit'],
         'cargo_audit_version': rustsec['cargo_audit_version'],
         'commercial_crates_evidence_sha256': sha(COMMERCIAL),
@@ -76,8 +96,8 @@ def main() -> int:
             'cargo check --workspace --all-targets --locked',
             'cargo clippy --workspace --all-targets --locked -- -D warnings',
             'cargo test --workspace --locked',
-            'cargo audit --deny warnings --json',
-            'RustSec advisory database HEAD and JSON report evidence',
+            'cargo audit --db <exact-pinned-checkout> --no-fetch --deny warnings --json',
+            'RustSec evidence bound to exact audited advisory pin report',
             'excluded commercial license-server/python crates: fmt/check/clippy/test/audit in isolated workspace',
         ],
     }

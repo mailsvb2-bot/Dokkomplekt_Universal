@@ -33,6 +33,85 @@ impl Drop for ManagedSemanticRuntime {
     }
 }
 
+fn bundled_tools_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(value) = std::env::var_os("DOKKOMPLEKT_TOOLS_DIR") {
+        let path = PathBuf::from(value);
+        if !path.as_os_str().is_empty() {
+            roots.push(path);
+        }
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            roots.push(parent.join("tools"));
+            roots.push(parent.join("resources").join("tools"));
+        }
+    }
+    roots
+}
+
+fn bundled_semantic_server() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    const NAMES: &[&str] = &["llama-server.exe", "server.exe"];
+    #[cfg(not(target_os = "windows"))]
+    const NAMES: &[&str] = &["llama-server", "server"];
+
+    for root in bundled_tools_roots() {
+        for name in NAMES {
+            let candidate = root.join("llama_cpp").join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn bundled_semantic_model() -> Option<PathBuf> {
+    for root in bundled_tools_roots() {
+        let directory = root.join("semantic_model");
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        let mut candidates = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| value.eq_ignore_ascii_case("gguf"))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort();
+        if candidates.len() == 1 {
+            return candidates.pop();
+        }
+        if candidates.len() > 1 {
+            return None;
+        }
+    }
+    None
+}
+
+fn resolve_semantic_runtime_assets() -> (PathBuf, PathBuf) {
+    let generic_server = universal_intake::resolve_tool("llama_cpp");
+    let server = if generic_server.is_file() {
+        generic_server
+    } else {
+        bundled_semantic_server().unwrap_or(generic_server)
+    };
+
+    let generic_model = universal_intake::resolve_tool("semantic_model");
+    let model = if generic_model.is_file() {
+        generic_model
+    } else {
+        bundled_semantic_model().unwrap_or(generic_model)
+    };
+    (server, model)
+}
+
 /// Turns a verified downloaded llama.cpp + GGUF component into a live localhost
 /// service. An external localhost server remains supported when the component is
 /// absent; downloaded files are never reported as usable without a healthy child.
@@ -43,8 +122,7 @@ pub(crate) fn effective_config(
     if !configured.enabled || configured.provider.trim() != "llama_cpp" {
         return Ok(configured.clone());
     }
-    let server_path = universal_intake::resolve_tool("llama_cpp");
-    let model_path = universal_intake::resolve_tool("semantic_model");
+    let (server_path, model_path) = resolve_semantic_runtime_assets();
     if !server_path.is_file() || !model_path.is_file() {
         return Ok(configured.clone());
     }

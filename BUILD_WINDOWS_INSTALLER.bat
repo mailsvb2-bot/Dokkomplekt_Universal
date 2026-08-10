@@ -25,6 +25,7 @@ call scripts\ensure_python_env.bat || exit /b 1
 call npm ci || exit /b 1
 .venv\Scripts\python.exe scripts\prepare_sidecars.py "%DOKKOMPLEKT_SIDECAR_MANIFEST%" --clean || exit /b 1
 .venv\Scripts\python.exe scripts\assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production || exit /b 1
+.venv\Scripts\python.exe scripts\verify_windows_runtime_app_parity.py --target windows-x86_64 || exit /b 1
 .venv\Scripts\python.exe scripts\probe_offline_runtime.py --target windows-x86_64 || exit /b 1
 .venv\Scripts\python.exe scripts\run_python_contracts_sharded.py --report verification\installer\python-contracts.json || exit /b 1
 call scripts\prepackage_rust_gate.bat || exit /b 1

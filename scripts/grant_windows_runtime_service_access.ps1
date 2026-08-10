@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$ExpectedRuntimeRoot = 'C:\ProgramData\DokkomplektRuntime'
 
 function Resolve-DirectPath {
     param([string] $Path, [string] $Label, [bool] $Directory = $false)
@@ -32,6 +33,9 @@ function Assert-UnderRoot {
     return $full
 }
 
+if ([IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\') -ine [IO.Path]::GetFullPath($ExpectedRuntimeRoot).TrimEnd('\')) {
+    throw "Production RuntimeRoot is fixed to $ExpectedRuntimeRoot"
+}
 if ($ServiceSid -ne 'S-1-5-20') { throw 'Runtime service SID is fixed to Windows Network Service S-1-5-20.' }
 $serviceSecurityIdentifier = [Security.Principal.SecurityIdentifier]::new($ServiceSid)
 $root = Resolve-DirectPath -Path $RuntimeRoot -Label 'RuntimeRoot' -Directory $true
@@ -65,8 +69,8 @@ Assert-UnderRoot -Path $inventory -Root $root -Label 'distribution inventory' | 
 $checked.Add($inventory) | Out-Null
 
 # icacls accepts a well-known SID prefixed with '*'. The ACL mutation is bounded
-# to this one protected runtime root only after every manifest-referenced path is
-# proven to remain under it.
+# to the fixed production runtime root only after every manifest-referenced path
+# is proven to remain under it.
 & icacls.exe $root /grant "*${ServiceSid}:(OI)(CI)(RX)" /T /C | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls failed with exit code $LASTEXITCODE." }
 

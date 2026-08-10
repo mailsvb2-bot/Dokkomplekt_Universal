@@ -33,11 +33,25 @@ python scripts/verify_offline_runtime_bundle.py $runtime.FullName --payload $run
 $app = Get-Item -LiteralPath $ApplicationPath -ErrorAction Stop
 $appSignature = Get-AuthenticodeSignature $app.FullName
 if ($appSignature.Status -ne 'Valid') { throw "Application binary is not validly signed: $($app.FullName)" }
+$identityOutput = @(python scripts/release_source_identity.py)
+if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve checked-out public release identity.' }
+try {
+    $sourceIdentity = (($identityOutput -join "`n") | ConvertFrom-Json)
+} catch {
+    throw "Invalid release source identity JSON: $($_.Exception.Message)"
+}
+if ([string] $sourceIdentity.schema -ne 'dokkomplekt.release-source-identity.v1' -or
+    [string] $sourceIdentity.source_repository -ne 'mailsvb2-bot/Dokkomplekt_Universal' -or
+    [string] $sourceIdentity.release_sha -notmatch '^[0-9a-f]{40}$') {
+    throw 'Release source identity is not canonical.'
+}
 $sourceFingerprint = (python scripts/source_fingerprint.py).Trim()
 $evidence = [ordered]@{
     schema = 'dokkomplekt.windows-signed-build.v1'
     generated_at_utc = [DateTime]::UtcNow.ToString('o')
     version = (Get-Content VERSION -Raw).Trim()
+    source_repository = [string] $sourceIdentity.source_repository
+    release_sha = [string] $sourceIdentity.release_sha
     source_sha256 = $sourceFingerprint
     rust_gate_attestation_sha256 = (Get-FileHash '.cargo-gate/CARGO_GATE_ATTESTATION.json' -Algorithm SHA256).Hash.ToLowerInvariant()
     rust_gate_signature_sha256 = (Get-FileHash '.cargo-gate/CARGO_GATE_ATTESTATION.sig' -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -61,4 +75,4 @@ $evidence = [ordered]@{
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
-Write-Host "WINDOWS SIGNED BUILD EVIDENCE: $OutputPath"
+Write-Host "WINDOWS SIGNED BUILD EVIDENCE: $OutputPath; release=$($sourceIdentity.source_repository)@$($sourceIdentity.release_sha)"

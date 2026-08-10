@@ -64,6 +64,7 @@ class AdversarialHardeningContracts(unittest.TestCase):
 
     def test_runtime_state_is_encrypted_and_audit_chain_is_keyed(self) -> None:
         storage = read("crates/dokkomplekt-storage/src/lib.rs")
+        runtime = read("src-tauri/src/subsystems/automation_runtime.rs")
         self.assertIn("let stored = self.encode_sensitive(&json)?", storage)
         self.assertIn("self.decode_sensitive(&stored)?", storage)
         self.assertIn("authenticated_audit_hash", storage)
@@ -150,22 +151,31 @@ class AdversarialHardeningContracts(unittest.TestCase):
                 json.dumps({"database": {"advisory-count": 0}, "vulnerabilities": {"found": False, "list": []}}),
                 encoding="utf-8",
             )
+            pin = gate_dir / "RUSTSEC_DB_PIN.json"
+            pin.write_text(
+                json.dumps({
+                    "repository": "https://github.com/RustSec/advisory-db",
+                    "commit": "b" * 40,
+                }),
+                encoding="utf-8",
+            )
             source_sha256 = subprocess.check_output(
                 [os.sys.executable, "scripts/source_fingerprint.py"],
                 cwd=ROOT,
                 text=True,
             ).strip()
             evidence = {
-                "schema": "dokkomplekt.rustsec-evidence.v1",
+                "schema": "dokkomplekt.rustsec-evidence.v2",
                 "result": "passed",
                 "source_sha256": source_sha256,
                 "cargo_lock_sha256": hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
                 "audit_report_sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
-                "audit_command": "cargo audit --deny warnings --json",
+                "audit_command": "cargo audit --db <exact-pinned-checkout> --no-fetch --deny warnings --json",
                 "cargo_audit_version": "cargo-audit 0.test",
                 "advisory_database_commit": "b" * 40,
-                "advisory_database_origin": "test-fixture",
+                "advisory_database_origin": "https://github.com/RustSec/advisory-db",
                 "advisory_database_dirty": False,
+                "advisory_database_pin_report_sha256": hashlib.sha256(pin.read_bytes()).hexdigest(),
             }
             (gate_dir / "RUSTSEC_EVIDENCE.json").write_text(
                 json.dumps(evidence), encoding="utf-8"

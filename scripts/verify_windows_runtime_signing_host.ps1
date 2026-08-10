@@ -8,36 +8,36 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$ServiceIdentity = 'NT AUTHORITY\NETWORK SERVICE'
+$ServiceSid = 'S-1-5-20'
 $AclEvidencePath = 'C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json'
 $checks = [System.Collections.Generic.List[object]]::new()
 $failures = [System.Collections.Generic.List[string]]::new()
 
 function Add-Check {
-    param([string] $Name, [bool] $Ok, [string] $Detail = '')
+    param([string] $Name,[bool] $Ok,[string] $Detail='')
     $checks.Add([ordered]@{ name=$Name; ok=$Ok; detail=$Detail })
     if (-not $Ok) { $failures.Add("${Name}: ${Detail}") }
 }
-
 function Get-MachineFingerprint {
-    $machineGuid = [string] (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid
+    $machineGuid = [string](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid
     if ([string]::IsNullOrWhiteSpace($machineGuid)) { throw 'Windows MachineGuid is unavailable.' }
     $bytes = [Text.Encoding]::UTF8.GetBytes($machineGuid.Trim().ToLowerInvariant())
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $hash = $sha.ComputeHash($bytes) } finally { $sha.Dispose() }
-    return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+    return ([BitConverter]::ToString($hash)).Replace('-','').ToLowerInvariant()
 }
-
 function Get-VcBuildToolsInstallation {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { return '' }
-    return [string] (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
+    return [string](& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
 }
-
-function Is-UnderRoot([string] $Path, [string] $Root) {
+function Is-UnderRoot([string] $Path,[string] $Root) {
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     $base = [IO.Path]::GetFullPath($Root).TrimEnd('\')
-    return $full -ieq $base -or $full.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase)
+    return $full -ieq $base -or $full.StartsWith($base + '\',[StringComparison]::OrdinalIgnoreCase)
+}
+function Get-RuleSid($Rule) {
+    try { return $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { return '' }
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) { Add-Check 'windows-x64' $false '64-bit Windows is required' } else { Add-Check 'windows-x64' $true '64-bit OS' }
@@ -45,8 +45,8 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sessionId = (Get-Process -Id $PID).SessionId
 $services = @(Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue)
 $serviceMode = $services.Count -gt 0 -and $sessionId -eq 0
-Add-Check 'actions-runner-service-mode' $serviceMode ("services={0}; session_id={1}; user={2}" -f $services.Count, $sessionId, $identity.Name)
-Add-Check 'runtime-service-identity' ($identity.Name -ieq $ServiceIdentity) ("expected=$ServiceIdentity; actual=$($identity.Name)")
+Add-Check 'actions-runner-service-mode' $serviceMode ("services={0}; session_id={1}; user={2}" -f $services.Count,$sessionId,$identity.Name)
+Add-Check 'runtime-service-identity' ($identity.User.Value -eq $ServiceSid) ("expected_sid=$ServiceSid; actual_sid=$($identity.User.Value); account=$($identity.Name)")
 
 $runnerConfig = Join-Path $RunnerRoot '.runner'
 Add-Check 'runtime-runner-config-present' (Test-Path -LiteralPath $runnerConfig -PathType Leaf) $runnerConfig
@@ -107,16 +107,13 @@ $aclEvidenceOk = $false
 $aclEvidenceDetail = ''
 try {
     $record = Get-Content -LiteralPath $AclEvidencePath -Raw -ErrorAction Stop | ConvertFrom-Json
-    if ([string]$record.schema -ne 'dokkomplekt.runtime-service-acl.v1') { throw 'ACL evidence schema mismatch' }
+    if ([string]$record.schema -ne 'dokkomplekt.runtime-service-acl.v2') { throw 'ACL evidence schema mismatch' }
     if ([IO.Path]::GetFullPath([string]$record.runtime_root).TrimEnd('\') -ine [IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')) { throw 'ACL evidence runtime root mismatch' }
     if ($manifestOk -and [IO.Path]::GetFullPath([string]$record.manifest_path) -ine [IO.Path]::GetFullPath($manifestFull)) { throw 'ACL evidence manifest mismatch' }
-    if ([string]$record.service_identity -ine $ServiceIdentity -or [string]$record.access -ne 'ReadAndExecute' -or $record.recursive_acl_applied -ne $true) { throw 'ACL evidence access mismatch' }
+    if ([string]$record.service_sid -ne $ServiceSid -or [string]$record.access -ne 'ReadAndExecute' -or $record.recursive_acl_applied -ne $true) { throw 'ACL evidence access mismatch' }
     $acl = Get-Acl -LiteralPath $RuntimeRoot
-    $rules = @($acl.Access | Where-Object {
-        $_.IdentityReference.Value -ieq $ServiceIdentity -and
-        ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute)
-    })
-    if ($rules.Count -eq 0) { throw 'runtime root ACL no longer grants Network Service ReadAndExecute' }
+    $rules = @($acl.Access | Where-Object { (Get-RuleSid $_) -eq $ServiceSid -and ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) })
+    if ($rules.Count -eq 0) { throw 'runtime root ACL no longer grants Network Service SID ReadAndExecute' }
     $aclEvidenceOk = $true
     $aclEvidenceDetail = $AclEvidencePath
 } catch { $aclEvidenceDetail = $_.Exception.Message }
@@ -133,15 +130,16 @@ catch { Add-Check 'machine-fingerprint' $false $_.Exception.Message }
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 $report = [ordered]@{
-    schema='dokkomplekt.runtime-signing-host-preflight.v2'
+    schema='dokkomplekt.runtime-signing-host-preflight.v3'
     created_at_utc=[DateTime]::UtcNow.ToString('o')
     computer=$env:COMPUTERNAME
     machine_fingerprint_sha256=$fingerprint
     runner_name=$env:RUNNER_NAME
     user=$identity.Name
+    user_sid=$identity.User.Value
     session_id=$sessionId
     service_mode_required=$true
-    service_identity=$ServiceIdentity
+    service_sid=$ServiceSid
     runtime_root=$RuntimeRoot
     runtime_manifest_sha256=$manifestSha
     runtime_service_acl_evidence=$AclEvidencePath
@@ -152,4 +150,4 @@ $report = [ordered]@{
 }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
 if ($failures.Count -gt 0) { Write-Error ("RUNTIME/SIGNING HOST PREFLIGHT FAILED:`n - " + ($failures -join "`n - ")); exit 1 }
-Write-Host "RUNTIME/SIGNING HOST PREFLIGHT PASSED: host=$fingerprint; runner=$env:RUNNER_NAME; service=$ServiceIdentity"
+Write-Host "RUNTIME/SIGNING HOST PREFLIGHT PASSED: host=$fingerprint; runner=$env:RUNNER_NAME; sid=$($identity.User.Value)"

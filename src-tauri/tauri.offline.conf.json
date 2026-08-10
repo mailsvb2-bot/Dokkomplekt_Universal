@@ -1,8 +1,8 @@
 {
   "bundle": {
-    "resources": [
-      "resources/tools/**"
-    ],
+    "resources": {
+      "resources/tools/windows-x86_64/": "resources/tools/"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "offlineInstaller"

@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_REGISTER = ROOT / "scripts" / "register_windows_runtime_runner.ps1"
 RUNTIME_BOOTSTRAP = ROOT / "scripts" / "bootstrap_windows_runtime_runner.ps1"
 RUNTIME_PREFLIGHT = ROOT / "scripts" / "verify_windows_runtime_signing_host.ps1"
+RUNTIME_ACL = ROOT / "scripts" / "grant_windows_runtime_service_access.ps1"
 HARDWARE_REGISTER = ROOT / "scripts" / "register_windows_hardware_evidence_runner.ps1"
 HARDWARE_BOOTSTRAP = ROOT / "scripts" / "bootstrap_windows_hardware_evidence_runner.ps1"
 HARDWARE_PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_evidence_host.ps1"
@@ -26,6 +27,28 @@ def test_two_host_bootstraps_have_opposite_execution_modes() -> None:
     assert "New-ScheduledTaskTrigger -AtLogOn" in hardware
     assert "Session 0/service execution is forbidden" in hardware
     assert "actions.runner.*" in hardware
+
+
+def test_runtime_service_access_is_bounded_before_registration() -> None:
+    register = read(RUNTIME_REGISTER)
+    bootstrap = read(RUNTIME_BOOTSTRAP)
+    acl = read(RUNTIME_ACL)
+    preflight = read(RUNTIME_PREFLIGHT)
+    assert "C:\\ProgramData\\DokkomplektRuntime" in register
+    assert "grant_windows_runtime_service_access.ps1" in register
+    assert register.index("grant_windows_runtime_service_access.ps1") < register.index(
+        "Read-Host 'GitHub self-hosted runner registration token' -AsSecureString"
+    )
+    assert "RUNTIME_SERVICE_ACL.json" in bootstrap
+    assert "Run register_windows_runtime_runner.ps1 instead of bypassing" in bootstrap
+    assert "bounded runtime root" in bootstrap.lower()
+    assert "Assert-UnderRoot" in acl
+    assert "escapes the bounded runtime root" in acl
+    assert "icacls.exe" in acl
+    assert "(OI)(CI)(RX)" in acl
+    assert "NT AUTHORITY\\NETWORK SERVICE" in acl
+    assert "bounded-runtime-service-acl" in preflight
+    assert "runtime-service-identity" in preflight
 
 
 def test_runtime_bootstrap_owns_manifest_and_hardware_bootstrap_forbids_it() -> None:
@@ -52,7 +75,9 @@ def test_runtime_and_hardware_preflights_prove_distinct_trust_domains() -> None:
     runtime = read(RUNTIME_PREFLIGHT)
     hardware = read(HARDWARE_PREFLIGHT)
     assert "actions-runner-service-mode" in runtime
+    assert "runtime-service-identity" in runtime
     assert "runner-owned-approved-runtime-manifest" in runtime
+    assert "bounded-runtime-service-acl" in runtime
     assert "hardware-only-environment-not-exposed" in runtime
     assert "machine_fingerprint_sha256" in runtime
     assert "interactive-user-session" in hardware

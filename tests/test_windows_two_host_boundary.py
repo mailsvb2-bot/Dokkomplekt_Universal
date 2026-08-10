@@ -23,6 +23,7 @@ def test_two_host_bootstraps_have_opposite_execution_modes() -> None:
     hardware = read(HARDWARE_BOOTSTRAP)
     assert "dokkomplekt-runtime" in runtime and "--runasservice" in runtime
     assert "NT AUTHORITY\\NETWORK SERVICE" in runtime
+    assert "S-1-5-20" in runtime
     assert "dokkomplekt-hardware" in hardware
     assert "New-ScheduledTaskTrigger -AtLogOn" in hardware
     assert "Session 0/service execution is forbidden" in hardware
@@ -46,9 +47,11 @@ def test_runtime_service_access_is_bounded_before_registration() -> None:
     assert "escapes the bounded runtime root" in acl
     assert "icacls.exe" in acl
     assert "(OI)(CI)(RX)" in acl
-    assert "NT AUTHORITY\\NETWORK SERVICE" in acl
+    assert "S-1-5-20" in acl
+    assert "SecurityIdentifier" in acl
     assert "bounded-runtime-service-acl" in preflight
     assert "runtime-service-identity" in preflight
+    assert "identity.User.Value" in preflight
 
 
 def test_runtime_bootstrap_owns_manifest_and_hardware_bootstrap_forbids_it() -> None:

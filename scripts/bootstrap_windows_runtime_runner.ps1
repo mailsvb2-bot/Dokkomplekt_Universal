@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $RegistrationToken,
     [Parameter(Mandatory = $true)] [string] $RepositoryUrl,
     [Parameter(Mandatory = $true)] [string] $SidecarManifestPath,
+    [string] $RuntimeRoot = 'C:\ProgramData\DokkomplektRuntime',
     [string] $RunnerRoot = 'C:\actions-runner-runtime',
     [string] $RunnerName = '',
     [string] $RunnerLabel = 'dokkomplekt-runtime',
@@ -12,6 +13,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $ExpectedRepository = 'https://github.com/mailsvb2-bot/Dokkomplekt_Hardware_Validation'
+$ServiceIdentity = 'NT AUTHORITY\NETWORK SERVICE'
+$AclEvidencePath = 'C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json'
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -83,6 +86,31 @@ function Assert-RuntimeManifest([string] $Path) {
     return $item.FullName
 }
 
+function Assert-ServiceAclEvidence([string] $ManifestPath, [string] $BoundedRuntimeRoot) {
+    $root = (Get-Item -LiteralPath $BoundedRuntimeRoot -Force -ErrorAction Stop).FullName.TrimEnd('\')
+    $manifest = [IO.Path]::GetFullPath($ManifestPath)
+    if ($manifest -ine $root -and -not $manifest.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Runtime manifest must be under bounded service root '$root'."
+    }
+    if (-not (Test-Path -LiteralPath $AclEvidencePath -PathType Leaf)) {
+        throw "Runtime service ACL evidence is missing: $AclEvidencePath. Run register_windows_runtime_runner.ps1 instead of bypassing the registration entrypoint."
+    }
+    $record = Get-Content -LiteralPath $AclEvidencePath -Raw | ConvertFrom-Json
+    if ([string]$record.schema -ne 'dokkomplekt.runtime-service-acl.v1') { throw 'Runtime service ACL evidence schema mismatch.' }
+    if ([IO.Path]::GetFullPath([string]$record.runtime_root).TrimEnd('\') -ine $root) { throw 'Runtime service ACL evidence root mismatch.' }
+    if ([IO.Path]::GetFullPath([string]$record.manifest_path) -ine $manifest) { throw 'Runtime service ACL evidence manifest mismatch.' }
+    if ([string]$record.service_identity -ine $ServiceIdentity -or [string]$record.access -ne 'ReadAndExecute' -or $record.recursive_acl_applied -ne $true) {
+        throw 'Runtime service ACL evidence does not prove bounded Network Service read/execute access.'
+    }
+    $acl = Get-Acl -LiteralPath $root
+    $rule = @($acl.Access | Where-Object {
+        $_.IdentityReference.Value -ieq $ServiceIdentity -and
+        ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute)
+    })
+    if ($rule.Count -eq 0) { throw 'Bounded runtime root no longer grants Network Service ReadAndExecute.' }
+    return $AclEvidencePath
+}
+
 function Get-MachineFingerprint {
     $machineGuid = [string] (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid
     $bytes = [Text.Encoding]::UTF8.GetBytes($machineGuid.Trim().ToLowerInvariant())
@@ -123,6 +151,7 @@ foreach ($required in @('git.exe','pwsh.exe')) { if ($null -eq (Get-Command $req
 if ([string]::IsNullOrWhiteSpace((Get-VcBuildToolsInstallation))) { throw 'Visual Studio Build Tools C++ workload is required.' }
 Ensure-OpenSsl
 $manifest = Assert-RuntimeManifest $SidecarManifestPath
+$aclEvidence = Assert-ServiceAclEvidence -ManifestPath $manifest -BoundedRuntimeRoot $RuntimeRoot
 
 New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -PropertyType DWord -Value 1 -Force | Out-Null
 & git.exe config --system core.longpaths true
@@ -158,7 +187,7 @@ $evidenceRoot = Join-Path $env:ProgramData 'DokkomplektE2E'
 New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 $evidencePath = Join-Path $evidenceRoot 'RUNTIME_RUNNER_BOOTSTRAP.json'
 [ordered]@{
-    schema='dokkomplekt.runtime-runner-bootstrap.v1'
+    schema='dokkomplekt.runtime-runner-bootstrap.v2'
     created_at_utc=[DateTime]::UtcNow.ToString('o')
     computer=$env:COMPUTERNAME
     machine_fingerprint_sha256=Get-MachineFingerprint
@@ -167,9 +196,12 @@ $evidencePath = Join-Path $evidenceRoot 'RUNTIME_RUNNER_BOOTSTRAP.json'
     runner_label=$RunnerLabel
     runner_root=(Resolve-Path -LiteralPath $RunnerRoot).Path
     service_mode_required=$true
+    service_identity=$ServiceIdentity
+    runtime_root=(Resolve-Path -LiteralPath $RuntimeRoot).Path
     runtime_manifest_path=$manifest
     runtime_manifest_sha256=(Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
     runtime_manifest_signature_path="$manifest.sig"
+    runtime_service_acl_evidence=$aclEvidence
     runner_package=$asset.name
     runner_package_sha256=$actual
     visual_studio_vctools=Get-VcBuildToolsInstallation

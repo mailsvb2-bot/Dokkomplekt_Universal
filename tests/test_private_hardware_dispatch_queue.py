@@ -4,7 +4,9 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dispatch_private_hardware_validation.py"
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "dispatch_private_hardware_validation.py"
+PUBLIC_WORKFLOW = ROOT / ".github" / "workflows" / "windows-hardware-e2e.yml"
 spec = importlib.util.spec_from_file_location("dispatch_private_hardware_validation", SCRIPT)
 assert spec and spec.loader
 module = importlib.util.module_from_spec(spec)
@@ -23,6 +25,14 @@ def args() -> argparse.Namespace:
         queue_timeout_seconds=900,
         timeout_seconds=14400,
     )
+
+
+class FakeApi:
+    def __init__(self) -> None:
+        self.cancelled: list[tuple[str, int]] = []
+
+    def cancel_run(self, repository: str, run_id: int) -> None:
+        self.cancelled.append((repository, run_id))
 
 
 def test_queued_duration_seconds_only_counts_queued_runs():
@@ -61,3 +71,40 @@ def test_validate_args_rejects_negative_queue_timeout():
         assert "queue_timeout_seconds" in str(exc)
     else:
         raise AssertionError("negative queue timeout should fail")
+
+
+def test_public_hardware_dispatch_serializes_prepare_and_verify():
+    workflow = PUBLIC_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "group: windows-hardware-e2e\n" in workflow
+    assert "group: windows-hardware-e2e-${{ inputs.reboot_phase }}" not in workflow
+    assert "cancel-in-progress: false" in workflow
+
+
+def test_timeout_cancellation_targets_correlated_private_run():
+    api = FakeApi()
+    run = {"id": 123, "status": "queued"}
+
+    requested, failure = module.cancel_private_run(
+        api,
+        "mailsvb2-bot/Dokkomplekt_Hardware_Validation",
+        run,
+    )
+
+    assert requested is True
+    assert failure is None
+    assert api.cancelled == [("mailsvb2-bot/Dokkomplekt_Hardware_Validation", 123)]
+
+
+def test_completed_private_run_is_never_cancelled():
+    api = FakeApi()
+
+    requested, failure = module.cancel_private_run(
+        api,
+        "mailsvb2-bot/Dokkomplekt_Hardware_Validation",
+        {"id": 123, "status": "completed"},
+    )
+
+    assert requested is False
+    assert failure is None
+    assert api.cancelled == []

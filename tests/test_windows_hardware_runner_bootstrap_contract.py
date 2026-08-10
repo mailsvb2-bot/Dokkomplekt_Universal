@@ -66,32 +66,39 @@ def test_host_preflight_checks_legacy_full_hardware_dependencies() -> None:
         assert required in text
 
 
-def test_new_hardware_evidence_preflight_has_no_runtime_manifest_dependency() -> None:
+def test_new_hardware_evidence_preflight_is_side_effect_free_before_handoff_verification() -> None:
     text = read(EVIDENCE_PREFLIGHT)
     for required in (
         "interactive-user-session",
         "actions-runner-not-service",
-        "microsoft-word-com",
-        "dedicated-real-printer",
-        "printservice-operational-log",
+        "dedicated-printer-name-configured",
+        "hardware-probes-deferred-until-signed-handoff",
         "visual-studio-vctools",
         "webview2-runtime",
         "runtime-manifest-not-exposed",
         "signing-secrets-not-exposed",
         "runtime_manifest_env_exposed",
         "signing_secret_env_exposed",
+        "hardware_probes_deferred_until_signed_handoff",
     ):
         assert required in text
     assert "[Parameter(Mandatory = $true)] [string] $SidecarManifestPath" not in text
     assert "runner-owned-sidecar-manifest" not in text
-    for forbidden in (
+    for forbidden_hardware_probe in (
+        "New-Object -ComObject Word.Application",
+        "Get-Printer -Name",
+        "Get-PrinterPort -Name",
+        "wevtutil sl Microsoft-Windows-PrintService/Operational",
+    ):
+        assert forbidden_hardware_probe not in text
+    for forbidden_secret in (
         "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
         "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
         "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
     ):
-        assert forbidden in text
+        assert forbidden_secret in text
 
 
 def test_public_workflow_never_targets_self_hosted_runner() -> None:

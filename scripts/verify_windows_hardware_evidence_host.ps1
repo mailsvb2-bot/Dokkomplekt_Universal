@@ -71,62 +71,15 @@ $exposedSigningSecrets = @($signingSecretNames | Where-Object {
 })
 Add-Check -Name 'signing-secrets-not-exposed' -Ok ($exposedSigningSecrets.Count -eq 0) -Detail (if ($exposedSigningSecrets.Count -eq 0) { 'no signing/private-key environment variables are exposed' } else { 'forbidden variables: ' + ($exposedSigningSecrets -join ', ') })
 
-$wordPath = ''
-try {
-    $wordPath = [string] (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Winword.exe' -ErrorAction Stop).'(default)'
-} catch {
-    $winword = Get-Command winword.exe -ErrorAction SilentlyContinue
-    if ($null -ne $winword) { $wordPath = $winword.Source }
-}
-$wordInstalled = -not [string]::IsNullOrWhiteSpace($wordPath) -and (Test-Path -LiteralPath $wordPath -PathType Leaf)
-Add-Check -Name 'microsoft-word-installed' -Ok $wordInstalled -Detail $wordPath
-
-$wordComOk = $false
-$wordVersion = ''
-$word = $null
-if ($wordInstalled -and $interactive) {
-    try {
-        $word = New-Object -ComObject Word.Application
-        $word.Visible = $false
-        $wordVersion = [string] $word.Version
-        $wordComOk = -not [string]::IsNullOrWhiteSpace($wordVersion)
-    } catch {
-        $wordVersion = $_.Exception.Message
-    } finally {
-        if ($null -ne $word) {
-            try { $word.Quit() } catch { }
-            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null
-        }
-    }
-}
-Add-Check -Name 'microsoft-word-com' -Ok $wordComOk -Detail $wordVersion
-
+# This preflight runs before the downloaded release handoff is trusted. It must
+# therefore remain side-effect-free with respect to Word, printer devices and
+# PrintService configuration. The real hardware probes execute only from
+# tests/windows/windows_hardware_e2e.ps1 after signed handoff, Authenticode and
+# runtime-signature verification have succeeded.
 $virtualPrinterPattern = '(?i)(Microsoft Print to PDF|Microsoft XPS|OneNote|Fax|PDFCreator|CutePDF)'
-$printerOk = $false
-$printerDetail = ''
-try {
-    if ($PrinterName -match $virtualPrinterPattern) { throw 'virtual/document printers are forbidden' }
-    $printer = Get-Printer -Name $PrinterName -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace([string] $printer.PortName)) { throw 'printer has no port' }
-    $port = Get-PrinterPort -Name $printer.PortName -ErrorAction Stop
-    $printerDetail = "driver=$($printer.DriverName); port=$($printer.PortName); description=$($port.Description)"
-    $printerOk = $true
-} catch {
-    $printerDetail = $_.Exception.Message
-}
-Add-Check -Name 'dedicated-real-printer' -Ok $printerOk -Detail $printerDetail
-
-$printLogOk = $false
-$printLogDetail = ''
-try {
-    wevtutil sl Microsoft-Windows-PrintService/Operational /e:true | Out-Null
-    $printLog = Get-WinEvent -ListLog 'Microsoft-Windows-PrintService/Operational' -ErrorAction Stop
-    $printLogOk = $printLog.IsEnabled
-    $printLogDetail = "enabled=$($printLog.IsEnabled)"
-} catch {
-    $printLogDetail = $_.Exception.Message
-}
-Add-Check -Name 'printservice-operational-log' -Ok $printLogOk -Detail $printLogDetail
+$printerNameConfigured = (-not [string]::IsNullOrWhiteSpace($PrinterName)) -and ($PrinterName -notmatch $virtualPrinterPattern)
+Add-Check -Name 'dedicated-printer-name-configured' -Ok $printerNameConfigured -Detail (if ($printerNameConfigured) { $PrinterName } else { 'missing or forbidden virtual/document printer name' })
+Add-Check -Name 'hardware-probes-deferred-until-signed-handoff' -Ok $true -Detail 'Word COM, Get-Printer and PrintService probes are intentionally deferred to windows_hardware_e2e.ps1 after signed payload verification'
 
 $rebootPathOk = $true
 $rebootPathDetail = 'not supplied'
@@ -142,13 +95,14 @@ Add-Check -Name 'power-plan-readable' -Ok (-not [string]::IsNullOrWhiteSpace($po
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 $report = [ordered]@{
-    schema = 'dokkomplekt.hardware-evidence-host-preflight.v1'
+    schema = 'dokkomplekt.hardware-evidence-host-preflight.v2'
     created_at_utc = [DateTime]::UtcNow.ToString('o')
     computer = $env:COMPUTERNAME
     user = $identity.Name
     session_id = $sessionId
     runtime_manifest_env_exposed = -not $runtimeManifestNotExposed
     signing_secret_env_exposed = $exposedSigningSecrets
+    hardware_probes_deferred_until_signed_handoff = $true
     ok = $failures.Count -eq 0
     checks = $checks
     failures = $failures
@@ -159,4 +113,4 @@ if ($failures.Count -gt 0) {
     Write-Error ("HARDWARE EVIDENCE HOST PREFLIGHT FAILED:`n - " + ($failures -join "`n - "))
     exit 1
 }
-Write-Host "HARDWARE EVIDENCE HOST PREFLIGHT PASSED: user=$($identity.Name); session=$sessionId; printer=$PrinterName"
+Write-Host "HARDWARE EVIDENCE HOST PREFLIGHT PASSED: user=$($identity.Name); session=$sessionId; hardware probes deferred until signed handoff verification"

@@ -170,10 +170,17 @@ def test_stale_versioned_ci_success_snapshot_is_removed() -> None:
 
 def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
     script = text("scripts/write_windows_hardware_evidence_index.ps1")
+    identity = text("scripts/release_source_identity.py")
     workflow = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
     handoff = text("scripts/windows_signed_handoff.py")
     assert "dokkomplekt.windows-hardware-evidence-index.v1" in script
-    assert "GITHUB_SHA must be the exact lowercase release commit SHA" in script
+    assert "release_source_identity.py" in script
+    assert "$env:GITHUB_SHA" not in script
+    assert 'CANONICAL_REPOSITORY = "mailsvb2-bot/Dokkomplekt_Universal"' in identity
+    assert 'git_value(root, "rev-parse", "--verify", "HEAD")' in identity
+    assert 'git_value(root, "remote", "get-url", "origin")' in identity
+    assert "Signed build evidence is not bound to the checked-out source repository" in script
+    assert "Signed build evidence is not bound to the checked-out release SHA" in script
     assert "Signed build evidence is not bound to the current source fingerprint" in script
     assert "Hardware E2E evidence is not bound to the current source fingerprint" in script
     assert "GUI evidence application" in script

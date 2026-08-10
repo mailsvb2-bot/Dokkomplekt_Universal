@@ -12,6 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "write_windows_hardware_evidence_index.ps1"
+CANONICAL_REPOSITORY = "mailsvb2-bot/Dokkomplekt_Universal"
 
 
 def sha256(path: Path) -> str:
@@ -79,6 +80,9 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
             cwd=ROOT,
             text=True,
         ).strip()
+        release_sha = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT, text=True
+        ).strip()
         gui_path = release_root / "GUI_AND_CONSOLE_EVIDENCE.json"
         print_path = release_root / "PRINT_EVENT_307.json"
         authenticode_path = release_root / "AUTHENTICODE_SIGNATURES.json"
@@ -102,23 +106,23 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
             },
         )
         signed_build_path = release_root / "WINDOWS_SIGNED_BUILD_PASSED.json"
-        write_json(
-            signed_build_path,
-            {
-                "schema": "dokkomplekt.windows-signed-build.v1",
-                "source_sha256": source_sha,
-                "rust_gate_attestation_sha256": sha256(cargo_attestation),
-                "rust_gate_signature_sha256": sha256(cargo_signature),
-                "application": {"sha256": sha256(application)},
-                "installers": [{"name": installer.name, "sha256": sha256(installer)}],
-                "offline_runtime": {
-                    "sha256": sha256(runtime),
-                    "signature_sha256": sha256(runtime_signature),
-                    "public_key_sha256": sha256(runtime_public_key),
-                    "trusted_public_key_sha256": sha256(trusted_public_key),
-                },
+        signed_build = {
+            "schema": "dokkomplekt.windows-signed-build.v1",
+            "source_repository": CANONICAL_REPOSITORY,
+            "release_sha": release_sha,
+            "source_sha256": source_sha,
+            "rust_gate_attestation_sha256": sha256(cargo_attestation),
+            "rust_gate_signature_sha256": sha256(cargo_signature),
+            "application": {"sha256": sha256(application)},
+            "installers": [{"name": installer.name, "sha256": sha256(installer)}],
+            "offline_runtime": {
+                "sha256": sha256(runtime),
+                "signature_sha256": sha256(runtime_signature),
+                "public_key_sha256": sha256(runtime_public_key),
+                "trusted_public_key_sha256": sha256(trusted_public_key),
             },
-        )
+        }
+        write_json(signed_build_path, signed_build)
         reboot_path = release_root / "WINDOWS_REBOOT_E2E_PASSED.json"
         write_json(
             reboot_path,
@@ -160,6 +164,8 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
 
         output = release_root / "WINDOWS_HARDWARE_EVIDENCE_INDEX.json"
         env = os.environ.copy()
+        # Deliberately simulate the private workflow's own repository SHA. The
+        # public release identity must ignore it and come from this checkout.
         env["GITHUB_SHA"] = "a" * 40
         command = [
             pwsh,
@@ -186,7 +192,9 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         assert result.returncode == 0, result.stdout + result.stderr
         index = json.loads(output.read_text(encoding="utf-8-sig"))
         assert index["schema"] == "dokkomplekt.windows-hardware-evidence-index.v1"
-        assert index["release_sha"] == "a" * 40
+        assert index["source_repository"] == CANONICAL_REPOSITORY
+        assert index["release_sha"] == release_sha
+        assert index["release_sha"] != env["GITHUB_SHA"]
         assert index["source_sha256"] == source_sha
         assert index["record_count"] == len(index["records"])
         assert index["record_count"] == 24
@@ -194,11 +202,20 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         assert len(paths) == index["record_count"]
         assert all("\\" not in path for path in paths)
 
+        signed_build["release_sha"] = "b" * 40
+        write_json(signed_build_path, signed_build)
+        wrong_release = subprocess.run(
+            command, cwd=ROOT, env=env, text=True, capture_output=True, check=False
+        )
+        assert wrong_release.returncode != 0
+        assert "not bound to the checked-out release SHA" in wrong_release.stdout + wrong_release.stderr
+        signed_build["release_sha"] = release_sha
+        write_json(signed_build_path, signed_build)
+
         application.write_bytes(b"tampered-application")
         failed = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
         assert failed.returncode != 0
         assert "Signed application SHA-256 mismatch" in failed.stdout + failed.stderr
-
 
 
 def test_repository_boundary_requires_separator() -> None:

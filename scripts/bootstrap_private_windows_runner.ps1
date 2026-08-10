@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $RegistrationToken,
     [string] $PrinterName = '',
     [string] $SidecarManifestPath = '',
+    [string] $RuntimeRoot = 'C:\ProgramData\DokkomplektRuntime',
     [string] $RunnerRoot = '',
     [string] $RunnerName = '',
     [string] $RunnerTaskName = '',
@@ -18,6 +19,10 @@ Set-StrictMode -Version Latest
 
 $PrivateRepositoryUrl = 'https://github.com/mailsvb2-bot/Dokkomplekt_Hardware_Validation'
 $PublicRepositoryUrl = 'https://github.com/mailsvb2-bot/Dokkomplekt_Universal'
+$ExpectedRuntimeRoot = 'C:\ProgramData\DokkomplektRuntime'
+$RuntimeServiceAccount = 'NT AUTHORITY\NETWORK SERVICE'
+$RuntimeServiceSid = 'S-1-5-20'
+$RuntimeAclEvidencePath = 'C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json'
 $RunnerLabel = if ($Role -eq 'runtime') { 'dokkomplekt-runtime' } else { 'dokkomplekt-hardware' }
 if ([string]::IsNullOrWhiteSpace($RunnerRoot)) { $RunnerRoot = if ($Role -eq 'runtime') { 'C:\actions-runner-runtime' } else { 'C:\actions-runner-hardware' } }
 if ([string]::IsNullOrWhiteSpace($RunnerTaskName)) { $RunnerTaskName = if ($Role -eq 'runtime') { 'Dokkomplekt Runtime Actions Runner' } else { 'Dokkomplekt Hardware Actions Runner' } }
@@ -28,7 +33,7 @@ function Assert-AdministratorAndInteractive {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated PowerShell window.' }
     $sessionId = (Get-Process -Id $PID).SessionId
-    if ($identity.IsSystem -or $identity.Name -eq 'NT AUTHORITY\SYSTEM' -or $sessionId -eq 0) { throw 'A dedicated interactive Windows user is required; SYSTEM/Session 0/service execution is forbidden.' }
+    if ($identity.IsSystem -or $identity.Name -eq 'NT AUTHORITY\SYSTEM' -or $sessionId -eq 0) { throw 'Runner bootstrap must be launched from an elevated interactive Windows session.' }
     return [ordered]@{ user = $identity.Name; session_id = $sessionId }
 }
 
@@ -76,15 +81,32 @@ function Ensure-OpenSslFromGit {
     if ($null -eq (Get-Command openssl.exe -ErrorAction SilentlyContinue)) { throw 'OpenSSL remains unavailable.' }
 }
 
+function Get-RuleSid($Rule) {
+    try { return $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { return '' }
+}
+
 function Assert-RuntimeHost {
+    if ([IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\') -ine [IO.Path]::GetFullPath($ExpectedRuntimeRoot).TrimEnd('\')) { throw "Production RuntimeRoot is fixed to $ExpectedRuntimeRoot" }
     if ([string]::IsNullOrWhiteSpace($SidecarManifestPath)) { throw 'SidecarManifestPath is required for Role=runtime.' }
     if (-not [IO.Path]::IsPathFullyQualified($SidecarManifestPath)) { throw 'SidecarManifestPath must be absolute.' }
     $item = Get-Item -LiteralPath $SidecarManifestPath -Force -ErrorAction Stop
     if ($item.PSIsContainer -or (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw 'Runtime manifest must be a direct regular file.' }
+    $root = (Get-Item -LiteralPath $RuntimeRoot -Force -ErrorAction Stop).FullName.TrimEnd('\')
+    $manifestFull = $item.FullName
+    if ($manifestFull -ine $root -and -not $manifestFull.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Runtime manifest must remain under $ExpectedRuntimeRoot" }
     $manifest = Get-Content -LiteralPath $item.FullName -Raw | ConvertFrom-Json
     if ([int] $manifest.schema -ne 1 -or [string] $manifest.target -ne 'windows-x86_64' -or $manifest.supply_chain_locked -ne $true) { throw 'Runtime manifest must be schema=1, target=windows-x86_64, supply_chain_locked=true.' }
     if ($null -eq $manifest.files -or @($manifest.files).Count -eq 0) { throw 'Runtime manifest has no files.' }
     if (-not (Test-Path -LiteralPath ($item.FullName + '.sig') -PathType Leaf)) { throw 'Offline approval signature beside the runtime manifest is required.' }
+    if (-not (Test-Path -LiteralPath $RuntimeAclEvidencePath -PathType Leaf)) { throw "Runtime service ACL evidence is missing: $RuntimeAclEvidencePath. Use register_windows_runtime_runner.ps1 instead of bypassing the secure registration entrypoint." }
+    $aclEvidence = Get-Content -LiteralPath $RuntimeAclEvidencePath -Raw | ConvertFrom-Json
+    if ([string]$aclEvidence.schema -ne 'dokkomplekt.runtime-service-acl.v2') { throw 'Runtime service ACL evidence schema mismatch.' }
+    if ([string]$aclEvidence.service_sid -ne $RuntimeServiceSid -or [string]$aclEvidence.access -ne 'ReadAndExecute' -or $aclEvidence.recursive_acl_applied -ne $true) { throw 'Runtime service ACL evidence does not prove bounded Network Service ReadAndExecute.' }
+    if ([IO.Path]::GetFullPath([string]$aclEvidence.runtime_root).TrimEnd('\') -ine $root) { throw 'Runtime service ACL root mismatch.' }
+    if ([IO.Path]::GetFullPath([string]$aclEvidence.manifest_path) -ine [IO.Path]::GetFullPath($manifestFull)) { throw 'Runtime service ACL manifest mismatch.' }
+    $acl = Get-Acl -LiteralPath $root
+    $rules = @($acl.Access | Where-Object { (Get-RuleSid $_) -eq $RuntimeServiceSid -and ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) })
+    if ($rules.Count -eq 0) { throw 'Runtime root no longer grants Network Service SID ReadAndExecute.' }
     if ([string]::IsNullOrWhiteSpace((Get-VcBuildToolsInstallation))) { throw 'Visual Studio C++ Build Tools are required on the runtime/signing host.' }
     Ensure-OpenSslFromGit
 }
@@ -141,7 +163,10 @@ if ($RepositoryUrl -ine $PrivateRepositoryUrl) { throw "Production runners may r
 if ($RegistrationToken -match '\s' -or $RegistrationToken.Length -lt 20) { throw 'RegistrationToken does not look valid.' }
 $interactive = Assert-AdministratorAndInteractive
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
-if (@(Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue).Count -gt 0) { throw 'Remove Actions runner Windows services; production runners use dedicated interactive AtLogOn tasks.' }
+
+$runnerServices = @(Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue)
+if ($Role -eq 'hardware' -and $runnerServices.Count -gt 0) { throw 'Remove Actions runner Windows services from the hardware host; Word/printer validation must remain interactive.' }
+if ($Role -eq 'runtime' -and $runnerServices.Count -gt 0) { throw 'Runtime runner service already exists. Use a clean runtime host/root or remove the stale runner before re-registration.' }
 
 if ($InstallPrerequisites) {
     if ($null -eq (Get-Command git.exe -ErrorAction SilentlyContinue)) { Install-WingetPackage 'Git.Git' }
@@ -171,19 +196,56 @@ try {
 
 Push-Location $RunnerRoot
 try {
-    & .\config.cmd --unattended --url $RepositoryUrl --token $RegistrationToken --name $RunnerName --labels $RunnerLabel --work _work --replace
+    if ($Role -eq 'runtime') {
+        & .\config.cmd --unattended --url $RepositoryUrl --token $RegistrationToken --name $RunnerName --labels $RunnerLabel --work _work --replace --runasservice --windowslogonaccount $RuntimeServiceAccount
+    } else {
+        & .\config.cmd --unattended --url $RepositoryUrl --token $RegistrationToken --name $RunnerName --labels $RunnerLabel --work _work --replace
+    }
     if ($LASTEXITCODE -ne 0) { throw "config.cmd failed with exit code $LASTEXITCODE" }
 } finally { Pop-Location }
 
-Register-InteractiveTask -UserName $interactive.user
-Start-Sleep -Seconds 4
-$listener = @(Get-Process -Name 'Runner.Listener' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $interactive.session_id })
-if ($listener.Count -eq 0) { throw 'Runner.Listener did not start in the interactive session.' }
+$executionMode = ''
+$runtimeServiceName = ''
+if ($Role -eq 'runtime') {
+    Start-Sleep -Seconds 3
+    $services = @(Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue)
+    if ($services.Count -ne 1) { throw "Expected exactly one Actions runner service after runtime registration, found $($services.Count)." }
+    $runtimeServiceName = $services[0].Name
+    if ($services[0].Status -ne 'Running') { Start-Service -Name $runtimeServiceName }
+    Start-Sleep -Seconds 2
+    if ((Get-Service -Name $runtimeServiceName).Status -ne 'Running') { throw 'Runtime Actions runner service is not running.' }
+    $executionMode = 'windows-service-network-service'
+} else {
+    Register-InteractiveTask -UserName $interactive.user
+    Start-Sleep -Seconds 4
+    $listener = @(Get-Process -Name 'Runner.Listener' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $interactive.session_id })
+    if ($listener.Count -eq 0) { throw 'Runner.Listener did not start in the interactive session.' }
+    $executionMode = 'interactive-at-logon'
+}
 
 $evidenceRoot = Join-Path $env:ProgramData 'DokkomplektE2E'
 New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 $evidencePath = Join-Path $evidenceRoot ("RUNNER_BOOTSTRAP_$($Role.ToUpperInvariant()).json")
 [ordered]@{
-    schema='dokkomplekt.private-runner-bootstrap.v1'; created_at_utc=[DateTime]::UtcNow.ToString('o'); role=$Role; computer=$env:COMPUTERNAME; user=$interactive.user; session_id=$interactive.session_id; repository_url=$RepositoryUrl; public_repository_forbidden=$PublicRepositoryUrl; runner_name=$RunnerName; runner_label=$RunnerLabel; runner_root=$RunnerRoot; task_name=$RunnerTaskName; sidecar_manifest_used=if ($Role -eq 'runtime') { $SidecarManifestPath } else { '' }; printer_used=if ($Role -eq 'hardware') { $PrinterName } else { '' }
+    schema='dokkomplekt.private-runner-bootstrap.v2'
+    created_at_utc=[DateTime]::UtcNow.ToString('o')
+    role=$Role
+    computer=$env:COMPUTERNAME
+    bootstrap_user=$interactive.user
+    bootstrap_session_id=$interactive.session_id
+    repository_url=$RepositoryUrl
+    public_repository_forbidden=$PublicRepositoryUrl
+    runner_name=$RunnerName
+    runner_label=$RunnerLabel
+    runner_root=$RunnerRoot
+    execution_mode=$executionMode
+    task_name=if ($Role -eq 'hardware') { $RunnerTaskName } else { '' }
+    service_name=if ($Role -eq 'runtime') { $runtimeServiceName } else { '' }
+    service_account=if ($Role -eq 'runtime') { $RuntimeServiceAccount } else { '' }
+    service_sid=if ($Role -eq 'runtime') { $RuntimeServiceSid } else { '' }
+    runtime_root=if ($Role -eq 'runtime') { $ExpectedRuntimeRoot } else { '' }
+    runtime_acl_evidence=if ($Role -eq 'runtime') { $RuntimeAclEvidencePath } else { '' }
+    sidecar_manifest_used=if ($Role -eq 'runtime') { $SidecarManifestPath } else { '' }
+    printer_used=if ($Role -eq 'hardware') { $PrinterName } else { '' }
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $evidencePath -Encoding utf8
-Write-Host "PRIVATE RUNNER BOOTSTRAP PASS: role=$Role label=$RunnerLabel name=$RunnerName"
+Write-Host "PRIVATE RUNNER BOOTSTRAP PASS: role=$Role label=$RunnerLabel mode=$executionMode name=$RunnerName"

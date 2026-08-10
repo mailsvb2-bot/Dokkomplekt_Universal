@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARED = ROOT / "scripts" / "bootstrap_private_windows_runner.ps1"
 RUNTIME = ROOT / "scripts" / "register_windows_runtime_runner.ps1"
 HARDWARE = ROOT / "scripts" / "register_windows_hardware_evidence_runner.ps1"
+RUNTIME_ACL = ROOT / "scripts" / "grant_windows_runtime_service_access.ps1"
 
 
 def read(path: Path) -> str:
@@ -22,21 +23,51 @@ def test_shared_bootstrap_pins_private_repo_and_distinct_roles() -> None:
     assert "C:\\actions-runner-runtime" in text
     assert "C:\\actions-runner-hardware" in text
     assert "New-ScheduledTaskTrigger -AtLogOn" in text
+    assert "--runasservice" in text
     assert "asset.digest" in text
     assert "Get-FileHash" in text
     assert "Runner package SHA-256 mismatch" in text
 
 
-def test_runtime_role_requires_locked_approved_manifest_but_not_word_or_printer() -> None:
+def test_runtime_role_requires_locked_approved_manifest_and_bounded_acl() -> None:
     text = read(SHARED)
     runtime = text[text.index("function Assert-RuntimeHost"):text.index("function Assert-HardwareHost")]
     assert "SidecarManifestPath is required for Role=runtime" in runtime
     assert "supply_chain_locked" in runtime
     assert "item.FullName + '.sig'" in runtime
+    assert "C:\\ProgramData\\DokkomplektRuntime" in text
+    assert "RUNTIME_SERVICE_ACL.json" in text
+    assert "dokkomplekt.runtime-service-acl.v2" in runtime
+    assert "S-1-5-20" in text
     assert "Visual Studio C++ Build Tools" in runtime
     assert "Ensure-OpenSslFromGit" in runtime
     assert "Word.Application" not in runtime
     assert "Get-Printer" not in runtime
+
+
+def test_runtime_runs_as_service_while_hardware_remains_interactive() -> None:
+    text = read(SHARED)
+    configure = text[text.index("Push-Location $RunnerRoot"):]
+    assert "if ($Role -eq 'runtime')" in configure
+    assert "--runasservice" in configure
+    assert "Register-InteractiveTask -UserName $interactive.user" in configure
+    assert "windows-service-network-service" in configure
+    assert "interactive-at-logon" in configure
+    assert "Role -eq 'hardware'" in text
+    assert "Word/printer validation must remain interactive" in text
+
+
+def test_runtime_acl_helper_is_fail_closed_and_fixed_root() -> None:
+    acl = read(RUNTIME_ACL)
+    assert "$ExpectedRuntimeRoot = 'C:\\ProgramData\\DokkomplektRuntime'" in acl
+    assert "Production RuntimeRoot is fixed to" in acl
+    assert "Assert-UnderRoot" in acl
+    assert "escapes the bounded runtime root" in acl
+    assert "S-1-5-20" in acl
+    assert "icacls.exe" in acl
+    assert "(OI)(CI)(RX)" in acl
+    assert "SecurityIdentifier" in acl
+    assert "dokkomplekt.runtime-service-acl.v2" in acl
 
 
 def test_hardware_role_requires_word_printer_and_rejects_runtime_or_signing_material() -> None:
@@ -67,6 +98,11 @@ def test_secure_entrypoints_do_not_cross_role_parameters() -> None:
         assert "$secureToken.Dispose()" in text
     assert "-Role runtime" in runtime
     assert "SidecarManifestPath" in runtime
+    assert "RuntimeRoot" in runtime
+    assert "grant_windows_runtime_service_access.ps1" in runtime
+    assert runtime.index("grant_windows_runtime_service_access.ps1") < runtime.index(
+        "Read-Host 'GitHub self-hosted runner registration token' -AsSecureString"
+    )
     assert "PrinterName" not in runtime
     assert "-Role hardware" in hardware
     assert "PrinterName" in hardware

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
+import ctypes
 import datetime as dt
 import hashlib
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 try:
@@ -80,6 +83,9 @@ REQUIRED_RUNTIME_TOOLS = {
     "llama_cpp", "semantic_model",
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+WINDOWS_RUNTIME_ROOT = Path(r"C:\ProgramData\DokkomplektRuntime")
+WINDOWS_RUNTIME_ACL_EVIDENCE = Path(r"C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json")
+WINDOWS_NETWORK_SERVICE_SID = "S-1-5-20"
 
 
 def sha256_file(path: Path) -> str:
@@ -99,6 +105,126 @@ def resolve_manifest_file(manifest_path: Path, raw: object) -> Path:
 
 def safe_relative(raw: object) -> str:
     return validate_relative_runtime_path(raw, "runtime target")
+
+
+def _is_reparse_like(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    return bool(is_junction and is_junction())
+
+
+def _is_under_root(path: Path, root: Path) -> bool:
+    try:
+        candidate = os.path.normcase(str(path.resolve(strict=True)))
+        base = os.path.normcase(str(root.resolve(strict=True)))
+        return os.path.commonpath([candidate, base]) == base
+    except (OSError, ValueError):
+        return False
+
+
+def _current_windows_sid() -> str:
+    completed = subprocess.run(
+        ["whoami", "/user", "/fo", "csv", "/nh"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    rows = list(csv.reader([completed.stdout.strip()]))
+    if len(rows) != 1 or len(rows[0]) < 2:
+        raise RuntimeError("whoami /user returned an unexpected result")
+    return rows[0][-1].strip()
+
+
+def _current_windows_session_id() -> int:
+    session_id = ctypes.c_uint32()
+    ok = ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id))
+    if not ok:
+        raise OSError("ProcessIdToSessionId failed")
+    return int(session_id.value)
+
+
+def validate_windows_runtime_service_boundary(
+    manifest_path: Path,
+    runtime_root: Path,
+    acl_evidence_path: Path,
+    *,
+    current_sid: str,
+    session_id: int,
+) -> list[str]:
+    errors: list[str] = []
+    label = "windows-runtime-service-boundary"
+    if current_sid != WINDOWS_NETWORK_SERVICE_SID:
+        errors.append(
+            f"{label}: runtime job must execute as Network Service SID {WINDOWS_NETWORK_SERVICE_SID}; got {current_sid or '<empty>'}"
+        )
+    if session_id != 0:
+        errors.append(f"{label}: runtime job must execute in Windows Session 0; got session {session_id}")
+
+    try:
+        root = runtime_root.resolve(strict=True)
+    except OSError as exc:
+        return errors + [f"{label}: runtime root is unavailable: {exc}"]
+    if not root.is_dir() or _is_reparse_like(root):
+        errors.append(f"{label}: runtime root must be a direct directory")
+        return errors
+
+    boundary_paths: list[tuple[str, Path]] = [("manifest", manifest_path)]
+    signature = Path(str(manifest_path) + ".sig")
+    boundary_paths.append(("approval signature", signature))
+    try:
+        data = json.loads(manifest_path.read_text("utf-8"))
+    except Exception as exc:
+        return errors + [f"{label}: cannot read runtime manifest as service identity: {exc}"]
+    files = data.get("files") if isinstance(data, dict) else None
+    if isinstance(files, list):
+        for index, raw in enumerate(files):
+            if not isinstance(raw, dict):
+                continue
+            boundary_paths.append((f"files[{index}].source", resolve_manifest_file(manifest_path, raw.get("source"))))
+            boundary_paths.append((f"files[{index}].license_file", resolve_manifest_file(manifest_path, raw.get("license_file"))))
+    review = data.get("distribution_review") if isinstance(data, dict) else None
+    if isinstance(review, dict):
+        boundary_paths.append(("distribution_review.inventory_file", resolve_manifest_file(manifest_path, review.get("inventory_file"))))
+
+    for name, path in boundary_paths:
+        if not path.exists():
+            errors.append(f"{label}: {name} is missing")
+            continue
+        if path.is_dir() or _is_reparse_like(path):
+            errors.append(f"{label}: {name} must be a direct regular file")
+            continue
+        if not _is_under_root(path, root):
+            errors.append(f"{label}: {name} escapes fixed runtime root {root}")
+            continue
+        try:
+            with path.open("rb") as stream:
+                stream.read(1)
+        except OSError as exc:
+            errors.append(f"{label}: Network Service cannot read {name}: {exc}")
+
+    try:
+        evidence = json.loads(acl_evidence_path.read_text("utf-8"))
+    except Exception as exc:
+        errors.append(f"{label}: runtime ACL evidence is unavailable: {exc}")
+        return errors
+    if evidence.get("schema") != "dokkomplekt.runtime-service-acl.v2":
+        errors.append(f"{label}: runtime ACL evidence schema mismatch")
+    if str(evidence.get("service_sid", "")) != WINDOWS_NETWORK_SERVICE_SID:
+        errors.append(f"{label}: runtime ACL evidence SID mismatch")
+    if str(evidence.get("access", "")) != "ReadAndExecute" or evidence.get("recursive_acl_applied") is not True:
+        errors.append(f"{label}: runtime ACL evidence does not prove recursive ReadAndExecute")
+    try:
+        if os.path.normcase(str(Path(str(evidence.get("runtime_root", ""))).resolve(strict=True))) != os.path.normcase(str(root)):
+            errors.append(f"{label}: runtime ACL evidence root mismatch")
+    except OSError:
+        errors.append(f"{label}: runtime ACL evidence root cannot be resolved")
+    try:
+        if os.path.normcase(str(Path(str(evidence.get("manifest_path", ""))).resolve(strict=True))) != os.path.normcase(str(manifest_path.resolve(strict=True))):
+            errors.append(f"{label}: runtime ACL evidence manifest mismatch")
+    except OSError:
+        errors.append(f"{label}: runtime ACL evidence manifest cannot be resolved")
+    return errors
 
 
 def validate_runner_manifest(path: Path) -> list[str]:
@@ -228,6 +354,7 @@ def check(mode: str, env: dict[str, str]) -> dict[str, object]:
     }[mode]
     errors: list[str] = []
     checked: list[str] = []
+    runtime_manifest: Path | None = None
     for name in required:
         value = env.get(name, "").strip()
         checked.append(name)
@@ -252,6 +379,7 @@ def check(mode: str, env: dict[str, str]) -> dict[str, object]:
                 errors.append(str(exc))
         if name == "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH":
             path = Path(value)
+            runtime_manifest = path
             if not path.is_absolute():
                 errors.append(f"{name}: must be an absolute runner-owned path")
             elif not path.is_file():
@@ -268,8 +396,24 @@ def check(mode: str, env: dict[str, str]) -> dict[str, object]:
             validate_public_https_url(timestamp, "DOKKOMPLEKT_TIMESTAMP_SERVER")
         except ValueError as exc:
             errors.append(str(exc))
+    if mode == "windows-runtime" and os.name == "nt" and runtime_manifest is not None and runtime_manifest.is_file():
+        checked.extend(("windows-runtime-service-sid", "windows-runtime-session-0", "windows-runtime-bounded-root", "windows-runtime-acl-evidence"))
+        try:
+            current_sid = _current_windows_sid()
+            session_id = _current_windows_session_id()
+            errors.extend(
+                validate_windows_runtime_service_boundary(
+                    runtime_manifest,
+                    WINDOWS_RUNTIME_ROOT,
+                    WINDOWS_RUNTIME_ACL_EVIDENCE,
+                    current_sid=current_sid,
+                    session_id=session_id,
+                )
+            )
+        except Exception as exc:
+            errors.append(f"windows-runtime-service-boundary: unable to prove Windows service identity: {exc}")
     return {
-        "schema": "dokkomplekt.release-environment-preflight.v1",
+        "schema": "dokkomplekt.release-environment-preflight.v2",
         "mode": mode,
         "ok": not errors,
         "checked": checked,

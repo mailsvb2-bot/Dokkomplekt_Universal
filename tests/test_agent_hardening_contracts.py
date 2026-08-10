@@ -21,7 +21,9 @@ def test_thin_and_offline_installers_have_distinct_payloads() -> None:
     assert thin["bundle"]["windows"]["webviewInstallMode"]["type"] == "downloadBootstrapper"
     assert thin["bundle"]["resources"] == []
     assert offline["bundle"]["windows"]["webviewInstallMode"]["type"] == "offlineInstaller"
-    assert offline["bundle"]["resources"] == ["resources/tools/**"]
+    assert offline["bundle"]["resources"] == {
+        "resources/tools/windows-x86_64/": "resources/tools/"
+    }
 
 
 def test_local_windows_release_signs_binary_and_installer() -> None:

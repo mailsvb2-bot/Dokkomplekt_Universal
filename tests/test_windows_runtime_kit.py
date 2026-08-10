@@ -155,6 +155,39 @@ def test_builder_fails_closed_when_msgconvert_component_is_missing() -> None:
             builder.build_catalog(spec, root / "output")
 
 
+def test_builder_rejects_target_root_not_discoverable_by_desktop_resolver() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_layout_parity")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec_path = make_spec(root)
+        data = json.loads(spec_path.read_text(encoding="utf-8"))
+        msgconvert = next(item for item in data["components"] if item["tool"] == "msgconvert")
+        msgconvert["target_root"] = "custom/msgconvert"
+        spec_path.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(ValueError, match="desktop resolver"):
+            builder.build_catalog(spec_path, root / "output")
+
+
+def test_production_verifier_rejects_perl_only_msgconvert_runtime() -> None:
+    verifier = load_module(VERIFIER, "assert_offline_runtime_ready_msgconvert_exe_parity")
+    tools = {
+        "tesseract": [
+            Path("tesseract/tesseract.exe"),
+            Path("tesseract/tessdata/rus.traineddata"),
+            Path("tesseract/tessdata/eng.traineddata"),
+        ],
+        "poppler": [Path("poppler/bin/pdftotext.exe"), Path("poppler/bin/pdftoppm.exe")],
+        "libreoffice": [Path("libreoffice/program/soffice.exe")],
+        "sumatrapdf": [Path("sumatrapdf/SumatraPDF.exe")],
+        "7zip": [Path("7zip/7z.exe")],
+        "msgconvert": [Path("msgconvert/bin/perl.exe"), Path("msgconvert/msgconvert.pl")],
+        "llama_cpp": [Path("llama_cpp/llama-server.exe")],
+        "semantic_model": [Path("semantic_model/model.gguf")],
+    }
+    with pytest.raises(ValueError, match="msgconvert.exe"):
+        verifier.verify_required_runtime(tools, True, True)
+
+
 def test_builder_rejects_placeholder_provenance() -> None:
     builder = load_module(BUILDER, "build_windows_runtime_kit_placeholder")
     with tempfile.TemporaryDirectory() as temporary:

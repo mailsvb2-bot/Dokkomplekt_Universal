@@ -159,9 +159,11 @@ def test_private_workflow_requires_offline_approved_runtime_lock_before_staging(
     approval = read(APPROVAL)
     runtime = workflow[workflow.index("  signed-runtime-build:"):workflow.index("  hardware-evidence:")]
     assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64" in runtime
+    assert '$signature = "$manifest.sig"' in runtime
+    assert "Test-Path -LiteralPath $signature -PathType Leaf" in runtime
     assert "windows_runtime_lock_approval.py verify" in runtime
     assert "RUNTIME_LOCK_APPROVAL.json" in runtime
-    assert "Offline approval signature is missing" in runtime
+    assert runtime.index("Test-Path -LiteralPath $signature -PathType Leaf") < runtime.index("windows_runtime_lock_approval.py verify")
     assert runtime.index("windows_runtime_lock_approval.py verify") < runtime.index("prepare_sidecars.py")
     assert "Ed25519PrivateKey" in approval
     assert "Ed25519PublicKey" in approval

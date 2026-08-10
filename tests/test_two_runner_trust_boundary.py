@@ -46,6 +46,25 @@ def test_private_workflow_separates_runtime_and_hardware_trust_domains() -> None
     assert "verify_windows_hardware_evidence_host.ps1" in hardware
 
 
+def test_runtime_runner_builds_only_verified_offline_application_parity_installer() -> None:
+    text = read(WORKFLOW)
+    runtime = _job_block(text, "  signed-runtime-build:", "  hardware-evidence:")
+
+    parity = "verify_windows_runtime_app_parity.py --target windows-x86_64"
+    bundle = "npx tauri bundle --bundles nsis --config src-tauri/tauri.offline.conf.json"
+    installer_contract = (
+        "windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.offline.conf.json "
+        "-ExpectedWebViewMode offlineInstaller"
+    )
+    handoff = "windows_signed_handoff.py build"
+
+    for marker in (parity, bundle, installer_contract, handoff):
+        assert marker in runtime
+    assert "npx tauri bundle --bundles nsis\n" not in runtime
+    assert runtime.index(parity) < runtime.index(bundle) < runtime.index(installer_contract)
+    assert runtime.index(installer_contract) < runtime.index(handoff)
+
+
 def test_hardware_verifies_handoff_before_word_printer_reboot_execution() -> None:
     text = read(WORKFLOW)
     hardware = _job_block(text, "  hardware-evidence:")

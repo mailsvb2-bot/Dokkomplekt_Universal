@@ -1,1 +1,0 @@
-The production Windows validation workflow in this directory uses two physically distinct trust domains: `dokkomplekt-runtime` for runtime/signing and `dokkomplekt-hardware` for Word/printer/reboot evidence. See `docs/WINDOWS_HARDWARE_RUNNER.md`.

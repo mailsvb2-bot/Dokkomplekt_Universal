@@ -20,7 +20,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-hardware-e2e-${{ inputs.reboot_phase }}
+  # Match the private repository's single production-hardware concurrency domain.
+  # Prepare and verify must never dispatch overlapping private runs, otherwise a
+  # healthy runner can look offline while the newer run is legitimately queued.
+  group: windows-hardware-e2e
   cancel-in-progress: false
 
 jobs:

@@ -127,7 +127,6 @@ def require_suffix(tool_files: dict[str, list[Path]], tool: str, suffix: str) ->
         raise ValueError(f"offline runtime is missing {tool}/{suffix}")
 
 
-
 def verify_distribution_review(
     target_dir: Path, status: dict[str, Any], tool_files: dict[str, list[Path]]
 ) -> None:
@@ -209,7 +208,10 @@ def verify_required_runtime(
     require_file(tool_files, "sumatrapdf", "sumatrapdf.exe", "sumatrapdf")
     require_file(tool_files, "7zip", "7z.exe", "7zz.exe", "7z", "7zz")
     if require_msgconvert:
-        require_file(tool_files, "msgconvert", "msgconvert.exe", "msgconvert", "msgconvert.pl")
+        # The Windows desktop resolver currently executes msgconvert.exe directly.
+        # A msgconvert.pl + Perl tree may be probeable in isolation, but it is not
+        # production-ready until the application has an equally locked launch path.
+        require_file(tool_files, "msgconvert", "msgconvert.exe")
 
     if require_model:
         require_file(

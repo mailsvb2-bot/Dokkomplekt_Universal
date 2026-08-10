@@ -27,6 +27,14 @@ def args() -> argparse.Namespace:
     )
 
 
+class FakeApi:
+    def __init__(self) -> None:
+        self.cancelled: list[tuple[str, int]] = []
+
+    def cancel_run(self, repository: str, run_id: int) -> None:
+        self.cancelled.append((repository, run_id))
+
+
 def test_queued_duration_seconds_only_counts_queued_runs():
     now = dt.datetime(2026, 8, 9, 22, 30, tzinfo=dt.timezone.utc)
     run = {"status": "queued", "created_at": "2026-08-09T22:15:00Z"}
@@ -71,3 +79,32 @@ def test_public_hardware_dispatch_serializes_prepare_and_verify():
     assert "group: windows-hardware-e2e\n" in workflow
     assert "group: windows-hardware-e2e-${{ inputs.reboot_phase }}" not in workflow
     assert "cancel-in-progress: false" in workflow
+
+
+def test_timeout_cancellation_targets_correlated_private_run():
+    api = FakeApi()
+    run = {"id": 123, "status": "queued"}
+
+    requested, failure = module.cancel_private_run(
+        api,
+        "mailsvb2-bot/Dokkomplekt_Hardware_Validation",
+        run,
+    )
+
+    assert requested is True
+    assert failure is None
+    assert api.cancelled == [("mailsvb2-bot/Dokkomplekt_Hardware_Validation", 123)]
+
+
+def test_completed_private_run_is_never_cancelled():
+    api = FakeApi()
+
+    requested, failure = module.cancel_private_run(
+        api,
+        "mailsvb2-bot/Dokkomplekt_Hardware_Validation",
+        {"id": 123, "status": "completed"},
+    )
+
+    assert requested is False
+    assert failure is None
+    assert api.cancelled == []

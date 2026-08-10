@@ -10,15 +10,24 @@ Environment: `windows-production-signing`.
 
 This runner owns the approved offline runtime tree and runtime lock. It receives production signing credentials, verifies the offline runtime-lock approval before staging, executes the Rust/RustSec release gate, stages and probes the runtime, performs image-only PDF OCR, builds and Authenticode-signs the application and NSIS installer, creates the signed runtime bundle and then creates a signed handoff manifest covering every transferred byte.
 
-Microsoft Word, printer and reboot acceptance are not responsibilities of this runner.
+Microsoft Word, printer and reboot acceptance are not responsibilities of this runner. The runner executes as a **Windows service in Session 0**. GitHub Actions runner uses its Windows default service identity, Network Service; Dokkomplekt verifies the actual runtime job SID is `S-1-5-20` before production runtime work is accepted.
+
+The production runtime tree is fixed to:
+
+`C:\ProgramData\DokkomplektRuntime`
+
+The manifest, its approval signature, every manifest `source`, every `license_file`, and the reviewed distribution inventory must remain inside that root and must not be symlinks/junctions/reparse points. Before runner registration, `grant_windows_runtime_service_access.ps1` proves those bounds and grants Network Service recursive **ReadAndExecute only** on this runtime root, writing `C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json`. The bootstrap and actual `windows-runtime` preflight both re-check that evidence.
 
 Audited registration entrypoint:
 
 ```powershell
 .\scripts\register_windows_runtime_runner.ps1 `
-  -SidecarManifestPath 'C:\DokkomplektRuntime\locked\windows-x86_64-manifest.json' `
+  -SidecarManifestPath 'C:\ProgramData\DokkomplektRuntime\locked\windows-x86_64-manifest.json' `
+  -RuntimeRoot 'C:\ProgramData\DokkomplektRuntime' `
   -InstallPrerequisites
 ```
+
+`RuntimeRoot` is a policy assertion, not a configurable production location: any value other than `C:\ProgramData\DokkomplektRuntime` is rejected.
 
 ## Hardware evidence runner
 
@@ -36,7 +45,7 @@ Audited registration entrypoint:
   -InstallPrerequisites
 ```
 
-The hardware entrypoint intentionally has no `SidecarManifestPath` parameter.
+The hardware entrypoint intentionally has no `SidecarManifestPath` parameter. Unlike the runtime runner, it **must remain interactive** and starts through an `AtLogOn` scheduled task; Windows service/Session 0 execution is forbidden for Word/printer/visible-GUI evidence.
 
 Before any Word/printer/reboot action the hardware runner downloads the runtime runner handoff artifact and verifies:
 
@@ -58,7 +67,10 @@ Both role-specific entrypoints prompt for the short-lived GitHub runner registra
 - permits registration only to `mailsvb2-bot/Dokkomplekt_Hardware_Validation`;
 - downloads the official Windows x64 Actions runner and verifies its published SHA-256 digest;
 - uses distinct roots `C:\actions-runner-runtime` and `C:\actions-runner-hardware`;
-- starts each runner through an interactive `AtLogOn` scheduled task, not a Windows service.
+- configures `dokkomplekt-runtime` with `--runasservice` and verifies a single running Actions runner service;
+- configures only `dokkomplekt-hardware` through an interactive `AtLogOn` task.
+
+The runtime bootstrap itself is launched from an elevated interactive administrator session, but that setup session is **not** the production execution identity. Production runtime/signing jobs must later prove Session 0 + SID `S-1-5-20` through `release_environment_preflight.py --mode windows-runtime`.
 
 ## Handoff
 
@@ -70,4 +82,4 @@ GitHub artifact transport is not treated as the trust anchor. The cryptographic 
 
 ## Acceptance invariant
 
-A production hardware verdict is valid only when the `hardware-evidence` job has `needs: signed-runtime-build` and the two jobs execute on distinct runner labels and distinct protected environments. The hardware job must contain no production signing secret references and no runner-owned runtime manifest.
+A production hardware verdict is valid only when the `hardware-evidence` job has `needs: signed-runtime-build` and the two jobs execute on distinct runner labels, distinct protected environments and distinct Windows host fingerprints. The hardware job must contain no production signing secret references and no runner-owned runtime manifest. The runtime job must execute as Network Service in Session 0 and must not be accepted if its approved runtime escapes the fixed ProgramData root.

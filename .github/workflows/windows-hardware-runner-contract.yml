@@ -12,6 +12,7 @@ on:
       - 'scripts/bootstrap_private_windows_runner.ps1'
       - 'scripts/register_windows_runtime_runner.ps1'
       - 'scripts/register_windows_hardware_evidence_runner.ps1'
+      - 'scripts/grant_windows_runtime_service_access.ps1'
       - 'scripts/verify_windows_hardware_runner.ps1'
       - 'scripts/verify_windows_hardware_evidence_host.ps1'
       - 'scripts/cleanup_windows_reboot_preparation.ps1'
@@ -73,6 +74,7 @@ jobs:
             'scripts/bootstrap_private_windows_runner.ps1',
             'scripts/register_windows_runtime_runner.ps1',
             'scripts/register_windows_hardware_evidence_runner.ps1',
+            'scripts/grant_windows_runtime_service_access.ps1',
             'scripts/verify_windows_hardware_runner.ps1',
             'scripts/verify_windows_hardware_evidence_host.ps1',
             'scripts/cleanup_windows_reboot_preparation.ps1',

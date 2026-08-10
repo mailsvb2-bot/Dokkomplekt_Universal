@@ -14,6 +14,8 @@ RUSTSEC_PIN = ROOT / '.cargo-gate' / 'RUSTSEC_DB_PIN.json'
 COMMERCIAL = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_EVIDENCE.json'
 COMMERCIAL_LOCK = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_Cargo.lock'
 COMMERCIAL_AUDIT = ROOT / '.cargo-gate' / 'COMMERCIAL_CRATES_RUSTSEC_AUDIT.json'
+# Migration marker retained for older contract readers; emitted attestations are v4.
+PREVIOUS_SCHEMA = 'dokkomplekt.cargo-gate.v3'
 
 def canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')

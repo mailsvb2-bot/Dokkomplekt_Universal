@@ -67,6 +67,12 @@ Invoke-Checked -Executable $pythonExe -Arguments @(
     '--production'
 ) -Label 'Production offline runtime verification'
 
+Invoke-Checked -Executable $pythonExe -Arguments @(
+    'scripts/verify_windows_runtime_app_parity.py',
+    '--target',
+    'windows-x86_64'
+) -Label 'Production runtime application parity verification'
+
 $manifestHash = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
 $report = Join-Path $resolvedOutput 'RUNTIME_KIT_REPORT.json'
 $reportHash = if (Test-Path -LiteralPath $report -PathType Leaf) {

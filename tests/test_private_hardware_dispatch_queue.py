@@ -4,7 +4,9 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dispatch_private_hardware_validation.py"
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "dispatch_private_hardware_validation.py"
+PUBLIC_WORKFLOW = ROOT / ".github" / "workflows" / "windows-hardware-e2e.yml"
 spec = importlib.util.spec_from_file_location("dispatch_private_hardware_validation", SCRIPT)
 assert spec and spec.loader
 module = importlib.util.module_from_spec(spec)
@@ -61,3 +63,11 @@ def test_validate_args_rejects_negative_queue_timeout():
         assert "queue_timeout_seconds" in str(exc)
     else:
         raise AssertionError("negative queue timeout should fail")
+
+
+def test_public_hardware_dispatch_serializes_prepare_and_verify():
+    workflow = PUBLIC_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "group: windows-hardware-e2e\n" in workflow
+    assert "group: windows-hardware-e2e-${{ inputs.reboot_phase }}" not in workflow
+    assert "cancel-in-progress: false" in workflow

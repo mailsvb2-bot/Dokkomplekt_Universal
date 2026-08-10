@@ -27,6 +27,12 @@ function Get-MachineFingerprint {
     return ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
 }
 
+function Get-VcBuildToolsInstallation {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { return '' }
+    return [string] (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 Add-Check 'administrator' $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) "user=$($identity.Name)"
@@ -48,6 +54,8 @@ foreach ($required in @('git.exe','pwsh.exe')) {
     $command = Get-Command $required -ErrorAction SilentlyContinue
     Add-Check ("tool-" + $required) ($null -ne $command) (if ($null -eq $command) { 'missing' } else { $command.Source })
 }
+$buildTools = Get-VcBuildToolsInstallation
+Add-Check 'visual-studio-vctools' (-not [string]::IsNullOrWhiteSpace($buildTools)) $buildTools
 $webViewCandidates = @(Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application" -Recurse -File -Filter 'msedgewebview2.exe' -ErrorAction SilentlyContinue)
 Add-Check 'webview2-runtime' ($webViewCandidates.Count -gt 0) (if ($webViewCandidates.Count -gt 0) { $webViewCandidates[0].FullName } else { 'missing' })
 
@@ -123,7 +131,7 @@ catch { Add-Check 'machine-fingerprint' $false $_.Exception.Message }
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 $report = [ordered]@{
-    schema='dokkomplekt.hardware-evidence-host-preflight.v2'
+    schema='dokkomplekt.hardware-evidence-host-preflight.v3'
     created_at_utc=[DateTime]::UtcNow.ToString('o')
     computer=$env:COMPUTERNAME
     machine_fingerprint_sha256=$fingerprint
@@ -132,7 +140,8 @@ $report = [ordered]@{
     session_id=$sessionId
     runtime_manifest_env_exposed=-not $runtimeManifestNotExposed
     signing_secret_env_exposed=@($exposedSigningSecrets)
-    build_toolchain_required=$false
+    build_toolchain_required=$true
+    visual_studio_vctools=$buildTools
     ok=$failures.Count -eq 0
     checks=$checks
     failures=$failures

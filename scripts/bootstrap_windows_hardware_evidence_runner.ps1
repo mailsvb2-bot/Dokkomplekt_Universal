@@ -19,16 +19,12 @@ function Assert-Administrator {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run hardware evidence bootstrap from an elevated interactive PowerShell window.' }
 }
-
 function Assert-InteractiveSession {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $sessionId = (Get-Process -Id $PID).SessionId
-    if ($identity.IsSystem -or $identity.Name -eq 'NT AUTHORITY\SYSTEM' -or $sessionId -eq 0) {
-        throw 'Hardware evidence runner requires a dedicated interactive Windows user. Session 0/service execution is forbidden.'
-    }
+    if ($identity.IsSystem -or $identity.Name -eq 'NT AUTHORITY\SYSTEM' -or $sessionId -eq 0) { throw 'Hardware evidence runner requires a dedicated interactive Windows user. Session 0/service execution is forbidden.' }
     return [ordered]@{ user=$identity.Name; session_id=$sessionId }
 }
-
 function Refresh-Path {
     $env:Path = @([Environment]::GetEnvironmentVariable('Path','Machine'),[Environment]::GetEnvironmentVariable('Path','User')) -join ';'
 }
@@ -37,6 +33,19 @@ function Install-WingetPackage([string] $Id) {
     & winget.exe install --id $Id --exact --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
     if ($LASTEXITCODE -notin @(0,3010)) { throw "WinGet failed to install $Id with exit code $LASTEXITCODE." }
     Refresh-Path
+}
+function Get-VcBuildToolsInstallation {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { return '' }
+    return [string] (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
+}
+function Install-VcBuildTools {
+    $bootstrapper = Join-Path $env:TEMP 'vs_BuildTools.exe'
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $bootstrapper
+    try {
+        $process = Start-Process -FilePath $bootstrapper -ArgumentList @('--quiet','--wait','--norestart','--nocache','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended') -Wait -PassThru
+        if ($process.ExitCode -notin @(0,3010)) { throw "Visual Studio Build Tools installer failed: $($process.ExitCode)" }
+    } finally { Remove-Item -LiteralPath $bootstrapper -Force -ErrorAction SilentlyContinue }
 }
 function Get-MachineFingerprint {
     $machineGuid = [string] (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid
@@ -100,7 +109,6 @@ if ([string]::IsNullOrWhiteSpace($RunnerName)) { $RunnerName = "dokkomplekt-hard
 
 $services = @(Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue)
 if ($services.Count -gt 0) { throw 'Actions runner service detected. Hardware evidence host must not contain the runtime/signing service runner.' }
-
 $sensitiveVars = @('DOKKOMPLEKT_SIDECAR_MANIFEST_PATH','DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64','DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD','DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64','DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64','DOKKOMPLEKT_GATE_PRIVATE_KEY_B64')
 $exposed = @($sensitiveVars | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_,'Process')) })
 if ($exposed.Count -gt 0) { throw "Runtime/signing environment must not be exposed on hardware host: $($exposed -join ', ')" }
@@ -108,9 +116,12 @@ if ($exposed.Count -gt 0) { throw "Runtime/signing environment must not be expos
 if ($InstallPrerequisites) {
     if ($null -eq (Get-Command git.exe -ErrorAction SilentlyContinue)) { Install-WingetPackage 'Git.Git' }
     if ($null -eq (Get-Command pwsh.exe -ErrorAction SilentlyContinue)) { Install-WingetPackage 'Microsoft.PowerShell' }
+    if ([string]::IsNullOrWhiteSpace((Get-VcBuildToolsInstallation))) { Install-VcBuildTools }
 }
 Refresh-Path
 foreach ($required in @('git.exe','pwsh.exe')) { if ($null -eq (Get-Command $required -ErrorAction SilentlyContinue)) { throw "$required is required." } }
+$buildTools = Get-VcBuildToolsInstallation
+if ([string]::IsNullOrWhiteSpace($buildTools)) { throw 'Visual Studio Build Tools C++ workload is required for the Rust Word hardware test.' }
 $word = Assert-WordCom
 $printer = Assert-RealPrinter $PrinterName
 $webView = @(Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application" -Recurse -File -Filter 'msedgewebview2.exe' -ErrorAction SilentlyContinue)
@@ -146,7 +157,7 @@ $evidenceRoot = Join-Path $env:ProgramData 'DokkomplektE2E'
 New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 $evidencePath = Join-Path $evidenceRoot 'HARDWARE_RUNNER_BOOTSTRAP.json'
 [ordered]@{
-    schema='dokkomplekt.hardware-evidence-runner-bootstrap.v1'
+    schema='dokkomplekt.hardware-evidence-runner-bootstrap.v2'
     created_at_utc=[DateTime]::UtcNow.ToString('o')
     computer=$env:COMPUTERNAME
     machine_fingerprint_sha256=Get-MachineFingerprint
@@ -165,6 +176,7 @@ $evidencePath = Join-Path $evidenceRoot 'HARDWARE_RUNNER_BOOTSTRAP.json'
     word_version=$word.version
     printer=$printer
     webview2_path=$webView[0].FullName
+    visual_studio_vctools=$buildTools
     powershell7=(Get-Command pwsh.exe).Source
     git=(Get-Command git.exe).Source
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $evidencePath -Encoding utf8

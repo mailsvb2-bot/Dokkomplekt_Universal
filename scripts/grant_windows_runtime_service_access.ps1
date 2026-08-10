@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory = $true)] [string] $ManifestPath,
     [string] $RuntimeRoot = 'C:\ProgramData\DokkomplektRuntime',
-    [string] $ServiceIdentity = 'NT AUTHORITY\NETWORK SERVICE',
+    [string] $ServiceSid = 'S-1-5-20',
     [string] $OutputPath = 'C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json'
 )
 
@@ -32,6 +32,8 @@ function Assert-UnderRoot {
     return $full
 }
 
+if ($ServiceSid -ne 'S-1-5-20') { throw 'Runtime service SID is fixed to Windows Network Service S-1-5-20.' }
+$serviceSecurityIdentifier = [Security.Principal.SecurityIdentifier]::new($ServiceSid)
 $root = Resolve-DirectPath -Path $RuntimeRoot -Label 'RuntimeRoot' -Directory $true
 $manifest = Resolve-DirectPath -Path $ManifestPath -Label 'ManifestPath'
 Assert-UnderRoot -Path $manifest -Root $root -Label 'ManifestPath' | Out-Null
@@ -62,29 +64,33 @@ $inventory = Resolve-DirectPath -Path ([string]$review.inventory_file) -Label 'd
 Assert-UnderRoot -Path $inventory -Root $root -Label 'distribution inventory' | Out-Null
 $checked.Add($inventory) | Out-Null
 
-# The ACL mutation is intentionally bounded to one fixed runtime root after every
-# manifest-referenced path has been proven to remain inside it.
-& icacls.exe $root /grant "${ServiceIdentity}:(OI)(CI)(RX)" /T /C | Out-Null
+# Windows icacls accepts a well-known SID prefixed with '*'. The ACL mutation is
+# bounded to one protected runtime root after every manifest-referenced path has
+# been proven to remain inside it.
+& icacls.exe $root /grant "*${ServiceSid}:(OI)(CI)(RX)" /T /C | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "icacls failed with exit code $LASTEXITCODE." }
 
 $acl = Get-Acl -LiteralPath $root
 $matchingRules = @($acl.Access | Where-Object {
-    $_.IdentityReference.Value -ieq $ServiceIdentity -and
-    ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute)
+    try {
+        $sid = $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        $sid -eq $ServiceSid -and ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute)
+    } catch { $false }
 })
-if ($matchingRules.Count -eq 0) { throw "$ServiceIdentity did not receive ReadAndExecute on runtime root." }
+if ($matchingRules.Count -eq 0) { throw "$ServiceSid did not receive ReadAndExecute on runtime root." }
 
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 [ordered]@{
-    schema = 'dokkomplekt.runtime-service-acl.v1'
-    created_at_utc = [DateTime]::UtcNow.ToString('o')
-    runtime_root = $root
-    manifest_path = $manifest
-    service_identity = $ServiceIdentity
-    access = 'ReadAndExecute'
-    bounded_paths_verified = $checked.Count
-    recursive_acl_applied = $true
+    schema='dokkomplekt.runtime-service-acl.v2'
+    created_at_utc=[DateTime]::UtcNow.ToString('o')
+    runtime_root=$root
+    manifest_path=$manifest
+    service_sid=$ServiceSid
+    service_account=$serviceSecurityIdentifier.Translate([Security.Principal.NTAccount]).Value
+    access='ReadAndExecute'
+    bounded_paths_verified=$checked.Count
+    recursive_acl_applied=$true
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $OutputPath -Encoding utf8
 
-Write-Host "RUNTIME SERVICE ACL PASSED: root=$root; identity=$ServiceIdentity; checked=$($checked.Count)"
+Write-Host "RUNTIME SERVICE ACL PASSED: root=$root; sid=$ServiceSid; checked=$($checked.Count)"

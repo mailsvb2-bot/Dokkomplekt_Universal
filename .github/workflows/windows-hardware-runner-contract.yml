@@ -13,6 +13,7 @@ on:
       - 'scripts/bootstrap_windows_runtime_runner.ps1'
       - 'scripts/register_windows_runtime_runner.ps1'
       - 'scripts/verify_windows_runtime_signing_host.ps1'
+      - 'scripts/grant_windows_runtime_service_access.ps1'
       - 'scripts/bootstrap_windows_hardware_evidence_runner.ps1'
       - 'scripts/register_windows_hardware_evidence_runner.ps1'
       - 'scripts/verify_windows_hardware_evidence_host.ps1'
@@ -74,6 +75,7 @@ jobs:
             'scripts/bootstrap_windows_runtime_runner.ps1',
             'scripts/register_windows_runtime_runner.ps1',
             'scripts/verify_windows_runtime_signing_host.ps1',
+            'scripts/grant_windows_runtime_service_access.ps1',
             'scripts/bootstrap_windows_hardware_evidence_runner.ps1',
             'scripts/register_windows_hardware_evidence_runner.ps1',
             'scripts/verify_windows_hardware_evidence_host.ps1',

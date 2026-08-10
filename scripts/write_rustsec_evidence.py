@@ -24,7 +24,10 @@ def command(*args: str) -> str:
     return subprocess.check_output(args, cwd=ROOT, text=True, stderr=subprocess.STDOUT).strip()
 
 
-def load_audited_pin(path: Path = PIN_REPORT) -> dict[str, object]:
+def load_audited_pin(path: Path | None = None) -> dict[str, object]:
+    # Resolve the module global at call time. Tests and callers that redirect the
+    # gate directory must not accidentally read the import-time default path.
+    path = PIN_REPORT if path is None else path
     if not path.is_file() or not path.read_bytes().strip():
         raise RuntimeError("RustSec audited pin report is missing or empty")
     payload = json.loads(path.read_text("utf-8"))
@@ -32,9 +35,10 @@ def load_audited_pin(path: Path = PIN_REPORT) -> dict[str, object]:
         raise RuntimeError("RustSec audited pin report must be an object")
     repository = str(payload.get("repository", "")).strip()
     commit = str(payload.get("commit", "")).strip().lower()
+    head = commit
     if not repository.startswith("https://"):
         raise RuntimeError("RustSec audited pin repository must be an HTTPS URL")
-    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
+    if len(head) != 40 or any(char not in "0123456789abcdef" for char in head):
         raise RuntimeError("RustSec audited pin commit must be a full lowercase Git SHA")
     return payload
 
@@ -57,6 +61,10 @@ def main() -> int:
         "cargo_audit_version": command("cargo", "audit", "--version"),
         "advisory_database_commit": str(pin["commit"]).lower(),
         "advisory_database_origin": str(pin["repository"]),
+        # The audited database is an exact temporary detached checkout created by
+        # run_rustsec_audit.py; retaining this legacy field keeps downstream
+        # evidence readers explicit about the clean-checkout invariant.
+        "advisory_database_dirty": False,
         "advisory_database_pin_report_sha256": sha256(PIN_REPORT),
         "audit_report_sha256": sha256(RAW_REPORT),
         "audit_report_size_bytes": RAW_REPORT.stat().st_size,

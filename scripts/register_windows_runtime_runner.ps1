@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory = $true)] [string] $RepositoryUrl,
     [Parameter(Mandatory = $true)] [string] $SidecarManifestPath,
+    [string] $RuntimeRoot = 'C:\ProgramData\DokkomplektRuntime',
     [string] $RunnerRoot = 'C:\actions-runner-runtime',
     [string] $RunnerName = '',
     [switch] $InstallPrerequisites
@@ -14,6 +15,16 @@ $normalized = $RepositoryUrl.Trim().TrimEnd('/')
 if ($normalized -ine $expectedRepository) {
     throw "Runtime/signing runner must be registered only in $expectedRepository"
 }
+
+$aclBootstrap = Join-Path $PSScriptRoot 'grant_windows_runtime_service_access.ps1'
+if (-not (Test-Path -LiteralPath $aclBootstrap -PathType Leaf)) {
+    throw "Runtime service ACL bootstrap is missing: $aclBootstrap"
+}
+& $aclBootstrap -ManifestPath $SidecarManifestPath -RuntimeRoot $RuntimeRoot
+if ($LASTEXITCODE -notin @(0, $null)) {
+    throw "Runtime service ACL preparation failed with exit code $LASTEXITCODE."
+}
+
 $secureToken = Read-Host 'GitHub self-hosted runner registration token' -AsSecureString
 if ($secureToken.Length -eq 0) { throw 'GitHub runner registration token is required.' }
 $credential = [Net.NetworkCredential]::new('', $secureToken)
@@ -26,6 +37,7 @@ try {
         -RegistrationToken $plainToken `
         -RepositoryUrl $normalized `
         -SidecarManifestPath $SidecarManifestPath `
+        -RuntimeRoot $RuntimeRoot `
         -RunnerRoot $RunnerRoot `
         -RunnerName $RunnerName `
         -InstallPrerequisites:$InstallPrerequisites

@@ -1,14 +1,14 @@
 # Windows production runtime + hardware validation
 
-Dokkomplekt production acceptance uses **two physically separate Windows trust domains**. A single self-hosted machine must never both hold production signing/runtime private material and execute Word/printer/reboot acceptance.
+Dokkomplekt production acceptance uses **two physically separate Windows trust domains**. A single Windows host must never both hold production runtime/signing private material and execute Word/printer/reboot acceptance.
 
-The public source repository `mailsvb2-bot/Dokkomplekt_Universal` must **not** be registered as a self-hosted runner target. Both Windows runners belong only to the private repository `mailsvb2-bot/Dokkomplekt_Hardware_Validation`; the public workflow only dispatches and waits from GitHub-hosted `ubuntu-latest`.
+The public repository `mailsvb2-bot/Dokkomplekt_Universal` must **not** be registered as a self-hosted runner target. Both role-specific runners are registered only in the private repository `mailsvb2-bot/Dokkomplekt_Hardware_Validation`. The public workflow runs on GitHub-hosted `ubuntu-latest`, dispatches the private workflow, waits for the correlated private run, and contains no self-hosted job.
 
-## Trust-domain architecture
+## Architecture
 
-### 1. Runtime/signing domain
+### Runtime/signing host
 
-Runner labels:
+Required labels:
 
 `self-hosted`, `Windows`, `X64`, `dokkomplekt-runtime`
 
@@ -16,9 +16,9 @@ Protected environment:
 
 `windows-production-signing`
 
-This runner owns the approved production runtime tree and the exact runner-owned manifest referenced by `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH`. It verifies the offline Ed25519 approval of that lock **before** staging, executes the Rust/RustSec release gate, stages/probes/OCR-tests the offline runtime, creates the signed runtime bundle, builds the application and NSIS installer, applies Authenticode signatures and creates build evidence.
+This is a dedicated Windows x64 build/signing host. It runs the Actions runner as a Windows service under `NT AUTHORITY\NETWORK SERVICE`. It owns the reviewed offline runtime tree, verifies the offline-approved runtime lock, runs Rust/RustSec, stages and probes the runtime, performs OCR validation, creates the signed runtime bundle/SBOM, builds the application and NSIS installer, applies Authenticode, and creates a signed release handoff.
 
-Only this trust domain may receive:
+Only this trust domain may receive private signing material:
 
 - `DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64`;
 - `DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD`;
@@ -26,13 +26,13 @@ Only this trust domain may receive:
 - `DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64`;
 - `DOKKOMPLEKT_GATE_PRIVATE_KEY_B64`.
 
-The runtime-lock approval **private** key remains offline and is not stored in GitHub or on either runner. The runtime runner receives only its approval public key and the already approved `<manifest>.sig`.
+The runtime-lock approval **private** key remains offline. GitHub and both runners receive no copy of it. The runtime runner receives only the approval public key and the already approved `<manifest>.sig`.
 
-The runtime runner does **not** need Microsoft Word or a printer. It is a build/signing/supply-chain host, not the user-behaviour evidence machine.
+The runtime host does not require Word or a printer.
 
-### 2. Hardware evidence domain
+### Hardware evidence host
 
-Runner labels:
+Required labels:
 
 `self-hosted`, `Windows`, `X64`, `dokkomplekt-hardware`
 
@@ -40,11 +40,11 @@ Protected environment:
 
 `windows-hardware-validation`
 
-This machine is the representative interactive Windows host. It requires licensed desktop Microsoft Word, WebView2, Visual Studio C++ tools, a dedicated real printer queue, PrintService Operational logging and persistent reboot storage.
+This is a **different Windows machine** running the Actions runner only in an interactive user session through an AtLogOn scheduled task. It requires licensed desktop Microsoft Word, WebView2, Visual Studio C++ Build Tools for the current Rust Word hardware test, a dedicated real printer queue, PrintService Operational logging, and persistent reboot storage.
 
-The hardware environment must contain **no signing/private-key secrets** and must not expose `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH`. `scripts/verify_windows_hardware_evidence_host.ps1` fails closed if a runtime manifest variable or any known signing secret is exposed to the hardware process.
+It must not expose `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH` and must contain no runtime/signing private-key variables. `scripts/verify_windows_hardware_evidence_host.ps1` fails closed if those values appear in the hardware process.
 
-Hardware-side variables are limited to hardware/public verification data such as:
+Hardware/public-verification variables include:
 
 - `DOKKOMPLEKT_TEST_PRINTER`;
 - `DOKKOMPLEKT_TEST_DUPLEX`;
@@ -53,31 +53,128 @@ Hardware-side variables are limited to hardware/public verification data such as
 - `DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT`;
 - `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64`.
 
-## Cryptographically signed handoff
+## Runtime root and service ACL boundary
 
-The only release payload that crosses from runtime/signing to hardware is the Actions artifact:
+The production runtime is allowed only under this bounded root on the runtime host:
+
+`C:\ProgramData\DokkomplektRuntime`
+
+Recommended layout:
+
+- `C:\ProgramData\DokkomplektRuntime\components\...` — reviewed portable component trees and license files;
+- `C:\ProgramData\DokkomplektRuntime\locked\runtime-inventory.json`;
+- `C:\ProgramData\DokkomplektRuntime\locked\windows-x86_64-manifest.json`;
+- `C:\ProgramData\DokkomplektRuntime\locked\windows-x86_64-manifest.json.sig`.
+
+The manifest, every `source`, every `license_file`, and the distribution inventory must stay inside this root. Symlinks/junctions/reparse points are rejected. `scripts/grant_windows_runtime_service_access.ps1` verifies that bounded set first and only then grants `NT AUTHORITY\NETWORK SERVICE` recursive ReadAndExecute on this one runtime root. It writes `C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json`.
+
+The runtime bootstrap refuses to continue without matching ACL evidence, and the runtime job re-checks both the bounded root and ACL while actually running as Network Service. This prevents a service-mode runner from becoming operationally correct only for the administrator who configured it.
+
+## Prepare the production runtime
+
+Place all reviewed component roots used by `runtime-kit.json` under `C:\ProgramData\DokkomplektRuntime`. From the exact approved public source checkout, run:
+
+```powershell
+.\scripts\prepare_windows_production_runtime.ps1 `
+  -SpecPath 'C:\ProgramData\DokkomplektRuntime\runtime-kit.json' `
+  -OutputDir 'C:\ProgramData\DokkomplektRuntime\locked'
+```
+
+The production kit requires complete portable trees and license/source provenance for Tesseract, Poppler, LibreOffice, SumatraPDF, 7-Zip, msgconvert, llama.cpp, and the approved GGUF semantic model. The generated manifest must use `schema=1`, `target=windows-x86_64`, `supply_chain_locked=true`, exact SHA-256 entries, and complete distribution-review inventory.
+
+Each rebuild deletes any stale approval signature. The exact new manifest must then be signed with the **offline** runtime-lock approval key using the documented `windows_runtime_lock_approval.py` process. Only the resulting `.sig` and approval public key reach the runtime host workflow.
+
+## Register runtime/signing runner
+
+In the private repository open **Settings → Actions → Runners → New self-hosted runner** and obtain a fresh time-limited registration token. From an elevated PowerShell window on the runtime host, in the approved source checkout:
+
+```powershell
+.\scripts\register_windows_runtime_runner.ps1 `
+  -RepositoryUrl 'https://github.com/mailsvb2-bot/Dokkomplekt_Hardware_Validation' `
+  -SidecarManifestPath 'C:\ProgramData\DokkomplektRuntime\locked\windows-x86_64-manifest.json' `
+  -RuntimeRoot 'C:\ProgramData\DokkomplektRuntime' `
+  -InstallPrerequisites
+```
+
+The entrypoint prepares the bounded runtime ACL **before asking for the GitHub token**, then prompts for the token as a `SecureString`. The internal bootstrap refuses a missing or mismatched `RUNTIME_SERVICE_ACL.json`, verifies the GitHub runner ZIP against the release SHA-256 digest, fixes the label to `dokkomplekt-runtime`, and installs the runner as a Windows service.
+
+Runtime bootstrap evidence:
+
+`C:\ProgramData\DokkomplektE2E\RUNTIME_RUNNER_BOOTSTRAP.json`
+
+## Register hardware evidence runner
+
+Use a **different physical/virtual Windows instance with a different Windows MachineGuid**. It must not contain the runtime service runner or signing secrets. In the private repository obtain a separate fresh runner registration token. From an elevated **interactive** PowerShell window on the hardware host:
+
+```powershell
+.\scripts\register_windows_hardware_evidence_runner.ps1 `
+  -RepositoryUrl 'https://github.com/mailsvb2-bot/Dokkomplekt_Hardware_Validation' `
+  -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
+  -InstallPrerequisites
+```
+
+The bootstrap checks Word COM, the real printer, PrintService logging, WebView2 and VCTools; refuses any Actions runner Windows service; refuses known signing/private-key variables and the runtime manifest variable; verifies the downloaded runner ZIP digest; registers only label `dokkomplekt-hardware`; and starts it with an interactive AtLogOn scheduled task.
+
+Hardware bootstrap evidence:
+
+`C:\ProgramData\DokkomplektE2E\HARDWARE_RUNNER_BOOTSTRAP.json`
+
+Keep the dedicated hardware user logged in while jobs execute. Word COM/visible-GUI acceptance must never run in Session 0.
+
+## Cryptographically signed handoff and physical-host proof
+
+The only release payload crossing from runtime/signing to hardware is:
 
 `Dokkomplekt-Windows-Signed-Handoff-<release_sha>-<request_id>`
 
-Before upload the runtime runner builds `SIGNED_HANDOFF.json`, containing the exact relative path, byte size and SHA-256 of every application, installer, runtime and build-evidence payload. `SIGNED_HANDOFF.json.sig` is an Ed25519 signature created in the runtime signing domain.
+The runtime job creates `SIGNED_HANDOFF.json` plus `SIGNED_HANDOFF.json.sig`. Schema v2 binds:
 
-The hardware job downloads that artifact and, **before any Word/printer/reboot execution**:
+- exact public `release_sha`;
+- exact dispatch `request_id`;
+- runtime producer runner name;
+- SHA-256 fingerprint derived from the runtime host Windows MachineGuid;
+- every relative payload path, byte size, and SHA-256.
 
-1. verifies `SIGNED_HANDOFF.json.sig` against the trusted runtime public key;
-2. binds it to the exact public `release_sha` and dispatch `request_id`;
-3. rejects missing, extra, symlink/reparse, size-changed or SHA-256-changed files;
-4. independently verifies Authenticode on the application and NSIS installer;
-5. independently verifies the signed offline runtime bundle against the trusted runtime public key.
+The hardware job computes its own MachineGuid-derived SHA-256 and passes it as the consumer fingerprint. Verification fails if producer and consumer fingerprints are equal. Therefore two labels configured on the **same Windows machine cannot satisfy production hardware acceptance**.
 
-A GitHub artifact transport therefore is not itself treated as the trust boundary. The cryptographic manifest and independent hardware-side verification are the boundary.
+Before Word/printer/reboot execution the hardware host independently verifies:
 
-## Public dispatcher boundary
+1. `SIGNED_HANDOFF.json.sig` against the trusted runtime public key;
+2. release SHA and request correlation;
+3. producer/consumer host separation;
+4. exact file set, sizes, and SHA-256 values;
+5. Authenticode on application and NSIS installer;
+6. the offline runtime bundle signature against the trusted runtime public key.
 
-The public workflow `.github/workflows/windows-hardware-e2e.yml` runs only on GitHub-hosted `ubuntu-latest`. Its protected environment is:
+GitHub artifact transport is therefore not itself trusted as the security boundary.
 
-`windows-hardware-dispatch`
+## Private environments
 
-It pins:
+### `windows-production-signing`
+
+Runtime-only variables include:
+
+- `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH` — `C:\ProgramData\DokkomplektRuntime\locked\windows-x86_64-manifest.json`;
+- `DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64`;
+- `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64`;
+- `DOKKOMPLEKT_GATE_PUBKEY_B64`;
+- `DOKKOMPLEKT_LICENSE_PUBKEY_B64`;
+- `DOKKOMPLEKT_UPDATE_PUBKEY_B64`;
+- `DOKKOMPLEKT_THRESHOLD_PUBKEY_B64`;
+- `DOKKOMPLEKT_REFDATA_PUBKEY_B64`;
+- production update/reference/component URLs;
+- `DOKKOMPLEKT_TIMESTAMP_SERVER`;
+- `DOKKOMPLEKT_SIGNING_SCRIPT_SHA256`.
+
+Runtime-only secrets are the five private values listed under the runtime/signing domain above.
+
+### `windows-hardware-validation`
+
+Contains only hardware variables and public verification material. It must contain no signing secrets and no `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH`.
+
+### Public `windows-hardware-dispatch`
+
+The public workflow pins:
 
 - `DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY=mailsvb2-bot/Dokkomplekt_Hardware_Validation`;
 - `DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW=windows-hardware-e2e.yml`.
@@ -86,70 +183,55 @@ Required secret:
 
 - `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN` — narrowly scoped to the private validation repository with Actions access only.
 
-The dispatcher requires the exact protected public main SHA, proves the target repository is private, supplies a correlation UUID, waits for the exact private run and fails unless that run succeeds.
+## Private workflow order
 
-## Runtime lock preparation
+The audited scaffold is `ops/private-hardware-validation/windows-hardware-e2e.yml`. The private repository workflow must match the audited scaffold.
 
-The runtime/signing host, not the hardware host, owns the production runtime tree. Prepare it from reviewed portable component roots using `scripts/prepare_windows_production_runtime.ps1`. The result must be an absolute runner-owned manifest such as:
+The order is fixed:
 
-`C:\DokkomplektRuntime\locked\windows-x86_64-manifest.json`
+1. `signed-runtime-build` → `dokkomplekt-runtime` / `windows-production-signing`;
+2. signed artifact handoff;
+3. `hardware-evidence` with `needs: signed-runtime-build` → `dokkomplekt-hardware` / `windows-hardware-validation`.
 
-Production runtime requirements include the complete portable trees and license/source provenance for Tesseract, Poppler, LibreOffice, SumatraPDF, 7-Zip, msgconvert, llama.cpp and the approved GGUF semantic model. The manifest must use `schema=1`, `target=windows-x86_64`, `supply_chain_locked=true`, exact SHA-256 entries and a complete reviewed distribution inventory.
-
-After each rebuild, any old approval `.sig` is invalidated. The new exact manifest must be approved again with the offline runtime-lock approval private key before production staging can proceed.
-
-## Private workflow
-
-The audited scaffold is:
-
-`ops/private-hardware-validation/windows-hardware-e2e.yml`
-
-The private repository `.github/workflows/windows-hardware-e2e.yml` must match the audited scaffold for an approved release.
-
-It contains two jobs in strict order:
-
-1. `signed-runtime-build` on `dokkomplekt-runtime` / `windows-production-signing`;
-2. `hardware-evidence`, with `needs: signed-runtime-build`, on `dokkomplekt-hardware` / `windows-hardware-validation`.
-
-Do not place both runner labels on one host. Do not copy signing secrets into `windows-hardware-validation`. Do not copy the runner-owned sidecar tree or manifest onto the hardware machine as part of the validation design.
+Do not place both labels on one host. The signed MachineGuid fingerprints enforce this rule at runtime, not only by documentation.
 
 ## Real reboot — two phases
 
-Real reboot validation remains explicitly two-phase for the same public release SHA.
-
 ### `prepare`
 
-Run public **Windows Hardware E2E** with the approved `release_sha` and `reboot_phase=prepare`. The runtime runner creates the signed handoff, then the hardware runner verifies it and installs/prepares the watcher under persistent `C:\ProgramData\DokkomplektE2E` state. The prepared record includes the SHA-256 of `SIGNED_HANDOFF.json`.
+Run public **Windows Hardware E2E** with the approved exact `release_sha` and `reboot_phase=prepare`. The runtime host creates the signed handoff. The hardware host verifies it and prepares persistent state under `C:\ProgramData\DokkomplektE2E`.
 
-Perform an actual Windows restart and log back into the dedicated hardware runner account.
+Perform a genuine Windows restart and log back into the same dedicated hardware runner account.
 
 ### `verify`
 
-Run the public workflow again for the same SHA with `reboot_phase=verify`. A fresh signed handoff for that source/request is independently verified, then the hardware runner verifies the post-reboot evidence and executes the full physical contour.
+Run public **Windows Hardware E2E** again for the same release SHA with `reboot_phase=verify`. The hardware machine verifies the post-reboot evidence, executes real Word COM `PrintOut`, requires PrintService Event 307, verifies watcher exactly-once behavior, GUI/no-console behavior, and clean uninstall.
 
-`FULL DOKKOMPLEKT AUTOPILOT` with `scope=production-hardware` is allowed to pass only after the required exact-SHA hardware evidence exists.
+After exact-SHA reboot evidence exists, run **FULL DOKKOMPLEKT AUTOPILOT** with `scope=production-hardware`.
 
-## Hardware acceptance
+## Production PASS
 
-Production hardware evidence requires all of the following:
+Issue #5 remains open until real evidence exists for all of the following:
 
 - exact protected public source SHA;
-- approved and supply-chain-locked offline runtime on the runtime runner;
-- signed Rust/RustSec release gate;
+- approved supply-chain-locked offline runtime on the runtime host;
+- bounded Network Service runtime ACL evidence;
+- signing/runtime host physically distinct from hardware host;
+- signed Rust/RustSec gate;
 - signed runtime bundle and SBOM;
 - Authenticode-valid application and NSIS installer;
-- signed `SIGNED_HANDOFF.json` with exact file hashes;
-- hardware-side independent handoff/runtime/Authenticode verification;
+- signed `SIGNED_HANDOFF.json` with exact file hashes and producer fingerprint;
+- hardware-side handoff/runtime/Authenticode verification;
 - licensed Word COM `PrintOut`;
-- PrintService Event 307 on the dedicated real printer queue;
+- PrintService Event 307 on the real printer;
 - visible installed GUI without unexpected console/PowerShell windows;
 - genuine Windows reboot;
 - watcher startup after reboot and exactly-once output;
 - silent install and clean uninstall;
 - immutable evidence hashes bound to the approved release.
 
-Issue #5 remains open until those **real external Windows observations** exist. Hosted CI, mocked Tauri IPC, unsigned preview installers or a green software-only Autopilot cannot substitute for this evidence.
+Hosted CI or software-only Autopilot cannot substitute for those external observations.
 
 ## Legacy single-runner scripts
 
-`scripts/register_windows_hardware_runner.ps1`, `scripts/bootstrap_windows_hardware_runner.ps1` and `scripts/verify_windows_hardware_runner.ps1` remain temporarily for compatibility with the previous single-runner setup. They are no longer the production trust-boundary design. The private validation repository must use role-specific runtime and hardware registration so the production signing material and the Word/printer/reboot host remain separate.
+`scripts/register_windows_hardware_runner.ps1`, `scripts/bootstrap_windows_hardware_runner.ps1`, and `scripts/verify_windows_hardware_runner.ps1` remain temporarily for compatibility with the previous design. They are **not** the production trust boundary. Production validation uses the role-specific runtime/signing and hardware-evidence runners above.

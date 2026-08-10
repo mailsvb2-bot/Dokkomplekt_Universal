@@ -43,12 +43,17 @@ def test_rustsec_evidence_uses_audited_pin_report_not_cached_checkout(tmp_path: 
     monkeypatch.setattr(module, "PIN_REPORT", pin)
     monkeypatch.setattr(module, "EVIDENCE", evidence)
     monkeypatch.setattr(module, "ROOT", tmp_path)
-    monkeypatch.setattr(module, "command", lambda *args: "source" if "source_fingerprint.py" in args else "cargo-audit 0.22.2")
+    monkeypatch.setattr(
+        module,
+        "command",
+        lambda *args: "source" if any("source_fingerprint.py" in arg for arg in args) else "cargo-audit 0.22.2",
+    )
 
     assert module.main() == 0
     payload = json.loads(evidence.read_text(encoding="utf-8"))
     assert payload["advisory_database_commit"] == commit
     assert payload["advisory_database_origin"] == repository
+    assert payload["advisory_database_dirty"] is False
     assert payload["advisory_database_pin_report_sha256"] == digest(pin)
 
 
@@ -104,7 +109,11 @@ def test_signed_attestation_fails_closed_if_audited_pin_changes(tmp_path: Path, 
     monkeypatch.setattr(module, "COMMERCIAL", commercial)
     monkeypatch.setattr(module, "COMMERCIAL_LOCK", commercial_lock)
     monkeypatch.setattr(module, "COMMERCIAL_AUDIT", commercial_audit)
-    monkeypatch.setattr(module, "command", lambda *args: "source" if "source_fingerprint.py" in args else "tool-version")
+    monkeypatch.setattr(
+        module,
+        "command",
+        lambda *args: "source" if any("source_fingerprint.py" in arg for arg in args) else "tool-version",
+    )
     monkeypatch.setenv("DOKKOMPLEKT_GATE_PRIVATE_KEY_B64", base64.b64encode(b"x" * 32).decode("ascii"))
 
     # Tamper the exact pin after evidence creation. Signing must fail rather than

@@ -94,9 +94,15 @@ def test_release_workflows_pin_actions_and_scope_private_keys_to_steps() -> None
         "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64",
         "DOKKOMPLEKT_REFDATA_PUBKEY_B64",
         "--mode production-build",
-        "--mode windows-runtime",
+        "verify_windows_hosted_signing_runner.py",
+        "fetch_hosted_runtime_bundle.py",
+        "stage_signed_runtime_bundle.py",
+        "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL",
     ):
         assert required in release
+    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]" not in release
+    assert "runs-on: windows-latest" in release
+    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in release
 
     # No private signing value may live in a job-level env block. It must appear
     # beneath a concrete step, after pinned setup actions have completed.

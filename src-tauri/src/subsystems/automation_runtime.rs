@@ -2894,14 +2894,10 @@ fn semantic_extract(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        merge_parsed_case(&mut case, extracted_case)?;
-    }
-    persist_default_state(&app, &state)?;
+    transact_default_state(&app, &state, |snapshot| {
+        merge_parsed_case(&mut snapshot.semantic_case, extracted_case)?;
+        Ok(((), true))
+    })?;
     report.fields.sort_by(|left, right| left.field_id.cmp(&right.field_id));
     report.warnings.sort();
     report.warnings.dedup();

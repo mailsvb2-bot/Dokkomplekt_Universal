@@ -168,6 +168,9 @@ function validatePrinterInventory(command: string, value: unknown): void {
   string(command, root.platform, 'platform');
   objectArray(command, root.printers, 'printers');
   record(command, root.preferences, 'preferences');
+  if (root.discovery_error !== undefined && root.discovery_error !== null) {
+    string(command, root.discovery_error, 'discovery_error');
+  }
   string(command, root.advanced_options_note, 'advanced_options_note');
 }
 

@@ -155,14 +155,24 @@ function Ensure-VcBuildTools {
 
 function Ensure-RustToolchain {
     Refresh-Path
-    if ($null -ne (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
-        & rustup.exe toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy 2>$null | Out-Null
+    $cargo = Get-Command cargo.exe -ErrorAction SilentlyContinue
+    $rustup = Get-Command rustup.exe -ErrorAction SilentlyContinue
+    if ($null -ne $cargo -and $null -ne $rustup) {
+        & $rustup.Source toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy | Out-Null
         if ($LASTEXITCODE -eq 0) { return }
     }
-    Write-Host '[SETUP] Rust toolchain is missing; installing Rust 1.97.1 from the official rustup distribution...'
+
+    Write-Host '[SETUP] Rust toolchain is missing; installing verified Rust 1.97.1 through official rustup...'
+    $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+    $shaUrl = "$rustupUrl.sha256"
     $installer = Join-Path $env:TEMP ('rustup-init-' + [Guid]::NewGuid().ToString('N') + '.exe')
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile $installer
+        $shaText = [string](Invoke-WebRequest -UseBasicParsing -Uri $shaUrl).Content
+        if ($shaText -notmatch '(?i)([0-9a-f]{64})') { throw 'Official rustup SHA-256 file did not contain a digest.' }
+        $expected = $Matches[1].ToLowerInvariant()
+        Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $installer
+        $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) { throw "rustup-init SHA-256 mismatch: expected $expected got $actual" }
         $process = Start-Process -FilePath $installer -ArgumentList @('-y','--default-toolchain','1.97.1','--profile','minimal','--component','rustfmt','--component','clippy') -Wait -PassThru
         if ($process.ExitCode -ne 0) { throw "rustup-init failed with exit code $($process.ExitCode)." }
     } finally {
@@ -217,10 +227,13 @@ function Resolve-Printer {
         if ($match.Count -eq 1) { return [string]$match[0].Name }
     }
 
-    $defaultPrinter = @($candidates | Where-Object { $_.Default -eq $true }) | Select-Object -First 1
-    if ($null -ne $defaultPrinter) {
-        Write-Host "[SETUP] Using default real printer: $($defaultPrinter.Name)"
-        return [string]$defaultPrinter.Name
+    $defaultName = [string](Get-CimInstance Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Default -eq $true } | Select-Object -First 1 -ExpandProperty Name)
+    if (-not [string]::IsNullOrWhiteSpace($defaultName)) {
+        $defaultPrinter = @($candidates | Where-Object { $_.Name -eq $defaultName }) | Select-Object -First 1
+        if ($null -ne $defaultPrinter) {
+            Write-Host "[SETUP] Using default real printer: $($defaultPrinter.Name)"
+            return [string]$defaultPrinter.Name
+        }
     }
     if ($candidates.Count -eq 1) {
         Write-Host "[SETUP] Using the only real printer: $($candidates[0].Name)"

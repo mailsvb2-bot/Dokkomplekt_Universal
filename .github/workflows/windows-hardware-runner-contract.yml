@@ -38,6 +38,7 @@ on:
       - 'tests/test_two_runner_bootstrap_roles.py'
       - 'tests/test_windows_runtime_service_boundary.py'
       - 'tests/test_windows_hardware_runner_bootstrap_contract.py'
+      - 'tests/test_one_pc_hardware_env_contract.py'
       - 'tests/test_windows_signed_handoff.py'
       - 'tests/test_windows_runtime_kit.py'
       - 'tests/test_windows_runtime_lock_approval.py'
@@ -125,6 +126,7 @@ jobs:
           tests/test_two_runner_bootstrap_roles.py
           tests/test_windows_runtime_service_boundary.py
           tests/test_windows_hardware_runner_bootstrap_contract.py
+          tests/test_one_pc_hardware_env_contract.py
           tests/test_windows_signed_handoff.py
           tests/test_windows_runtime_kit.py
           tests/test_windows_runtime_lock_approval.py

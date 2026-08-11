@@ -60,3 +60,15 @@ def test_rustsec_evidence_requires_a_real_database_commit() -> None:
     assert "advisory_database_commit" in source
     assert "len(head) != 40" in source
     assert any(isinstance(node, ast.Raise) for node in ast.walk(tree))
+
+
+def test_background_watcher_install_is_durable_and_error_events_match_frontend_contract() -> None:
+    source = (ROOT / "src-tauri/src/subsystems/watcher_commands.rs").read_text("utf-8")
+    assert "fn write_autostart_entries(exe: &Path) -> Result<(Vec<PathBuf>, Vec<String>), String>" in source
+    assert "installed=true" in source
+    assert "match write_autostart_entries(&exe)" in source
+    assert "status: \"error\".into()" not in source
+    assert source.count("status: \"attention\".into()") >= 2
+
+    frontend = (ROOT / "src/lib/runtimeValidation.ts").read_text("utf-8")
+    assert "'processed', 'attention', 'setup_needed', 'ignored'" in frontend

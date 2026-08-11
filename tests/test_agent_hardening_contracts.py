@@ -26,8 +26,17 @@ def test_thin_and_offline_installers_have_distinct_payloads() -> None:
     }
 
 
-def test_local_windows_release_signs_binary_and_installer() -> None:
+def test_local_windows_release_signs_binary_and_installer_with_hsm_only() -> None:
     script = (ROOT / "BUILD_WINDOWS_INSTALLER.bat").read_text("utf-8")
+    assert 'set "DOKKOMPLEKT_RELEASE_MODE=production"' in script
+    assert 'if /I not "%DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND%"=="certificate-store"' in script
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT is required" in script
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER is required" in script
+    assert "DOKKOMPLEKT_TIMESTAMP_SERVER is required for production signing" in script
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 is forbidden in production" in script
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD is forbidden in production" in script
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 is required" not in script
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD is required" not in script
     assert "sign_windows_release.ps1 -ArtifactRoot target\\release\\dokkomplekt-tauri.exe" in script
     assert "sign_windows_release.ps1 -ArtifactRoot target\\release\\bundle\\nsis" in script
     assert "DOKKOMPLEKT_REQUIRE_AUTHENTICODE=1" in script

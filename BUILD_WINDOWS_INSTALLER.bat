@@ -7,12 +7,32 @@ if "%DOKKOMPLEKT_SIDECAR_MANIFEST%"=="" (
   echo The offline installer requires a reviewed manifest for OCR and Office sidecars.
   exit /b 1
 )
-if "%DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64%"=="" (
-  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 is required.
+
+rem This entrypoint is production-only. Authenticode must use a non-exportable
+rem certificate-store key exposed by the approved HSM/KSP/CSP provider.
+set "DOKKOMPLEKT_RELEASE_MODE=production"
+if /I not "%DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND%"=="certificate-store" (
+  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND must be certificate-store for production.
   exit /b 1
 )
-if "%DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD%"=="" (
-  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD is required.
+if "%DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT%"=="" (
+  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT is required.
+  exit /b 1
+)
+if "%DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER%"=="" (
+  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER is required.
+  exit /b 1
+)
+if "%DOKKOMPLEKT_TIMESTAMP_SERVER%"=="" (
+  echo ERROR: DOKKOMPLEKT_TIMESTAMP_SERVER is required for production signing.
+  exit /b 1
+)
+if not "%DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64%"=="" (
+  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 is forbidden in production.
+  exit /b 1
+)
+if not "%DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD%"=="" (
+  echo ERROR: DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD is forbidden in production.
   exit /b 1
 )
 

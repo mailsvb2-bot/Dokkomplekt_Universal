@@ -23,13 +23,26 @@ class OperationalHardeningContracts(unittest.TestCase):
         self.assertIn(".file_name()", hygiene)
         self.assertIn('format!("{name}{PROCESSED_SUFFIX}")', hygiene)
 
-    def test_retained_sources_use_encrypted_case_history_without_adjacent_markers(self) -> None:
+    def test_retained_sources_use_plan_bound_completion_evidence_without_routine_adjacent_markers(self) -> None:
         main = self.read("src-tauri/src/main.rs")
         storage = self.read("crates/dokkomplekt-storage/src/lib.rs")
         self.assertIn("completed_case_exists_for_source_hash", storage)
         self.assertIn("source_retained_and_tracked_in_case_history", main)
-        self.assertIn("Publication is the business terminal point", main)
+        self.assertIn(
+            "Publication + committed commercial usage is the irreversible business",
+            main,
+        )
+        self.assertIn("fn local_completion_receipt", main)
+        self.assertIn("completed_in_local_receipts", main)
+        self.assertIn("completed_in_emergency_marker", main)
+        self.assertIn(
+            "local_completion.is_err() && queue_completion.is_err() && case_completion.is_err()",
+            main,
+        )
+        self.assertIn("status=published_completion_ledgers_failed", main)
+        self.assertIn("processing_job_sha256={processing_job_sha256}", main)
         self.assertNotIn("status=published_source_retained_by_privacy_policy", main)
+        self.assertNotIn("status=shared_receipt_failed", main)
 
     def test_network_processing_lock_uses_content_addressed_shared_lease(self) -> None:
         main = self.read("src-tauri/src/main.rs")

@@ -1,0 +1,234 @@
+--- a/src-tauri/src/subsystems/watcher_commands.rs
++++ b/src-tauri/src/subsystems/watcher_commands.rs
+@@ -598,14 +598,46 @@
+             let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
+             let _ = std::fs::remove_file(&unreadable_note);
+             let _ = app.emit("document-batch-ready", response.clone());
+-            let latest_runtime = control_path
+-                .as_ref()
+-                .and_then(|path| std::fs::read(path).ok())
+-                .and_then(|bytes| serde_json::from_slice::<WatcherRuntimeConfig>(&bytes).ok());
+-            let effective_auto_print = latest_runtime
+-                .as_ref()
+-                .map(|runtime| runtime.auto_print)
+-                .unwrap_or(fallback_auto_print);
++            let (latest_runtime, control_error) = match control_path.as_ref() {
++                None => (None, None),
++                Some(control_path) => match std::fs::read(control_path) {
++                    Ok(bytes) => match serde_json::from_slice::<WatcherRuntimeConfig>(&bytes) {
++                        Ok(runtime) => (Some(runtime), None),
++                        Err(error) => (
++                            None,
++                            Some(format!("Настройки фонового агента повреждены: {error}")),
++                        ),
++                    },
++                    Err(error) => (
++                        None,
++                        Some(format!("Настройки фонового агента недоступны: {error}")),
++                    ),
++                },
++            };
++            if let Some(error) = control_error.as_deref() {
++                let details = serde_json::json!({ "error": error });
++                let _ = create_automation_exception(
++                    &app,
++                    "watcher_control_unavailable",
++                    response.patient_folder.as_deref().unwrap_or(""),
++                    "Автопечать отключена: настройки фонового агента недоступны или повреждены.",
++                    &details,
++                );
++                let _ = append_audit_event(
++                    &app,
++                    "automatic_print_blocked_control_error",
++                    "",
++                    &details,
++                );
++            }
++            let effective_auto_print = if control_error.is_some() {
++                false
++            } else {
++                latest_runtime
++                    .as_ref()
++                    .map(|runtime| runtime.auto_print)
++                    .unwrap_or(fallback_auto_print)
++            };
+             let effective_copies = latest_runtime
+                 .as_ref()
+                 .map(|runtime| runtime.print_copies_by_document.clone())
+@@ -624,7 +656,40 @@
+                             (PathBuf::from(&document.path), copies)
+                         })
+                         .collect::<Vec<_>>();
+-                    let print_preferences = load_print_preferences(&app).unwrap_or_default();
++                    let print_preferences = match load_print_preferences(&app) {
++                        Ok(preferences) => preferences,
++                        Err(error) => {
++                            increment_metric(&app, "print_failures", jobs.len() as u64);
++                            let details = serde_json::json!({
++                                "error": error,
++                                "blocked_job_count": jobs.len(),
++                            });
++                            let _ = create_automation_exception(
++                                &app,
++                                "print_preferences_unavailable",
++                                response.patient_folder.as_deref().unwrap_or(""),
++                                "Автопечать не выполнялась: настройки принтера недоступны или повреждены.",
++                                &details,
++                            );
++                            let _ = append_audit_event(
++                                &app,
++                                "automatic_print_blocked_preferences_error",
++                                "",
++                                &details,
++                            );
++                            if let Ok(mut log) = std::fs::OpenOptions::new()
++                                .create(true)
++                                .append(true)
++                                .open(&log_path)
++                            {
++                                let _ = writeln!(
++                                    log,
++                                    "[watcher] automatic_print_blocked; print_preferences_unavailable=true"
++                                );
++                            }
++                            return;
++                        }
++                    };
+                     let print_result = print_resolved_jobs(&jobs, &print_preferences);
+                     if !print_result.failed_files.is_empty() {
+                         increment_metric(
+--- a/src-tauri/src/subsystems/desktop_io.rs
++++ b/src-tauri/src/subsystems/desktop_io.rs
+@@ -1344,6 +1344,7 @@
+     platform: String,
+     printers: Vec<PrinterInfo>,
+     preferences: PrintPreferences,
++    discovery_error: Option<String>,
+     advanced_options_note: String,
+ }
+ 
+@@ -1400,19 +1401,27 @@
+         .collect())
+ }
+ 
+-#[tauri::command]
+-fn get_printer_inventory(app: tauri::AppHandle) -> Result<PrinterInventory, String> {
+-    let printers = discover_printers().unwrap_or_default();
+-    Ok(PrinterInventory {
++fn build_printer_inventory(preferences: PrintPreferences) -> PrinterInventory {
++    let (printers, discovery_error) = match discover_printers() {
++        Ok(printers) => (printers, None),
++        Err(error) => (Vec::new(), Some(error)),
++    };
++    PrinterInventory {
+         platform: std::env::consts::OS.into(),
+         printers,
+-        preferences: load_print_preferences(&app)?,
++        preferences,
++        discovery_error,
+         advanced_options_note: if cfg!(target_os = "windows") {
+             "Для Word используются COM и PrintTicket. Для PDF принтер, copies, duplex и лоток передаются проверяемому SumatraPDF sidecar; без него PDF auto-print блокируется fail-closed, а не уходит в неизвестный системный обработчик.".into()
+         } else {
+             "Для CUPS передаются printer, sides и media-source через lp.".into()
+         },
+-    })
++    }
++}
++
++#[tauri::command]
++fn get_printer_inventory(app: tauri::AppHandle) -> Result<PrinterInventory, String> {
++    Ok(build_printer_inventory(load_print_preferences(&app)?))
+ }
+ 
+ #[derive(Debug, Deserialize)]
+@@ -1442,16 +1451,7 @@
+             "tray": preferences.tray,
+         }),
+     )?;
+-    Ok(PrinterInventory {
+-        platform: std::env::consts::OS.into(),
+-        printers: discover_printers().unwrap_or_default(),
+-        preferences,
+-        advanced_options_note: if cfg!(target_os = "windows") {
+-            "Для Word используются COM и PrintTicket. Для PDF принтер, copies, duplex и лоток передаются проверяемому SumatraPDF sidecar; без него PDF auto-print блокируется fail-closed, а не уходит в неизвестный системный обработчик.".into()
+-        } else {
+-            "Для CUPS передаются printer, sides и media-source через lp.".into()
+-        },
+-    })
++    Ok(build_printer_inventory(preferences))
+ }
+ 
+ #[derive(Debug, Clone, Serialize)]
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -371,6 +371,7 @@
+   platform: string;
+   printers: PrinterInfo[];
+   preferences: PrintPreferences;
++  discovery_error?: string | null;
+   advanced_options_note: string;
+ }
+ 
+--- a/src/lib/runtimeValidation.ts
++++ b/src/lib/runtimeValidation.ts
+@@ -168,6 +168,9 @@
+   string(command, root.platform, 'platform');
+   objectArray(command, root.printers, 'printers');
+   record(command, root.preferences, 'preferences');
++  if (root.discovery_error !== undefined && root.discovery_error !== null) {
++    string(command, root.discovery_error, 'discovery_error');
++  }
+   string(command, root.advanced_options_note, 'advanced_options_note');
+ }
+ 
+--- a/src/components/AutomationControlCenter.tsx
++++ b/src/components/AutomationControlCenter.tsx
+@@ -36,6 +36,7 @@
+   platform: '',
+   printers: [],
+   preferences: { printer_name: null, duplex_mode: 'simplex', tray: null },
++  discovery_error: null,
+   advanced_options_note: '',
+ };
+ 
+@@ -362,6 +363,7 @@
+       <label>Двусторонняя печать<select value={printers.preferences.duplex_mode} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, duplex_mode: e.target.value } })}><option value="simplex">односторонняя</option><option value="long_edge">по длинной стороне</option><option value="short_edge">по короткой стороне</option><option value="manual">ручная двусторонняя печать</option></select></label>
+       <label>Лоток Word<select value={printers.preferences.tray ?? ''} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, tray: e.target.value === '' ? null : Number(e.target.value) } })}><option value="">по умолчанию</option><option value="0">драйвер по умолчанию</option><option value="1">верхний</option><option value="2">нижний</option><option value="3">средний</option><option value="4">ручная подача</option><option value="7">автоматическая подача</option><option value="10">крупный формат</option><option value="11">большая ёмкость</option><option value="14">кассета</option><option value="15">источник формы</option></select></label>
+       <button className="utilBtn" disabled={busy} onClick={savePrinterPreferences}>Сохранить печать</button>
++      {printers.discovery_error && <small className="badgeWarn" role="alert">Не удалось получить список принтеров: {printers.discovery_error}</small>}
+       <small>{printers.advanced_options_note || 'Список принтеров пока не загружен.'}</small>
+     </section>
+ 
+--- /dev/null
++++ b/tests/test_print_fail_closed_contract.py
+@@ -0,0 +1,30 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def test_watcher_auto_print_fails_closed_on_control_and_preferences_errors() -> None:
++    watcher = (ROOT / "src-tauri/src/subsystems/watcher_commands.rs").read_text("utf-8")
++    assert "watcher_control_unavailable" in watcher
++    assert "automatic_print_blocked_control_error" in watcher
++    assert "let effective_auto_print = if control_error.is_some()" in watcher
++    assert "load_print_preferences(&app).unwrap_or_default()" not in watcher
++    assert "print_preferences_unavailable" in watcher
++    assert "automatic_print_blocked_preferences_error" in watcher
++    prefs = watcher.index("let print_preferences = match load_print_preferences(&app)")
++    print_call = watcher.index("let print_result = print_resolved_jobs(&jobs, &print_preferences)")
++    blocked = watcher.index("return;", prefs, print_call)
++    assert prefs < blocked < print_call
++
++
++def test_printer_discovery_failure_is_not_an_empty_inventory() -> None:
++    rust = (ROOT / "src-tauri/src/subsystems/desktop_io.rs").read_text("utf-8")
++    types = (ROOT / "src/lib/types.ts").read_text("utf-8")
++    validation = (ROOT / "src/lib/runtimeValidation.ts").read_text("utf-8")
++    ui = (ROOT / "src/components/AutomationControlCenter.tsx").read_text("utf-8")
++    assert "discovery_error: Option<String>" in rust
++    assert "fn build_printer_inventory" in rust
++    assert "discover_printers().unwrap_or_default()" not in rust
++    assert "discovery_error?: string | null" in types
++    assert "root.discovery_error" in validation
++    assert "Не удалось получить список принтеров" in ui

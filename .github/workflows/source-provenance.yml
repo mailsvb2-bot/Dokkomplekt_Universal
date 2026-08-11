@@ -41,23 +41,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
-          components: rustfmt
-      - name: Apply guarded Rust test-scope fix
-        id: guarded_patch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          patch=.github/deep-audit-test-scope-fix.patch
-          test -f "$patch"
-          git apply --check "$patch"
-          git apply "$patch"
-          cargo fmt --all
-          python scripts/static_quality_gate.py
-          git diff --check
-          git checkout ab1811e138a731592211ebfcad9e3cd13cb3079d -- .github/workflows/source-provenance.yml
-          rm -f "$patch"
-          echo "applied=true" >> "$GITHUB_OUTPUT"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true
@@ -65,11 +48,6 @@ jobs:
           python scripts/verify_source_manifest.py \
             --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt \
             --json-report verification/ci/source-manifest-report.json
-      - name: Adopt guarded patch source manifest
-        if: steps.guarded_patch.outputs.applied == 'true'
-        run: |
-          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py
       - name: Build and verify deterministic clean source ZIP
         run: |
           python scripts/build_source_archive.py \
@@ -99,18 +77,6 @@ jobs:
             verification/ci/source-archive-cargo-metadata.json
             verification/ci/Dokkomplekt_Universal-history.bundle
           if-no-files-found: error
-      - name: Commit guarded Rust test-scope fix
-        if: steps.guarded_patch.outputs.applied == 'true'
-        env:
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A -- .github/workflows/source-provenance.yml .github/deep-audit-test-scope-fix.patch SOURCE_MANIFEST_SHA256.txt src-tauri/src/generation_publication.rs src-tauri/src/main.rs tests/test_v18_4_6_mail_merge_snapshot_consistency.py
-          git diff --cached --check
-          git commit -m "fix(tests): wire publication helpers into Rust test scope"
-          git push origin "HEAD:${BRANCH}"
       - name: Synchronize manifest on same-repository pull request
         if: >-
           steps.manifest.outcome != 'success' &&
@@ -127,7 +93,7 @@ jobs:
           git commit -m "chore(provenance): regenerate source manifest"
           git push origin "HEAD:${BRANCH}"
       - name: Enforce source-manifest integrity
-        if: steps.manifest.outcome != 'success' && steps.guarded_patch.outputs.applied != 'true'
+        if: steps.manifest.outcome != 'success'
         run: |
           cat verification/ci/source-manifest-report.json
           exit 1

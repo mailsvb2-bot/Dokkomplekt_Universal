@@ -74,6 +74,10 @@ use tauri::{Emitter, Manager, State};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+#[cfg(test)]
+use generation_publication::{
+    local_completion_receipt, local_completion_receipt_matches, mark_local_completion,
+};
 use privacy_runtime::{
     cleanup_intake_workspace, load_privacy_preferences, lock_learning_workspace,
     persist_privacy_preferences, start_periodic_intake_cleanup, PrivacyPreferences,

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
 
-fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
+pub(crate) fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
     app_data
         .join("intake-completion-receipts")
         .join(format!("{processing_job_sha256}.done"))

@@ -32,13 +32,15 @@ def test_mail_merge_revalidates_before_publish_and_treats_postpublish_drift_as_w
     body = _mail_merge_body()
     guard = "ensure_mail_merge_templates_current(&template_inputs)"
     publish = "publish_stage_to_unique_directory(&stage, &desired)"
-    finalize = "generation_publication::finalize_published_generation(&app, &permit, &published)"
+    finalize = "warnings.extend(generation_publication::finalize_published_generation("
     assert body.count(guard) == 2
     first_verify = body.index(guard)
     publish_at = body.index(publish)
     second_verify = body.index(guard, first_verify + 1)
     finalize_at = body.index(finalize)
     assert first_verify < publish_at < second_verify < finalize_at
+    finalize_call = " ".join(body[finalize_at : body.index("));", finalize_at) + 3].split())
+    assert "&app, &permit, false," in finalize_call
 
     before_publish = body[first_verify:publish_at]
     assert "remove_dir_all(&stage)" in before_publish

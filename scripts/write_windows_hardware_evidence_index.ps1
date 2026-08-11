@@ -162,7 +162,6 @@ $authenticodeRecord = Get-FileRecord $authenticodePath 'hardware-evidence'
 Assert-Sha256Equal $guiRecord.sha256 ([string] $hardware.gui_console_evidence_sha256) 'GUI/console evidence'
 Assert-Sha256Equal $printRecord.sha256 ([string] $hardware.print_event_evidence_sha256) 'Print event evidence'
 Assert-Sha256Equal $authenticodeRecord.sha256 ([string] $hardware.authenticode_evidence_sha256) 'Authenticode evidence'
-$rebootEvidenceSha256 = (Get-FileHash -LiteralPath $rebootPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $installerFiles = @(Get-ChildItem -LiteralPath $InstallerRoot -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.msi') })
 if ($installerFiles.Count -eq 0) { throw 'No installer artifacts were found for the final evidence index.' }
@@ -186,11 +185,14 @@ $runtimeRecord = Get-FileRecord $runtime.FullName 'offline-runtime'
 Assert-Sha256Equal $runtimeRecord.sha256 ([string] $signedBuild.offline_runtime.sha256) 'Offline runtime'
 $runtimePayloadRecord = Get-FileRecord "$($runtime.FullName).signing.json" 'offline-runtime-signing'
 $runtimeSignatureRecord = Get-FileRecord "$($runtime.FullName).signing.json.sig" 'offline-runtime-signature'
-$runtimePublicKeyRecord = Get-FileRecord "$($runtime.FullName).signing.json.public.pem" 'offline-runtime-public-key'
+$runtimeApprovalRecord = Get-FileRecord "$($runtime.FullName).signing.json.approval.sig" 'offline-runtime-approval-signature'
 $trustedKeyRecord = Get-FileRecord (Join-Path $VerificationRoot 'runtime-trusted-public.pem') 'trusted-public-key'
 Assert-Sha256Equal $runtimeSignatureRecord.sha256 ([string] $signedBuild.offline_runtime.signature_sha256) 'Offline runtime signature'
-Assert-Sha256Equal $runtimePublicKeyRecord.sha256 ([string] $signedBuild.offline_runtime.public_key_sha256) 'Offline runtime public key'
+Assert-Sha256Equal $trustedKeyRecord.sha256 ([string] $signedBuild.offline_runtime.public_key_sha256) 'Runtime verification public key'
 Assert-Sha256Equal $trustedKeyRecord.sha256 ([string] $signedBuild.offline_runtime.trusted_public_key_sha256) 'Pinned runtime public key'
+if ([string] $signedBuild.offline_runtime.trust_source -ne 'protected_pinned_public_key') {
+    throw 'Signed build runtime trust source is not the protected pinned public key.'
+}
 
 $cargoAttestationRecord = Get-FileRecord $cargoAttestationPath 'rust-gate-evidence'
 $cargoSignatureRecord = Get-FileRecord $cargoSignaturePath 'rust-gate-signature'
@@ -204,12 +206,15 @@ $requiredEvidence = @(
     @{ Path = $watcherInstallPath; Kind = 'hardware-evidence' },
     @{ Path = $watcherUninstallPath; Kind = 'hardware-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'production-build-preflight.json'); Kind = 'preflight-evidence' },
-    @{ Path = (Join-Path $VerificationRoot 'windows-runtime-preflight.json'); Kind = 'preflight-evidence' },
+    @{ Path = (Join-Path $VerificationRoot 'windows-hosted-signing-preflight.json'); Kind = 'preflight-evidence' },
+    @{ Path = (Join-Path $VerificationRoot 'HOSTED_RUNTIME_FETCH.json'); Kind = 'runtime-provenance-evidence' },
+    @{ Path = (Join-Path $VerificationRoot 'HOSTED_RUNTIME_STAGE.json'); Kind = 'runtime-provenance-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'hardware-preflight.json'); Kind = 'preflight-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'sidecar-status.json'); Kind = 'runtime-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'SIDECAR_AUTHENTICODE.json'); Kind = 'runtime-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'offline-runtime-probe.log'); Kind = 'runtime-evidence' },
-    @{ Path = (Join-Path $VerificationRoot 'scanned-pdf-ocr.json'); Kind = 'ocr-evidence' }
+    @{ Path = (Join-Path $VerificationRoot 'scanned-pdf-ocr.json'); Kind = 'ocr-evidence' },
+    @{ Path = (Join-Path $VerificationRoot 'runtime-trusted-public.pem'); Kind = 'trusted-public-key-evidence' }
 )
 $evidenceRecords = @($requiredEvidence | ForEach-Object { Get-FileRecord $_.Path $_.Kind })
 
@@ -219,8 +224,7 @@ $allRecords = @(
     $runtimeRecord
     $runtimePayloadRecord
     $runtimeSignatureRecord
-    $runtimePublicKeyRecord
-    $trustedKeyRecord
+    $runtimeApprovalRecord
     $cargoAttestationRecord
     $cargoSignatureRecord
     $guiRecord

@@ -4,6 +4,7 @@ mod reference_data_update;
 mod resume_engine;
 mod semantic_model;
 mod semantic_runtime;
+mod state_transaction;
 mod template_snapshot;
 mod threshold_calibration;
 mod universal_intake;
@@ -75,6 +76,7 @@ use semantic_model::{
     LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
 };
 use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
+use state_transaction::transact_default_state;
 
 /// Install the explicitly selected rustls crypto backend before any reqwest
 /// client is created. The operation is process-global and safely idempotent.
@@ -1675,41 +1677,6 @@ fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
         .save_case_and_pack_atomic("current", "default", &case, &pack)
         .map_err(|error| error.to_string())?;
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(db_path.to_path_buf());
-    Ok(())
-}
-
-fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
-    ensure_persistence_available(state)?;
-    let _persistence_guard = state
-        .persistence_gate
-        .lock()
-        .map_err(|_| "persistence gate lock failed")?;
-    let path = default_state_db_path(app)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let case = state
-        .semantic_case
-        .lock()
-        .map_err(|_| "state lock failed")?
-        .clone();
-    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let license = state
-        .license_document
-        .lock()
-        .map_err(|_| "license state lock failed")?
-        .clone();
-    repository_for(&path)?
-        .save_desktop_snapshot(
-            "current",
-            "default",
-            &case,
-            &pack,
-            "license_document",
-            &license,
-        )
-        .map_err(|error| error.to_string())?;
-    *state.db_path.lock().map_err(|_| "state lock failed")? = Some(path);
     Ok(())
 }
 

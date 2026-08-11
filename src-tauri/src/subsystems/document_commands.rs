@@ -563,14 +563,11 @@ fn rename_document_button(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        rename_button_in_pack(&mut pack, &req.document_id, &req.button_label)
+    transact_default_state(&app, &state, |snapshot| {
+        rename_button_in_pack(&mut snapshot.pack, &req.document_id, &req.button_label)
             .map_err(|error| error.to_string())?;
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+        Ok((snapshot.pack.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,13 +581,11 @@ fn remove_document_button(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        remove_button_from_pack(&mut pack, &req.document_id).map_err(|error| error.to_string())?;
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+    transact_default_state(&app, &state, |snapshot| {
+        remove_button_from_pack(&mut snapshot.pack, &req.document_id)
+            .map_err(|error| error.to_string())?;
+        Ok((snapshot.pack.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -606,9 +601,9 @@ fn update_document_popup_fields(
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
     validate_popup_fields(&req.popup_fields)?;
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let document = pack
+    transact_default_state(&app, &state, |snapshot| {
+        let document = snapshot
+            .pack
             .documents
             .iter_mut()
             .find(|document| document.id == req.document_id)
@@ -640,10 +635,8 @@ fn update_document_popup_fields(
             }
         }
         document.required_fields = required.into_iter().collect();
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+        Ok((snapshot.pack.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -658,22 +651,16 @@ fn set_field(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<SemanticCase, String> {
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
+    transact_default_state(&app, &state, |snapshot| {
         validate_field_value(&req.field_id, &req.value)?;
-        let mut candidate = case.clone();
+        let mut candidate = snapshot.semantic_case.clone();
         set_user_value(&mut candidate, req.field_id, req.value);
         if let Some((_, error)) = validate_case_relations(&candidate).into_iter().next() {
             return Err(error);
         }
-        *case = candidate;
-        case.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+        snapshot.semantic_case = candidate;
+        Ok((snapshot.semantic_case.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,6 +701,13 @@ fn replace_case_from_new_source(target: &mut SemanticCase, mut parsed: SemanticC
 
 #[tauri::command]
 fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<SemanticCase, String> {
+    let result = transact_default_state(&app, &state, |snapshot| {
+        let mut blocks = snapshot.semantic_case.blocks.clone();
+        blocks.retain(|key, _| !key.starts_with("source."));
+        snapshot.semantic_case = SemanticCase::default();
+        snapshot.semantic_case.blocks = blocks;
+        Ok((snapshot.semantic_case.clone(), true))
+    })?;
     state
         .retained_uploaded_source
         .lock()
@@ -724,18 +718,6 @@ fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<Seman
         .lock()
         .map_err(|_| "source provenance state lock failed")?
         .take();
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        let mut blocks = case.blocks.clone();
-        blocks.retain(|key, _| !key.starts_with("source."));
-        *case = SemanticCase::default();
-        case.blocks = blocks;
-        case.clone()
-    };
-    persist_default_state(&app, &state)?;
     Ok(result)
 }
 
@@ -745,16 +727,6 @@ fn parse_source(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceResponse, String> {
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
     let provenance = SourceProvenance::from_bytes("вставленный текст", req.source_text.as_bytes());
     let (mut parsed, mut report) = parse_source_text(&req.source_text, req.default_year);
     let learned = apply_learned_scanner_rules(&app, &req.source_text, &mut parsed)?;
@@ -764,23 +736,24 @@ fn parse_source(
             learned.len()
         ));
     }
-    let response = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        replace_case_from_new_source(&mut case, parsed);
-        let semantic_case = case.clone();
-        drop(case);
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let routing = recommend_document_bundle(&req.source_text, &semantic_case, &pack);
-        ParseSourceResponse {
-            semantic_case,
-            report,
-            routing,
-        }
-    };
-    persist_default_state(&app, &state)?;
+    let response = transact_default_state(&app, &state, |snapshot| {
+        replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
+        let semantic_case = snapshot.semantic_case.clone();
+        let routing = recommend_document_bundle(&req.source_text, &semantic_case, &snapshot.pack);
+        Ok((
+            ParseSourceResponse {
+                semantic_case,
+                report,
+                routing,
+            },
+            true,
+        ))
+    })?;
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     *state
         .source_provenance
         .lock()
@@ -812,16 +785,6 @@ fn parse_source_file(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceFileResponse, String> {
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
     let mut bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
     let workspace = app
         .path()
@@ -849,27 +812,23 @@ fn parse_source_file(
             learned.len()
         ));
     }
-    let response = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        replace_case_from_new_source(&mut case, parsed);
-        let semantic_case = case.clone();
-        drop(case);
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let routing = recommend_document_bundle(&source_text, &semantic_case, &pack);
-        ParseSourceFileResponse {
-            source_text,
-            source_path,
-            source_kind,
-            layout_items,
-            semantic_case,
-            report,
-            routing,
-        }
-    };
-    persist_default_state(&app, &state)?;
+    let response = transact_default_state(&app, &state, |snapshot| {
+        replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
+        let semantic_case = snapshot.semantic_case.clone();
+        let routing = recommend_document_bundle(&source_text, &semantic_case, &snapshot.pack);
+        Ok((
+            ParseSourceFileResponse {
+                source_text,
+                source_path,
+                source_kind,
+                layout_items,
+                semantic_case,
+                report,
+                routing,
+            },
+            true,
+        ))
+    })?;
     drop(upload_session);
     *state
         .retained_uploaded_source
@@ -939,16 +898,6 @@ fn parse_web_source(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseWebSourceResponse, String> {
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
     let workspace = app
         .path()
         .app_data_dir()
@@ -965,31 +914,32 @@ fn parse_web_source(
             learned.len()
         ));
     }
-    let semantic_case = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        replace_case_from_new_source(&mut case, parsed);
-        case.clone()
-    };
-    persist_default_state(&app, &state)?;
+    let response = transact_default_state(&app, &state, |snapshot| {
+        replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
+        let semantic_case = snapshot.semantic_case.clone();
+        let routing = recommend_document_bundle(&fetched.source_text, &semantic_case, &snapshot.pack);
+        Ok((
+            ParseWebSourceResponse {
+                source_text: fetched.source_text,
+                final_url: fetched.final_url,
+                content_type: fetched.content_type,
+                semantic_case,
+                report,
+                routing,
+            },
+            true,
+        ))
+    })?;
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     *state
         .source_provenance
         .lock()
         .map_err(|_| "source provenance state lock failed")? = Some(provenance);
-    let routing = {
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        recommend_document_bundle(&fetched.source_text, &semantic_case, &pack)
-    };
-    Ok(ParseWebSourceResponse {
-        source_text: fetched.source_text,
-        final_url: fetched.final_url,
-        content_type: fetched.content_type,
-        semantic_case,
-        report,
-        routing,
-    })
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1112,36 +1062,28 @@ fn apply_popup(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<PopupApplyResult, String> {
-    let doc = {
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        pack.documents
+    transact_default_state(&app, &state, |snapshot| {
+        let doc = snapshot
+            .pack
+            .documents
             .iter()
-            .find(|d| d.id == req.document_id)
+            .find(|document| document.id == req.document_id)
             .cloned()
-            .ok_or_else(|| "document not found".to_string())?
-    };
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
+            .ok_or_else(|| "document not found".to_string())?;
         let plan = build_merged_popup_plan(
             &doc,
-            &case,
+            &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
         );
-        let result = apply_popup_answers(&case, &plan, &req.answers);
+        let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
-            *case = result.semantic_case.clone();
+            snapshot.semantic_case = result.semantic_case.clone();
         }
-        result
-    };
-    if result.accepted {
-        persist_default_state(&app, &state)?;
-    }
-    Ok(result)
+        let changed = result.accepted;
+        Ok((result, changed))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1157,8 +1099,7 @@ fn apply_popup_batch(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<PopupApplyResult, String> {
-    let documents = {
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
+    transact_default_state(&app, &state, |snapshot| {
         let requested = req
             .document_ids
             .iter()
@@ -1166,39 +1107,30 @@ fn apply_popup_batch(
             .filter(|id| !id.is_empty())
             .map(ToString::to_string)
             .collect::<BTreeSet<_>>();
-        let found = pack
+        let documents = snapshot
+            .pack
             .documents
             .iter()
             .filter(|document| requested.contains(document.id.as_str()))
             .cloned()
             .collect::<Vec<_>>();
-        if found.len() != requested.len() {
+        if documents.len() != requested.len() {
             return Err("Один или несколько документов комплекта не найдены".into());
         }
-        found
-    };
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
         let plan = plan_workflow_batch(
             &documents,
-            &case,
+            &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
         );
-        let result = apply_popup_answers(&case, &plan, &req.answers);
+        let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
-            *case = result.semantic_case.clone();
+            snapshot.semantic_case = result.semantic_case.clone();
         }
-        result
-    };
-    if result.accepted {
-        persist_default_state(&app, &state)?;
-    }
-    Ok(result)
+        let changed = result.accepted;
+        Ok((result, changed))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1563,14 +1495,10 @@ fn apply_scanner(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
-    let report = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        apply_scanner_marks(&mut case, &req.marks)
-    };
-    persist_default_state(&app, &state)?;
+    let report = transact_default_state(&app, &state, |snapshot| {
+        let report = apply_scanner_marks(&mut snapshot.semantic_case, &req.marks);
+        Ok((report, true))
+    })?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
@@ -2770,12 +2698,10 @@ fn verify_rust_license_text(
     let public_key = dokkomplekt_license_core::PublicKeyBytes::from_base64(key_b64)
         .map_err(|e| e.to_string())?;
     verify_license_document_now(&document, &public_key).map_err(|e| e.to_string())?;
-    *state
-        .license_document
-        .lock()
-        .map_err(|_| "license state lock failed")? = Some(document);
-    persist_default_state(&app, &state)?;
-    Ok(true)
+    transact_default_state(&app, &state, |snapshot| {
+        snapshot.license_document = Some(document);
+        Ok((true, true))
+    })
 }
 
 include!("watcher_commands.rs");

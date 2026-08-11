@@ -250,13 +250,12 @@ fn apply_organization_knowledge(
     if !record_is_current(&record, &today) {
         return Err("Запись неактивна или находится вне срока действия; применение заблокировано.".into());
     }
-    let mut semantic_case = state.semantic_case.lock().map_err(|_| "state lock failed")?;
-    for (field_id, value) in &record.fields {
-        set_user_value(&mut semantic_case, field_id.clone(), value);
-    }
-    let updated = semantic_case.clone();
-    drop(semantic_case);
-    persist_default_state(&app, &state)?;
+    let updated = transact_default_state(&app, &state, |snapshot| {
+        for (field_id, value) in &record.fields {
+            set_user_value(&mut snapshot.semantic_case, field_id.clone(), value);
+        }
+        Ok((snapshot.semantic_case.clone(), true))
+    })?;
     append_audit_event(
         &app,
         "organization_knowledge_applied",

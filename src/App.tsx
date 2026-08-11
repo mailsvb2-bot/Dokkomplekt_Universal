@@ -607,7 +607,9 @@ function AppContent() {
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
-    setStatus(`Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.`);
+    setStatus(res.warnings?.length
+      ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}. Требует внимания: ${res.warnings.join(' ')}`
+      : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.`);
     if (autoPrint) await queuePrint(jobsForItems(printItems), true, documentIds, null, res.output_folder);
   }
 

@@ -1,5 +1,6 @@
 mod central_queue;
 mod component_manager;
+mod generation_publication;
 mod privacy_runtime;
 mod reference_data_update;
 mod resume_engine;
@@ -1468,10 +1469,10 @@ fn commit_generation_access(
     let db_path = default_state_db_path(app)?;
     let mut repo = repository_for(&db_path)?;
     if !repo
-        .commit_usage(&permit.reservation)
+        .finalize_published_usage(&permit.reservation.reservation_id)
         .map_err(|error| error.to_string())?
     {
-        return Err("Резервация лимита уже завершена или потеряна.".into());
+        return Err("Резервация опубликованной генерации потеряна.".into());
     }
     Ok(())
 }
@@ -2221,8 +2222,10 @@ fn main() {
                 start_periodic_intake_cleanup(handle.clone());
                 if let Ok(db_path) = default_state_db_path(&handle) {
                     if let Ok(mut repo) = repository_for(&db_path) {
-                        let _ = repo.recover_stale_usage_reservations(24 * 60);
-                        let _ = repo.recover_interrupted_case_runs();
+                        generation_publication::recover_startup_generation_state(
+                            &handle,
+                            &mut repo,
+                        );
                         if let Ok(cases) = repo.list_case_runs(500) {
                             let mut roots = BTreeSet::new();
                             for case in cases {

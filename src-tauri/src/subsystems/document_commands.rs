@@ -1224,7 +1224,7 @@ fn render_docx(
         req.strict,
         permit.watermark.as_deref(),
     );
-    let result = match render_result {
+    let mut result = match render_result {
         Ok(result) => result,
         Err(error) => {
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
@@ -1245,18 +1245,20 @@ fn render_docx(
             return Err(error);
         }
     };
+    let mut publication_warnings = Vec::new();
     if let Err(error) = template_snapshot.ensure_current() {
-        let _ = std::fs::remove_file(&output_path);
-        rollback_counter_reservations(&app, &hydrated.counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
+        publication_warnings.push(format!(
+            "Документ уже опубликован, но шаблон изменился сразу после границы публикации: {error}"
+        ));
+        let _ = append_audit_event(
+            &app,
+            "published_template_changed_after_boundary",
+            "",
+            &serde_json::json!({ "document_id": doc.id, "error": error }),
+        );
     }
-    if let Err(error) = commit_generation_access(&app, &permit) {
-        let _ = std::fs::remove_file(&output_path);
-        rollback_counter_reservations(&app, &hydrated.counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
+    publication_warnings.extend(generation_publication::finalize_published_generation(&app, &permit, &output_path));
+    result.warnings.extend(publication_warnings);
     // Report the real absolute location back to the user (the core RenderResult
     // deliberately knows nothing about the filesystem).
     let mut value = serde_json::to_value(result).map_err(|e| e.to_string())?;
@@ -1289,6 +1291,7 @@ struct RenderDocxBatchResponse {
     output_folder: String,
     created_files: Vec<String>,
     created_documents: Vec<CreatedDocumentOutputDto>,
+    warnings: Vec<String>,
 }
 
 #[tauri::command]
@@ -1459,18 +1462,19 @@ fn render_docx_batch(
             return Err(error);
         }
     };
+    let mut warnings = Vec::new();
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
-        let _ = std::fs::remove_dir_all(&output_folder);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
+        warnings.push(format!(
+            "Комплект уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"
+        ));
+        let _ = append_audit_event(
+            &app,
+            "published_templates_changed_after_boundary",
+            "",
+            &serde_json::json!({ "error": error }),
+        );
     }
-    if let Err(error) = commit_generation_access(&app, &permit) {
-        let _ = std::fs::remove_dir_all(&output_folder);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
+    warnings.extend(generation_publication::finalize_published_generation(&app, &permit, &output_folder));
     let created_files = staged_paths
         .iter()
         .filter_map(|path| path.file_name())
@@ -1489,6 +1493,7 @@ fn render_docx_batch(
         output_folder: output_folder.display().to_string(),
         created_files,
         created_documents,
+        warnings,
     })
 }
 

@@ -48,6 +48,7 @@ struct RenderMailMergeResponse {
     output_folder: String,
     row_count: usize,
     created_files: Vec<String>,
+    warnings: Vec<String>,
 }
 #[tauri::command]
 fn render_mail_merge(
@@ -189,18 +190,19 @@ fn render_mail_merge(
             return Err(e);
         }
     };
+    let mut warnings = Vec::new();
     if let Err(error) = ensure_mail_merge_templates_current(&template_inputs) {
-        let _ = std::fs::remove_dir_all(&published);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
+        warnings.push(format!(
+            "Пакет уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"
+        ));
+        let _ = append_audit_event(
+            &app,
+            "published_mail_merge_templates_changed_after_boundary",
+            "",
+            &serde_json::json!({ "error": error }),
+        );
     }
-    if let Err(error) = commit_generation_access(&app, &permit) {
-        let _ = std::fs::remove_dir_all(&published);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
+    warnings.extend(generation_publication::finalize_published_generation(&app, &permit, &published));
     let created_files = files
         .iter()
         .filter_map(|p| p.strip_prefix(&stage).ok())
@@ -210,5 +212,6 @@ fn render_mail_merge(
         output_folder: published.display().to_string(),
         row_count: table.rows.len(),
         created_files,
+        warnings,
     })
 }

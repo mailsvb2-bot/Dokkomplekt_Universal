@@ -97,6 +97,7 @@ function validateBatch(command: string, value: unknown): void {
   string(command, root.output_folder, 'output_folder');
   stringArray(command, root.created_files, 'created_files');
   if (root.created_documents !== undefined) objectArray(command, root.created_documents, 'created_documents');
+  optionalStringArray(command, root.warnings, 'warnings');
 }
 
 function validateSemantic(command: string, value: unknown): void {

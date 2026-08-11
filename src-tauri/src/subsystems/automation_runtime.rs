@@ -1152,30 +1152,39 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
+            // The filesystem publication is the irreversible business boundary.
+            // From this point onward the output is never deleted and accounting is
+            // never refunded merely because best-effort metadata finalization fails.
+            case_run.mark_business_terminal();
+            let mut publication_warnings = Vec::new();
             if let Err(error) = ensure_generation_inputs_current(
                 &source,
                 &source_sha256,
                 &template_snapshots,
                 processing_guard.as_ref(),
             ) {
-                let _ = std::fs::remove_dir_all(&patient_dir);
-                rollback_counter_reservations(app, &counter_reservations);
-                rollback_generation_access(app, state, &permit);
-                let _ = case_run.finish("superseded", None, &[], &[], Some(&error));
+                publication_warnings.push(format!(
+                    "Комплект уже опубликован, но входные данные изменились сразу после границы публикации: {error}"
+                ));
+                let details = serde_json::json!({
+                    "stage": "after_directory_publish",
+                    "error": &error,
+                });
+                let _ = create_automation_exception(
+                    app,
+                    "published_inputs_changed_after_boundary",
+                    "",
+                    "Комплект опубликован, но входные данные изменились сразу после публикации; результат сохранён и требует проверки.",
+                    &details,
+                );
                 let _ = append_audit_event(
                     app,
-                    "intake_source_superseded",
+                    "published_inputs_changed_after_boundary",
                     &source_sha256,
-                    &serde_json::json!({ "stage": "after_directory_publish", "error": &error }),
+                    &details,
                 );
-                return Err(error);
             }
-            if let Err(error) = commit_generation_access(app, &permit) {
-                let _ = std::fs::remove_dir_all(&patient_dir);
-                rollback_counter_reservations(app, &counter_reservations);
-                rollback_generation_access(app, state, &permit);
-                return Err(error);
-            }
+            publication_warnings.extend(generation_publication::finalize_published_generation(app, &permit, &patient_dir));
             let audit_details = serde_json::json!({
                 "output_folder": patient_dir.display().to_string(),
                 "documents": &names,
@@ -1242,9 +1251,9 @@ fn perform_created_documents_intake(
                 .iter()
                 .map(|name| patient_dir.join(name).display().to_string())
                 .collect::<Vec<_>>();
-            // Publication + committed commercial usage is the irreversible business
-            // terminal point. Persist independent plan-bound completion evidence
-            // before any best-effort post-publication metadata can fail.
+            // Publication is already the irreversible business terminal point.
+            // Persist independent plan-bound completion evidence before any further
+            // best-effort post-publication metadata can fail.
             let local_completion = mark_local_completion(
                 &app_data,
                 &processing_job_sha256,
@@ -1256,7 +1265,6 @@ fn perform_created_documents_intake(
             } else {
                 mark_shared_completion(&source, &processing_job_sha256).map(|_| ())
             };
-            case_run.mark_business_terminal();
             let case_completion =
                 case_run.finish("completed", Some(&patient_dir), &created, &[], None);
 
@@ -1538,7 +1546,14 @@ fn perform_created_documents_intake(
                 missing: Vec::new(),
                 attention_file: None,
                 print_triage,
-                message: "Комплект документов создан и опубликован атомарно.".into(),
+                message: if publication_warnings.is_empty() {
+                    "Комплект документов создан и опубликован атомарно.".into()
+                } else {
+                    format!(
+                        "Комплект документов опубликован. Требует внимания: {}",
+                        publication_warnings.join(" ")
+                    )
+                },
             })
         }
     }

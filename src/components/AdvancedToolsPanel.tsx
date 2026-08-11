@@ -279,7 +279,9 @@ export function AdvancedToolsPanel({
     const result = await execute('пакетная генерация', () =>
       renderMailMerge(selectedDocumentIds, tableText, outputRoot || 'output/Готовые документы', true));
     if (result) {
-      onStatus(`Пакетная генерация: ${result.row_count} комплектов, ${result.created_files.length} файлов.`);
+      onStatus(result.warnings?.length
+        ? `Пакетная генерация: ${result.row_count} комплектов, ${result.created_files.length} файлов. Требует внимания: ${result.warnings.join(' ')}`
+        : `Пакетная генерация: ${result.row_count} комплектов, ${result.created_files.length} файлов.`);
     }
   }
 

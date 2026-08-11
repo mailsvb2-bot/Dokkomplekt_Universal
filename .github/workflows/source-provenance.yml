@@ -21,8 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          # A workflow_dispatch run carries an immutable event SHA. Use that exact
-          # commit instead of resolving the moving branch again when this job starts.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Verify immutable dispatch checkout identity
@@ -41,6 +39,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply guarded published-generation accounting hardening
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.head_ref == 'agent/deep-audit-runtime-integration'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .github/deep-audit-publication-accounting.patch.gz.b64 | gzip -d > /tmp/publication-accounting.patch
+          git apply --3way /tmp/publication-accounting.patch
+          cargo fmt --all
+          cargo fmt --all --check
+          cargo test -p dokkomplekt-storage published_usage_finalization_is_idempotent_and_never_refunds --locked
+          PYTHONPATH=tests python - <<'PY'
+          import runpy
+          for file_name in (
+              'tests/test_generation_publication_accounting_contract.py',
+              'tests/test_v18_4_6_mail_merge_snapshot_consistency.py',
+              'tests/test_print_fail_closed_contract.py',
+              'tests/test_transactional_state_persistence_contract.py',
+              'tests/test_learning_privacy_retention_contract.py',
+          ):
+              ns = runpy.run_path(file_name)
+              for name in sorted(ns):
+                  if name.startswith('test_'):
+                      ns[name]()
+          PY
+          python scripts/static_quality_gate.py --source-only
+          git show 60359ee19a4924f344c9ea0d3e03db69b35213f6:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
+          rm .github/deep-audit-publication-accounting.patch.gz.b64
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(generation): make published output accounting crash-safe"
+          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

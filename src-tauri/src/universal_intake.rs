@@ -473,10 +473,7 @@ pub fn create_retained_workspace_session(workspace: &Path) -> Result<PathBuf, St
     create_sensitive_session(workspace)
 }
 
-pub fn refresh_retained_workspace_session(
-    workspace: &Path,
-    path: &Path,
-) -> Result<bool, String> {
+pub fn refresh_retained_workspace_session(workspace: &Path, path: &Path) -> Result<bool, String> {
     let Ok(relative) = path.strip_prefix(workspace) else {
         return Ok(false);
     };

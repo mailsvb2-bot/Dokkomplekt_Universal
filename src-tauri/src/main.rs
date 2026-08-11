@@ -72,14 +72,14 @@ use tauri::{Emitter, Manager, State};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use semantic_model::{
-    LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
-};
-use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
 use privacy_runtime::{
     cleanup_intake_workspace, load_privacy_preferences, lock_learning_workspace,
     persist_privacy_preferences, start_periodic_intake_cleanup, PrivacyPreferences,
 };
+use semantic_model::{
+    LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
+};
+use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
 
 /// Install the explicitly selected rustls crypto backend before any reqwest
 /// client is created. The operation is process-global and safely idempotent.

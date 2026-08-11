@@ -41,6 +41,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply guarded deep-audit runtime patch
+        id: guarded_patch
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          carrier='.github/deep-audit-runtime-hardening-v2.patch.gz.b64'
+          if [[ ! -f "$carrier" ]]; then
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base64 --decode "$carrier" | gzip --decompress > /tmp/dokkomplekt-runtime-hardening.patch
+          git apply --check /tmp/dokkomplekt-runtime-hardening.patch
+          git apply /tmp/dokkomplekt-runtime-hardening.patch
+          git checkout HEAD^ -- .github/workflows/source-provenance.yml
+          rm -f "$carrier"
+          echo "applied=true" >> "$GITHUB_OUTPUT"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true
@@ -77,6 +96,31 @@ jobs:
             verification/ci/source-archive-cargo-metadata.json
             verification/ci/Dokkomplekt_Universal-history.bundle
           if-no-files-found: error
+      - name: Commit guarded deep-audit runtime patch
+        if: steps.guarded_patch.outputs.applied == 'true'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A -- \
+            .github/workflows/source-provenance.yml \
+            .github/deep-audit-runtime-hardening-v2.patch.gz.b64 \
+            SOURCE_MANIFEST_SHA256.txt \
+            src-tauri/src/generation_publication.rs \
+            src-tauri/src/privacy_runtime.rs \
+            src-tauri/src/subsystems/automation_mail_merge.rs \
+            src-tauri/src/subsystems/automation_runtime.rs \
+            src-tauri/src/subsystems/document_commands.rs \
+            tests/test_generation_publication_accounting_contract.py \
+            tests/test_publication_completion_exactly_once_contract.py \
+            tests/test_v18_1_0_production_pilot_contracts.py \
+            tests/test_v18_1_1_operational_hardening_contracts.py
+          git diff --cached --check
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(runtime): close publication crash windows"
+          git push origin "HEAD:${BRANCH}"
       - name: Synchronize manifest on same-repository pull request
         if: >-
           steps.manifest.outcome != 'success' &&

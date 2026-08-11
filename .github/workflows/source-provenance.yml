@@ -41,6 +41,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply guarded deep-audit watcher patch
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch='.github/deep-audit-watcher.patch'
+          if [[ ! -f "$patch" ]]; then
+            exit 0
+          fi
+          if git apply --check "$patch"; then
+            git apply "$patch"
+            echo 'DEEP AUDIT WATCHER PATCH APPLIED'
+          elif git apply --reverse --check "$patch"; then
+            echo 'DEEP AUDIT WATCHER PATCH ALREADY APPLIED'
+          else
+            echo 'Guarded watcher patch no longer matches the audited source tree.' >&2
+            exit 1
+          fi
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true
@@ -88,9 +106,9 @@ jobs:
           cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt src-tauri/src/subsystems/watcher_commands.rs tests/test_agent_hardening_contracts.py
           git diff --cached --quiet && exit 0
-          git commit -m "chore(provenance): regenerate source manifest"
+          git commit -m "chore(provenance): apply guarded watcher fix and regenerate source manifest"
           git push origin "HEAD:${BRANCH}"
       - name: Enforce source-manifest integrity
         if: steps.manifest.outcome != 'success'

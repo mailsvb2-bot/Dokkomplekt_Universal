@@ -142,14 +142,22 @@ def test_private_workflow_requires_only_one_physical_windows_runner() -> None:
     hardware_start = text.index("  hardware-evidence:")
     runtime = text[runtime_start:hardware_start]
     hardware = text[hardware_start:]
-    for secret_name in (
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+    for required_name in (
+        "DOKKOMPLEKT_RELEASE_MODE: production",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
     ):
-        assert secret_name in runtime
-        assert secret_name not in hardware
+        assert required_name in runtime
+        assert required_name not in hardware
+    for forbidden_pfx in (
+        "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
+        "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+    ):
+        assert forbidden_pfx not in runtime
+        assert forbidden_pfx not in hardware
     assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in text
     assert "verify_windows_hosted_signing_runner.py" in runtime
     assert "verify_windows_hardware_evidence_host.ps1" in hardware
@@ -234,7 +242,9 @@ def test_hardware_runner_runbook_describes_single_physical_machine_boundary() ->
     assert "DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" in text
     assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in text
     assert "DOKKOMPLEKT_RUNTIME_BUNDLE_URL" in text
-    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" in text
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND" in text
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT" in text
+    assert "non-exportable" in text
     assert "dokkomplekt-hardware" in text
     assert "SIGNED_HANDOFF.json" in text
     assert "prepare" in text

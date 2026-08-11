@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A -- .github/workflows/source-provenance.yml .github/deep-audit-test-scope-fix.patch SOURCE_MANIFEST_SHA256.txt src-tauri/src/generation_publication.rs src-tauri/src/main.rs
+          git add -A -- .github/workflows/source-provenance.yml .github/deep-audit-test-scope-fix.patch SOURCE_MANIFEST_SHA256.txt src-tauri/src/generation_publication.rs src-tauri/src/main.rs tests/test_v18_4_6_mail_merge_snapshot_consistency.py
           git diff --cached --check
           git commit -m "fix(tests): wire publication helpers into Rust test scope"
           git push origin "HEAD:${BRANCH}"

@@ -1,5 +1,7 @@
 # Windows production signing + hardware validation
 
+Для пользователя нужна **одна физическая Windows-машина**, а не две.
+
 Dokkomplekt production acceptance requires **one physical Windows machine**, not two. Build/signing runs on an ephemeral **GitHub-hosted Windows** runner inside the protected `windows-production-signing` environment. Only Word/printer/reboot/watcher acceptance uses a self-hosted physical Windows host.
 
 The public source repository `mailsvb2-bot/Dokkomplekt_Universal` must not be registered as a self-hosted runner target. The sole physical runner belongs only to the private repository `mailsvb2-bot/Dokkomplekt_Hardware_Validation`; the public `windows-hardware-dispatch` workflow dispatches and waits from GitHub-hosted Linux.

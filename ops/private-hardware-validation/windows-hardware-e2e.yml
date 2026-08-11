@@ -58,6 +58,10 @@ jobs:
       DOKKOMPLEKT_COMPONENTS_CATALOG_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_CATALOG_URL }}
       DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
       DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
+      DOKKOMPLEKT_RELEASE_MODE: production
+      DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER }}
     steps:
       - name: Validate dispatch identity
         shell: pwsh
@@ -106,11 +110,9 @@ jobs:
       - name: Prove ephemeral GitHub-hosted signing boundary
         shell: pwsh
         env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
           DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
           DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
-        run: python scripts/verify_windows_hosted_signing_runner.py --json-report verification/release/HOSTED_SIGNING_PREFLIGHT.json
+        run: python scripts/verify_windows_hosted_signing_runner.py --require-handoff-signing-key --json-report verification/release/HOSTED_SIGNING_PREFLIGHT.json
       - name: Fetch immutable pre-approved runtime bundle
         shell: pwsh
         run: |
@@ -170,16 +172,10 @@ jobs:
       - run: npx tauri build --no-bundle
       - name: Sign application binary
         shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
       - run: npx tauri bundle --bundles nsis --config src-tauri/tauri.offline.conf.json
       - name: Sign NSIS installer
         shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
       - name: Verify signed offline installer contract
         shell: pwsh

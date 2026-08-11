@@ -89,9 +89,11 @@ def test_dispatched_source_provenance_checks_out_immutable_event_sha() -> None:
     assert "github.event_name == 'workflow_dispatch' && inputs.audit_sha" not in provenance
 
 
-def test_first_main_landing_runs_software_autopilot_without_starting_hardware() -> None:
+def test_every_main_landing_runs_software_autopilot_without_starting_hardware() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "push:\n    branches: [main]" in workflow
+    push_trigger = workflow.split("  push:\n", 1)[1].split("  pull_request:\n", 1)[0]
+    assert "paths:" not in push_trigger
     assert "github.event_name == 'workflow_dispatch' || github.event_name == 'push'" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.scope || 'software'" in workflow
     # Write privilege is scoped to the orchestration job rather than the PR coverage/oracle jobs.

@@ -9,6 +9,7 @@ def test_publication_completion_is_plan_bound_before_best_effort_metadata() -> N
 
     assert "fn local_completion_receipt" in automation
     assert "fn mark_local_completion" in automation
+    assert "fn local_completion_receipt_matches" in automation
     assert "fn plan_bound_emergency_completion_exists" in automation
     assert "fn mark_business_terminal" in main
     assert "self.terminal = true;" in main

@@ -174,6 +174,28 @@ fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> Pat
         .join(format!("{processing_job_sha256}.done"))
 }
 
+fn local_completion_receipt_matches(
+    app_data: &Path,
+    processing_job_sha256: &str,
+    source_sha256: &str,
+    processing_fingerprint: &str,
+) -> bool {
+    let Ok(body) = std::fs::read_to_string(local_completion_receipt(
+        app_data,
+        processing_job_sha256,
+    )) else {
+        return false;
+    };
+    let required = [
+        format!("processing_job_sha256={processing_job_sha256}"),
+        format!("source_sha256={source_sha256}"),
+        format!("processing_fingerprint={processing_fingerprint}"),
+    ];
+    required
+        .iter()
+        .all(|expected| body.lines().any(|line| line.trim() == expected))
+}
+
 fn plan_bound_emergency_completion_exists(
     source: &Path,
     processing_job_sha256: &str,
@@ -244,8 +266,12 @@ fn perform_created_documents_intake(
         .map_err(|error| error.to_string())?;
     let completed_in_shared_queue =
         shared_completion_receipt(&source, &processing_job_sha256).is_file();
-    let completed_in_local_receipts =
-        local_completion_receipt(&app_data, &processing_job_sha256).is_file();
+    let completed_in_local_receipts = local_completion_receipt_matches(
+        &app_data,
+        &processing_job_sha256,
+        &source_sha256,
+        &processing_fingerprint,
+    );
     let completed_in_emergency_marker =
         plan_bound_emergency_completion_exists(&source, &processing_job_sha256);
     // Legacy adjacent markers remain non-authoritative. Only the explicit
@@ -2936,6 +2962,9 @@ mod publication_completion_receipt_tests {
         assert!(body.contains(&format!("processing_job_sha256={job}")));
         assert!(body.contains(&format!("source_sha256={source}")));
         assert!(body.contains(&format!("processing_fingerprint={plan}")));
+        assert!(local_completion_receipt_matches(&root, &job, &source, &plan));
+        std::fs::write(&path, b"schema=1\n").expect("corrupt local completion receipt");
+        assert!(!local_completion_receipt_matches(&root, &job, &source, &plan));
         assert_ne!(
             local_completion_receipt(&root, &job),
             local_completion_receipt(&root, &"d".repeat(64))

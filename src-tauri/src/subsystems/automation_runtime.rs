@@ -167,6 +167,69 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hex::encode(hasher.finalize())
 }
 
+
+fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
+    app_data
+        .join("intake-completion-receipts")
+        .join(format!("{processing_job_sha256}.done"))
+}
+
+fn local_completion_receipt_matches(
+    app_data: &Path,
+    processing_job_sha256: &str,
+    source_sha256: &str,
+    processing_fingerprint: &str,
+) -> bool {
+    let Ok(body) = std::fs::read_to_string(local_completion_receipt(
+        app_data,
+        processing_job_sha256,
+    )) else {
+        return false;
+    };
+    let required = [
+        format!("processing_job_sha256={processing_job_sha256}"),
+        format!("source_sha256={source_sha256}"),
+        format!("processing_fingerprint={processing_fingerprint}"),
+    ];
+    required
+        .iter()
+        .all(|expected| body.lines().any(|line| line.trim() == expected))
+}
+
+fn plan_bound_emergency_completion_exists(
+    source: &Path,
+    processing_job_sha256: &str,
+) -> bool {
+    workspace_hygiene::processed_marker_candidates(source)
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .any(|body| {
+            body.lines().any(|line| {
+                line.trim() == format!("processing_job_sha256={processing_job_sha256}")
+            }) && body
+                .lines()
+                .any(|line| line.trim() == "status=published_completion_ledgers_failed")
+        })
+}
+
+fn mark_local_completion(
+    app_data: &Path,
+    processing_job_sha256: &str,
+    source_sha256: &str,
+    processing_fingerprint: &str,
+) -> Result<PathBuf, String> {
+    let final_path = local_completion_receipt(app_data, processing_job_sha256);
+    let payload = format!(
+        "schema=1\nprocessing_job_sha256={processing_job_sha256}\nsource_sha256={source_sha256}\nprocessing_fingerprint={processing_fingerprint}\ncompleted_unix={}\nhost={}\n",
+        unix_now_seconds(),
+        processing_lock_host_id(),
+    );
+    atomic_write_file(&final_path, payload.as_bytes()).map_err(|error| {
+        format!("Не удалось записать локальную квитанцию завершённого дела: {error}")
+    })?;
+    Ok(final_path)
+}
+
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -175,11 +238,8 @@ fn perform_created_documents_intake(
     let intake_started = std::time::Instant::now();
     let source = resolve_user_path(app, &req.source_path)?;
     let privacy = load_privacy_preferences(app)?;
-    let workspace = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("intake-work");
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let workspace = app_data.join("intake-work");
     let source_snapshot = universal_intake::capture_stable_source(&source, &workspace)?;
     let source_size = source_snapshot.size_bytes();
     let source_modified_ms = source_snapshot.modified_unix_ms();
@@ -206,11 +266,21 @@ fn perform_created_documents_intake(
         .map_err(|error| error.to_string())?;
     let completed_in_shared_queue =
         shared_completion_receipt(&source, &processing_job_sha256).is_file();
-    // Adjacent legacy markers are not authoritative completion evidence: they
-    // do not include the template/workflow fingerprint and would suppress a
-    // required reissue after configuration changes.
-    let processed_is_current =
-        !req.force_reissue && (completed_in_history || completed_in_shared_queue);
+    let completed_in_local_receipts = local_completion_receipt_matches(
+        &app_data,
+        &processing_job_sha256,
+        &source_sha256,
+        &processing_fingerprint,
+    );
+    let completed_in_emergency_marker =
+        plan_bound_emergency_completion_exists(&source, &processing_job_sha256);
+    // Legacy adjacent markers remain non-authoritative. Only the explicit
+    // plan-bound emergency publication marker can suppress a duplicate retry.
+    let processed_is_current = !req.force_reissue
+        && (completed_in_history
+            || completed_in_shared_queue
+            || completed_in_local_receipts
+            || completed_in_emergency_marker);
     if processed_is_current {
         return Ok(CreatedDocumentsIntakeResponse {
             status: "ignored".into(),
@@ -903,7 +973,6 @@ fn perform_created_documents_intake(
                 return Err(error.to_string());
             }
 
-            let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let previous_case_documents = req
                 .resume_from_case_id
                 .as_deref()
@@ -1173,10 +1242,70 @@ fn perform_created_documents_intake(
                 .iter()
                 .map(|name| patient_dir.join(name).display().to_string())
                 .collect::<Vec<_>>();
-            // Publication is the business terminal point. Persist it before
-            // best-effort workspace hygiene so a retained source can be
-            // deduplicated by encrypted case history without an adjacent marker.
-            case_run.finish("completed", Some(&patient_dir), &created, &[], None)?;
+            // Publication + committed commercial usage is the irreversible business
+            // terminal point. Persist independent plan-bound completion evidence
+            // before any best-effort post-publication metadata can fail.
+            let local_completion = mark_local_completion(
+                &app_data,
+                &processing_job_sha256,
+                &source_sha256,
+                &processing_fingerprint,
+            );
+            let queue_completion = if let Some(lease) = central_queue_lease.as_mut() {
+                lease.complete()
+            } else {
+                mark_shared_completion(&source, &processing_job_sha256).map(|_| ())
+            };
+            case_run.mark_business_terminal();
+            let case_completion =
+                case_run.finish("completed", Some(&patient_dir), &created, &[], None);
+
+            let mut completion_errors = Vec::new();
+            if let Err(error) = &local_completion {
+                completion_errors.push(format!("local_receipt: {error}"));
+            }
+            if let Err(error) = &queue_completion {
+                completion_errors.push(format!("queue_receipt: {error}"));
+            }
+            if let Err(error) = &case_completion {
+                completion_errors.push(format!("case_history: {error}"));
+            }
+            if !completion_errors.is_empty() {
+                let details = serde_json::json!({
+                    "errors": completion_errors,
+                    "source_sha256": source_sha256,
+                    "processing_job_sha256": processing_job_sha256,
+                    "local_receipt_persisted": local_completion.is_ok(),
+                    "queue_receipt_persisted": queue_completion.is_ok(),
+                    "case_history_persisted": case_completion.is_ok(),
+                });
+                let _ = create_automation_exception(
+                    app,
+                    "publication_completion_metadata",
+                    &source.display().to_string(),
+                    "Комплект создан и опубликован, но часть квитанций завершения не сохранилась.",
+                    &details,
+                );
+                let _ = append_audit_event(
+                    app,
+                    "publication_completion_metadata_degraded",
+                    &source_sha256,
+                    &details,
+                );
+            }
+
+            if local_completion.is_err() && queue_completion.is_err() && case_completion.is_err() {
+                // Never claim that published files were rolled back. The source is kept
+                // out of the ordinary retry error path; a visible exception above tells
+                // the operator that all completion ledgers require repair.
+                let marker = workspace_hygiene::processed_marker_path(&source);
+                let _ = std::fs::write(
+                    &marker,
+                    format!(
+                        "sha256={source_sha256}\nprocessing_job_sha256={processing_job_sha256}\nstatus=published_completion_ledgers_failed\n"
+                    ),
+                );
+            }
             if corpus_recording_enabled {
                 let entry_id = format!("corpus-{}", Uuid::new_v4());
                 let created_at = chrono::Utc::now().to_rfc3339();
@@ -1254,23 +1383,6 @@ fn perform_created_documents_intake(
                         );
                     }
                 }
-            }
-            let queue_completion = if let Some(lease) = central_queue_lease.as_mut() {
-                lease.complete()
-            } else {
-                mark_shared_completion(&source, &processing_job_sha256).map(|_| ())
-            };
-            if let Err(error) = queue_completion {
-                let details = serde_json::json!({ "error": error, "source_sha256": source_sha256 });
-                let _ = create_automation_exception(
-                    app,
-                    "distributed_queue_receipt",
-                    &source.display().to_string(),
-                    "Комплект создан, но межкомпьютерная очередь не смогла записать квитанцию.",
-                    &details,
-                );
-                let marker = workspace_hygiene::processed_marker_path(&source);
-                let _ = std::fs::write(&marker, format!("sha256={source_sha256}\nstatus=shared_receipt_failed\n"));
             }
             let source_finalize = match finalize_processed_source(
                 &source,
@@ -2826,4 +2938,37 @@ fn semantic_extract(
         ),
     };
     serde_json::to_value(response).map_err(|e| e.to_string())
+}
+
+
+#[cfg(test)]
+mod publication_completion_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn local_completion_receipt_is_atomic_and_plan_bound() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-completion-receipt-{}",
+            Uuid::new_v4()
+        ));
+        let job = "a".repeat(64);
+        let source = "b".repeat(64);
+        let plan = "c".repeat(64);
+        let path = mark_local_completion(&root, &job, &source, &plan)
+            .expect("persist local completion receipt");
+        assert_eq!(path, local_completion_receipt(&root, &job));
+        assert!(path.is_file());
+        let body = std::fs::read_to_string(&path).expect("read local completion receipt");
+        assert!(body.contains(&format!("processing_job_sha256={job}")));
+        assert!(body.contains(&format!("source_sha256={source}")));
+        assert!(body.contains(&format!("processing_fingerprint={plan}")));
+        assert!(local_completion_receipt_matches(&root, &job, &source, &plan));
+        std::fs::write(&path, b"schema=1\n").expect("corrupt local completion receipt");
+        assert!(!local_completion_receipt_matches(&root, &job, &source, &plan));
+        assert_ne!(
+            local_completion_receipt(&root, &job),
+            local_completion_receipt(&root, &"d".repeat(64))
+        );
+        std::fs::remove_dir_all(root).expect("cleanup completion receipt test root");
+    }
 }

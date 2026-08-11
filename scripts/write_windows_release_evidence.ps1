@@ -28,8 +28,13 @@ $runtime = Get-ChildItem -LiteralPath $RuntimeRoot -File -Filter '*.zip' | Selec
 if ($null -eq $runtime) { throw 'Offline runtime ZIP not found.' }
 $runtimePayload = "$($runtime.FullName).signing.json"
 $runtimeSignature = "$runtimePayload.sig"
-$runtimePublicKey = "$runtimePayload.public.pem"
-python scripts/verify_offline_runtime_bundle.py $runtime.FullName --payload $runtimePayload --signature $runtimeSignature --public-key $runtimePublicKey --trusted-public-key $RuntimeTrustedPublicKey --require-signature
+if (-not (Test-Path -LiteralPath $runtimePayload -PathType Leaf)) { throw 'Offline runtime signing payload not found.' }
+if (-not (Test-Path -LiteralPath $runtimeSignature -PathType Leaf)) { throw 'Offline runtime signature not found.' }
+if (-not (Test-Path -LiteralPath $RuntimeTrustedPublicKey -PathType Leaf)) { throw 'Pinned runtime public key not found.' }
+# The protected pinned key is the only runtime trust root. Do not trust or require
+# an artifact-provided public key, which would re-introduce trust-on-first-use.
+python scripts/verify_offline_runtime_bundle.py $runtime.FullName --payload $runtimePayload --signature $runtimeSignature --trusted-public-key $RuntimeTrustedPublicKey --require-signature
+if ($LASTEXITCODE -ne 0) { throw 'Offline runtime verification against pinned public key failed.' }
 $app = Get-Item -LiteralPath $ApplicationPath -ErrorAction Stop
 $appSignature = Get-AuthenticodeSignature $app.FullName
 if ($appSignature.Status -ne 'Valid') { throw "Application binary is not validly signed: $($app.FullName)" }
@@ -46,6 +51,7 @@ if ([string] $sourceIdentity.schema -ne 'dokkomplekt.release-source-identity.v1'
     throw 'Release source identity is not canonical.'
 }
 $sourceFingerprint = (python scripts/source_fingerprint.py).Trim()
+$trustedKeySha256 = (Get-FileHash -LiteralPath $RuntimeTrustedPublicKey -Algorithm SHA256).Hash.ToLowerInvariant()
 $evidence = [ordered]@{
     schema = 'dokkomplekt.windows-signed-build.v1'
     generated_at_utc = [DateTime]::UtcNow.ToString('o')
@@ -67,8 +73,9 @@ $evidence = [ordered]@{
         name = $runtime.Name
         sha256 = (Get-FileHash $runtime.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         signature_sha256 = (Get-FileHash $runtimeSignature -Algorithm SHA256).Hash.ToLowerInvariant()
-        public_key_sha256 = (Get-FileHash $runtimePublicKey -Algorithm SHA256).Hash.ToLowerInvariant()
-        trusted_public_key_sha256 = (Get-FileHash $RuntimeTrustedPublicKey -Algorithm SHA256).Hash.ToLowerInvariant()
+        public_key_sha256 = $trustedKeySha256
+        trusted_public_key_sha256 = $trustedKeySha256
+        trust_source = 'protected_pinned_public_key'
     }
     hardware_e2e = 'not_executed_in_signed_build_job'
 }

@@ -1,0 +1,28 @@
+--- a/src-tauri/src/main.rs
++++ b/src-tauri/src/main.rs
+@@ -75,8 +75,8 @@
+ use semantic_model::{
+     LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
+ };
+-use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
+ use state_transaction::transact_default_state;
++use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
+ 
+ /// Install the explicitly selected rustls crypto backend before any reqwest
+ /// client is created. The operation is process-global and safely idempotent.
+--- a/tests/test_p0_trust_boundaries.py
++++ b/tests/test_p0_trust_boundaries.py
+@@ -31,7 +31,12 @@
+ 
+     main = text("src-tauri/src/main.rs")
+     assert "save_case_and_pack_atomic" in main
+-    assert "save_desktop_snapshot" in main
++    assert "transact_default_state" in main
++    transaction = text("src-tauri/src/state_transaction.rs")
++    assert "save_desktop_snapshot" in transaction
++    assert "persistence_gate" in transaction
++    assert transaction.index(".save_desktop_snapshot(") < transaction.index(
++        "if let Some(next) = prepared.next_state"
++    )
+     assert "if let Err(error) = load_state_from" in main
+     assert "persistence_blocked.store(true" in main

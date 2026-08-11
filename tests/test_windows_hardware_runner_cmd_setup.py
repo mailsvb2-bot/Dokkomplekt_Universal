@@ -34,6 +34,8 @@ def test_setup_installs_missing_prerequisites_without_requiring_winget() -> None
     assert "https://aka.ms/vs/17/release/vs_BuildTools.exe" in text
     assert "Assert-MicrosoftSignedFile" in text
     assert "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" in text
+    assert '"$rustupUrl.sha256"' in text
+    assert "rustup-init SHA-256 mismatch" in text
     assert "1.97.1" in text
     assert "winget" not in text.lower()
 
@@ -43,6 +45,7 @@ def test_setup_auto_configures_real_printer_reboot_source_and_interactive_runner
     for required in (
         "Get-Printer",
         "Get-PrinterPort",
+        "Get-CimInstance Win32_Printer",
         "Word.Application",
         "OpenFileDialog",
         "hardware-runner.json",

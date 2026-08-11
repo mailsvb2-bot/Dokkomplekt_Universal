@@ -13,7 +13,7 @@ diff --git a/src-tauri/src/generation_publication.rs b/src-tauri/src/generation_
 diff --git a/src-tauri/src/main.rs b/src-tauri/src/main.rs
 --- a/src-tauri/src/main.rs
 +++ b/src-tauri/src/main.rs
-@@ -70,6 +70,11 @@ use tauri::{Emitter, Manager, State};
+@@ -70,6 +70,10 @@ use tauri::{Emitter, Manager, State};
  use time::OffsetDateTime;
  use uuid::Uuid;
  

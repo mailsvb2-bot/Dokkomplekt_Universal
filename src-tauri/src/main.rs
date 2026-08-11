@@ -590,6 +590,10 @@ impl<'a> CaseRunTracker<'a> {
         self.terminal = true;
         Ok(())
     }
+
+    fn mark_business_terminal(&mut self) {
+        self.terminal = true;
+    }
 }
 
 impl Drop for CaseRunTracker<'_> {

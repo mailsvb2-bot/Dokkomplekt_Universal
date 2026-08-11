@@ -67,12 +67,22 @@ def test_hosted_signing_preflight_requires_github_hosted_windows_and_no_runner_m
         "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL": "https://downloads.dokkomplekt.ru/runtime/runtime.zip.signing.json.approval.sig",
         "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64": b64(pem_public(runtime_key)),
         "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64": b64(pem_public(approval_key)),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"pfx"),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD": "secret",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND": "certificate-store",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT": "A" * 40,
+        "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER": "SafeNet Key Storage Provider",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64": b64(pem_private(runtime_key)),
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64": b64(b"gate"),
     }
     assert hosted_check(env)["ok"] is True
+
+    pfx_env = {
+        **env,
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"pfx"),
+    }
+    pfx_report = hosted_check(pfx_env)
+    assert pfx_report["ok"] is False
+    assert any("forbidden on the hosted production signer" in error for error in pfx_report["errors"])
+
     env["DOKKOMPLEKT_SIDECAR_MANIFEST_PATH"] = r"C:\ProgramData\DokkomplektRuntime\manifest.json"
     report = hosted_check(env)
     assert report["ok"] is False

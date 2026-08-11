@@ -30,14 +30,23 @@ def test_private_workflow_separates_hosted_signing_and_hardware_trust_domains() 
     assert "environment: windows-hardware-validation" in hardware
     assert "needs: signed-runtime-build" in hardware
 
-    for secret in (
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+    for required in (
+        "DOKKOMPLEKT_RELEASE_MODE: production",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
     ):
-        assert secret in runtime
-        assert secret not in hardware
+        assert required in runtime
+        assert required not in hardware
+
+    for forbidden_pfx in (
+        "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
+        "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
+    ):
+        assert forbidden_pfx not in runtime
+        assert forbidden_pfx not in hardware
 
     assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in text
     assert "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL" in runtime

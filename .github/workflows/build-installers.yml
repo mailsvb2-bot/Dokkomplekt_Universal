@@ -80,6 +80,10 @@ jobs:
       DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL }}
       DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL }}
       DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
+      DOKKOMPLEKT_RELEASE_MODE: production
+      DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT }}
+      DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -97,8 +101,6 @@ jobs:
       - name: Validate ephemeral hosted signing boundary
         shell: pwsh
         env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
           DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
           DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
         run: python scripts/verify_windows_hosted_signing_runner.py --json-report verification/release/HOSTED_SIGNING_PREFLIGHT.json
@@ -160,17 +162,11 @@ jobs:
         run: npx tauri build --no-bundle
       - name: Sign and verify application binary before it is embedded
         shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
       - name: Bundle thin signed application into NSIS
         run: npx tauri bundle --bundles nsis --config src-tauri/tauri.thin.conf.json
       - name: Sign and preserve thin NSIS installer
         shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
           New-Item -ItemType Directory -Force release-installers/thin | Out-Null
@@ -179,9 +175,6 @@ jobs:
         run: npx tauri bundle --bundles nsis --config src-tauri/tauri.offline.conf.json
       - name: Sign and preserve offline NSIS installer
         shell: pwsh
-        env:
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
-          DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
           New-Item -ItemType Directory -Force release-installers/offline | Out-Null

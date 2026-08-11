@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -28,12 +29,16 @@ PEM_PUBLIC_VARS = (
     "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64",
     "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64",
 )
-BASE_SIGNING_SECRET_VARS = (
+BASE_SIGNING_SECRET_VARS = ("DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",)
+HANDOFF_SIGNING_SECRET = "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64"
+SIGNING_BACKEND_VAR = "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND"
+CERT_THUMBPRINT_VAR = "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT"
+ALLOWED_PROVIDER_VAR = "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER"
+LEGACY_PFX_VARS = (
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
-    "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
 )
-HANDOFF_SIGNING_SECRET = "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64"
+THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40,128}$")
 
 
 def decode_ed25519_public_pem(value: str, label: str) -> None:
@@ -44,6 +49,42 @@ def decode_ed25519_public_pem(value: str, label: str) -> None:
         raise ValueError(f"{label}: invalid base64 Ed25519 PEM") from exc
     if not isinstance(key, Ed25519PublicKey):
         raise ValueError(f"{label}: key must be Ed25519")
+
+
+def validate_windows_signing_backend(env: dict[str, str]) -> tuple[list[str], list[str]]:
+    checked = [SIGNING_BACKEND_VAR, CERT_THUMBPRINT_VAR, ALLOWED_PROVIDER_VAR]
+    errors: list[str] = []
+
+    backend = env.get(SIGNING_BACKEND_VAR, "").strip().lower()
+    if backend != "certificate-store":
+        errors.append(
+            f"{SIGNING_BACKEND_VAR}: hosted production signing requires 'certificate-store'; "
+            f"got {backend or '<empty>'!r}"
+        )
+
+    thumbprint = re.sub(r"\s+", "", env.get(CERT_THUMBPRINT_VAR, ""))
+    if not THUMBPRINT_RE.fullmatch(thumbprint):
+        errors.append(f"{CERT_THUMBPRINT_VAR}: missing or invalid certificate thumbprint")
+
+    provider = env.get(ALLOWED_PROVIDER_VAR, "").strip()
+    if not provider:
+        errors.append(f"{ALLOWED_PROVIDER_VAR}: missing")
+    elif provider.lower() in {
+        "microsoft software key storage provider",
+        "microsoft enhanced rsa and aes cryptographic provider",
+        "microsoft enhanced cryptographic provider v1.0",
+        "microsoft base cryptographic provider v1.0",
+    }:
+        errors.append(f"{ALLOWED_PROVIDER_VAR}: software-backed provider is forbidden")
+
+    for name in LEGACY_PFX_VARS:
+        checked.append(f"{name} absent")
+        if env.get(name, "").strip():
+            errors.append(
+                f"{name}: forbidden on the hosted production signer; use a non-exportable HSM/KSP key"
+            )
+
+    return checked, errors
 
 
 def check(env: dict[str, str], *, require_handoff_signing_key: bool = False) -> dict[str, object]:
@@ -90,6 +131,10 @@ def check(env: dict[str, str], *, require_handoff_signing_key: bool = False) -> 
         except ValueError as exc:
             errors.append(str(exc))
 
+    signing_checked, signing_errors = validate_windows_signing_backend(env)
+    checked.extend(signing_checked)
+    errors.extend(signing_errors)
+
     required_secrets = list(BASE_SIGNING_SECRET_VARS)
     if require_handoff_signing_key:
         required_secrets.append(HANDOFF_SIGNING_SECRET)
@@ -101,22 +146,15 @@ def check(env: dict[str, str], *, require_handoff_signing_key: bool = False) -> 
     if not require_handoff_signing_key:
         checked.append(f"{HANDOFF_SIGNING_SECRET} not required for release-only hosted signing")
 
-    pfx = env.get("DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64", "").strip()
-    if pfx:
-        try:
-            if not base64.b64decode(pfx, validate=True):
-                raise ValueError
-        except Exception:
-            errors.append("DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: invalid base64")
-
     return {
-        "schema": "dokkomplekt.windows-hosted-signing-preflight.v1",
+        "schema": "dokkomplekt.windows-hosted-signing-preflight.v2",
         "ok": not errors,
         "ephemeral_hosted_windows": not errors or (
             env.get("GITHUB_ACTIONS", "").lower() == "true"
             and env.get("RUNNER_OS", "").lower() == "windows"
             and env.get("RUNNER_ENVIRONMENT", "").lower() == "github-hosted"
         ),
+        "windows_signing_backend": env.get(SIGNING_BACKEND_VAR, "").strip().lower(),
         "handoff_signing_key_required": require_handoff_signing_key,
         "checked": checked,
         "errors": errors,

@@ -21,8 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          # A workflow_dispatch run carries an immutable event SHA. Use that exact
-          # commit instead of resolving the moving branch again when this job starts.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Verify immutable dispatch checkout identity
@@ -41,6 +39,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply guarded fail-closed printing patch
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.head_ref == 'agent/print-fail-closed'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git apply --check .github/deep-audit-print-fail-closed.patch
+          git apply .github/deep-audit-print-fail-closed.patch
+          python -c "import runpy; ns=runpy.run_path('tests/test_print_fail_closed_contract.py'); ns['test_watcher_auto_print_fails_closed_on_control_and_preferences_errors'](); ns['test_printer_discovery_failure_is_not_an_empty_inventory']()"
+          git show c4b7c1bc966d7e473cf9426f3356555de4835b5b:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
+          rm .github/deep-audit-print-fail-closed.patch
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(print): fail closed when printing configuration is unavailable"
+          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

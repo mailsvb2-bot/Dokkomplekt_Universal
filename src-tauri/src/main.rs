@@ -75,8 +75,8 @@ use uuid::Uuid;
 use semantic_model::{
     LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
 };
-use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
 use state_transaction::transact_default_state;
+use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
 
 /// Install the explicitly selected rustls crypto backend before any reqwest
 /// client is created. The operation is process-global and safely idempotent.

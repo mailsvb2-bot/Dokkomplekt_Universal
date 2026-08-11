@@ -28,8 +28,10 @@ $runtime = Get-ChildItem -LiteralPath $RuntimeRoot -File -Filter '*.zip' | Selec
 if ($null -eq $runtime) { throw 'Offline runtime ZIP not found.' }
 $runtimePayload = "$($runtime.FullName).signing.json"
 $runtimeSignature = "$runtimePayload.sig"
+$runtimeApprovalSignature = "$runtimePayload.approval.sig"
 if (-not (Test-Path -LiteralPath $runtimePayload -PathType Leaf)) { throw 'Offline runtime signing payload not found.' }
 if (-not (Test-Path -LiteralPath $runtimeSignature -PathType Leaf)) { throw 'Offline runtime signature not found.' }
+if (-not (Test-Path -LiteralPath $runtimeApprovalSignature -PathType Leaf)) { throw 'Offline runtime approval signature not found.' }
 if (-not (Test-Path -LiteralPath $RuntimeTrustedPublicKey -PathType Leaf)) { throw 'Pinned runtime public key not found.' }
 # The protected pinned key is the only runtime trust root. Do not trust or require
 # an artifact-provided public key, which would re-introduce trust-on-first-use.
@@ -73,6 +75,7 @@ $evidence = [ordered]@{
         name = $runtime.Name
         sha256 = (Get-FileHash $runtime.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         signature_sha256 = (Get-FileHash $runtimeSignature -Algorithm SHA256).Hash.ToLowerInvariant()
+        approval_signature_sha256 = (Get-FileHash $runtimeApprovalSignature -Algorithm SHA256).Hash.ToLowerInvariant()
         public_key_sha256 = $trustedKeySha256
         trusted_public_key_sha256 = $trustedKeySha256
         trust_source = 'protected_pinned_public_key'

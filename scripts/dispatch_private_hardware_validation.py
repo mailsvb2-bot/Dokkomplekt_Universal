@@ -15,6 +15,7 @@ import uuid
 from typing import Any
 
 SCHEMA = "dokkomplekt.private-hardware-dispatch.v1"
+PRESTART_STATUSES = frozenset({"pending", "queued", "requested", "waiting"})
 
 
 def now_utc() -> dt.datetime:
@@ -102,10 +103,11 @@ def locate_run(
     return matches[0]
 
 
-def queued_duration_seconds(run: dict[str, Any], current: dt.datetime) -> int:
-    if str(run.get("status", "")) != "queued":
+def prestart_duration_seconds(run: dict[str, Any], current: dt.datetime) -> int:
+    status = str(run.get("status", "")).strip().lower()
+    if status not in PRESTART_STATUSES:
         return 0
-    created_raw = str(run.get("created_at", ""))
+    created_raw = str(run.get("created_at", "")).strip()
     if not created_raw:
         return 0
     created = parse_time(created_raw)
@@ -270,8 +272,8 @@ def main() -> int:
         )
         if candidate is not None:
             run = candidate
-            status = str(run.get("status", ""))
-            queued_seconds = queued_duration_seconds(run, now_utc())
+            status = str(run.get("status", "")).strip().lower()
+            prestart_seconds = prestart_duration_seconds(run, now_utc())
             print(
                 f"Private hardware run #{run.get('run_number')} id={run.get('id')} "
                 f"status={status} conclusion={run.get('conclusion')} url={run.get('html_url')}",
@@ -281,14 +283,15 @@ def main() -> int:
             if status == "completed":
                 break
             if (
-                status == "queued"
+                status in PRESTART_STATUSES
                 and args.queue_timeout_seconds > 0
-                and queued_seconds >= args.queue_timeout_seconds
+                and prestart_seconds >= args.queue_timeout_seconds
             ):
                 failure = (
-                    f"private hardware workflow remained queued for {queued_seconds}s; "
-                    "verify that the dokkomplekt-runtime self-hosted Windows runner is online "
-                    "and registered in the private validation repository"
+                    f"private hardware workflow remained in pre-start status {status!r} "
+                    f"for {prestart_seconds}s; verify that the dokkomplekt-runtime self-hosted "
+                    "Windows runner is online and registered, the windows-production-signing "
+                    "environment is approved, and no concurrency gate is blocking the private workflow"
                 )
                 write_failure_with_cancellation(api, args, request_id, run, report_path, failure)
                 return 1

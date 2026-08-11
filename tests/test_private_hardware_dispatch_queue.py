@@ -35,12 +35,36 @@ class FakeApi:
         self.cancelled.append((repository, run_id))
 
 
-def test_queued_duration_seconds_only_counts_queued_runs():
-    now = dt.datetime(2026, 8, 9, 22, 30, tzinfo=dt.timezone.utc)
-    run = {"status": "queued", "created_at": "2026-08-09T22:15:00Z"}
+def test_prestart_duration_seconds_counts_all_github_prestart_states():
+    now = dt.datetime(2026, 8, 10, 22, 29, 46, tzinfo=dt.timezone.utc)
+    created = "2026-08-10T19:54:13Z"
 
-    assert module.queued_duration_seconds(run, now) == 900
-    assert module.queued_duration_seconds({**run, "status": "in_progress"}, now) == 0
+    for status in ("pending", "queued", "requested", "waiting"):
+        run = {"status": status, "created_at": created}
+        assert module.prestart_duration_seconds(run, now) == 9333
+
+    assert module.prestart_duration_seconds(
+        {"status": "in_progress", "created_at": created},
+        now,
+    ) == 0
+    assert module.prestart_duration_seconds(
+        {"status": "completed", "created_at": created},
+        now,
+    ) == 0
+
+
+def test_real_incident_pending_state_exceeds_fail_fast_timeout():
+    now = dt.datetime(2026, 8, 10, 20, 9, 13, tzinfo=dt.timezone.utc)
+    run = {"status": "pending", "created_at": "2026-08-10T19:54:13Z"}
+
+    assert module.prestart_duration_seconds(run, now) == 900
+    assert module.prestart_duration_seconds(run, now) >= args().queue_timeout_seconds
+
+
+def test_prestart_duration_seconds_ignores_missing_created_at():
+    now = dt.datetime(2026, 8, 10, 20, 9, 13, tzinfo=dt.timezone.utc)
+
+    assert module.prestart_duration_seconds({"status": "pending"}, now) == 0
 
 
 def test_run_report_exposes_private_run_identity():
@@ -83,7 +107,7 @@ def test_public_hardware_dispatch_serializes_prepare_and_verify():
 
 def test_timeout_cancellation_targets_correlated_private_run():
     api = FakeApi()
-    run = {"id": 123, "status": "queued"}
+    run = {"id": 123, "status": "pending"}
 
     requested, failure = module.cancel_private_run(
         api,

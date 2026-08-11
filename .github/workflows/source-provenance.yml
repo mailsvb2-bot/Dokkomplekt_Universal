@@ -21,6 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          # A workflow_dispatch run carries an immutable event SHA. Use that exact
+          # commit instead of resolving the moving branch again when this job starts.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Verify immutable dispatch checkout identity
@@ -29,51 +31,34 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          test "$actual" = "${GITHUB_SHA}" || { echo "Expected dispatched SHA ${GITHUB_SHA}, checked out $actual" >&2; exit 1; }
+          test "$actual" = "${GITHUB_SHA}" || {
+            echo "Expected dispatched SHA ${GITHUB_SHA}, checked out $actual" >&2
+            exit 1
+          }
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
-      - name: Apply guarded learning privacy retention patch
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          github.head_ref == 'agent/learning-privacy-retention'
-        env:
-          BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          base64 -d .github/deep-audit-learning-privacy.patch.gz.b64 | gzip -d > /tmp/learning-privacy.patch
-          git apply --check /tmp/learning-privacy.patch
-          git apply /tmp/learning-privacy.patch
-          python - <<'PY'
-          import runpy
-          ns = runpy.run_path('tests/test_learning_privacy_retention_contract.py')
-          for name in sorted(ns):
-              if name.startswith('test_'):
-                  ns[name]()
-          PY
-          python scripts/static_quality_gate.py --source-only
-          git show c4b7c1bc966d7e473cf9426f3356555de4835b5b:.github/workflows/source-provenance.yml > .github/workflows/source-provenance.yml
-          rm .github/deep-audit-learning-privacy.patch.gz.b64
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "fix(privacy): retain learning inputs only under active policy-bound sessions"
-          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true
         run: |
-          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.json
+          python scripts/verify_source_manifest.py \
+            --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report verification/ci/source-manifest-report.json
       - name: Build and verify deterministic clean source ZIP
         run: |
-          python scripts/build_source_archive.py --output verification/ci/Dokkomplekt_Universal-source.zip --top-level Dokkomplekt_Universal --manifest-json verification/ci/source-archive-report.json
+          python scripts/build_source_archive.py \
+            --output verification/ci/Dokkomplekt_Universal-source.zip \
+            --top-level Dokkomplekt_Universal \
+            --manifest-json verification/ci/source-archive-report.json
           rm -rf verification/ci/extracted
           unzip -q verification/ci/Dokkomplekt_Universal-source.zip -d verification/ci/extracted
-          cargo metadata --locked --no-deps --manifest-path verification/ci/extracted/Dokkomplekt_Universal/Cargo.toml > verification/ci/source-archive-cargo-metadata.json
+          cargo metadata --locked --no-deps \
+            --manifest-path verification/ci/extracted/Dokkomplekt_Universal/Cargo.toml \
+            > verification/ci/source-archive-cargo-metadata.json
       - name: Create portable Git history bundle
         run: |
           git bundle create verification/ci/Dokkomplekt_Universal-history.bundle --all

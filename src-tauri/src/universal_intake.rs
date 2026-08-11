@@ -469,6 +469,37 @@ fn active_session_is_recent(path: &Path, now: std::time::SystemTime) -> bool {
         .is_some_and(|age| age < ACTIVE_SESSION_GRACE)
 }
 
+pub fn create_retained_workspace_session(workspace: &Path) -> Result<PathBuf, String> {
+    create_sensitive_session(workspace)
+}
+
+pub fn refresh_retained_workspace_session(
+    workspace: &Path,
+    path: &Path,
+) -> Result<bool, String> {
+    let Ok(relative) = path.strip_prefix(workspace) else {
+        return Ok(false);
+    };
+    let Some(Component::Normal(session_name)) = relative.components().next() else {
+        return Ok(false);
+    };
+    let session_name = session_name.to_string_lossy();
+    if !session_name.starts_with("session-") {
+        return Ok(false);
+    }
+    let session_root = workspace.join(session_name.as_ref());
+    let metadata = std::fs::symlink_metadata(&session_root)
+        .map_err(|error| format!("Учебная сессия недоступна: {error}"))?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err("Учебная сессия имеет небезопасный тип файла.".into());
+    }
+    let marker = session_root.join(ACTIVE_SESSION_MARKER);
+    std::fs::write(&marker, b"active")
+        .map_err(|error| format!("Не удалось продлить учебную сессию: {error}"))?;
+    restrict_file_permissions(&marker)?;
+    Ok(true)
+}
+
 fn create_sensitive_session(workspace: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(workspace).map_err(|error| error.to_string())?;
     let root = workspace.join(format!("session-{}", Uuid::new_v4()));
@@ -2855,6 +2886,45 @@ Symbolic Link = ../../secret
         assert!(session.root().exists());
         drop(session);
         let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn retained_learning_session_survives_zero_hour_cleanup_while_lease_is_active() {
+        let workspace = std::env::temp_dir().join(format!("dkk-learning-{}", Uuid::new_v4()));
+        let session = create_retained_workspace_session(&workspace).expect("learning session");
+        let source = session.join("example.txt");
+        std::fs::write(&source, b"sensitive learning example").expect("example");
+        assert_eq!(cleanup_workspace(&workspace, Duration::ZERO).unwrap(), 0);
+        assert!(source.is_file());
+        assert!(refresh_retained_workspace_session(&workspace, &source).unwrap());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn zero_hour_cleanup_removes_released_learning_session_without_touching_other_root() {
+        let workspace = std::env::temp_dir().join(format!("dkk-learning-{}", Uuid::new_v4()));
+        let other = std::env::temp_dir().join(format!("dkk-learning-other-{}", Uuid::new_v4()));
+        let session = create_retained_workspace_session(&workspace).expect("learning session");
+        std::fs::write(session.join("example.txt"), b"sensitive").expect("example");
+        std::fs::remove_file(session.join(ACTIVE_SESSION_MARKER)).expect("release lease");
+        std::fs::create_dir_all(&other).expect("other root");
+        let other_file = other.join("user-owned.txt");
+        std::fs::write(&other_file, b"must survive").expect("other file");
+        assert_eq!(cleanup_workspace(&workspace, Duration::ZERO).unwrap(), 1);
+        assert!(!session.exists());
+        assert!(other_file.is_file());
+        let _ = std::fs::remove_dir_all(workspace);
+        let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[test]
+    fn retained_learning_lease_refresh_ignores_paths_outside_workspace() {
+        let workspace = std::env::temp_dir().join(format!("dkk-learning-{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("outside-{}.txt", Uuid::new_v4()));
+        std::fs::write(&outside, b"external").expect("outside");
+        assert!(!refresh_retained_workspace_session(&workspace, &outside).unwrap());
+        assert!(outside.is_file());
+        let _ = std::fs::remove_file(outside);
     }
 
     #[test]

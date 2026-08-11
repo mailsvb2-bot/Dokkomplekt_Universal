@@ -155,12 +155,13 @@ fn import_learning_example_file(
     app: tauri::AppHandle,
 ) -> Result<ImportLearningExampleFileResponse, String> {
     let bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
+    let _learning_guard = lock_learning_workspace()?;
     let root = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("template-learning-inputs");
-    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let session_root = universal_intake::create_retained_workspace_session(&root)?;
     let safe_name = sanitize_path_component(
         Path::new(&req.file_name)
             .file_name()
@@ -170,14 +171,14 @@ fn import_learning_example_file(
     if safe_name.is_empty() {
         return Err("Имя учебного примера некорректно.".into());
     }
-    let target = root.join(format!("{}-{safe_name}", Uuid::new_v4()));
+    let target = session_root.join(safe_name);
     std::fs::write(&target, &bytes)
         .map_err(|error| format!("Не удалось сохранить учебный пример: {error}"))?;
-    let work = root.join("normalized-work");
+    let work = session_root.join("normalized-work");
     let normalized = match universal_intake::normalize_path(&target, &work, 0) {
         Ok(value) => value,
         Err(error) => {
-            let _ = std::fs::remove_file(&target);
+            let _ = std::fs::remove_dir_all(&session_root);
             return Err(error);
         }
     };
@@ -213,6 +214,12 @@ struct LearnTemplateFromExamplesRequest {
 
 fn read_learning_text(app: &tauri::AppHandle, value: &str) -> Result<String, String> {
     let path = resolve_user_path(app, value)?;
+    let learning_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("template-learning-inputs");
+    let _ = universal_intake::refresh_retained_workspace_session(&learning_root, &path)?;
     let extension = path
         .extension()
         .and_then(|item| item.to_str())
@@ -237,6 +244,7 @@ fn learn_template_from_examples_command(
     if req.completed_example_paths.len() < 3 {
         return Err("Добавьте минимум три заполненных примера (поддерживается 3–10).".into());
     }
+    let _learning_guard = lock_learning_workspace()?;
     let blank_template_text = read_learning_text(&app, &req.blank_template_path)?;
     let completed_examples = req
         .completed_example_paths

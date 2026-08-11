@@ -98,17 +98,24 @@ def test_release_workflows_pin_actions_and_scope_private_keys_to_steps() -> None
         "fetch_hosted_runtime_bundle.py",
         "stage_signed_runtime_bundle.py",
         "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL",
+        "DOKKOMPLEKT_RELEASE_MODE: production",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT",
+        "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER",
     ):
         assert required in release
     assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]" not in release
     assert "runs-on: windows-latest" in release
     assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in release
 
-    # No private signing value may live in a job-level env block. It must appear
-    # beneath a concrete step, after pinned setup actions have completed.
+    # Production Authenticode is hardware-backed; exportable PFX material must not
+    # be wired into the release workflow at any scope.
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" not in release
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD" not in release
+
+    # Remaining private values must never live in a job-level env block. They are
+    # scoped to the concrete steps that consume them after pinned setup actions.
     for secret in (
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
         "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",

@@ -117,6 +117,7 @@ def main() -> int:
     bundle = direct_file(args.bundle, "runtime bundle")
     payload_path = direct_file(args.payload, "runtime signing payload")
     signature_path = direct_file(args.signature, "runtime signature")
+    trusted_runtime_public_key = direct_file(args.trusted_runtime_public_key, "trusted runtime public key")
     payload_bytes = payload_path.read_bytes()
     payload = json.loads(payload_bytes.decode("utf-8"))
     if payload.get("schema") != PAYLOAD_SCHEMA or payload.get("target") != TARGET:
@@ -132,7 +133,7 @@ def main() -> int:
     if bundle.stat().st_size != payload.get("bundle_size_bytes"):
         raise ValueError("runtime bundle size mismatch")
 
-    runtime_key = load_ed25519_public_key(args.trusted_runtime_public_key, "trusted runtime public key")
+    runtime_key = load_ed25519_public_key(trusted_runtime_public_key, "trusted runtime public key")
     runtime_signature = signature_path.read_bytes()
     if len(runtime_signature) != 64:
         raise ValueError("runtime signature must be a raw 64-byte Ed25519 signature")
@@ -259,6 +260,7 @@ def main() -> int:
     }
     status_path = destination / "sidecar-status.json"
     status_path.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    trusted_key_bytes = trusted_runtime_public_key.read_bytes()
     report = {
         "schema": "dokkomplekt.hosted-runtime-stage.v1",
         "ok": True,
@@ -268,13 +270,20 @@ def main() -> int:
         "runtime_signature_verified": True,
         "offline_approval_verified": True,
         "offline_approval_key_id": approval["approval_key_id"],
+        "trusted_runtime_public_key_sha256": sha256_bytes(trusted_key_bytes),
         "files": len(staged),
         "unpacked_bytes": total_unpacked,
         "sidecar_status": str(status_path),
     }
     if args.json_report:
-        args.json_report.parent.mkdir(parents=True, exist_ok=True)
-        args.json_report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report_path = args.json_report.resolve()
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        # These public evidence files are copied from the exact objects used by
+        # this successful staging decision, so downstream hardware evidence can
+        # bind to the real trust root/status without artifact-provided TOFU.
+        atomic_write(report_path.parent / "sidecar-status.json", status_path.read_bytes())
+        atomic_write(report_path.parent / "runtime-trusted-public.pem", trusted_key_bytes)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False))
     return 0
 

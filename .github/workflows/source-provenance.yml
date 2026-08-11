@@ -45,8 +45,41 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          git apply --check .github/deep-audit-pr110-followup.patch
-          git apply .github/deep-audit-pr110-followup.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          main = Path('src-tauri/src/main.rs')
+          body = main.read_text('utf-8')
+          old = '''use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
+          use state_transaction::transact_default_state;
+          '''
+          new = '''use state_transaction::transact_default_state;
+          use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
+          '''
+          if body.count(old) != 1:
+              raise SystemExit('PR110 import-order guard did not match exactly once')
+          main.write_text(body.replace(old, new), 'utf-8')
+
+          test = Path('tests/test_p0_trust_boundaries.py')
+          body = test.read_text('utf-8')
+          old = '''    assert "save_case_and_pack_atomic" in main
+              assert "save_desktop_snapshot" in main
+              assert "if let Err(error) = load_state_from" in main
+          '''
+          new = '''    assert "save_case_and_pack_atomic" in main
+              assert "transact_default_state" in main
+              transaction = text("src-tauri/src/state_transaction.rs")
+              assert "save_desktop_snapshot" in transaction
+              assert "persistence_gate" in transaction
+              assert transaction.index(".save_desktop_snapshot(") < transaction.index(
+                  "if let Some(next) = prepared.next_state"
+              )
+              assert "if let Err(error) = load_state_from" in main
+          '''
+          if body.count(old) != 1:
+              raise SystemExit('PR110 trust-contract guard did not match exactly once')
+          test.write_text(body.replace(old, new), 'utf-8')
+          PY
           cargo fmt --all --check
           python - <<'PY'
           import runpy

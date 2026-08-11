@@ -93,7 +93,8 @@ class OperationalHardeningContracts(unittest.TestCase):
             self.assertIn(required, verifier.lower())
         self.assertIn("DOKKOMPLEKT_SIDECAR_MANIFEST", installer)
         self.assertIn("--require-semantic-model", installer)
-        self.assertIn("Verify the pre-provisioned offline runtime", workflow)
+        self.assertIn("Verify production runtime staged from immutable approved bundle", workflow)
+        self.assertIn("stage_signed_runtime_bundle.py", workflow)
 
     def test_completed_case_can_be_reissued_without_deleting_previous_output(self) -> None:
         main = self.read("src-tauri/src/main.rs")

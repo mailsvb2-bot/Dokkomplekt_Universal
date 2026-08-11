@@ -34,11 +34,24 @@ The offline approval private key is never stored in GitHub. `scripts/windows_run
 
 The hosted job then executes the existing production gates: offline runtime completeness, semantic GGUF, runtime/application parity, sidecar Authenticode, OCR fixture, Rust/RustSec gate, Tauri build, application Authenticode, offline NSIS build/signing and installer contract smoke.
 
-Private values used only in this protected hosted domain include:
+### Windows Authenticode key boundary
 
-- `DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64`;
-- `DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD`;
-- `DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64` (signed handoff only);
+Production Windows signing does **not** use an exportable PFX. The signing backend is explicit:
+
+- `DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND=certificate-store`;
+- `DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT` identifies the exact code-signing certificate in `Cert:\CurrentUser\My`;
+- `DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER` pins the exact approved HSM/KSP/CSP provider;
+- `DOKKOMPLEKT_TIMESTAMP_SERVER` selects the reviewed timestamp service.
+
+`scripts/sign_windows_release.ps1` proves that the selected certificate has an RSA private key, that its provider exactly matches the approved provider, rejects known Microsoft software-only providers, rejects an exportable production key, signs the requested artifacts and then verifies both Authenticode validity and the signer thumbprint.
+
+The legacy `pfx` backend exists only for non-production compatibility/testing. It is fail-closed when `DOKKOMPLEKT_RELEASE_MODE=production` and imported PFX keys are never marked `-Exportable`.
+
+The private key for Authenticode therefore remains **non-exportable** in the configured hardware/HSM-backed provider. The CI workflow must provision/authenticate that provider before signing; it must not copy the private key into GitHub Actions variables or secrets.
+
+Other private values used only in the protected hosted domain include:
+
+- `DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64` for the signed handoff;
 - `DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64` where component catalog publishing is required;
 - `DOKKOMPLEKT_GATE_PRIVATE_KEY_B64`.
 

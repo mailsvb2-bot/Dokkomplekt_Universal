@@ -257,6 +257,7 @@ export interface RenderDocxBatchResult {
   output_folder: string;
   created_files: string[];
   created_documents?: CreatedDocumentOutput[];
+  warnings?: string[];
 }
 
 export interface RenderResult {
@@ -371,6 +372,7 @@ export interface PrinterInventory {
   platform: string;
   printers: PrinterInfo[];
   preferences: PrintPreferences;
+  discovery_error?: string | null;
   advanced_options_note: string;
 }
 
@@ -664,7 +666,7 @@ export interface TemplateMarkupReplacement { field_id: string; value: string; ac
 export interface TemplateMarkupReport { output_path: string; replacement_count: number; replaced_occurrences: number; skipped_values: string[]; }
 export interface MailMergeTable { delimiter: string; headers: string[]; canonical_headers: string[]; rows: string[][]; warnings: string[]; }
 export interface PrepareMailMergeFileResult { delimited_text: string; table: MailMergeTable; }
-export interface RenderMailMergeResult { output_folder: string; row_count: number; created_files: string[]; }
+export interface RenderMailMergeResult { output_folder: string; row_count: number; created_files: string[]; warnings?: string[]; }
 
 export type GuidedScannerMode = 'source' | 'template';
 export type GuidedScannerMarkupAction = 'replace' | 'insert_after';

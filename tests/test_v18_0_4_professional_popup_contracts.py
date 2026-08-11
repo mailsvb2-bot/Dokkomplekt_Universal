@@ -91,7 +91,9 @@ class ProfessionalPopupContracts(unittest.TestCase):
     def test_popup_values_have_final_user_confirmed_priority(self) -> None:
         popup = self.read("crates/dokkomplekt-core/src/popup_engine.rs")
         self.assertIn("ValueSource::UserConfirmed", popup)
-        self.assertIn("*case = result.semantic_case.clone()", self.read("src-tauri/src/main.rs"))
+        main = self.read("src-tauri/src/main.rs")
+        self.assertIn("snapshot.semantic_case = result.semantic_case.clone()", main)
+        self.assertIn("transact_default_state(&app, &state", main)
 
     def test_dates_are_normalized_in_popup(self) -> None:
         popup = self.read("crates/dokkomplekt-core/src/popup_engine.rs")
@@ -110,7 +112,11 @@ class ProfessionalPopupContracts(unittest.TestCase):
         main = self.read("src-tauri/src/main.rs")
         app = self.read("src/App.tsx")
         self.assertIn("fn replace_case_from_new_source", main)
-        self.assertGreaterEqual(main.count("replace_case_from_new_source(&mut case, parsed)"), 2)
+        self.assertGreaterEqual(
+            main.count("replace_case_from_new_source(&mut snapshot.semantic_case, parsed)"),
+            2,
+        )
+        self.assertIn("transact_default_state(&app, &state", main)
         self.assertIn("fn reset_case", main)
         self.assertIn("Новый комплект", app)
 

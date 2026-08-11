@@ -32,7 +32,13 @@ def test_desktop_state_is_loaded_then_applied_and_saved_as_one_snapshot() -> Non
 
     main = text("src-tauri/src/main.rs")
     assert "save_case_and_pack_atomic" in main
-    assert "save_desktop_snapshot" in main
+    assert "transact_default_state" in main
+    transaction = text("src-tauri/src/state_transaction.rs")
+    assert "save_desktop_snapshot" in transaction
+    assert "persistence_gate" in transaction
+    assert transaction.index(".save_desktop_snapshot(") < transaction.index(
+        "if let Some(next) = prepared.next_state"
+    )
     assert "if let Err(error) = load_state_from" in main
     assert "persistence_blocked.store(true" in main
 

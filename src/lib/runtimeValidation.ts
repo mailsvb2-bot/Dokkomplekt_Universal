@@ -97,6 +97,7 @@ function validateBatch(command: string, value: unknown): void {
   string(command, root.output_folder, 'output_folder');
   stringArray(command, root.created_files, 'created_files');
   if (root.created_documents !== undefined) objectArray(command, root.created_documents, 'created_documents');
+  optionalStringArray(command, root.warnings, 'warnings');
 }
 
 function validateSemantic(command: string, value: unknown): void {
@@ -168,6 +169,9 @@ function validatePrinterInventory(command: string, value: unknown): void {
   string(command, root.platform, 'platform');
   objectArray(command, root.printers, 'printers');
   record(command, root.preferences, 'preferences');
+  if (root.discovery_error !== undefined && root.discovery_error !== null) {
+    string(command, root.discovery_error, 'discovery_error');
+  }
   string(command, root.advanced_options_note, 'advanced_options_note');
 }
 

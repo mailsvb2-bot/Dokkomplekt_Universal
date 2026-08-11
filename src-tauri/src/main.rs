@@ -1,9 +1,12 @@
 mod central_queue;
 mod component_manager;
+mod generation_publication;
+mod privacy_runtime;
 mod reference_data_update;
 mod resume_engine;
 mod semantic_model;
 mod semantic_runtime;
+mod state_transaction;
 mod template_snapshot;
 mod threshold_calibration;
 mod universal_intake;
@@ -71,9 +74,18 @@ use tauri::{Emitter, Manager, State};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+#[cfg(test)]
+use generation_publication::{
+    local_completion_receipt, local_completion_receipt_matches, mark_local_completion,
+};
+use privacy_runtime::{
+    cleanup_intake_workspace, load_privacy_preferences, lock_learning_workspace,
+    persist_privacy_preferences, start_periodic_intake_cleanup, PrivacyPreferences,
+};
 use semantic_model::{
     LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
 };
+use state_transaction::transact_default_state;
 use workspace_hygiene::{WorkspaceHygieneReport, WorkspaceRetentionPolicy};
 
 /// Install the explicitly selected rustls crypto backend before any reqwest
@@ -385,93 +397,6 @@ fn import_reference_data(
         &serde_json::to_value(&status).map_err(|error| error.to_string())?,
     )?;
     Ok(status)
-}
-
-const PRIVACY_PREFERENCES_STATE_KEY: &str = "privacy_preferences_v1";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-struct PrivacyPreferences {
-    copy_source_to_output: bool,
-    write_trust_report: bool,
-    include_values_in_trust_report: bool,
-    temp_retention_hours: u32,
-    archive_processed_sources: bool,
-    archive_folder_name: String,
-    service_note_retention_days: u32,
-    processed_marker_retention_days: u32,
-    archived_source_retention_days: u32,
-}
-
-impl Default for PrivacyPreferences {
-    fn default() -> Self {
-        let retention = WorkspaceRetentionPolicy::default();
-        Self {
-            copy_source_to_output: false,
-            write_trust_report: true,
-            include_values_in_trust_report: false,
-            temp_retention_hours: 0,
-            archive_processed_sources: retention.archive_processed_sources,
-            archive_folder_name: retention.archive_folder_name,
-            service_note_retention_days: retention.service_note_retention_days,
-            processed_marker_retention_days: retention.processed_marker_retention_days,
-            archived_source_retention_days: retention.archived_source_retention_days,
-        }
-    }
-}
-
-impl PrivacyPreferences {
-    fn retention_policy(&self) -> WorkspaceRetentionPolicy {
-        WorkspaceRetentionPolicy {
-            archive_processed_sources: self.archive_processed_sources,
-            archive_folder_name: self.archive_folder_name.clone(),
-            service_note_retention_days: self.service_note_retention_days,
-            processed_marker_retention_days: self.processed_marker_retention_days,
-            archived_source_retention_days: self.archived_source_retention_days,
-        }
-    }
-}
-
-fn load_privacy_preferences(app: &tauri::AppHandle) -> Result<PrivacyPreferences, String> {
-    let repo = repository_for(&default_state_db_path(app)?)?;
-    Ok(repo
-        .load_state_value::<PrivacyPreferences>(PRIVACY_PREFERENCES_STATE_KEY)
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default())
-}
-
-fn persist_privacy_preferences(
-    app: &tauri::AppHandle,
-    preferences: &PrivacyPreferences,
-) -> Result<(), String> {
-    if preferences.temp_retention_hours > 24 * 30 {
-        return Err("Срок хранения временных источников должен быть от 0 до 720 часов.".into());
-    }
-    preferences.retention_policy().validate()?;
-    repository_for(&default_state_db_path(app)?)?
-        .save_state_value(PRIVACY_PREFERENCES_STATE_KEY, preferences)
-        .map_err(|error| error.to_string())
-}
-
-fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
-    let privacy = load_privacy_preferences(app).unwrap_or_default();
-    universal_intake::cleanup_workspace(
-        &data_dir.join("intake-work"),
-        Duration::from_secs(u64::from(privacy.temp_retention_hours) * 60 * 60),
-    )
-}
-
-fn start_periodic_intake_cleanup(app: tauri::AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(5 * 60));
-        if let Err(error) = cleanup_intake_workspace(&app) {
-            eprintln!("Периодическая очистка временных источников пропущена: {error}");
-        }
-    });
 }
 
 fn create_automation_exception(
@@ -1548,10 +1473,10 @@ fn commit_generation_access(
     let db_path = default_state_db_path(app)?;
     let mut repo = repository_for(&db_path)?;
     if !repo
-        .commit_usage(&permit.reservation)
+        .finalize_published_usage(&permit.reservation.reservation_id)
         .map_err(|error| error.to_string())?
     {
-        return Err("Резервация лимита уже завершена или потеряна.".into());
+        return Err("Резервация опубликованной генерации потеряна.".into());
     }
     Ok(())
 }
@@ -1675,41 +1600,6 @@ fn persist_state_to(db_path: &Path, state: &AppState) -> Result<(), String> {
         .save_case_and_pack_atomic("current", "default", &case, &pack)
         .map_err(|error| error.to_string())?;
     *state.db_path.lock().map_err(|_| "state lock failed")? = Some(db_path.to_path_buf());
-    Ok(())
-}
-
-fn persist_default_state(app: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
-    ensure_persistence_available(state)?;
-    let _persistence_guard = state
-        .persistence_gate
-        .lock()
-        .map_err(|_| "persistence gate lock failed")?;
-    let path = default_state_db_path(app)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let case = state
-        .semantic_case
-        .lock()
-        .map_err(|_| "state lock failed")?
-        .clone();
-    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let license = state
-        .license_document
-        .lock()
-        .map_err(|_| "license state lock failed")?
-        .clone();
-    repository_for(&path)?
-        .save_desktop_snapshot(
-            "current",
-            "default",
-            &case,
-            &pack,
-            "license_document",
-            &license,
-        )
-        .map_err(|error| error.to_string())?;
-    *state.db_path.lock().map_err(|_| "state lock failed")? = Some(path);
     Ok(())
 }
 
@@ -2329,13 +2219,17 @@ fn main() {
                         }
                     });
                 }
-                let _ = cleanup_intake_workspace(&handle);
+                if let Err(error) = cleanup_intake_workspace(&handle) {
+                    eprintln!("Очистка временных рабочих данных при запуске пропущена: {error}");
+                }
                 let _ = std::fs::remove_dir_all(data_dir.join("word-scanner-work"));
                 start_periodic_intake_cleanup(handle.clone());
                 if let Ok(db_path) = default_state_db_path(&handle) {
                     if let Ok(mut repo) = repository_for(&db_path) {
-                        let _ = repo.recover_stale_usage_reservations(24 * 60);
-                        let _ = repo.recover_interrupted_case_runs();
+                        generation_publication::recover_startup_generation_state(
+                            &handle,
+                            &mut repo,
+                        );
                         if let Ok(cases) = repo.list_case_runs(500) {
                             let mut roots = BTreeSet::new();
                             for case in cases {

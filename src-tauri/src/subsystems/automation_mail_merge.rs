@@ -48,6 +48,7 @@ struct RenderMailMergeResponse {
     output_folder: String,
     row_count: usize,
     created_files: Vec<String>,
+    warnings: Vec<String>,
 }
 #[tauri::command]
 fn render_mail_merge(
@@ -180,27 +181,53 @@ fn render_mail_merge(
         "Пакетная генерация {}",
         OffsetDateTime::now_utc().date()
     ));
+    if let Err(error) =
+        generation_publication::prepare_publication(&app, &permit, &stage, None)
+    {
+        let _ = std::fs::remove_dir_all(&stage);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let published = match publish_stage_to_unique_directory(&stage, &desired) {
         Ok(v) => v,
         Err(e) => {
+            let journal_cleanup =
+                generation_publication::abort_prepared_publication(&app, &permit);
             let _ = std::fs::remove_dir_all(&stage);
             rollback_counter_reservations(&app, &counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(e);
+            if journal_cleanup.is_ok() {
+                rollback_generation_access(&app, &state, &permit);
+                return Err(e);
+            }
+            return Err(format!(
+                "{e}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+            ));
         }
     };
+    let mut warnings = Vec::new();
+    if let Err(error) =
+        generation_publication::confirm_publication(&app, &permit, &published)
+    {
+        warnings.push(format!(
+            "Пакет опубликован, но durable-квитанция не перешла в состояние published: {error}"
+        ));
+    }
     if let Err(error) = ensure_mail_merge_templates_current(&template_inputs) {
-        let _ = std::fs::remove_dir_all(&published);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
+        warnings.push(format!(
+            "Пакет уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"
+        ));
+        let _ = append_audit_event(
+            &app,
+            "published_mail_merge_templates_changed_after_boundary",
+            "",
+            &serde_json::json!({ "error": error }),
+        );
     }
-    if let Err(error) = commit_generation_access(&app, &permit) {
-        let _ = std::fs::remove_dir_all(&published);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
+    warnings.extend(generation_publication::finalize_published_generation(
+        &app, &permit, false,
+    ));
     let created_files = files
         .iter()
         .filter_map(|p| p.strip_prefix(&stage).ok())
@@ -210,5 +237,6 @@ fn render_mail_merge(
         output_folder: published.display().to_string(),
         row_count: table.rows.len(),
         created_files,
+        warnings,
     })
 }

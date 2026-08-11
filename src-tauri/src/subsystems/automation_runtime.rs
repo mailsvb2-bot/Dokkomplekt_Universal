@@ -168,68 +168,6 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
 }
 
 
-fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
-    app_data
-        .join("intake-completion-receipts")
-        .join(format!("{processing_job_sha256}.done"))
-}
-
-fn local_completion_receipt_matches(
-    app_data: &Path,
-    processing_job_sha256: &str,
-    source_sha256: &str,
-    processing_fingerprint: &str,
-) -> bool {
-    let Ok(body) = std::fs::read_to_string(local_completion_receipt(
-        app_data,
-        processing_job_sha256,
-    )) else {
-        return false;
-    };
-    let required = [
-        format!("processing_job_sha256={processing_job_sha256}"),
-        format!("source_sha256={source_sha256}"),
-        format!("processing_fingerprint={processing_fingerprint}"),
-    ];
-    required
-        .iter()
-        .all(|expected| body.lines().any(|line| line.trim() == expected))
-}
-
-fn plan_bound_emergency_completion_exists(
-    source: &Path,
-    processing_job_sha256: &str,
-) -> bool {
-    workspace_hygiene::processed_marker_candidates(source)
-        .into_iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .any(|body| {
-            body.lines().any(|line| {
-                line.trim() == format!("processing_job_sha256={processing_job_sha256}")
-            }) && body
-                .lines()
-                .any(|line| line.trim() == "status=published_completion_ledgers_failed")
-        })
-}
-
-fn mark_local_completion(
-    app_data: &Path,
-    processing_job_sha256: &str,
-    source_sha256: &str,
-    processing_fingerprint: &str,
-) -> Result<PathBuf, String> {
-    let final_path = local_completion_receipt(app_data, processing_job_sha256);
-    let payload = format!(
-        "schema=1\nprocessing_job_sha256={processing_job_sha256}\nsource_sha256={source_sha256}\nprocessing_fingerprint={processing_fingerprint}\ncompleted_unix={}\nhost={}\n",
-        unix_now_seconds(),
-        processing_lock_host_id(),
-    );
-    atomic_write_file(&final_path, payload.as_bytes()).map_err(|error| {
-        format!("Не удалось записать локальную квитанцию завершённого дела: {error}")
-    })?;
-    Ok(final_path)
-}
-
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -266,21 +204,29 @@ fn perform_created_documents_intake(
         .map_err(|error| error.to_string())?;
     let completed_in_shared_queue =
         shared_completion_receipt(&source, &processing_job_sha256).is_file();
-    let completed_in_local_receipts = local_completion_receipt_matches(
+    let completed_in_local_receipts = generation_publication::local_completion_receipt_matches(
         &app_data,
         &processing_job_sha256,
         &source_sha256,
         &processing_fingerprint,
     );
     let completed_in_emergency_marker =
-        plan_bound_emergency_completion_exists(&source, &processing_job_sha256);
-    // Legacy adjacent markers remain non-authoritative. Only the explicit
+        generation_publication::plan_bound_emergency_completion_exists(&source, &processing_job_sha256);
+    let completed_in_publication_guard =
+        generation_publication::plan_bound_publication_guard_exists(
+            &app_data,
+            &processing_job_sha256,
+            &source_sha256,
+            &processing_fingerprint,
+        );
+    // Legacy adjacent markers remain non-authoritative. Only explicit
     // plan-bound emergency publication marker can suppress a duplicate retry.
     let processed_is_current = !req.force_reissue
         && (completed_in_history
             || completed_in_shared_queue
             || completed_in_local_receipts
-            || completed_in_emergency_marker);
+            || completed_in_emergency_marker
+            || completed_in_publication_guard);
     if processed_is_current {
         return Ok(CreatedDocumentsIntakeResponse {
             status: "ignored".into(),
@@ -1142,40 +1088,82 @@ fn perform_created_documents_intake(
             if let Some(lease) = central_queue_lease.as_mut() {
                 lease.renew()?;
             }
+            let publication_binding = generation_publication::PublicationPlanBinding {
+                processing_job_sha256: processing_job_sha256.clone(),
+                source_sha256: source_sha256.clone(),
+                processing_fingerprint: processing_fingerprint.clone(),
+            };
+            if let Err(error) = generation_publication::prepare_publication(
+                app,
+                &permit,
+                &stage,
+                Some(&publication_binding),
+            ) {
+                let _ = std::fs::remove_dir_all(&stage);
+                rollback_counter_reservations(app, &counter_reservations);
+                rollback_generation_access(app, state, &permit);
+                return Err(error);
+            }
             let patient_dir = match publish_stage_to_unique_directory(&stage, &desired_patient_dir)
             {
                 Ok(path) => path,
                 Err(error) => {
+                    let journal_cleanup =
+                        generation_publication::abort_prepared_publication(app, &permit);
                     let _ = std::fs::remove_dir_all(&stage);
                     rollback_counter_reservations(app, &counter_reservations);
-                    rollback_generation_access(app, state, &permit);
-                    return Err(error);
+                    if journal_cleanup.is_ok() {
+                        rollback_generation_access(app, state, &permit);
+                        return Err(error);
+                    }
+                    return Err(format!(
+                        "{error}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                        journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+                    ));
                 }
             };
+            // The filesystem publication is the irreversible business boundary.
+            // From this point onward the output is never deleted and accounting is
+            // never refunded merely because best-effort metadata finalization fails.
+            case_run.mark_business_terminal();
+            let mut publication_warnings = Vec::new();
+            if let Err(error) =
+                generation_publication::confirm_publication(app, &permit, &patient_dir)
+            {
+                publication_warnings.push(format!(
+                    "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
+                ));
+            }
             if let Err(error) = ensure_generation_inputs_current(
                 &source,
                 &source_sha256,
                 &template_snapshots,
                 processing_guard.as_ref(),
             ) {
-                let _ = std::fs::remove_dir_all(&patient_dir);
-                rollback_counter_reservations(app, &counter_reservations);
-                rollback_generation_access(app, state, &permit);
-                let _ = case_run.finish("superseded", None, &[], &[], Some(&error));
+                publication_warnings.push(format!(
+                    "Комплект уже опубликован, но входные данные изменились сразу после границы публикации: {error}"
+                ));
+                let details = serde_json::json!({
+                    "stage": "after_directory_publish",
+                    "error": &error,
+                });
+                let _ = create_automation_exception(
+                    app,
+                    "published_inputs_changed_after_boundary",
+                    "",
+                    "Комплект опубликован, но входные данные изменились сразу после публикации; результат сохранён и требует проверки.",
+                    &details,
+                );
                 let _ = append_audit_event(
                     app,
-                    "intake_source_superseded",
+                    "published_inputs_changed_after_boundary",
                     &source_sha256,
-                    &serde_json::json!({ "stage": "after_directory_publish", "error": &error }),
+                    &details,
                 );
-                return Err(error);
             }
-            if let Err(error) = commit_generation_access(app, &permit) {
-                let _ = std::fs::remove_dir_all(&patient_dir);
-                rollback_counter_reservations(app, &counter_reservations);
-                rollback_generation_access(app, state, &permit);
-                return Err(error);
-            }
+            publication_warnings.extend(generation_publication::finalize_published_generation(
+                app, &permit, true,
+            ));
             let audit_details = serde_json::json!({
                 "output_folder": patient_dir.display().to_string(),
                 "documents": &names,
@@ -1242,10 +1230,10 @@ fn perform_created_documents_intake(
                 .iter()
                 .map(|name| patient_dir.join(name).display().to_string())
                 .collect::<Vec<_>>();
-            // Publication + committed commercial usage is the irreversible business
-            // terminal point. Persist independent plan-bound completion evidence
-            // before any best-effort post-publication metadata can fail.
-            let local_completion = mark_local_completion(
+            // Publication is already the irreversible business terminal point.
+            // Persist independent plan-bound completion evidence before any further
+            // best-effort post-publication metadata can fail.
+            let local_completion = generation_publication::mark_local_completion(
                 &app_data,
                 &processing_job_sha256,
                 &source_sha256,
@@ -1256,7 +1244,6 @@ fn perform_created_documents_intake(
             } else {
                 mark_shared_completion(&source, &processing_job_sha256).map(|_| ())
             };
-            case_run.mark_business_terminal();
             let case_completion =
                 case_run.finish("completed", Some(&patient_dir), &created, &[], None);
 
@@ -1294,17 +1281,35 @@ fn perform_created_documents_intake(
                 );
             }
 
-            if local_completion.is_err() && queue_completion.is_err() && case_completion.is_err() {
-                // Never claim that published files were rolled back. The source is kept
-                // out of the ordinary retry error path; a visible exception above tells
-                // the operator that all completion ledgers require repair.
-                let marker = workspace_hygiene::processed_marker_path(&source);
-                let _ = std::fs::write(
-                    &marker,
-                    format!(
-                        "sha256={source_sha256}\nprocessing_job_sha256={processing_job_sha256}\nstatus=published_completion_ledgers_failed\n"
-                    ),
-                );
+            let completion_guard_is_durable =
+                if local_completion.is_err() && queue_completion.is_err() && case_completion.is_err()
+                {
+                    // Never claim that published files were rolled back. If all ordinary
+                    // ledgers fail, keep either the explicit emergency marker or the
+                    // pre-publication journal as the retry guard.
+                    let marker = workspace_hygiene::processed_marker_path(&source);
+                    std::fs::write(
+                        &marker,
+                        format!(
+                            "sha256={source_sha256}\nprocessing_job_sha256={processing_job_sha256}\nstatus=published_completion_ledgers_failed\n"
+                        ),
+                    )
+                    .is_ok()
+                } else {
+                    true
+                };
+            if completion_guard_is_durable {
+                if let Err(error) =
+                    generation_publication::complete_publication_receipt(app, &permit)
+                {
+                    let _ = create_automation_exception(
+                        app,
+                        "publication_guard_cleanup",
+                        &source.display().to_string(),
+                        "Комплект завершён, но publication guard не удалось удалить; повтор останется заблокирован до восстановления.",
+                        &serde_json::json!({ "error": error }),
+                    );
+                }
             }
             if corpus_recording_enabled {
                 let entry_id = format!("corpus-{}", Uuid::new_v4());
@@ -1538,7 +1543,14 @@ fn perform_created_documents_intake(
                 missing: Vec::new(),
                 attention_file: None,
                 print_triage,
-                message: "Комплект документов создан и опубликован атомарно.".into(),
+                message: if publication_warnings.is_empty() {
+                    "Комплект документов создан и опубликован атомарно.".into()
+                } else {
+                    format!(
+                        "Комплект документов опубликован. Требует внимания: {}",
+                        publication_warnings.join(" ")
+                    )
+                },
             })
         }
     }
@@ -2894,14 +2906,10 @@ fn semantic_extract(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        merge_parsed_case(&mut case, extracted_case)?;
-    }
-    persist_default_state(&app, &state)?;
+    transact_default_state(&app, &state, |snapshot| {
+        merge_parsed_case(&mut snapshot.semantic_case, extracted_case)?;
+        Ok(((), true))
+    })?;
     report.fields.sort_by(|left, right| left.field_id.cmp(&right.field_id));
     report.warnings.sort();
     report.warnings.dedup();

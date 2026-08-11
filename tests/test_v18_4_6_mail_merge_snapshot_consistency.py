@@ -28,27 +28,30 @@ def test_mail_merge_captures_templates_before_row_loop_and_never_rereads_live_pa
     assert "render_docx_with_assets(\n                    &app,\n                    template_path," in body
 
 
-def test_mail_merge_revalidates_before_publish_and_again_before_commercial_commit() -> None:
+def test_mail_merge_revalidates_before_publish_and_treats_postpublish_drift_as_warning() -> None:
     body = _mail_merge_body()
     guard = "ensure_mail_merge_templates_current(&template_inputs)"
     publish = "publish_stage_to_unique_directory(&stage, &desired)"
-    commit = "commit_generation_access(&app, &permit)"
+    finalize = "warnings.extend(generation_publication::finalize_published_generation("
     assert body.count(guard) == 2
     first_verify = body.index(guard)
     publish_at = body.index(publish)
     second_verify = body.index(guard, first_verify + 1)
-    commit_at = body.index(commit)
-    assert first_verify < publish_at < second_verify < commit_at
+    finalize_at = body.index(finalize)
+    assert first_verify < publish_at < second_verify < finalize_at
+    finalize_call = " ".join(body[finalize_at : body.index("));", finalize_at) + 3].split())
+    assert "&app, &permit, false," in finalize_call
 
     before_publish = body[first_verify:publish_at]
     assert "remove_dir_all(&stage)" in before_publish
     assert "rollback_counter_reservations" in before_publish
     assert "rollback_generation_access" in before_publish
 
-    before_commit = body[second_verify:commit_at]
-    assert "remove_dir_all(&published)" in before_commit
-    assert "rollback_counter_reservations" in before_commit
-    assert "rollback_generation_access" in before_commit
+    after_publish = body[second_verify:finalize_at]
+    assert "published_mail_merge_templates_changed_after_boundary" in after_publish
+    assert "remove_dir_all(&published)" not in after_publish
+    assert "rollback_counter_reservations" not in after_publish
+    assert "rollback_generation_access" not in after_publish
 
 
 def test_mail_merge_snapshot_helper_extracts_text_from_immutable_snapshot() -> None:

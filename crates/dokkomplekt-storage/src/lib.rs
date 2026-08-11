@@ -747,6 +747,46 @@ impl LocalRepository {
         Ok(changed == 1)
     }
 
+    /// Finalize a reservation after the generated output has crossed the
+    /// filesystem publication boundary. The reservation row is authoritative and
+    /// the operation is idempotent so crash recovery can safely repeat it.
+    pub fn finalize_published_usage(&mut self, reservation_id: &str) -> StorageResult<bool> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let status: Option<String> = tx
+            .query_row(
+                "SELECT status FROM usage_reservations WHERE reservation_id=?1",
+                params![reservation_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(status) = status else {
+            tx.commit()?;
+            return Ok(false);
+        };
+        match status.as_str() {
+            "reserved" => {
+                tx.execute(
+                    "UPDATE usage_reservations SET status='committed',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?1 AND status='reserved'",
+                    params![reservation_id],
+                )?;
+                tx.commit()?;
+                Ok(true)
+            }
+            "committed" | "committed_after_crash" => {
+                tx.commit()?;
+                Ok(true)
+            }
+            "rolled_back" => Err(StorageError::Crypto(
+                "published usage reservation was already rolled back".into(),
+            )),
+            other => Err(StorageError::Crypto(format!(
+                "published usage reservation has unsupported status: {other}"
+            ))),
+        }
+    }
+
     pub fn rollback_usage(&mut self, reservation: &UsageReservation) -> StorageResult<bool> {
         let tx = self
             .conn
@@ -2005,6 +2045,41 @@ mod tests {
         let mut repo = LocalRepository::open(&path).unwrap();
         repo.reserve_usage("2026-07", 3, true, 3, 3).unwrap();
         assert!(repo.reserve_usage("2026-07", 1, true, 3, 3).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn published_usage_finalization_is_idempotent_and_never_refunds() {
+        let path = temp_db("published-usage-finalize");
+        let mut repo = LocalRepository::open(&path).unwrap();
+        let reservation = repo.reserve_usage("2026-07", 2, true, 30, 30).unwrap();
+        assert!(repo
+            .finalize_published_usage(&reservation.reservation_id)
+            .unwrap());
+        assert!(repo
+            .finalize_published_usage(&reservation.reservation_id)
+            .unwrap());
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 2);
+
+        let crash_reservation = repo.reserve_usage("2026-07", 1, true, 30, 30).unwrap();
+        repo.conn
+            .execute(
+                "UPDATE usage_reservations SET status='committed_after_crash' WHERE reservation_id=?1",
+                params![crash_reservation.reservation_id.as_str()],
+            )
+            .unwrap();
+        assert!(repo
+            .finalize_published_usage(&crash_reservation.reservation_id)
+            .unwrap());
+
+        let rolled_back = repo.reserve_usage("2026-07", 1, true, 30, 30).unwrap();
+        assert!(repo.rollback_usage(&rolled_back).unwrap());
+        assert!(repo
+            .finalize_published_usage(&rolled_back.reservation_id)
+            .is_err());
+        assert!(!repo
+            .finalize_published_usage("missing-reservation")
+            .unwrap());
         let _ = std::fs::remove_file(path);
     }
 

@@ -155,12 +155,13 @@ fn import_learning_example_file(
     app: tauri::AppHandle,
 ) -> Result<ImportLearningExampleFileResponse, String> {
     let bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
+    let _learning_guard = lock_learning_workspace()?;
     let root = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("template-learning-inputs");
-    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let session_root = universal_intake::create_retained_workspace_session(&root)?;
     let safe_name = sanitize_path_component(
         Path::new(&req.file_name)
             .file_name()
@@ -170,14 +171,14 @@ fn import_learning_example_file(
     if safe_name.is_empty() {
         return Err("Имя учебного примера некорректно.".into());
     }
-    let target = root.join(format!("{}-{safe_name}", Uuid::new_v4()));
+    let target = session_root.join(safe_name);
     std::fs::write(&target, &bytes)
         .map_err(|error| format!("Не удалось сохранить учебный пример: {error}"))?;
-    let work = root.join("normalized-work");
+    let work = session_root.join("normalized-work");
     let normalized = match universal_intake::normalize_path(&target, &work, 0) {
         Ok(value) => value,
         Err(error) => {
-            let _ = std::fs::remove_file(&target);
+            let _ = std::fs::remove_dir_all(&session_root);
             return Err(error);
         }
     };
@@ -213,6 +214,12 @@ struct LearnTemplateFromExamplesRequest {
 
 fn read_learning_text(app: &tauri::AppHandle, value: &str) -> Result<String, String> {
     let path = resolve_user_path(app, value)?;
+    let learning_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("template-learning-inputs");
+    let _ = universal_intake::refresh_retained_workspace_session(&learning_root, &path)?;
     let extension = path
         .extension()
         .and_then(|item| item.to_str())
@@ -237,6 +244,7 @@ fn learn_template_from_examples_command(
     if req.completed_example_paths.len() < 3 {
         return Err("Добавьте минимум три заполненных примера (поддерживается 3–10).".into());
     }
+    let _learning_guard = lock_learning_workspace()?;
     let blank_template_text = read_learning_text(&app, &req.blank_template_path)?;
     let completed_examples = req
         .completed_example_paths
@@ -563,14 +571,11 @@ fn rename_document_button(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        rename_button_in_pack(&mut pack, &req.document_id, &req.button_label)
+    transact_default_state(&app, &state, |snapshot| {
+        rename_button_in_pack(&mut snapshot.pack, &req.document_id, &req.button_label)
             .map_err(|error| error.to_string())?;
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+        Ok((snapshot.pack.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,13 +589,11 @@ fn remove_document_button(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        remove_button_from_pack(&mut pack, &req.document_id).map_err(|error| error.to_string())?;
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+    transact_default_state(&app, &state, |snapshot| {
+        remove_button_from_pack(&mut snapshot.pack, &req.document_id)
+            .map_err(|error| error.to_string())?;
+        Ok((snapshot.pack.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -606,9 +609,9 @@ fn update_document_popup_fields(
     app: tauri::AppHandle,
 ) -> Result<DocumentPack, String> {
     validate_popup_fields(&req.popup_fields)?;
-    let result = {
-        let mut pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let document = pack
+    transact_default_state(&app, &state, |snapshot| {
+        let document = snapshot
+            .pack
             .documents
             .iter_mut()
             .find(|document| document.id == req.document_id)
@@ -640,10 +643,8 @@ fn update_document_popup_fields(
             }
         }
         document.required_fields = required.into_iter().collect();
-        pack.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+        Ok((snapshot.pack.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -658,22 +659,16 @@ fn set_field(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<SemanticCase, String> {
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
+    transact_default_state(&app, &state, |snapshot| {
         validate_field_value(&req.field_id, &req.value)?;
-        let mut candidate = case.clone();
+        let mut candidate = snapshot.semantic_case.clone();
         set_user_value(&mut candidate, req.field_id, req.value);
         if let Some((_, error)) = validate_case_relations(&candidate).into_iter().next() {
             return Err(error);
         }
-        *case = candidate;
-        case.clone()
-    };
-    persist_default_state(&app, &state)?;
-    Ok(result)
+        snapshot.semantic_case = candidate;
+        Ok((snapshot.semantic_case.clone(), true))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,6 +709,13 @@ fn replace_case_from_new_source(target: &mut SemanticCase, mut parsed: SemanticC
 
 #[tauri::command]
 fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<SemanticCase, String> {
+    let result = transact_default_state(&app, &state, |snapshot| {
+        let mut blocks = snapshot.semantic_case.blocks.clone();
+        blocks.retain(|key, _| !key.starts_with("source."));
+        snapshot.semantic_case = SemanticCase::default();
+        snapshot.semantic_case.blocks = blocks;
+        Ok((snapshot.semantic_case.clone(), true))
+    })?;
     state
         .retained_uploaded_source
         .lock()
@@ -724,18 +726,6 @@ fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<Seman
         .lock()
         .map_err(|_| "source provenance state lock failed")?
         .take();
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        let mut blocks = case.blocks.clone();
-        blocks.retain(|key, _| !key.starts_with("source."));
-        *case = SemanticCase::default();
-        case.blocks = blocks;
-        case.clone()
-    };
-    persist_default_state(&app, &state)?;
     Ok(result)
 }
 
@@ -745,16 +735,6 @@ fn parse_source(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceResponse, String> {
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
     let provenance = SourceProvenance::from_bytes("вставленный текст", req.source_text.as_bytes());
     let (mut parsed, mut report) = parse_source_text(&req.source_text, req.default_year);
     let learned = apply_learned_scanner_rules(&app, &req.source_text, &mut parsed)?;
@@ -764,23 +744,24 @@ fn parse_source(
             learned.len()
         ));
     }
-    let response = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        replace_case_from_new_source(&mut case, parsed);
-        let semantic_case = case.clone();
-        drop(case);
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let routing = recommend_document_bundle(&req.source_text, &semantic_case, &pack);
-        ParseSourceResponse {
-            semantic_case,
-            report,
-            routing,
-        }
-    };
-    persist_default_state(&app, &state)?;
+    let response = transact_default_state(&app, &state, |snapshot| {
+        replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
+        let semantic_case = snapshot.semantic_case.clone();
+        let routing = recommend_document_bundle(&req.source_text, &semantic_case, &snapshot.pack);
+        Ok((
+            ParseSourceResponse {
+                semantic_case,
+                report,
+                routing,
+            },
+            true,
+        ))
+    })?;
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     *state
         .source_provenance
         .lock()
@@ -812,16 +793,6 @@ fn parse_source_file(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceFileResponse, String> {
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
     let mut bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
     let workspace = app
         .path()
@@ -849,27 +820,23 @@ fn parse_source_file(
             learned.len()
         ));
     }
-    let response = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        replace_case_from_new_source(&mut case, parsed);
-        let semantic_case = case.clone();
-        drop(case);
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let routing = recommend_document_bundle(&source_text, &semantic_case, &pack);
-        ParseSourceFileResponse {
-            source_text,
-            source_path,
-            source_kind,
-            layout_items,
-            semantic_case,
-            report,
-            routing,
-        }
-    };
-    persist_default_state(&app, &state)?;
+    let response = transact_default_state(&app, &state, |snapshot| {
+        replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
+        let semantic_case = snapshot.semantic_case.clone();
+        let routing = recommend_document_bundle(&source_text, &semantic_case, &snapshot.pack);
+        Ok((
+            ParseSourceFileResponse {
+                source_text,
+                source_path,
+                source_kind,
+                layout_items,
+                semantic_case,
+                report,
+                routing,
+            },
+            true,
+        ))
+    })?;
     drop(upload_session);
     *state
         .retained_uploaded_source
@@ -939,16 +906,6 @@ fn parse_web_source(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseWebSourceResponse, String> {
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
     let workspace = app
         .path()
         .app_data_dir()
@@ -965,31 +922,32 @@ fn parse_web_source(
             learned.len()
         ));
     }
-    let semantic_case = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        replace_case_from_new_source(&mut case, parsed);
-        case.clone()
-    };
-    persist_default_state(&app, &state)?;
+    let response = transact_default_state(&app, &state, |snapshot| {
+        replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
+        let semantic_case = snapshot.semantic_case.clone();
+        let routing = recommend_document_bundle(&fetched.source_text, &semantic_case, &snapshot.pack);
+        Ok((
+            ParseWebSourceResponse {
+                source_text: fetched.source_text,
+                final_url: fetched.final_url,
+                content_type: fetched.content_type,
+                semantic_case,
+                report,
+                routing,
+            },
+            true,
+        ))
+    })?;
+    state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?
+        .take();
     *state
         .source_provenance
         .lock()
         .map_err(|_| "source provenance state lock failed")? = Some(provenance);
-    let routing = {
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        recommend_document_bundle(&fetched.source_text, &semantic_case, &pack)
-    };
-    Ok(ParseWebSourceResponse {
-        source_text: fetched.source_text,
-        final_url: fetched.final_url,
-        content_type: fetched.content_type,
-        semantic_case,
-        report,
-        routing,
-    })
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1112,36 +1070,28 @@ fn apply_popup(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<PopupApplyResult, String> {
-    let doc = {
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        pack.documents
+    transact_default_state(&app, &state, |snapshot| {
+        let doc = snapshot
+            .pack
+            .documents
             .iter()
-            .find(|d| d.id == req.document_id)
+            .find(|document| document.id == req.document_id)
             .cloned()
-            .ok_or_else(|| "document not found".to_string())?
-    };
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
+            .ok_or_else(|| "document not found".to_string())?;
         let plan = build_merged_popup_plan(
             &doc,
-            &case,
+            &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
         );
-        let result = apply_popup_answers(&case, &plan, &req.answers);
+        let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
-            *case = result.semantic_case.clone();
+            snapshot.semantic_case = result.semantic_case.clone();
         }
-        result
-    };
-    if result.accepted {
-        persist_default_state(&app, &state)?;
-    }
-    Ok(result)
+        let changed = result.accepted;
+        Ok((result, changed))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1157,8 +1107,7 @@ fn apply_popup_batch(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<PopupApplyResult, String> {
-    let documents = {
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
+    transact_default_state(&app, &state, |snapshot| {
         let requested = req
             .document_ids
             .iter()
@@ -1166,39 +1115,30 @@ fn apply_popup_batch(
             .filter(|id| !id.is_empty())
             .map(ToString::to_string)
             .collect::<BTreeSet<_>>();
-        let found = pack
+        let documents = snapshot
+            .pack
             .documents
             .iter()
             .filter(|document| requested.contains(document.id.as_str()))
             .cloned()
             .collect::<Vec<_>>();
-        if found.len() != requested.len() {
+        if documents.len() != requested.len() {
             return Err("Один или несколько документов комплекта не найдены".into());
         }
-        found
-    };
-    let result = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
         let plan = plan_workflow_batch(
             &documents,
-            &case,
+            &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
         );
-        let result = apply_popup_answers(&case, &plan, &req.answers);
+        let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
-            *case = result.semantic_case.clone();
+            snapshot.semantic_case = result.semantic_case.clone();
         }
-        result
-    };
-    if result.accepted {
-        persist_default_state(&app, &state)?;
-    }
-    Ok(result)
+        let changed = result.accepted;
+        Ok((result, changed))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1284,7 +1224,7 @@ fn render_docx(
         req.strict,
         permit.watermark.as_deref(),
     );
-    let result = match render_result {
+    let mut result = match render_result {
         Ok(result) => result,
         Err(error) => {
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
@@ -1297,26 +1237,52 @@ fn render_docx(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    if let Err(error) =
+        generation_publication::prepare_publication(&app, &permit, &reservation.path, None)
+    {
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let output_path = match reservation.commit() {
         Ok(path) => path,
         Err(error) => {
+            let journal_cleanup =
+                generation_publication::abort_prepared_publication(&app, &permit);
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(error);
+            if journal_cleanup.is_ok() {
+                rollback_generation_access(&app, &state, &permit);
+                return Err(error);
+            }
+            return Err(format!(
+                "{error}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+            ));
         }
     };
+    let mut publication_warnings = Vec::new();
+    if let Err(error) =
+        generation_publication::confirm_publication(&app, &permit, &output_path)
+    {
+        publication_warnings.push(format!(
+            "Документ опубликован, но durable-квитанция не перешла в состояние published: {error}"
+        ));
+    }
     if let Err(error) = template_snapshot.ensure_current() {
-        let _ = std::fs::remove_file(&output_path);
-        rollback_counter_reservations(&app, &hydrated.counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
+        publication_warnings.push(format!(
+            "Документ уже опубликован, но шаблон изменился сразу после границы публикации: {error}"
+        ));
+        let _ = append_audit_event(
+            &app,
+            "published_template_changed_after_boundary",
+            "",
+            &serde_json::json!({ "document_id": doc.id, "error": error }),
+        );
     }
-    if let Err(error) = commit_generation_access(&app, &permit) {
-        let _ = std::fs::remove_file(&output_path);
-        rollback_counter_reservations(&app, &hydrated.counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
+    publication_warnings.extend(generation_publication::finalize_published_generation(
+        &app, &permit, false,
+    ));
+    result.warnings.extend(publication_warnings);
     // Report the real absolute location back to the user (the core RenderResult
     // deliberately knows nothing about the filesystem).
     let mut value = serde_json::to_value(result).map_err(|e| e.to_string())?;
@@ -1349,6 +1315,7 @@ struct RenderDocxBatchResponse {
     output_folder: String,
     created_files: Vec<String>,
     created_documents: Vec<CreatedDocumentOutputDto>,
+    warnings: Vec<String>,
 }
 
 #[tauri::command]
@@ -1510,27 +1477,53 @@ fn render_docx_batch(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    if let Err(error) =
+        generation_publication::prepare_publication(&app, &permit, &stage, None)
+    {
+        let _ = std::fs::remove_dir_all(&stage);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let output_folder = match publish_stage_to_unique_directory(&stage, &desired_output_folder) {
         Ok(path) => path,
         Err(error) => {
+            let journal_cleanup =
+                generation_publication::abort_prepared_publication(&app, &permit);
             let _ = std::fs::remove_dir_all(&stage);
             rollback_counter_reservations(&app, &counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(error);
+            if journal_cleanup.is_ok() {
+                rollback_generation_access(&app, &state, &permit);
+                return Err(error);
+            }
+            return Err(format!(
+                "{error}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+            ));
         }
     };
+    let mut warnings = Vec::new();
+    if let Err(error) =
+        generation_publication::confirm_publication(&app, &permit, &output_folder)
+    {
+        warnings.push(format!(
+            "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
+        ));
+    }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
-        let _ = std::fs::remove_dir_all(&output_folder);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
+        warnings.push(format!(
+            "Комплект уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"
+        ));
+        let _ = append_audit_event(
+            &app,
+            "published_templates_changed_after_boundary",
+            "",
+            &serde_json::json!({ "error": error }),
+        );
     }
-    if let Err(error) = commit_generation_access(&app, &permit) {
-        let _ = std::fs::remove_dir_all(&output_folder);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
+    warnings.extend(generation_publication::finalize_published_generation(
+        &app, &permit, false,
+    ));
     let created_files = staged_paths
         .iter()
         .filter_map(|path| path.file_name())
@@ -1549,6 +1542,7 @@ fn render_docx_batch(
         output_folder: output_folder.display().to_string(),
         created_files,
         created_documents,
+        warnings,
     })
 }
 
@@ -1563,14 +1557,10 @@ fn apply_scanner(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
-    let report = {
-        let mut case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        apply_scanner_marks(&mut case, &req.marks)
-    };
-    persist_default_state(&app, &state)?;
+    let report = transact_default_state(&app, &state, |snapshot| {
+        let report = apply_scanner_marks(&mut snapshot.semantic_case, &req.marks);
+        Ok((report, true))
+    })?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
@@ -2770,12 +2760,10 @@ fn verify_rust_license_text(
     let public_key = dokkomplekt_license_core::PublicKeyBytes::from_base64(key_b64)
         .map_err(|e| e.to_string())?;
     verify_license_document_now(&document, &public_key).map_err(|e| e.to_string())?;
-    *state
-        .license_document
-        .lock()
-        .map_err(|_| "license state lock failed")? = Some(document);
-    persist_default_state(&app, &state)?;
-    Ok(true)
+    transact_default_state(&app, &state, |snapshot| {
+        snapshot.license_document = Some(document);
+        Ok((true, true))
+    })
 }
 
 include!("watcher_commands.rs");

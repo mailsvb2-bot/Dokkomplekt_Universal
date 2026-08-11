@@ -36,6 +36,7 @@ const DEFAULT_PRINTERS: PrinterInventory = {
   platform: '',
   printers: [],
   preferences: { printer_name: null, duplex_mode: 'simplex', tray: null },
+  discovery_error: null,
   advanced_options_note: '',
 };
 
@@ -362,6 +363,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       <label>Двусторонняя печать<select value={printers.preferences.duplex_mode} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, duplex_mode: e.target.value } })}><option value="simplex">односторонняя</option><option value="long_edge">по длинной стороне</option><option value="short_edge">по короткой стороне</option><option value="manual">ручная двусторонняя печать</option></select></label>
       <label>Лоток Word<select value={printers.preferences.tray ?? ''} onChange={e => setPrinters({ ...printers, preferences: { ...printers.preferences, tray: e.target.value === '' ? null : Number(e.target.value) } })}><option value="">по умолчанию</option><option value="0">драйвер по умолчанию</option><option value="1">верхний</option><option value="2">нижний</option><option value="3">средний</option><option value="4">ручная подача</option><option value="7">автоматическая подача</option><option value="10">крупный формат</option><option value="11">большая ёмкость</option><option value="14">кассета</option><option value="15">источник формы</option></select></label>
       <button className="utilBtn" disabled={busy} onClick={savePrinterPreferences}>Сохранить печать</button>
+      {printers.discovery_error && <small className="badgeWarn" role="alert">Не удалось получить список принтеров: {printers.discovery_error}</small>}
       <small>{printers.advanced_options_note || 'Список принтеров пока не загружен.'}</small>
     </section>
 

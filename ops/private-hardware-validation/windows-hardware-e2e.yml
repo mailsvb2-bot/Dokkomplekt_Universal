@@ -33,16 +33,19 @@ concurrency:
 
 jobs:
   signed-runtime-build:
-    name: Signed runtime / installer handoff
+    name: Hosted signed runtime / installer handoff
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]
+    runs-on: windows-latest
     environment: windows-production-signing
     timeout-minutes: 180
     defaults:
       run:
         working-directory: source
     env:
-      DOKKOMPLEKT_SIDECAR_MANIFEST_PATH: ${{ vars.DOKKOMPLEKT_SIDECAR_MANIFEST_PATH }}
+      DOKKOMPLEKT_RUNTIME_BUNDLE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_URL }}
+      DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL }}
+      DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL }}
+      DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL }}
       DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64 }}
       DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
@@ -100,44 +103,63 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
-      - name: Verify offline-approved runner-owned runtime lock before staging
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64)) { throw 'runtime lock approval public key is required' }
-          $manifest = $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH
-          $signature = "$manifest.sig"
-          if (-not (Test-Path -LiteralPath $signature -PathType Leaf)) { throw "offline approval signature missing: $signature" }
-          New-Item -ItemType Directory -Force verification/release | Out-Null
-          $trustedKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-lock-approval-" + [Guid]::NewGuid().ToString('N') + '.pem')
-          try {
-            [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64))
-            python scripts/windows_runtime_lock_approval.py verify $manifest --signature $signature --trusted-public-key $trustedKey --json-report verification/release/RUNTIME_LOCK_APPROVAL.json
-            if ($LASTEXITCODE -ne 0) { throw 'runtime lock approval failed' }
-          } finally {
-            Remove-Item -LiteralPath $trustedKey -Force -ErrorAction SilentlyContinue
-          }
-      - name: Validate production and runtime trust boundaries
+      - name: Prove ephemeral GitHub-hosted signing boundary
         shell: pwsh
         env:
           DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64 }}
           DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD }}
           DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
-          DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64 }}
-        run: |
-          python scripts/release_environment_preflight.py --mode production-build --json-report verification/release/production-build-preflight.json
-          python scripts/release_environment_preflight.py --mode windows-runtime --json-report verification/release/windows-runtime-preflight.json
-      - name: Stage and prove exact offline runtime
+          DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
+        run: python scripts/verify_windows_hosted_signing_runner.py --json-report verification/release/HOSTED_SIGNING_PREFLIGHT.json
+      - name: Fetch immutable pre-approved runtime bundle
         shell: pwsh
         run: |
-          python scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean
-          if ($LASTEXITCODE -ne 0) { throw 'sidecar staging failed' }
-          New-Item -ItemType Directory -Force verification/release | Out-Null
-          Copy-Item src-tauri/resources/tools/windows-x86_64/sidecar-status.json verification/release/sidecar-status.json -Force
+          python scripts/fetch_hosted_runtime_bundle.py `
+            --bundle-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_URL `
+            --payload-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL `
+            --signature-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL `
+            --approval-signature-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL `
+            --out release-runtime-source `
+            --json-report verification/release/HOSTED_RUNTIME_FETCH.json
+      - name: Verify two independent runtime signatures and stage exact bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtimeKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-public-" + [Guid]::NewGuid().ToString('N') + '.pem')
+          $approvalKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-approval-public-" + [Guid]::NewGuid().ToString('N') + '.pem')
+          try {
+            [IO.File]::WriteAllBytes($runtimeKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
+            [IO.File]::WriteAllBytes($approvalKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64))
+            $bundle = (Resolve-Path release-runtime-source/Dokkomplekt-offline-runtime-windows-x86_64.zip).Path
+            $payload = "$bundle.signing.json"
+            python scripts/stage_signed_runtime_bundle.py $bundle `
+              --payload $payload `
+              --signature "$payload.sig" `
+              --trusted-runtime-public-key $runtimeKey `
+              --approval-signature "$payload.approval.sig" `
+              --trusted-approval-public-key $approvalKey `
+              --clean `
+              --json-report verification/release/HOSTED_RUNTIME_STAGE.json
+            if ($LASTEXITCODE -ne 0) { throw 'hosted runtime staging failed' }
+          } finally {
+            Remove-Item -LiteralPath $runtimeKey -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $approvalKey -Force -ErrorAction SilentlyContinue
+          }
+      - name: Prove staged production runtime
+        shell: pwsh
+        run: |
           python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
           if ($LASTEXITCODE -ne 0) { throw 'production runtime verification failed' }
           python scripts/verify_windows_runtime_app_parity.py --target windows-x86_64
           if ($LASTEXITCODE -ne 0) { throw 'runtime application parity verification failed' }
+          tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
+          if ($LASTEXITCODE -ne 0) { throw 'sidecar Authenticode verification failed' }
+          $output = & python scripts/probe_offline_runtime.py --target windows-x86_64 2>&1
+          $code = $LASTEXITCODE
+          $output | Tee-Object -FilePath verification/release/offline-runtime-probe.log
+          if ($code -ne 0) { throw "offline runtime probe failed: $code" }
+          python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
+          if ($LASTEXITCODE -ne 0) { throw 'staged OCR fixture failed' }
       - run: npm ci
       - run: cargo install cargo-audit --locked --version 0.22.2
       - name: Execute signed Rust and RustSec release gate
@@ -145,34 +167,6 @@ jobs:
         env:
           DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
         run: scripts\prepackage_rust_gate.bat
-      - name: Verify and probe staged runtime
-        shell: pwsh
-        run: |
-          tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
-          $output = & python scripts/probe_offline_runtime.py --target windows-x86_64 2>&1
-          $code = $LASTEXITCODE
-          $output | Tee-Object -FilePath verification/release/offline-runtime-probe.log
-          if ($code -ne 0) { throw "offline runtime probe failed: $code" }
-          python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
-          if ($LASTEXITCODE -ne 0) { throw 'staged OCR fixture failed' }
-      - name: Create signed offline runtime bundle and SBOM
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $privateKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-private-" + [Guid]::NewGuid().ToString('N') + '.pem')
-          $trustedKey = (Resolve-Path verification/release).Path + '\runtime-trusted-public.pem'
-          try {
-            [IO.File]::WriteAllBytes($privateKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64))
-            [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
-            python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --output-dir release-runtime --require-semantic-model --require-supply-chain --production --signing-key $privateKey --trusted-public-key $trustedKey --require-signature
-            if ($LASTEXITCODE -ne 0) { throw 'signed runtime bundle creation failed' }
-          } finally {
-            Remove-Item -LiteralPath $privateKey -Force -ErrorAction SilentlyContinue
-          }
-          if (Test-Path -LiteralPath $privateKey) { throw 'runtime private-key cleanup failed' }
-          "DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH=$trustedKey" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: npx tauri build --no-bundle
       - name: Sign application binary
         shell: pwsh
@@ -192,9 +186,21 @@ jobs:
         run: |
           $env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE = '1'
           tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.offline.conf.json -ExpectedWebViewMode offlineInstaller
+      - name: Preserve the independently approved runtime source
+        shell: pwsh
+        run: |
+          if (Test-Path release-runtime) { Remove-Item release-runtime -Recurse -Force }
+          Copy-Item release-runtime-source release-runtime -Recurse -Force
       - name: Bind signed release evidence
         shell: pwsh
-        run: scripts/write_windows_release_evidence.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey $env:DOKKOMPLEKT_RUNTIME_TRUSTED_KEY_PATH
+        run: |
+          $trustedKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-evidence-" + [Guid]::NewGuid().ToString('N') + '.pem')
+          try {
+            [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
+            scripts/write_windows_release_evidence.ps1 -InstallerRoot target/release/bundle/nsis -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey $trustedKey
+          } finally {
+            Remove-Item -LiteralPath $trustedKey -Force -ErrorAction SilentlyContinue
+          }
       - name: Assemble cryptographically signed handoff
         shell: pwsh
         env:
@@ -303,7 +309,7 @@ jobs:
           try {
             [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
             $bundle = $bundles[0].FullName
-            python scripts/verify_offline_runtime_bundle.py $bundle --payload "$bundle.signing.json" --signature "$bundle.signing.json.sig" --public-key "$bundle.signing.json.public.pem" --trusted-public-key $trustedKey --require-signature
+            python scripts/verify_offline_runtime_bundle.py $bundle --payload "$bundle.signing.json" --signature "$bundle.signing.json.sig" --trusted-public-key $trustedKey --require-signature
             if ($LASTEXITCODE -ne 0) { throw 'runtime bundle signature invalid' }
           } finally {
             Remove-Item -LiteralPath $trustedKey -Force -ErrorAction SilentlyContinue

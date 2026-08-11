@@ -59,6 +59,9 @@ def test_signing_workflow_is_private_approval_and_commit_pinned() -> None:
     assert "git merge-base --is-ancestor" in workflow
     assert "unexpected source repository" in workflow
     assert "https://github.com/${{ inputs.source_repository }}.git" in workflow
+    assert "runs-on: windows-latest" in workflow
+    assert "self-hosted, Windows, X64, dokkomplekt-runtime" not in workflow
+    assert workflow.count("runs-on: [self-hosted") == 1
 
 
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:
@@ -67,9 +70,17 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     release_workflow = text(".github/workflows/build-installers.yml")
     hardware = text("tests/windows/windows_hardware_e2e.ps1")
     sidecar_signatures = text("tests/windows/verify_sidecar_authenticode.ps1")
+    evidence_index = text("scripts/write_windows_hardware_evidence_index.ps1")
+    release_evidence = text("scripts/write_windows_release_evidence.ps1")
+
     assert "python -m pip install --disable-pip-version-check -r requirements-dev.txt" in workflow
-    assert "--mode windows-runtime" in workflow
-    assert "scripts/prepare_sidecars.py $env:DOKKOMPLEKT_SIDECAR_MANIFEST_PATH --clean" in workflow
+    assert "verify_windows_hosted_signing_runner.py" in workflow
+    assert "fetch_hosted_runtime_bundle.py" in workflow
+    assert "stage_signed_runtime_bundle.py" in workflow
+    assert "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL" in workflow
+    assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64" in workflow
+    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in workflow
+    assert "--mode windows-runtime" not in workflow
     assert "scripts\\prepackage_rust_gate.bat" in workflow
     assert "verify_sidecar_authenticode.ps1" in workflow
     assert "SIDECAR_AUTHENTICODE.json" in workflow
@@ -78,8 +89,12 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "Get-AuthenticodeSignature" in sidecar_signatures
     assert "Sidecar Authenticode signature is not valid" in sidecar_signatures
     assert "dokkomplekt.sidecar-authenticode.v1" in sidecar_signatures
-    assert "create_offline_runtime_bundle.py" in workflow
-    assert "--require-signature" in workflow
+    # Runtime composition is reviewed and signed before hosted CI. CI must not
+    # silently recreate a different release runtime from local files.
+    assert "create_offline_runtime_bundle.py" not in workflow
+    assert "HOSTED_SIGNING_PREFLIGHT.json" in workflow
+    assert "HOSTED_RUNTIME_FETCH.json" in workflow
+    assert "HOSTED_RUNTIME_STAGE.json" in workflow
     assert "finally {" in workflow
     assert "Remove-Item -LiteralPath $privateKey -Force" in workflow
     assert "if (Test-Path -LiteralPath $privateKey)" in workflow
@@ -95,9 +110,16 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "NSIS silent uninstall failed" in hardware
     assert "silent_uninstall_passed = $true" in hardware
     assert "write_windows_hardware_evidence_index.ps1" in workflow
-    assert "WINDOWS_HARDWARE_EVIDENCE_INDEX.json" in text("scripts/write_windows_hardware_evidence_index.ps1")
+    assert "WINDOWS_HARDWARE_EVIDENCE_INDEX.json" in evidence_index
+    assert "offline-runtime-approval-signature" in evidence_index
+    assert "protected_pinned_public_key" in release_evidence
+    assert "--public-key $runtimePublicKey" not in release_evidence
 
     assert "environment: windows-production-signing" in release_workflow
+    assert "runs-on: windows-latest" in release_workflow
+    assert "self-hosted, Windows, X64, dokkomplekt-runtime" not in release_workflow
+    assert "stage_signed_runtime_bundle.py" in release_workflow
+    assert "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL" in release_workflow
     assert "verify_sidecar_authenticode.ps1" in release_workflow
     assert "SIDECAR_AUTHENTICODE.json" in release_workflow
     assert "--output-json verification/release/scanned-pdf-ocr.json" in release_workflow
@@ -186,6 +208,7 @@ def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
     assert "GUI evidence application" in script
     assert "Hardware Authenticode application" in script
     assert "Pinned runtime public key" in script
+    assert "Offline runtime approval signature" in script
     assert "Rust gate attestation" in script
     assert "Rust gate signature" in script
     assert "Hardware E2E required flag is not true" in script
@@ -203,8 +226,9 @@ def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
         "WATCHER_UNINSTALL.json",
         "CARGO_GATE_ATTESTATION.json",
         "CARGO_GATE_ATTESTATION.sig",
-        "production-build-preflight.json",
-        "windows-runtime-preflight.json",
+        "HOSTED_SIGNING_PREFLIGHT.json",
+        "HOSTED_RUNTIME_FETCH.json",
+        "HOSTED_RUNTIME_STAGE.json",
         "hardware-preflight.json",
         "sidecar-status.json",
         "SIDECAR_AUTHENTICODE.json",
@@ -213,6 +237,7 @@ def test_final_windows_hardware_evidence_index_is_fail_closed() -> None:
         "runtime-trusted-public.pem",
     ):
         assert required in script
+    assert "windows-runtime-preflight.json" not in script
     assert "write_windows_hardware_evidence_index.ps1" in workflow
     assert "Copy-Item signed-handoff/SIGNED_HANDOFF.json verification/release/SIGNED_HANDOFF.json -Force" in workflow
     assert "Copy-Item signed-handoff/SIGNED_HANDOFF.json.sig verification/release/SIGNED_HANDOFF.json.sig -Force" in workflow

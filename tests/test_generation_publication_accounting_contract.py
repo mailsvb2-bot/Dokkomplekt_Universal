@@ -105,3 +105,45 @@ def test_postpublish_template_change_is_warning_not_rollback() -> None:
     assert 'published_templates_changed_after_boundary' in batch
     mail = read('src-tauri/src/subsystems/automation_mail_merge.rs')
     assert 'published_mail_merge_templates_changed_after_boundary' in mail
+
+def test_durable_journal_is_prepared_before_every_filesystem_publication_boundary() -> None:
+    publication = read('src-tauri/src/generation_publication.rs')
+    assert 'PublicationPhase::Prepared' in publication
+    assert 'PublicationPhase::Published' in publication
+    assert 'pub(crate) fn prepare_publication' in publication
+    assert 'pub(crate) fn confirm_publication' in publication
+    assert 'pub(crate) fn plan_bound_publication_guard_exists' in publication
+
+    document = read('src-tauri/src/subsystems/document_commands.rs')
+    single_start = document.index('fn render_docx(')
+    single_end = document.index('struct RenderDocxBatchRequest', single_start)
+    single = document[single_start:single_end]
+    assert single.index('generation_publication::prepare_publication') < single.index('reservation.commit()')
+    assert single.index('reservation.commit()') < single.index('generation_publication::confirm_publication')
+
+    batch_start = document.index('fn render_docx_batch(')
+    batch_end = document.index('struct ScannerRequest', batch_start)
+    batch = document[batch_start:batch_end]
+    assert batch.index('generation_publication::prepare_publication') < batch.index(
+        'publish_stage_to_unique_directory'
+    )
+    assert batch.index('publish_stage_to_unique_directory') < batch.index(
+        'generation_publication::confirm_publication'
+    )
+
+    mail = read('src-tauri/src/subsystems/automation_mail_merge.rs')
+    assert mail.index('generation_publication::prepare_publication') < mail.index(
+        'publish_stage_to_unique_directory'
+    )
+    assert mail.index('publish_stage_to_unique_directory') < mail.index(
+        'generation_publication::confirm_publication'
+    )
+
+    automation = read('src-tauri/src/subsystems/automation_runtime.rs')
+    auto_publish = automation.index('let publication_binding = generation_publication::PublicationPlanBinding')
+    auto_confirm = automation.index('generation_publication::confirm_publication', auto_publish)
+    assert automation.index('generation_publication::prepare_publication', auto_publish) < automation.index(
+        'publish_stage_to_unique_directory', auto_publish
+    ) < auto_confirm
+    assert 'completed_in_publication_guard' in automation
+    assert 'complete_publication_receipt' in automation

@@ -1,9 +1,8 @@
-use crate::{default_state_db_path, repository_for, universal_intake};
+use crate::{default_state_db_path, repository_for, universal_intake, WorkspaceRetentionPolicy};
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager as _;
-use workspace_hygiene::WorkspaceRetentionPolicy;
 
 const PRIVACY_PREFERENCES_STATE_KEY: &str = "privacy_preferences_v1";
 static LEARNING_WORKSPACE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

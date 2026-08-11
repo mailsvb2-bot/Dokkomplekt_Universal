@@ -28,10 +28,10 @@ class OperationalHardeningContracts(unittest.TestCase):
         storage = self.read("crates/dokkomplekt-storage/src/lib.rs")
         self.assertIn("completed_case_exists_for_source_hash", storage)
         self.assertIn("source_retained_and_tracked_in_case_history", main)
-        self.assertIn(
-            "Publication + committed commercial usage is the irreversible business",
-            main,
-        )
+        self.assertIn("case_run.mark_business_terminal()", main)
+        publication = self.read("src-tauri/src/generation_publication.rs")
+        self.assertIn("prepare_publication", publication)
+        self.assertIn("plan_bound_publication_guard_exists", publication)
         self.assertIn("fn local_completion_receipt", main)
         self.assertIn("completed_in_local_receipts", main)
         self.assertIn("completed_in_emergency_marker", main)

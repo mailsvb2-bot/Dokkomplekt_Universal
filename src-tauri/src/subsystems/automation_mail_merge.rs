@@ -181,16 +181,39 @@ fn render_mail_merge(
         "Пакетная генерация {}",
         OffsetDateTime::now_utc().date()
     ));
+    if let Err(error) =
+        generation_publication::prepare_publication(&app, &permit, &stage, None)
+    {
+        let _ = std::fs::remove_dir_all(&stage);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let published = match publish_stage_to_unique_directory(&stage, &desired) {
         Ok(v) => v,
         Err(e) => {
+            let journal_cleanup =
+                generation_publication::abort_prepared_publication(&app, &permit);
             let _ = std::fs::remove_dir_all(&stage);
             rollback_counter_reservations(&app, &counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(e);
+            if journal_cleanup.is_ok() {
+                rollback_generation_access(&app, &state, &permit);
+                return Err(e);
+            }
+            return Err(format!(
+                "{e}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+            ));
         }
     };
     let mut warnings = Vec::new();
+    if let Err(error) =
+        generation_publication::confirm_publication(&app, &permit, &published)
+    {
+        warnings.push(format!(
+            "Пакет опубликован, но durable-квитанция не перешла в состояние published: {error}"
+        ));
+    }
     if let Err(error) = ensure_mail_merge_templates_current(&template_inputs) {
         warnings.push(format!(
             "Пакет уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"
@@ -202,7 +225,9 @@ fn render_mail_merge(
             &serde_json::json!({ "error": error }),
         );
     }
-    warnings.extend(generation_publication::finalize_published_generation(&app, &permit, &published));
+    warnings.extend(generation_publication::finalize_published_generation(
+        &app, &permit, false,
+    ));
     let created_files = files
         .iter()
         .filter_map(|p| p.strip_prefix(&stage).ok())

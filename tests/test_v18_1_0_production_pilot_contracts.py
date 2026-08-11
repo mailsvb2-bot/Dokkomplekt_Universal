@@ -42,7 +42,9 @@ class V1810ProductionPilotContracts(unittest.TestCase):
         for state in ["received", "normalizing", "recognizing", "checking", "generating", "completed"]:
             self.assertIn(f'"{state}"', state_sources)
         self.assertIn("recover_interrupted_case_runs", self.storage)
-        self.assertIn("recover_interrupted_case_runs", self.main)
+        publication = text("src-tauri/src/generation_publication.rs")
+        self.assertIn("generation_publication::recover_startup_generation_state", self.main)
+        self.assertIn("recover_interrupted_case_runs", publication)
         self.assertIn("retry_case_run", self.api)
 
     def test_template_versions_are_encrypted_and_rollback_publishes_new_version(self) -> None:

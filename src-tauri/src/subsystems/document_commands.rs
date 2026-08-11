@@ -1237,15 +1237,37 @@ fn render_docx(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    if let Err(error) =
+        generation_publication::prepare_publication(&app, &permit, &reservation.path, None)
+    {
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let output_path = match reservation.commit() {
         Ok(path) => path,
         Err(error) => {
+            let journal_cleanup =
+                generation_publication::abort_prepared_publication(&app, &permit);
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(error);
+            if journal_cleanup.is_ok() {
+                rollback_generation_access(&app, &state, &permit);
+                return Err(error);
+            }
+            return Err(format!(
+                "{error}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+            ));
         }
     };
     let mut publication_warnings = Vec::new();
+    if let Err(error) =
+        generation_publication::confirm_publication(&app, &permit, &output_path)
+    {
+        publication_warnings.push(format!(
+            "Документ опубликован, но durable-квитанция не перешла в состояние published: {error}"
+        ));
+    }
     if let Err(error) = template_snapshot.ensure_current() {
         publication_warnings.push(format!(
             "Документ уже опубликован, но шаблон изменился сразу после границы публикации: {error}"
@@ -1257,7 +1279,9 @@ fn render_docx(
             &serde_json::json!({ "document_id": doc.id, "error": error }),
         );
     }
-    publication_warnings.extend(generation_publication::finalize_published_generation(&app, &permit, &output_path));
+    publication_warnings.extend(generation_publication::finalize_published_generation(
+        &app, &permit, false,
+    ));
     result.warnings.extend(publication_warnings);
     // Report the real absolute location back to the user (the core RenderResult
     // deliberately knows nothing about the filesystem).
@@ -1453,16 +1477,39 @@ fn render_docx_batch(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    if let Err(error) =
+        generation_publication::prepare_publication(&app, &permit, &stage, None)
+    {
+        let _ = std::fs::remove_dir_all(&stage);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     let output_folder = match publish_stage_to_unique_directory(&stage, &desired_output_folder) {
         Ok(path) => path,
         Err(error) => {
+            let journal_cleanup =
+                generation_publication::abort_prepared_publication(&app, &permit);
             let _ = std::fs::remove_dir_all(&stage);
             rollback_counter_reservations(&app, &counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(error);
+            if journal_cleanup.is_ok() {
+                rollback_generation_access(&app, &state, &permit);
+                return Err(error);
+            }
+            return Err(format!(
+                "{error}; pre-publication квитанцию удалить не удалось, поэтому резервация лимита сохранена для безопасного восстановления: {}",
+                journal_cleanup.err().unwrap_or_else(|| "unknown journal cleanup error".into())
+            ));
         }
     };
     let mut warnings = Vec::new();
+    if let Err(error) =
+        generation_publication::confirm_publication(&app, &permit, &output_folder)
+    {
+        warnings.push(format!(
+            "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
+        ));
+    }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
         warnings.push(format!(
             "Комплект уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"
@@ -1474,7 +1521,9 @@ fn render_docx_batch(
             &serde_json::json!({ "error": error }),
         );
     }
-    warnings.extend(generation_publication::finalize_published_generation(&app, &permit, &output_folder));
+    warnings.extend(generation_publication::finalize_published_generation(
+        &app, &permit, false,
+    ));
     let created_files = staged_paths
         .iter()
         .filter_map(|path| path.file_name())

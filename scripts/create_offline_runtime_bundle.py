@@ -74,6 +74,30 @@ def zip_info(name: str, executable: bool = False) -> zipfile.ZipInfo:
     return info
 
 
+def bundled_distribution_review(target_dir: Path, status: dict[str, Any]) -> tuple[dict[str, Any] | None, Path | None]:
+    raw = status.get("distribution_review")
+    if raw is None:
+        return None, None
+    if not isinstance(raw, dict) or raw.get("complete_portable_tree") is not True:
+        raise ValueError("distribution_review must assert complete_portable_tree=true")
+    review: dict[str, Any] = {"complete_portable_tree": True}
+    for key in ("reviewer", "reviewed_at", "scope", "inventory_path", "inventory_sha256"):
+        value = str(raw.get(key, "")).strip()
+        if not value:
+            raise ValueError(f"distribution_review is missing {key}")
+        review[key] = value
+    relative = Path(validate_relative_runtime_path(review["inventory_path"], "distribution inventory path"))
+    source = target_dir / relative
+    if not source.is_file():
+        raise FileNotFoundError(f"staged distribution inventory is missing: {source}")
+    actual = sha256_file(source)
+    if actual != review["inventory_sha256"].lower():
+        raise ValueError("staged distribution inventory SHA-256 mismatch")
+    review["inventory_path"] = relative.as_posix()
+    review["inventory_sha256"] = actual
+    return review, source
+
+
 def create_bundle(
     target: str,
     output_dir: Path,
@@ -102,7 +126,7 @@ def create_bundle(
             "path": relative.as_posix(),
             "sha256": actual,
             "size_bytes": source.stat().st_size,
-            "executable": os.access(source, os.X_OK),
+            "executable": bool(raw.get("executable", os.access(source, os.X_OK))),
         }
         for metadata_key in ("version", "source_url", "license", "license_path", "license_sha256"):
             if metadata_key in raw:
@@ -127,6 +151,7 @@ def create_bundle(
             "size_bytes": source.stat().st_size,
         })
     license_entries.sort(key=lambda item: item["path"])
+    distribution_review, inventory_source = bundled_distribution_review(target_dir, status)
     sbom = {
         "schema": "dokkomplekt.offline-runtime.sbom.v1",
         "target": target,
@@ -136,6 +161,8 @@ def create_bundle(
         "files": entries,
         "license_notices": license_entries,
     }
+    if distribution_review is not None:
+        sbom["distribution_review"] = distribution_review
     sbom_bytes = canonical_json(sbom)
     output = output_dir / f"Dokkomplekt-offline-runtime-{target}.zip"
     temporary = output.with_suffix(".zip.tmp")
@@ -153,6 +180,11 @@ def create_bundle(
                 zip_info(f"runtime/{target}/{item['path']}", False),
                 source.read_bytes(),
             )
+        if distribution_review is not None and inventory_source is not None:
+            archive.writestr(
+                zip_info(f"runtime/{target}/{distribution_review['inventory_path']}", False),
+                inventory_source.read_bytes(),
+            )
     temporary.replace(output)
     payload = {
         "schema": "dokkomplekt.offline-runtime.signature.v1",
@@ -163,6 +195,7 @@ def create_bundle(
         "sbom_sha256": hashlib.sha256(sbom_bytes).hexdigest(),
         "semantic_model_required": require_model,
         "supply_chain_locked": status.get("supply_chain_locked") is True,
+        "distribution_review_bound": distribution_review is not None,
     }
     payload_path = output.with_suffix(output.suffix + ".signing.json")
     payload_path.write_bytes(canonical_json(payload))

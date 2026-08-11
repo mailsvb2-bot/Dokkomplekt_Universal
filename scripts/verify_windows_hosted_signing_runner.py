@@ -6,7 +6,6 @@ import argparse
 import base64
 import json
 import os
-import sys
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -29,12 +28,12 @@ PEM_PUBLIC_VARS = (
     "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64",
     "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64",
 )
-SIGNING_SECRET_VARS = (
+BASE_SIGNING_SECRET_VARS = (
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
     "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
-    "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
     "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
 )
+HANDOFF_SIGNING_SECRET = "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64"
 
 
 def decode_ed25519_public_pem(value: str, label: str) -> None:
@@ -47,7 +46,7 @@ def decode_ed25519_public_pem(value: str, label: str) -> None:
         raise ValueError(f"{label}: key must be Ed25519")
 
 
-def check(env: dict[str, str]) -> dict[str, object]:
+def check(env: dict[str, str], *, require_handoff_signing_key: bool = False) -> dict[str, object]:
     errors: list[str] = []
     checked: list[str] = []
     production = release_check("production-build", env)
@@ -91,11 +90,17 @@ def check(env: dict[str, str]) -> dict[str, object]:
         except ValueError as exc:
             errors.append(str(exc))
 
-    for name in SIGNING_SECRET_VARS:
+    required_secrets = list(BASE_SIGNING_SECRET_VARS)
+    if require_handoff_signing_key:
+        required_secrets.append(HANDOFF_SIGNING_SECRET)
+    for name in required_secrets:
         checked.append(name)
         value = env.get(name, "").strip()
         if not value:
             errors.append(f"{name}: missing")
+    if not require_handoff_signing_key:
+        checked.append(f"{HANDOFF_SIGNING_SECRET} not required for release-only hosted signing")
+
     pfx = env.get("DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64", "").strip()
     if pfx:
         try:
@@ -112,6 +117,7 @@ def check(env: dict[str, str]) -> dict[str, object]:
             and env.get("RUNNER_OS", "").lower() == "windows"
             and env.get("RUNNER_ENVIRONMENT", "").lower() == "github-hosted"
         ),
+        "handoff_signing_key_required": require_handoff_signing_key,
         "checked": checked,
         "errors": errors,
     }
@@ -120,8 +126,9 @@ def check(env: dict[str, str]) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json-report", type=Path)
+    parser.add_argument("--require-handoff-signing-key", action="store_true")
     args = parser.parse_args()
-    report = check(dict(os.environ))
+    report = check(dict(os.environ), require_handoff_signing_key=args.require_handoff_signing_key)
     payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.json_report:
         args.json_report.parent.mkdir(parents=True, exist_ok=True)

@@ -50,7 +50,75 @@ jobs:
         run: |
           set -euo pipefail
           base64 -d .github/deep-audit-publication-accounting.patch.gz.b64 | gzip -d > /tmp/publication-accounting.patch
-          git apply --3way /tmp/publication-accounting.patch
+          git apply --3way --exclude=src-tauri/src/main.rs /tmp/publication-accounting.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src-tauri/src/main.rs')
+          body = path.read_text('utf-8')
+
+          old = '''mod central_queue;
+          mod component_manager;
+          mod privacy_runtime;
+          '''
+          new = '''mod central_queue;
+          mod component_manager;
+          mod generation_publication;
+          mod privacy_runtime;
+          '''
+          if body.count(old) != 1:
+              raise SystemExit('generation_publication module guard did not match exactly once')
+          body = body.replace(old, new)
+
+          old = '''fn commit_generation_access(
+              app: &tauri::AppHandle,
+              permit: &GenerationPermit,
+          ) -> Result<(), String> {
+              let db_path = default_state_db_path(app)?;
+              let mut repo = repository_for(&db_path)?;
+              if !repo
+                  .commit_usage(&permit.reservation)
+                  .map_err(|error| error.to_string())?
+              {
+                  return Err("Резервация лимита уже завершена или потеряна.".into());
+              }
+              Ok(())
+          }
+          '''
+          new = '''fn commit_generation_access(
+              app: &tauri::AppHandle,
+              permit: &GenerationPermit,
+          ) -> Result<(), String> {
+              let db_path = default_state_db_path(app)?;
+              let mut repo = repository_for(&db_path)?;
+              if !repo
+                  .finalize_published_usage(&permit.reservation.reservation_id)
+                  .map_err(|error| error.to_string())?
+              {
+                  return Err("Резервация опубликованной генерации потеряна.".into());
+              }
+              Ok(())
+          }
+          '''
+          if body.count(old) != 1:
+              raise SystemExit('published usage finalize guard did not match exactly once')
+          body = body.replace(old, new)
+
+          old = '''                    if let Ok(mut repo) = repository_for(&db_path) {
+                                  let _ = repo.recover_stale_usage_reservations(24 * 60);
+                                  let _ = repo.recover_interrupted_case_runs();
+          '''
+          new = '''                    if let Ok(mut repo) = repository_for(&db_path) {
+                                  generation_publication::recover_startup_generation_state(
+                                      &handle,
+                                      &mut repo,
+                                  );
+          '''
+          if body.count(old) != 1:
+              raise SystemExit('startup generation recovery guard did not match exactly once')
+          body = body.replace(old, new)
+          path.write_text(body, 'utf-8')
+          PY
           cargo fmt --all
           cargo fmt --all --check
           cargo test -p dokkomplekt-storage published_usage_finalization_is_idempotent_and_never_refunds --locked

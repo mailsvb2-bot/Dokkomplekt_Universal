@@ -1,0 +1,26 @@
+diff --git a/src-tauri/src/generation_publication.rs b/src-tauri/src/generation_publication.rs
+--- a/src-tauri/src/generation_publication.rs
++++ b/src-tauri/src/generation_publication.rs
+@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
+ use sha2::{Digest as _, Sha256};
+ use std::path::{Path, PathBuf};
+ 
+-fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
++pub(crate) fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
+     app_data
+         .join("intake-completion-receipts")
+         .join(format!("{processing_job_sha256}.done"))
+diff --git a/src-tauri/src/main.rs b/src-tauri/src/main.rs
+--- a/src-tauri/src/main.rs
++++ b/src-tauri/src/main.rs
+@@ -70,6 +70,11 @@ use tauri::{Emitter, Manager, State};
+ use time::OffsetDateTime;
+ use uuid::Uuid;
+ 
++#[cfg(test)]
++use generation_publication::{
++    local_completion_receipt, local_completion_receipt_matches, mark_local_completion,
++};
+ use privacy_runtime::{
+     cleanup_intake_workspace, load_privacy_preferences, lock_learning_workspace,
+     persist_privacy_preferences, start_periodic_intake_cleanup, PrivacyPreferences,

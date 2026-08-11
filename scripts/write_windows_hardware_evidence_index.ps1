@@ -188,6 +188,7 @@ $runtimeSignatureRecord = Get-FileRecord "$($runtime.FullName).signing.json.sig"
 $runtimeApprovalRecord = Get-FileRecord "$($runtime.FullName).signing.json.approval.sig" 'offline-runtime-approval-signature'
 $trustedKeyRecord = Get-FileRecord (Join-Path $VerificationRoot 'runtime-trusted-public.pem') 'trusted-public-key'
 Assert-Sha256Equal $runtimeSignatureRecord.sha256 ([string] $signedBuild.offline_runtime.signature_sha256) 'Offline runtime signature'
+Assert-Sha256Equal $runtimeApprovalRecord.sha256 ([string] $signedBuild.offline_runtime.approval_signature_sha256) 'Offline runtime approval signature'
 Assert-Sha256Equal $trustedKeyRecord.sha256 ([string] $signedBuild.offline_runtime.public_key_sha256) 'Runtime verification public key'
 Assert-Sha256Equal $trustedKeyRecord.sha256 ([string] $signedBuild.offline_runtime.trusted_public_key_sha256) 'Pinned runtime public key'
 if ([string] $signedBuild.offline_runtime.trust_source -ne 'protected_pinned_public_key') {
@@ -205,8 +206,7 @@ $requiredEvidence = @(
     @{ Path = $rebootPath; Kind = 'hardware-evidence' },
     @{ Path = $watcherInstallPath; Kind = 'hardware-evidence' },
     @{ Path = $watcherUninstallPath; Kind = 'hardware-evidence' },
-    @{ Path = (Join-Path $VerificationRoot 'production-build-preflight.json'); Kind = 'preflight-evidence' },
-    @{ Path = (Join-Path $VerificationRoot 'windows-hosted-signing-preflight.json'); Kind = 'preflight-evidence' },
+    @{ Path = (Join-Path $VerificationRoot 'HOSTED_SIGNING_PREFLIGHT.json'); Kind = 'preflight-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'HOSTED_RUNTIME_FETCH.json'); Kind = 'runtime-provenance-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'HOSTED_RUNTIME_STAGE.json'); Kind = 'runtime-provenance-evidence' },
     @{ Path = (Join-Path $VerificationRoot 'hardware-preflight.json'); Kind = 'preflight-evidence' },

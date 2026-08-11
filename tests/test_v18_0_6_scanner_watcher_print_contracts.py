@@ -19,6 +19,7 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         cls.main = project_text("src-tauri/src/main.rs")
         cls.workspace = (ROOT / "src/components/Workspace.tsx").read_text(encoding="utf-8")
         cls.guided_modal = (ROOT / "src/components/GuidedScannerModal.tsx").read_text(encoding="utf-8")
+        cls.runtime_validation = (ROOT / "src/lib/runtimeValidation.ts").read_text(encoding="utf-8")
 
     def test_short_scanner_keywords_use_token_boundaries(self) -> None:
         self.assertIn("containsTokenSequence", self.suggestions)
@@ -65,7 +66,9 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("unreadable_note_blocks_retry(&unreadable_note, &path, now)", self.main)
         self.assertIn("retry_after_unix_ms=", self.main)
         self.assertIn("Legacy notes", self.main)
-        self.assertIn('status: "error".into()', self.main)
+        self.assertNotIn('status: "error".into()', self.main)
+        self.assertGreaterEqual(self.main.count('status: "attention".into()'), 2)
+        self.assertIn("'processed', 'attention', 'setup_needed', 'ignored'", self.runtime_validation)
         self.assertIn("временная будет повторена автоматически", self.main)
         self.assertIn("НЕ ПРОЧИТАН.txt", self.workspace)
 

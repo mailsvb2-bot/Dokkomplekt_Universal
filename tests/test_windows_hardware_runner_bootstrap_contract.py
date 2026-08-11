@@ -10,7 +10,8 @@ CLEANUP = ROOT / "scripts" / "cleanup_windows_reboot_preparation.ps1"
 DISPATCHER = ROOT / "scripts" / "dispatch_private_hardware_validation.py"
 PUBLIC_WORKFLOW = ROOT / ".github" / "workflows" / "windows-hardware-e2e.yml"
 PRIVATE_WORKFLOW = ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
-APPROVAL = ROOT / "scripts" / "windows_runtime_lock_approval.py"
+APPROVAL = ROOT / "scripts" / "windows_runtime_bundle_approval.py"
+STAGER = ROOT / "scripts" / "stage_signed_runtime_bundle.py"
 HANDOFF = ROOT / "scripts" / "windows_signed_handoff.py"
 DOC = ROOT / "docs" / "WINDOWS_HARDWARE_RUNNER.md"
 
@@ -122,12 +123,14 @@ def test_dispatcher_requires_a_separate_private_target_and_correlates_runs() -> 
     assert '"reboot_phase": args.reboot_phase' in text
 
 
-def test_private_workflow_splits_signing_and_hardware_trust_domains() -> None:
+def test_private_workflow_requires_only_one_physical_windows_runner() -> None:
     text = read(PRIVATE_WORKFLOW)
     assert "signed-runtime-build:" in text
     assert "hardware-evidence:" in text
-    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]" in text
+    assert "runs-on: windows-latest" in text
     assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" in text
+    assert "dokkomplekt-runtime]" not in text
+    assert text.count("runs-on: [self-hosted") == 1
     assert "environment: windows-production-signing" in text
     assert "environment: windows-hardware-validation" in text
     assert "needs: signed-runtime-build" in text
@@ -143,32 +146,41 @@ def test_private_workflow_splits_signing_and_hardware_trust_domains() -> None:
         "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
         "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
-        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
     ):
         assert secret_name in runtime
         assert secret_name not in hardware
-    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" in runtime
-    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in hardware
+    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in text
+    assert "verify_windows_hosted_signing_runner.py" in runtime
     assert "verify_windows_hardware_evidence_host.ps1" in hardware
     assert "verify_windows_hardware_runner.ps1" not in hardware
 
 
-def test_private_workflow_requires_offline_approved_runtime_lock_before_staging() -> None:
+def test_hosted_workflow_requires_preapproved_signed_runtime_before_staging() -> None:
     workflow = read(PRIVATE_WORKFLOW)
     approval = read(APPROVAL)
+    stager = read(STAGER)
     runtime = workflow[workflow.index("  signed-runtime-build:"):workflow.index("  hardware-evidence:")]
-    assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64" in runtime
-    assert '$signature = "$manifest.sig"' in runtime
-    assert "Test-Path -LiteralPath $signature -PathType Leaf" in runtime
-    assert "windows_runtime_lock_approval.py verify" in runtime
-    assert "RUNTIME_LOCK_APPROVAL.json" in runtime
-    assert runtime.index("Test-Path -LiteralPath $signature -PathType Leaf") < runtime.index("windows_runtime_lock_approval.py verify")
-    assert runtime.index("windows_runtime_lock_approval.py verify") < runtime.index("prepare_sidecars.py")
+    for required in (
+        "DOKKOMPLEKT_RUNTIME_BUNDLE_URL",
+        "DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL",
+        "DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL",
+        "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL",
+        "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64",
+        "fetch_hosted_runtime_bundle.py",
+        "stage_signed_runtime_bundle.py",
+        "HOSTED_RUNTIME_STAGE.json",
+    ):
+        assert required in runtime
+    assert runtime.index("fetch_hosted_runtime_bundle.py") < runtime.index("stage_signed_runtime_bundle.py")
+    assert runtime.index("stage_signed_runtime_bundle.py") < runtime.index("assert_offline_runtime_ready.py")
     assert "Ed25519PrivateKey" in approval
     assert "Ed25519PublicKey" in approval
-    assert "private_key_present_on_runner" in approval
+    assert "private_key_present_in_ci" in approval
     assert "DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PRIVATE" not in workflow
+    assert "runtime release signature verification failed" in stager
+    assert "offline_approval_verified" in stager
+    assert "runtime bundle file set mismatch" in stager
 
 
 def test_signed_handoff_is_verified_before_hardware_execution() -> None:
@@ -211,18 +223,18 @@ def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:
     assert "Prepared NSIS uninstall" in cleanup
 
 
-def test_hardware_runner_runbook_describes_private_security_boundary() -> None:
+def test_hardware_runner_runbook_describes_single_physical_machine_boundary() -> None:
     text = read(DOC)
     assert "windows-production-signing" in text
     assert "windows-hardware-validation" in text
     assert "windows-hardware-dispatch" in text
     assert "private" in text.lower()
-    assert "must **not** be registered" in text
+    assert "GitHub-hosted" in text
+    assert "одна физическая Windows-машина" in text
     assert "DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" in text
     assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in text
-    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" in text
+    assert "DOKKOMPLEKT_RUNTIME_BUNDLE_URL" in text
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" in text
-    assert "dokkomplekt-runtime" in text
     assert "dokkomplekt-hardware" in text
     assert "SIGNED_HANDOFF.json" in text
     assert "prepare" in text

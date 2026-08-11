@@ -49,7 +49,7 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         runtime = runtime_root / "Dokkomplekt-offline-runtime-windows-x86_64.zip"
         runtime_payload = Path(f"{runtime}.signing.json")
         runtime_signature = Path(f"{runtime_payload}.sig")
-        runtime_public_key = Path(f"{runtime_payload}.public.pem")
+        runtime_approval_signature = Path(f"{runtime_payload}.approval.sig")
         trusted_public_key = verification_root / "runtime-trusted-public.pem"
         cargo_attestation = cargo_root / "CARGO_GATE_ATTESTATION.json"
         cargo_signature = cargo_root / "CARGO_GATE_ATTESTATION.sig"
@@ -59,14 +59,15 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         write_bytes(runtime, b"signed-runtime-zip")
         write_json(runtime_payload, {"schema": "fixture.runtime-signing.v1"})
         write_bytes(runtime_signature, b"runtime-signature")
-        write_bytes(runtime_public_key, b"artifact-public-key")
+        write_bytes(runtime_approval_signature, b"runtime-approval-signature")
         write_bytes(trusted_public_key, b"trusted-public-key")
         write_json(cargo_attestation, {"schema": "fixture.cargo-gate.v1"})
         write_bytes(cargo_signature, b"cargo-gate-signature")
 
         for name in (
-            "production-build-preflight.json",
-            "windows-runtime-preflight.json",
+            "HOSTED_SIGNING_PREFLIGHT.json",
+            "HOSTED_RUNTIME_FETCH.json",
+            "HOSTED_RUNTIME_STAGE.json",
             "hardware-preflight.json",
             "sidecar-status.json",
             "SIDECAR_AUTHENTICODE.json",
@@ -118,8 +119,10 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
             "offline_runtime": {
                 "sha256": sha256(runtime),
                 "signature_sha256": sha256(runtime_signature),
-                "public_key_sha256": sha256(runtime_public_key),
+                "approval_signature_sha256": sha256(runtime_approval_signature),
+                "public_key_sha256": sha256(trusted_public_key),
                 "trusted_public_key_sha256": sha256(trusted_public_key),
+                "trust_source": "protected_pinned_public_key",
             },
         }
         write_json(signed_build_path, signed_build)
@@ -197,10 +200,12 @@ def test_windows_hardware_evidence_index_binds_artifacts_and_rejects_tampering()
         assert index["release_sha"] != env["GITHUB_SHA"]
         assert index["source_sha256"] == source_sha
         assert index["record_count"] == len(index["records"])
-        assert index["record_count"] == 24
+        assert index["record_count"] == 25
         paths = {record["path"] for record in index["records"]}
         assert len(paths) == index["record_count"]
         assert all("\\" not in path for path in paths)
+        assert str(runtime_approval_signature.relative_to(ROOT)).replace("\\", "/") in paths
+        assert str(trusted_public_key.relative_to(ROOT)).replace("\\", "/") in paths
 
         signed_build["release_sha"] = "b" * 40
         write_json(signed_build_path, signed_build)
@@ -228,3 +233,6 @@ def test_repository_boundary_requires_separator() -> None:
     assert "Reboot evidence application" in source
     assert "Reboot watcher executable" in source
     assert "@{ Path = $rebootPath; Kind = 'hardware-evidence' }" in source
+    assert "HOSTED_SIGNING_PREFLIGHT.json" in source
+    assert "HOSTED_RUNTIME_STAGE.json" in source
+    assert "offline-runtime-approval-signature" in source

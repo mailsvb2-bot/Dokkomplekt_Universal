@@ -99,56 +99,47 @@ fn remove_windows_run_entry() -> Result<(), String> {
 
 /// Configure silent OS autostart. Runtime settings are read from the protected
 /// per-user JSON file; raw paths are no longer embedded into shell scripts.
-fn write_autostart_entries(exe: &Path) -> (Vec<PathBuf>, Vec<String>) {
+fn write_autostart_entries(exe: &Path) -> Result<(Vec<PathBuf>, Vec<String>), String> {
     let mut files = Vec::new();
-    let mut warnings = Vec::new();
+    let warnings = Vec::new();
     match std::env::consts::OS {
-        "windows" =>
-        {
+        "windows" => {
             #[cfg(target_os = "windows")]
-            if let Err(error) = install_windows_run_entry(exe) {
-                warnings.push(format!("Автозапуск Windows не настроен: {error}"));
-            }
+            install_windows_run_entry(exe)
+                .map_err(|error| format!("Автозапуск Windows не настроен: {error}"))?;
         }
-        "macos" => match std::env::var("HOME") {
-            Ok(home) => {
-                let dir = PathBuf::from(home).join("Library/LaunchAgents");
-                let path = dir.join("ru.dokkomplekt.watcher.plist");
-                let body = format!(
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>ru.dokkomplekt.watcher</string>\n<key>ProgramArguments</key><array><string>{}</string><string>--background-watch</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
-                    xml_escape(&exe.display().to_string())
-                );
-                match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, body)) {
-                    Ok(()) => files.push(path),
-                    Err(e) => warnings.push(format!("LaunchAgent не записан: {e}")),
-                }
-            }
-            Err(_) => warnings.push("Переменная HOME не найдена; автозапуск не настроен.".into()),
-        },
+        "macos" => {
+            let home = std::env::var("HOME")
+                .map_err(|_| "Переменная HOME не найдена; автозапуск не настроен.".to_string())?;
+            let dir = PathBuf::from(home).join("Library/LaunchAgents");
+            let path = dir.join("ru.dokkomplekt.watcher.plist");
+            let body = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>ru.dokkomplekt.watcher</string>\n<key>ProgramArguments</key><array><string>{}</string><string>--background-watch</string></array>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
+                xml_escape(&exe.display().to_string())
+            );
+            std::fs::create_dir_all(&dir)
+                .and_then(|_| std::fs::write(&path, body))
+                .map_err(|error| format!("LaunchAgent не записан: {error}"))?;
+            files.push(path);
+        }
         _ => {
             let config = std::env::var("XDG_CONFIG_HOME")
                 .map(PathBuf::from)
-                .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")));
-            match config {
-                Ok(config) => {
-                    let dir = config.join("autostart");
-                    let path = dir.join("dokkomplekt-watcher.desktop");
-                    let body = format!(
-                        "[Desktop Entry]\nType=Application\nName=Dokkomplekt Watcher\nExec={} --background-watch\nX-GNOME-Autostart-enabled=true\n",
-                        desktop_exec_quote(&exe.display().to_string())
-                    );
-                    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, body)) {
-                        Ok(()) => files.push(path),
-                        Err(e) => warnings.push(format!("XDG-автозапуск не записан: {e}")),
-                    }
-                }
-                Err(_) => {
-                    warnings.push("HOME/XDG_CONFIG_HOME не найдены; автозапуск не настроен.".into())
-                }
-            }
+                .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")))
+                .map_err(|_| "HOME/XDG_CONFIG_HOME не найдены; автозапуск не настроен.".to_string())?;
+            let dir = config.join("autostart");
+            let path = dir.join("dokkomplekt-watcher.desktop");
+            let body = format!(
+                "[Desktop Entry]\nType=Application\nName=Dokkomplekt Watcher\nExec={} --background-watch\nX-GNOME-Autostart-enabled=true\n",
+                desktop_exec_quote(&exe.display().to_string())
+            );
+            std::fs::create_dir_all(&dir)
+                .and_then(|_| std::fs::write(&path, body))
+                .map_err(|error| format!("XDG-автозапуск не записан: {error}"))?;
+            files.push(path);
         }
     }
-    (files, warnings)
+    Ok((files, warnings))
 }
 
 fn remove_autostart_entries() -> (Vec<PathBuf>, Vec<String>) {
@@ -716,7 +707,7 @@ fn process_watcher_source(
             let now = std::time::SystemTime::now();
             let note = write_unreadable_source_note(&path, &error, now).ok();
             let response = CreatedDocumentsIntakeResponse {
-                status: "error".into(),
+                status: "attention".into(),
                 patient_folder: None,
                 created_files: Vec::new(),
                 created_documents: Vec::new(),
@@ -969,7 +960,7 @@ fn start_watcher_thread(
                                 &details,
                             );
                             let response = CreatedDocumentsIntakeResponse {
-                                status: "error".into(),
+                                status: "attention".into(),
                                 patient_folder: None,
                                 created_files: Vec::new(),
                                 created_documents: Vec::new(),
@@ -1044,16 +1035,77 @@ fn install_background_watcher(
         max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
     };
     let config_path = watcher_config_path(&app)?;
-    atomic_write_file(
-        &config_path,
-        &serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?,
-    )?;
+    let previous_config = if config_path.exists() {
+        Some(
+            std::fs::read(&config_path)
+                .map_err(|error| format!("Не удалось прочитать предыдущие настройки фонового агента: {error}"))?,
+        )
+    } else {
+        None
+    };
+    let runtime_bytes = serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?;
+    atomic_write_file(&config_path, &runtime_bytes)?;
 
-    // 1) The watcher actually starts, right now, in-process.
+    // Durable OS autostart is part of the installation contract. Never report
+    // `installed=true` when the watcher would disappear after the next login.
+    let (autostart_files, warnings) = match write_autostart_entries(&exe) {
+        Ok(result) => result,
+        Err(error) => {
+            let rollback = match previous_config.as_deref() {
+                Some(bytes) => atomic_write_file(&config_path, bytes),
+                None => {
+                    if config_path.exists() {
+                        std::fs::remove_file(&config_path).map_err(|e| e.to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            };
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!(
+                    "{error}; дополнительно не удалось восстановить настройки: {rollback_error}"
+                )),
+            };
+        }
+    };
+
+    // Start only after persistence is proven. If startup fails on a first install,
+    // remove the just-created autostart entry so no half-installed watcher remains.
     let max_parallel_cases = runtime.max_parallel_cases;
-    start_watcher_thread(app.clone(), runtime, false)?;
-    // 2) OS autostart reads the persisted runtime settings after the next login.
-    let (autostart_files, warnings) = write_autostart_entries(&exe);
+    if let Err(error) = start_watcher_thread(app.clone(), runtime, false) {
+        let rollback_config = match previous_config.as_deref() {
+            Some(bytes) => atomic_write_file(&config_path, bytes),
+            None => {
+                if config_path.exists() {
+                    std::fs::remove_file(&config_path).map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        let rollback_autostart = if previous_config.is_none() {
+            let (_, rollback_warnings) = remove_autostart_entries();
+            if rollback_warnings.is_empty() {
+                Ok(())
+            } else {
+                Err(rollback_warnings.join("; "))
+            }
+        } else {
+            Ok(())
+        };
+        let mut failures = Vec::new();
+        if let Err(rollback_error) = rollback_config {
+            failures.push(format!("восстановление настроек: {rollback_error}"));
+        }
+        if let Err(rollback_error) = rollback_autostart {
+            failures.push(format!("откат автозапуска: {rollback_error}"));
+        }
+        if failures.is_empty() {
+            return Err(error);
+        }
+        return Err(format!("{error}; ошибки отката: {}", failures.join("; ")));
+    }
 
     Ok(serde_json::json!({
         "platform": std::env::consts::OS,

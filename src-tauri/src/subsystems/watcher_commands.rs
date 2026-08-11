@@ -598,14 +598,46 @@ fn process_watcher_source(
             let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
             let _ = std::fs::remove_file(&unreadable_note);
             let _ = app.emit("document-batch-ready", response.clone());
-            let latest_runtime = control_path
-                .as_ref()
-                .and_then(|path| std::fs::read(path).ok())
-                .and_then(|bytes| serde_json::from_slice::<WatcherRuntimeConfig>(&bytes).ok());
-            let effective_auto_print = latest_runtime
-                .as_ref()
-                .map(|runtime| runtime.auto_print)
-                .unwrap_or(fallback_auto_print);
+            let (latest_runtime, control_error) = match control_path.as_ref() {
+                None => (None, None),
+                Some(control_path) => match std::fs::read(control_path) {
+                    Ok(bytes) => match serde_json::from_slice::<WatcherRuntimeConfig>(&bytes) {
+                        Ok(runtime) => (Some(runtime), None),
+                        Err(error) => (
+                            None,
+                            Some(format!("Настройки фонового агента повреждены: {error}")),
+                        ),
+                    },
+                    Err(error) => (
+                        None,
+                        Some(format!("Настройки фонового агента недоступны: {error}")),
+                    ),
+                },
+            };
+            if let Some(error) = control_error.as_deref() {
+                let details = serde_json::json!({ "error": error });
+                let _ = create_automation_exception(
+                    &app,
+                    "watcher_control_unavailable",
+                    response.patient_folder.as_deref().unwrap_or(""),
+                    "Автопечать отключена: настройки фонового агента недоступны или повреждены.",
+                    &details,
+                );
+                let _ = append_audit_event(
+                    &app,
+                    "automatic_print_blocked_control_error",
+                    "",
+                    &details,
+                );
+            }
+            let effective_auto_print = if control_error.is_some() {
+                false
+            } else {
+                latest_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.auto_print)
+                    .unwrap_or(fallback_auto_print)
+            };
             let effective_copies = latest_runtime
                 .as_ref()
                 .map(|runtime| runtime.print_copies_by_document.clone())
@@ -624,7 +656,40 @@ fn process_watcher_source(
                             (PathBuf::from(&document.path), copies)
                         })
                         .collect::<Vec<_>>();
-                    let print_preferences = load_print_preferences(&app).unwrap_or_default();
+                    let print_preferences = match load_print_preferences(&app) {
+                        Ok(preferences) => preferences,
+                        Err(error) => {
+                            increment_metric(&app, "print_failures", jobs.len() as u64);
+                            let details = serde_json::json!({
+                                "error": error,
+                                "blocked_job_count": jobs.len(),
+                            });
+                            let _ = create_automation_exception(
+                                &app,
+                                "print_preferences_unavailable",
+                                response.patient_folder.as_deref().unwrap_or(""),
+                                "Автопечать не выполнялась: настройки принтера недоступны или повреждены.",
+                                &details,
+                            );
+                            let _ = append_audit_event(
+                                &app,
+                                "automatic_print_blocked_preferences_error",
+                                "",
+                                &details,
+                            );
+                            if let Ok(mut log) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&log_path)
+                            {
+                                let _ = writeln!(
+                                    log,
+                                    "[watcher] automatic_print_blocked; print_preferences_unavailable=true"
+                                );
+                            }
+                            return;
+                        }
+                    };
                     let print_result = print_resolved_jobs(&jobs, &print_preferences);
                     if !print_result.failed_files.is_empty() {
                         increment_metric(

@@ -1344,6 +1344,7 @@ struct PrinterInventory {
     platform: String,
     printers: Vec<PrinterInfo>,
     preferences: PrintPreferences,
+    discovery_error: Option<String>,
     advanced_options_note: String,
 }
 
@@ -1400,19 +1401,27 @@ fn discover_printers() -> Result<Vec<PrinterInfo>, String> {
         .collect())
 }
 
-#[tauri::command]
-fn get_printer_inventory(app: tauri::AppHandle) -> Result<PrinterInventory, String> {
-    let printers = discover_printers().unwrap_or_default();
-    Ok(PrinterInventory {
+fn build_printer_inventory(preferences: PrintPreferences) -> PrinterInventory {
+    let (printers, discovery_error) = match discover_printers() {
+        Ok(printers) => (printers, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    PrinterInventory {
         platform: std::env::consts::OS.into(),
         printers,
-        preferences: load_print_preferences(&app)?,
+        preferences,
+        discovery_error,
         advanced_options_note: if cfg!(target_os = "windows") {
             "Для Word используются COM и PrintTicket. Для PDF принтер, copies, duplex и лоток передаются проверяемому SumatraPDF sidecar; без него PDF auto-print блокируется fail-closed, а не уходит в неизвестный системный обработчик.".into()
         } else {
             "Для CUPS передаются printer, sides и media-source через lp.".into()
         },
-    })
+    }
+}
+
+#[tauri::command]
+fn get_printer_inventory(app: tauri::AppHandle) -> Result<PrinterInventory, String> {
+    Ok(build_printer_inventory(load_print_preferences(&app)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1442,16 +1451,7 @@ fn update_print_preferences(
             "tray": preferences.tray,
         }),
     )?;
-    Ok(PrinterInventory {
-        platform: std::env::consts::OS.into(),
-        printers: discover_printers().unwrap_or_default(),
-        preferences,
-        advanced_options_note: if cfg!(target_os = "windows") {
-            "Для Word используются COM и PrintTicket. Для PDF принтер, copies, duplex и лоток передаются проверяемому SumatraPDF sidecar; без него PDF auto-print блокируется fail-closed, а не уходит в неизвестный системный обработчик.".into()
-        } else {
-            "Для CUPS передаются printer, sides и media-source через lp.".into()
-        },
-    })
+    Ok(build_printer_inventory(preferences))
 }
 
 #[derive(Debug, Clone, Serialize)]

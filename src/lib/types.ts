@@ -371,6 +371,7 @@ export interface PrinterInventory {
   platform: string;
   printers: PrinterInfo[];
   preferences: PrintPreferences;
+  discovery_error?: string | null;
   advanced_options_note: string;
 }
 

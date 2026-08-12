@@ -120,5 +120,3 @@ class OfflineRuntimeVerificationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-# CI retrigger sentinel; reverted immediately in the next commit.

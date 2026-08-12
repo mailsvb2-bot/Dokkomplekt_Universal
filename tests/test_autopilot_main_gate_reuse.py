@@ -30,6 +30,8 @@ class FakeApi:
     def runs(self, workflow: str, *, event: str | None = None):
         assert workflow == "quality-gate.yml"
         self.events.append(event)
+        # Intentionally adversarial: return the mixed set even when the caller asks
+        # for push runs, proving the selector itself fails closed on run.event.
         return list(self._runs)
 
 
@@ -115,6 +117,7 @@ def test_main_push_autopilot_reuses_existing_gates_but_manual_run_does_not() -> 
 def test_reuse_lookup_is_exact_sha_and_push_only() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert 'api.runs(workflow, event="push")' in source
+    assert 'if run.get("event") != "push":' in source
     assert 'if run.get("head_sha") != sha:' in source
     assert 'if head_branch and head_branch != ref:' in source
     assert "never retry a failed" in source

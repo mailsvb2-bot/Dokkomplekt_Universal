@@ -1,0 +1,103 @@
+name: One-shot Autopilot rerun refresh fix
+
+on:
+  push:
+    branches:
+      - agent/autopilot-rerun-attempt-refresh
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/autopilot-rerun-attempt-refresh
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Apply focused source and regression patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          script_path = Path("scripts/full_product_autopilot.py")
+          source = script_path.read_text(encoding="utf-8")
+
+          source = replace_once(
+              source,
+              '''        return list((data or {}).get("workflow_runs", []))\n\n\ndef parse_github_time''',
+              '''        return list((data or {}).get("workflow_runs", []))\n\n    def run(self, run_id: int) -> dict[str, Any]:\n        data = self.request("GET", f"/actions/runs/{run_id}")\n        if not isinstance(data, dict):\n            raise RuntimeError(f"GitHub Actions run {run_id} did not return an object")\n        return data\n\n\ndef parse_github_time''',
+              "GitHubApi.run insertion",
+          )
+
+          old_refresh = '''def _refresh_run(\n    api: GitHubApi,\n    workflow: str,\n    state: dict[str, Any],\n    sha: str,\n    ref: str,\n) -> dict[str, Any] | None:\n    if state["source"] == "reused-push":\n        return locate_existing_push_run(api, workflow, sha, ref)\n    return locate_dispatched_run(api, workflow, sha, state["requested_at"])\n'''
+          new_refresh = '''def _refresh_run(\n    api: GitHubApi,\n    workflow: str,\n    state: dict[str, Any],\n    sha: str,\n    ref: str,\n) -> dict[str, Any] | None:\n    current = state.get("run")\n    if isinstance(current, dict) and current.get("id") is not None:\n        # A GitHub re-run keeps the same workflow-run ID while advancing run_attempt\n        # and mutating status/conclusion. Refresh that exact authoritative identity\n        # instead of freezing the first completed snapshot or locating a fresh run.\n        refreshed = api.run(int(current["id"]))\n        if refreshed.get("id") != current.get("id"):\n            raise RuntimeError(f"{workflow}: authoritative run identity changed")\n        return refreshed\n    if state["source"] == "reused-push":\n        return locate_existing_push_run(api, workflow, sha, ref)\n    return locate_dispatched_run(api, workflow, sha, state["requested_at"])\n'''
+          source = replace_once(source, old_refresh, new_refresh, "_refresh_run replacement")
+
+          old_loop = '''        for workflow, state in dispatch_records.items():\n            run = state["run"]\n            if run is None or run.get("status") != "completed":\n                refreshed = _refresh_run(api, workflow, state, args.sha, args.ref)\n                if refreshed is not None:\n                    state["run"] = refreshed\n                    run = refreshed\n                    if run.get("status") == "completed":\n                        print(\n                            f"Completed {workflow} run #{run.get('run_number')}: "\n                            f"{run.get('conclusion')}",\n                            flush=True,\n                        )\n                if run is None or run.get("status") != "completed":\n                    all_complete = False\n'''
+          new_loop = '''        for workflow, state in dispatch_records.items():\n            run = state["run"]\n            previous_signature = (\n                None if run is None else run.get("status"),\n                None if run is None else run.get("conclusion"),\n                None if run is None else run.get("run_attempt"),\n            )\n            # Refresh every authoritative run on every poll, including a completed\n            # reused push run: GitHub can re-run the same run ID after a failure.\n            refreshed = _refresh_run(api, workflow, state, args.sha, args.ref)\n            if refreshed is not None:\n                state["run"] = refreshed\n                run = refreshed\n                current_signature = (\n                    run.get("status"),\n                    run.get("conclusion"),\n                    run.get("run_attempt"),\n                )\n                if current_signature != previous_signature and run.get("status") == "completed":\n                    print(\n                        f"Completed {workflow} run #{run.get('run_number')} "\n                        f"attempt {run.get('run_attempt')}: {run.get('conclusion')}",\n                        flush=True,\n                    )\n            if run is None or run.get("status") != "completed":\n                all_complete = False\n'''
+          source = replace_once(source, old_loop, new_loop, "poll-loop replacement")
+
+          old_final = '''    workflows: list[dict[str, Any]] = []\n    for workflow, state in dispatch_records.items():\n        run = state["run"]\n'''
+          new_final = '''    # Take one final exact-run snapshot immediately before the verdict so a\n    # same-ID rerun completed near the polling boundary cannot leave stale state.\n    for workflow, state in dispatch_records.items():\n        refreshed = _refresh_run(api, workflow, state, args.sha, args.ref)\n        if refreshed is not None:\n            state["run"] = refreshed\n\n    workflows: list[dict[str, Any]] = []\n    for workflow, state in dispatch_records.items():\n        run = state["run"]\n'''
+          source = replace_once(source, old_final, new_final, "final refresh insertion")
+
+          old_item = '''            "event": run.get("event"),\n        }\n'''
+          new_item = '''            "event": run.get("event"),\n            "run_attempt": run.get("run_attempt"),\n        }\n'''
+          source = replace_once(source, old_item, new_item, "run_attempt report field")
+
+          old_help = '''            "reuse exact-SHA main push runs for hosted gates; never retry a failed "\n            "authoritative push run"\n'''
+          new_help = '''            "reuse exact-SHA main push runs for hosted gates; never replace a failed "\n            "authoritative push run with a fresh dispatch; same-run rerun attempts remain authoritative"\n'''
+          source = replace_once(source, old_help, new_help, "reuse help text")
+          script_path.write_text(source, encoding="utf-8")
+
+          test_path = Path("tests/test_autopilot_main_gate_reuse.py")
+          tests = test_path.read_text(encoding="utf-8")
+          tests += '''\n\nclass RerunAttemptApi:\n    def __init__(self, initial: dict, refreshed: dict):\n        self.initial = initial\n        self.refreshed = refreshed\n        self.direct_ids: list[int] = []\n\n    def runs(self, workflow: str, *, event: str | None = None):\n        assert workflow == "quality-gate.yml"\n        assert event == "push"\n        return [dict(self.initial)]\n\n    def run(self, run_id: int):\n        self.direct_ids.append(run_id)\n        return dict(self.refreshed)\n\n\ndef test_completed_reused_push_refreshes_same_run_id_after_rerun_attempt() -> None:\n    module = load_autopilot_module()\n    sha = "d" * 40\n    initial = {\n        "id": 301,\n        "event": "push",\n        "head_sha": sha,\n        "head_branch": "main",\n        "status": "completed",\n        "conclusion": "failure",\n        "run_number": 30,\n        "run_attempt": 1,\n        "created_at": "2026-08-12T12:00:00Z",\n    }\n    rerun = {**initial, "conclusion": "success", "run_attempt": 2}\n    api = RerunAttemptApi(initial, rerun)\n\n    authoritative = module.locate_existing_push_run(\n        api, "quality-gate.yml", sha, "main"\n    )\n    assert authoritative is not None\n    assert authoritative["conclusion"] == "failure"\n\n    state = {"source": "reused-push", "requested_at": None, "run": authoritative}\n    refreshed = module._refresh_run(\n        api, "quality-gate.yml", state, sha, "main"\n    )\n\n    assert refreshed is not None\n    assert refreshed["id"] == 301\n    assert refreshed["run_attempt"] == 2\n    assert refreshed["conclusion"] == "success"\n    assert api.direct_ids == [301]\n\n\ndef test_polling_contract_refreshes_completed_authoritative_runs() -> None:\n    source = SCRIPT.read_text(encoding="utf-8")\n    assert "Refresh every authoritative run on every poll" in source\n    assert "Take one final exact-run snapshot immediately before the verdict" in source\n    assert '"run_attempt": run.get("run_attempt")' in source\n    assert "never replace a failed" in source\n    assert "same-run rerun attempts remain authoritative" in source\n'''
+          test_path.write_text(tests, encoding="utf-8")
+
+          Path(".github/workflows/one-shot-autopilot-rerun-refresh.yml").unlink()
+          PY
+      - name: Run focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_autopilot_main_gate_reuse.py \
+            tests/test_full_product_autopilot_contract.py
+      - name: Regenerate source manifest for final branch tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report /tmp/source-manifest-report.json || true
+          test -s /tmp/SOURCE_MANIFEST_SHA256.generated.txt
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.recheck.txt \
+            --json-report /tmp/source-manifest-recheck.json
+      - name: Commit clean final diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/full_product_autopilot.py tests/test_autopilot_main_gate_reuse.py SOURCE_MANIFEST_SHA256.txt .github/workflows/one-shot-autopilot-rerun-refresh.yml
+          git status --short
+          git commit -m "Fix Autopilot refresh after same-run rerun"
+          git push origin HEAD:agent/autopilot-rerun-attempt-refresh

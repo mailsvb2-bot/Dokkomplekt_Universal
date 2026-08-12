@@ -30,7 +30,7 @@ SCHEMA = "dokkomplekt.windows-runtime-kit.v1"
 SPEC_SCHEMA = 1
 TARGET = "windows-x86_64"
 EXECUTABLE_SUFFIXES = {".exe", ".com", ".cmd", ".bat", ".ps1", ".pl"}
-PRODUCTION_REQUIRED_TOOLS = set(REQUIRED_TOOLS) | {"msgconvert"}
+PRODUCTION_REQUIRED_TOOLS = set(REQUIRED_TOOLS)
 # Runtime-kit staging must match the layouts searched by the desktop resolver.
 # Keeping one canonical root per component prevents a reviewed/locked runtime
 # from being marked production-ready while the installed app cannot locate it.

@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::{
-    html_to_text, is_supported_path, layout_items_from_text, normalize_path, restrict_directory_permissions,
-    restrict_file_permissions, rtf_to_text, safe_file_name, NormalizedLayoutItem, NormalizedSource,
-    MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNPACKED_BYTES, MAX_SOURCE_FILE_BYTES,
+    html_to_text, is_supported_path, layout_items_from_text, normalize_path,
+    restrict_directory_permissions, restrict_file_permissions, rtf_to_text, safe_file_name,
+    NormalizedLayoutItem, NormalizedSource, MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNPACKED_BYTES,
+    MAX_SOURCE_FILE_BYTES,
 };
 
 fn person_list(people: &[Person]) -> String {
@@ -36,7 +37,10 @@ fn message_body(message: &Outlook) -> String {
     if !message.html.trim().is_empty() {
         return html_to_text(&message.html);
     }
-    if let Some(html) = message.html_from_rtf().filter(|value| !value.trim().is_empty()) {
+    if let Some(html) = message
+        .html_from_rtf()
+        .filter(|value| !value.trim().is_empty())
+    {
         return html_to_text(&html);
     }
     message
@@ -188,9 +192,9 @@ fn normalize_attachments(
                     layout_items.extend(nested_layout);
                     warnings.extend(nested.warnings);
                 }
-                Err(error) => warnings.push(format!(
-                    "Вложение MSG «{file_name}» не обработано: {error}"
-                )),
+                Err(error) => {
+                    warnings.push(format!("Вложение MSG «{file_name}» не обработано: {error}"))
+                }
             }
         }
         Ok(())
@@ -230,7 +234,9 @@ pub(super) fn normalize_msg(
         &mut layout_items,
     )?;
     if text.trim().is_empty() {
-        return Err("Из MSG не удалось получить содержательный текст или поддерживаемые вложения.".into());
+        return Err(
+            "Из MSG не удалось получить содержательный текст или поддерживаемые вложения.".into(),
+        );
     }
     Ok(NormalizedSource {
         text,

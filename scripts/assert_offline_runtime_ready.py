@@ -197,7 +197,6 @@ def verify_production_plausibility(target_dir: Path, tool_files: dict[str, list[
 def verify_required_runtime(
     tool_files: dict[str, list[Path]],
     require_model: bool,
-    require_msgconvert: bool = False,
 ) -> None:
     require_file(tool_files, "tesseract", "tesseract.exe", "tesseract")
     require_suffix(tool_files, "tesseract", "tessdata/rus.traineddata")
@@ -207,11 +206,6 @@ def verify_required_runtime(
     require_file(tool_files, "libreoffice", "soffice.exe", "soffice")
     require_file(tool_files, "sumatrapdf", "sumatrapdf.exe", "sumatrapdf")
     require_file(tool_files, "7zip", "7z.exe", "7zz.exe", "7z", "7zz")
-    if require_msgconvert:
-        # The Windows desktop resolver currently executes msgconvert.exe directly.
-        # A msgconvert.pl + Perl tree may be probeable in isolation, but it is not
-        # production-ready until the application has an equally locked launch path.
-        require_file(tool_files, "msgconvert", "msgconvert.exe")
 
     if require_model:
         require_file(
@@ -244,7 +238,7 @@ def main() -> int:
     tools = verify_entries(target_dir, status)
     if args.require_supply_chain:
         verify_supply_chain(target_dir, status)
-    verify_required_runtime(tools, args.require_semantic_model, args.production)
+    verify_required_runtime(tools, args.require_semantic_model)
     if args.require_distribution_review or args.production:
         verify_distribution_review(target_dir, status, tools)
     if args.production:

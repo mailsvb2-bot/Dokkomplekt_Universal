@@ -169,6 +169,7 @@ jobs:
           --ref "${GITHUB_REF_NAME}"
           --sha "${GITHUB_SHA}"
           --scope "${{ github.event_name == 'workflow_dispatch' && inputs.scope || 'software' }}"
+          ${{ github.event_name == 'push' && '--reuse-existing' || '' }}
           --json-report verification/autopilot/FULL_AUTOPILOT_REPORT.json
           --markdown-report verification/autopilot/FULL_AUTOPILOT_REPORT.md
       - name: Always publish unified verdict

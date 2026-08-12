@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: source-provenance-${{ github.ref }}
+  group: source-provenance-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -11,14 +11,11 @@ on:
         options:
           - software
           - production-hardware
+  # Every landing on main must receive the full hosted software verdict.
+  # Restricting this trigger to autopilot-owned files leaves runtime/product
+  # changes unverified by the document oracle and synthetic corpus.
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/full-product-autopilot.yml'
-      - 'scripts/full_product_autopilot.py'
-      - 'verification/autopilot/**'
-      - 'tests/test_full_product_autopilot_contract.py'
-      - 'docs/FULL_PRODUCT_AUTOPILOT.md'
   pull_request:
     paths:
       - '.github/workflows/full-product-autopilot.yml'

@@ -137,3 +137,63 @@ def test_pr_updates_still_share_ref_concurrency_group() -> None:
     for path in AUTHORITATIVE_HOSTED:
         workflow = path.read_text(encoding="utf-8")
         assert "|| github.ref" in workflow, path.name
+
+
+class RerunAttemptApi:
+    def __init__(self, initial: dict, refreshed: dict):
+        self.initial = initial
+        self.refreshed = refreshed
+        self.direct_ids: list[int] = []
+
+    def runs(self, workflow: str, *, event: str | None = None):
+        assert workflow == "quality-gate.yml"
+        assert event == "push"
+        return [dict(self.initial)]
+
+    def run(self, run_id: int):
+        self.direct_ids.append(run_id)
+        return dict(self.refreshed)
+
+
+def test_completed_reused_push_refreshes_same_run_id_after_rerun_attempt() -> None:
+    module = load_autopilot_module()
+    sha = "d" * 40
+    initial = {
+        "id": 301,
+        "event": "push",
+        "head_sha": sha,
+        "head_branch": "main",
+        "status": "completed",
+        "conclusion": "failure",
+        "run_number": 30,
+        "run_attempt": 1,
+        "created_at": "2026-08-12T12:00:00Z",
+    }
+    rerun = {**initial, "conclusion": "success", "run_attempt": 2}
+    api = RerunAttemptApi(initial, rerun)
+
+    authoritative = module.locate_existing_push_run(
+        api, "quality-gate.yml", sha, "main"
+    )
+    assert authoritative is not None
+    assert authoritative["conclusion"] == "failure"
+
+    state = {"source": "reused-push", "requested_at": None, "run": authoritative}
+    refreshed = module._refresh_run(
+        api, "quality-gate.yml", state, sha, "main"
+    )
+
+    assert refreshed is not None
+    assert refreshed["id"] == 301
+    assert refreshed["run_attempt"] == 2
+    assert refreshed["conclusion"] == "success"
+    assert api.direct_ids == [301]
+
+
+def test_polling_contract_refreshes_completed_authoritative_runs() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "Refresh every authoritative run on every poll" in source
+    assert "Take one final exact-run snapshot immediately before the verdict" in source
+    assert '"run_attempt": run.get("run_attempt")' in source
+    assert "never replace a failed" in source
+    assert "same-run rerun attempts remain authoritative" in source

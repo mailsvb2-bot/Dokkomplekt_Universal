@@ -6,6 +6,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "full_product_autopilot.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "full-product-autopilot.yml"
+AUTHORITATIVE_HOSTED = (
+    ROOT / ".github" / "workflows" / "quality-gate.yml",
+    ROOT / ".github" / "workflows" / "source-provenance.yml",
+    ROOT / ".github" / "workflows" / "macos-smoke.yml",
+    ROOT / ".github" / "workflows" / "unsigned-preview.yml",
+)
 
 
 def load_autopilot_module():
@@ -112,3 +118,19 @@ def test_reuse_lookup_is_exact_sha_and_push_only() -> None:
     assert 'if run.get("head_sha") != sha:' in source
     assert 'if head_branch and head_branch != ref:' in source
     assert "never retry a failed" in source
+
+
+def test_every_authoritative_main_push_gate_is_concurrency_isolated_by_sha() -> None:
+    expression = "github.event_name == 'push' && github.sha || github.ref"
+    for path in AUTHORITATIVE_HOSTED:
+        workflow = path.read_text(encoding="utf-8")
+        assert "cancel-in-progress: true" in workflow, path.name
+        assert expression in workflow, path.name
+
+
+def test_pr_updates_still_share_ref_concurrency_group() -> None:
+    # The expression deliberately falls back to github.ref outside push events,
+    # so stale commits within one pull request can still be superseded.
+    for path in AUTHORITATIVE_HOSTED:
+        workflow = path.read_text(encoding="utf-8")
+        assert "|| github.ref" in workflow, path.name

@@ -89,7 +89,7 @@ jobs:
           if len(data) != 9728:
               raise SystemExit(f'unexpected ascii.msg size: {len(data)}')
           git_blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-          if git_blob != 'ded03f131eb0fc0774da77ccd19d687cf36ac6f5':
+          if git_blob != 'ded03fdf23a72dbfbf3af272a4a0308473b0b0fd':
               raise SystemExit(f'unexpected ascii.msg git blob: {git_blob}')
           Path('tests/fixtures/outlook-msg/ascii.msg').write_bytes(data)
           Path('tests/fixtures/outlook-msg/README.md').write_text(
@@ -97,7 +97,7 @@ jobs:
               '- Upstream: `marirs/msg-parser-rs`\n'
               '- Upstream commit: `a5579ed5d1379c794392f4e01891f35f9d25aa8e`\n'
               '- Upstream path: `data/ascii.msg`\n'
-              '- Git blob SHA-1: `ded03f131eb0fc0774da77ccd19d687cf36ac6f5`\n'
+              '- Git blob SHA-1: `ded03fdf23a72dbfbf3af272a4a0308473b0b0fd`\n'
               '- Size: `9728` bytes\n'
               '- License of upstream project: MIT\n\n'
               'This real OLE Outlook file is used only to prove that Dokkomplekt parses `.msg` natively without `msgconvert`, Perl, or a mocked converter.\n',

@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "assert_offline_runtime_ready.py"
+SOURCE_CHECKPOINT = ROOT / "src-tauri" / "resources" / "tools" / "windows-x86_64" / "sidecar-status.json"
 
 
 def load_module():
@@ -76,6 +77,29 @@ class OfflineRuntimeVerificationTests(unittest.TestCase):
                 },
             )
             self.assertNotIn("msgconvert", tools)
+
+    def test_source_checkpoint_matches_native_msg_runtime_surface(self) -> None:
+        status = json.loads(SOURCE_CHECKPOINT.read_text("utf-8"))
+        missing = set(status["missing_required_tools"])
+
+        self.assertFalse(status["ready"])
+        self.assertFalse(status["supply_chain_locked"])
+        self.assertNotIn("msgconvert", missing)
+        self.assertEqual(
+            missing,
+            {
+                "tesseract",
+                "tessdata/rus",
+                "tessdata/eng",
+                "poppler/pdftotext",
+                "poppler/pdftoppm",
+                "libreoffice/soffice",
+                "7zip",
+                "sumatrapdf",
+                "llama_cpp/llama-server",
+                "approved_gguf_model",
+            },
+        )
 
     def test_missing_model_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

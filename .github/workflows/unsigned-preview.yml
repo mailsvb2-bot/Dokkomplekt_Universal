@@ -30,7 +30,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: unsigned-preview-${{ github.workflow }}-${{ github.ref }}
+  group: unsigned-preview-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -14,6 +14,15 @@ OFFLINE_CONFIG = ROOT / "src-tauri" / "tauri.offline.conf.json"
 SEMANTIC_RUNTIME = ROOT / "src-tauri" / "src" / "semantic_runtime.rs"
 BUILD_WINDOWS = ROOT / "BUILD_WINDOWS_INSTALLER.bat"
 PREPARE_WINDOWS = ROOT / "scripts" / "prepare_windows_production_runtime.ps1"
+EXPECTED_TOOLS = {
+    "tesseract",
+    "poppler",
+    "libreoffice",
+    "sumatrapdf",
+    "7zip",
+    "llama_cpp",
+    "semantic_model",
+}
 
 
 def load_module():
@@ -31,7 +40,6 @@ def valid_status() -> dict:
         "libreoffice": ["libreoffice/program/soffice.exe"],
         "sumatrapdf": ["sumatrapdf/SumatraPDF.exe"],
         "7zip": ["7zip/7z.exe"],
-        "msgconvert": ["msgconvert/msgconvert.exe"],
         "llama_cpp": ["llama_cpp/llama-server.exe"],
         "semantic_model": ["semantic_model/dokkomplekt-instruct.gguf"],
     }
@@ -49,19 +57,26 @@ def valid_status() -> dict:
 def test_valid_production_layout_matches_application_contract() -> None:
     module = load_module()
     tools = module.paths_by_tool(valid_status())
+    assert set(tools) == EXPECTED_TOOLS
+    assert module.EXPECTED_RUNTIME_TOOLS == EXPECTED_TOOLS
     module.verify_entry_points(tools)
 
 
-def test_perl_only_msgconvert_is_not_marked_production_ready() -> None:
+def test_external_msgconvert_component_is_rejected_after_native_msg_migration() -> None:
     module = load_module()
     status = valid_status()
-    status["files"] = [
-        item for item in status["files"] if item["tool"] != "msgconvert"
-    ] + [
-        {"tool": "msgconvert", "path": "msgconvert/msgconvert.pl"},
-        {"tool": "msgconvert", "path": "msgconvert/bin/perl.exe"},
-    ]
-    with pytest.raises(ValueError, match="msgconvert/msgconvert.exe"):
+    status["files"].append(
+        {"tool": "msgconvert", "path": "msgconvert/msgconvert.exe"}
+    )
+    with pytest.raises(ValueError, match="unsupported external Windows runtime component"):
+        module.paths_by_tool(status)
+
+
+def test_missing_component_is_rejected_fail_closed() -> None:
+    module = load_module()
+    status = valid_status()
+    status["files"] = [item for item in status["files"] if item["tool"] != "sumatrapdf"]
+    with pytest.raises(ValueError, match="component set"):
         module.verify_entry_points(module.paths_by_tool(status))
 
 
@@ -69,8 +84,8 @@ def test_noncanonical_target_root_is_rejected() -> None:
     module = load_module()
     status = valid_status()
     for item in status["files"]:
-        if item["tool"] == "msgconvert":
-            item["path"] = "custom/msgconvert.exe"
+        if item["tool"] == "tesseract":
+            item["path"] = "custom/tesseract.exe"
             break
     with pytest.raises(ValueError, match="application-resolvable root"):
         module.paths_by_tool(status)

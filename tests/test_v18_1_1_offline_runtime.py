@@ -32,7 +32,6 @@ class OfflineRuntimeVerificationTests(unittest.TestCase):
             ("sumatrapdf", "sumatrapdf/SumatraPDF.exe"),
             ("7zip", "7zip/7z.exe"),
             ("7zip", "7zip/7z.dll"),
-            ("msgconvert", "msgconvert/msgconvert.exe"),
         ]
         if include_model:
             files.extend([
@@ -64,6 +63,19 @@ class OfflineRuntimeVerificationTests(unittest.TestCase):
             target_dir, status = module.load_status(target)
             tools = module.verify_entries(target_dir, status)
             module.verify_required_runtime(tools, True)
+            self.assertEqual(
+                set(tools),
+                {
+                    "tesseract",
+                    "poppler",
+                    "libreoffice",
+                    "sumatrapdf",
+                    "7zip",
+                    "llama_cpp",
+                    "semantic_model",
+                },
+            )
+            self.assertNotIn("msgconvert", tools)
 
     def test_missing_model_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

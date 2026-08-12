@@ -6,6 +6,9 @@ additional gate proves a different invariant: the staged directory layout and
 entry-point names must match the paths the installed Rust application resolves.
 It also verifies that the offline Tauri config strips the staging target prefix
 (`windows-x86_64`) when embedding resources into the installed application.
+
+Outlook MSG is parsed inside the Rust core and therefore has no external Windows
+runtime component or executable entry point in this parity gate.
 """
 from __future__ import annotations
 
@@ -26,6 +29,16 @@ WINDOWS_TARGET = "windows-x86_64"
 RESOURCE_SOURCE = f"resources/tools/{WINDOWS_TARGET}/"
 RESOURCE_TARGET = "resources/tools/"
 
+EXPECTED_RUNTIME_TOOLS = {
+    "tesseract",
+    "poppler",
+    "libreoffice",
+    "sumatrapdf",
+    "7zip",
+    "llama_cpp",
+    "semantic_model",
+}
+
 # These are installed-resource paths relative to `$RESOURCE/resources/tools/`.
 # They intentionally mirror the Rust resolver's canonical tool directories.
 REQUIRED_EXACT_PATHS: dict[str, tuple[str, ...]] = {
@@ -34,10 +47,6 @@ REQUIRED_EXACT_PATHS: dict[str, tuple[str, ...]] = {
     "libreoffice": ("libreoffice/program/soffice.exe",),
     "sumatrapdf": ("sumatrapdf/SumatraPDF.exe",),
     "7zip": ("7zip/7z.exe",),
-    # The desktop MSG intake executes a Windows executable. A bare .pl + Perl
-    # tree may still be useful for development/probing, but it is not a
-    # production-ready application entry point until wrapped by msgconvert.exe.
-    "msgconvert": ("msgconvert/msgconvert.exe",),
 }
 SEMANTIC_SERVER_CHOICES = (
     "llama_cpp/llama-server.exe",
@@ -72,6 +81,8 @@ def paths_by_tool(status: dict[str, Any]) -> dict[str, set[str]]:
         tool = str(raw.get("tool", "")).strip().lower()
         if not tool:
             raise ValueError(f"files[{index}].tool is empty")
+        if tool not in EXPECTED_RUNTIME_TOOLS:
+            raise ValueError(f"unsupported external Windows runtime component: {tool}")
         path = safe_relative(raw.get("path", ""))
         canonical_prefix = f"{tool}/"
         if not path.lower().startswith(canonical_prefix.lower()):
@@ -84,6 +95,15 @@ def paths_by_tool(status: dict[str, Any]) -> dict[str, set[str]]:
 
 
 def verify_entry_points(tools: dict[str, set[str]]) -> None:
+    actual_tools = set(tools)
+    if actual_tools != EXPECTED_RUNTIME_TOOLS:
+        missing = sorted(EXPECTED_RUNTIME_TOOLS - actual_tools)
+        extra = sorted(actual_tools - EXPECTED_RUNTIME_TOOLS)
+        raise ValueError(
+            "production Windows runtime component set does not match the application contract: "
+            f"missing={missing}; extra={extra}"
+        )
+
     lower_tools = {
         tool: {path.lower() for path in paths}
         for tool, paths in tools.items()

@@ -18,6 +18,7 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 mod archive;
+mod msg;
 mod source_snapshot;
 mod web;
 
@@ -326,7 +327,6 @@ pub fn capabilities() -> Vec<IntakeCapability> {
     let pdftoppm = command_available("pdftoppm");
     let tesseract = command_available("tesseract");
     let soffice = command_available("soffice");
-    let msgconvert = command_available("msgconvert");
     let seven_zip = command_available("7z");
     vec![
         capability("Word DOCX/DOCM", &["docx", "docm"], true, "встроенно", "Текст, таблицы, колонтитулы и сноски; удалённые правки, комментарии и инструкции полей исключаются."),
@@ -339,7 +339,7 @@ pub fn capabilities() -> Vec<IntakeCapability> {
         capability("XLS / ODS", &["xls", "ods"], soffice, "LibreOffice", if soffice { "Готово через безоконную конвертацию." } else { "Нужен LibreOffice/soffice или упакованный sidecar." }),
         capability("ODT / RTF", &["odt", "rtf"], true, "встроенно", "Нормализация без запуска офисного приложения."),
         capability("EML", &["eml"], true, "встроенно", "Заголовки, текст/HTML и поддерживаемые вложения."),
-        capability("MSG", &["msg"], msgconvert, "msgconvert", if msgconvert { "Готово." } else { "Нужен msgconvert/libemail-outlook-perl либо предварительный экспорт в EML." }),
+        capability("MSG", &["msg"], true, "встроенно", "Outlook MSG читается нативно в Rust без внешнего конвертера; поддерживаемые вложения проходят тот же безопасный recursive intake."),
         capability("ZIP", &["zip"], true, "встроенно", "Рекурсивная распаковка с защитой от zip-slip, архивных бомб и чрезмерной вложенности."),
         capability("7Z / RAR", &["7z", "rar"], seven_zip, "7-Zip", if seven_zip { "Готово." } else { "Нужен 7z sidecar или установленный 7-Zip." }),
         capability("Сайты и API", &["https"], true, "HTTPS", "Публичные HTTPS-адреса, ограничение размера, проверка перенаправлений и нормализация HTML/JSON/XML/файлов."),
@@ -353,7 +353,6 @@ pub fn sidecar_tool_statuses() -> Vec<SidecarToolStatus> {
         ("pdftoppm", "преобразование страниц PDF для OCR"),
         ("soffice", "XLS/ODS, PDF-экспорт и печать Office-документов"),
         ("7z", "распаковка 7Z/RAR"),
-        ("msgconvert", "чтение Outlook MSG"),
         ("sumatrapdf", "управляемая печать PDF на Windows"),
     ]
     .into_iter()
@@ -630,7 +629,7 @@ pub fn normalize_path(
         "txt" | "md" | "csv" | "tsv" | "json" | "xml" => normalize_plain_text(path, &extension)?,
         "html" | "htm" => normalize_html(path)?,
         "eml" => normalize_eml(path, workspace, depth)?,
-        "msg" => normalize_msg(path, workspace, depth)?,
+        "msg" => msg::normalize_msg(path, workspace, depth)?,
         "zip" => normalize_zip(path, workspace, depth)?,
         "7z" | "rar" => normalize_external_archive(path, workspace, depth)?,
         _ => return Err(format!("Неподдерживаемый формат: .{extension}")),
@@ -1838,35 +1837,6 @@ fn normalize_eml(path: &Path, workspace: &Path, depth: usize) -> Result<Normaliz
         processed_files: vec![path.to_path_buf()],
         layout_items,
     })
-}
-
-fn normalize_msg(path: &Path, workspace: &Path, depth: usize) -> Result<NormalizedSource, String> {
-    let output_dir = workspace.join(format!("msg-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
-    let output = run_command_in(
-        &output_dir,
-        "msgconvert",
-        &[path.to_string_lossy().as_ref()],
-    )?;
-    if !output.status.success() {
-        return Err(
-            "MSG не удалось преобразовать. Установите msgconvert/libemail-outlook-perl.".into(),
-        );
-    }
-    let eml = std::fs::read_dir(&output_dir)
-        .map_err(|error| error.to_string())?
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|entry| {
-            entry
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("eml"))
-        })
-        .ok_or_else(|| "msgconvert не создал EML-файл.".to_string())?;
-    let result = normalize_eml(&eml, workspace, depth)?;
-    let _ = std::fs::remove_dir_all(output_dir);
-    Ok(result)
 }
 
 fn normalize_office_via_libreoffice(

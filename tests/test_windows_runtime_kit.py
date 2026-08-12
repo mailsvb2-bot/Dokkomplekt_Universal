@@ -13,9 +13,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_windows_runtime_kit.py"
+LOCKER = ROOT / "scripts" / "create_runtime_lock.py"
 STAGER = ROOT / "scripts" / "prepare_sidecars.py"
 VERIFIER = ROOT / "scripts" / "assert_offline_runtime_ready.py"
 WRAPPER = ROOT / "scripts" / "prepare_windows_production_runtime.ps1"
+EXPECTED_PRODUCTION_COMPONENTS = {
+    "tesseract",
+    "poppler",
+    "libreoffice",
+    "sumatrapdf",
+    "7zip",
+    "llama_cpp",
+    "semantic_model",
+}
 
 
 def load_module(path: Path, name: str):
@@ -55,7 +65,6 @@ def component_tree(root: Path, tool: str) -> Path:
             "7z.exe": b"MZ" + b"7" * 64,
             "7z.dll": b"MZ" + b"z" * 64,
         },
-        "msgconvert": {"msgconvert.exe": b"MZ" + b"m" * 64},
         "llama_cpp": {"llama-server.exe": b"MZ" + b"a" * 64},
         "semantic_model": {"dokkomplekt-instruct.gguf": b"GGUF-test-model"},
     }
@@ -72,7 +81,6 @@ def make_spec(root: Path, *, omit: str | None = None) -> Path:
         "libreoffice",
         "sumatrapdf",
         "7zip",
-        "msgconvert",
         "llama_cpp",
         "semantic_model",
     ]
@@ -127,9 +135,9 @@ def test_builder_creates_lock_that_stages_and_verifies_end_to_end() -> None:
 
         assert lock["supply_chain_locked"] is True
         assert {entry["tool"] for entry in lock["files"]} == builder.PRODUCTION_REQUIRED_TOOLS
-        assert report["component_count"] == 8
+        assert report["component_count"] == 7
         assert report["file_count"] == len(lock["files"])
-        assert "msgconvert" in {entry["tool"] for entry in lock["files"]}
+        assert "msgconvert" not in {entry["tool"] for entry in lock["files"]}
 
         staged_root = root / "staged"
         with mock.patch.object(stager, "DEST_ROOT", staged_root), mock.patch.object(
@@ -141,17 +149,17 @@ def test_builder_creates_lock_that_stages_and_verifies_end_to_end() -> None:
         target_dir, status = verifier.load_status("windows-x86_64")
         tools = verifier.verify_entries(target_dir, status)
         verifier.verify_supply_chain(target_dir, status)
-        verifier.verify_required_runtime(tools, True, True)
+        verifier.verify_required_runtime(tools, True)
         verifier.verify_distribution_review(target_dir, status, tools)
-        assert "msgconvert" in tools
+        assert set(tools) == EXPECTED_PRODUCTION_COMPONENTS
 
 
-def test_builder_fails_closed_when_msgconvert_component_is_missing() -> None:
-    builder = load_module(BUILDER, "build_windows_runtime_kit_missing_msg")
+def test_builder_fails_closed_when_required_component_is_missing() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_missing_component")
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        spec = make_spec(root, omit="msgconvert")
-        with pytest.raises(ValueError, match="msgconvert"):
+        spec = make_spec(root, omit="llama_cpp")
+        with pytest.raises(ValueError, match="llama_cpp"):
             builder.build_catalog(spec, root / "output")
 
 
@@ -161,31 +169,11 @@ def test_builder_rejects_target_root_not_discoverable_by_desktop_resolver() -> N
         root = Path(temporary)
         spec_path = make_spec(root)
         data = json.loads(spec_path.read_text(encoding="utf-8"))
-        msgconvert = next(item for item in data["components"] if item["tool"] == "msgconvert")
-        msgconvert["target_root"] = "custom/msgconvert"
+        tesseract = next(item for item in data["components"] if item["tool"] == "tesseract")
+        tesseract["target_root"] = "custom/tesseract"
         spec_path.write_text(json.dumps(data), encoding="utf-8")
         with pytest.raises(ValueError, match="desktop resolver"):
             builder.build_catalog(spec_path, root / "output")
-
-
-def test_production_verifier_rejects_perl_only_msgconvert_runtime() -> None:
-    verifier = load_module(VERIFIER, "assert_offline_runtime_ready_msgconvert_exe_parity")
-    tools = {
-        "tesseract": [
-            Path("tesseract/tesseract.exe"),
-            Path("tesseract/tessdata/rus.traineddata"),
-            Path("tesseract/tessdata/eng.traineddata"),
-        ],
-        "poppler": [Path("poppler/bin/pdftotext.exe"), Path("poppler/bin/pdftoppm.exe")],
-        "libreoffice": [Path("libreoffice/program/soffice.exe")],
-        "sumatrapdf": [Path("sumatrapdf/SumatraPDF.exe")],
-        "7zip": [Path("7zip/7z.exe")],
-        "msgconvert": [Path("msgconvert/bin/perl.exe"), Path("msgconvert/msgconvert.pl")],
-        "llama_cpp": [Path("llama_cpp/llama-server.exe")],
-        "semantic_model": [Path("semantic_model/model.gguf")],
-    }
-    with pytest.raises(ValueError, match="msgconvert.exe"):
-        verifier.verify_required_runtime(tools, True, True)
 
 
 def test_builder_rejects_placeholder_provenance() -> None:
@@ -214,28 +202,13 @@ def test_builder_rejects_linklike_component_content() -> None:
             builder.build_catalog(spec_path, root / "output")
 
 
-def test_runtime_required_tool_set_includes_msgconvert() -> None:
+def test_production_runtime_surface_is_exactly_seven_components_without_msgconvert() -> None:
     builder = load_module(BUILDER, "build_windows_runtime_kit_required_set")
-    verifier = load_module(VERIFIER, "assert_offline_runtime_ready_msgconvert_contract")
-    assert "msgconvert" in builder.PRODUCTION_REQUIRED_TOOLS
-    with pytest.raises(ValueError, match="msgconvert"):
-        verifier.verify_required_runtime(
-            {
-                "tesseract": [
-                    Path("tesseract/tesseract.exe"),
-                    Path("tesseract/tessdata/rus.traineddata"),
-                    Path("tesseract/tessdata/eng.traineddata"),
-                ],
-                "poppler": [Path("poppler/pdftotext.exe"), Path("poppler/pdftoppm.exe")],
-                "libreoffice": [Path("libreoffice/soffice.exe")],
-                "sumatrapdf": [Path("sumatrapdf/SumatraPDF.exe")],
-                "7zip": [Path("7zip/7z.exe")],
-                "llama_cpp": [Path("llama_cpp/llama-server.exe")],
-                "semantic_model": [Path("semantic_model/model.gguf")],
-            },
-            True,
-            True,
-        )
+    locker = load_module(LOCKER, "create_runtime_lock_required_set")
+    assert builder.PRODUCTION_REQUIRED_TOOLS == EXPECTED_PRODUCTION_COMPONENTS
+    assert locker.REQUIRED_TOOLS == EXPECTED_PRODUCTION_COMPONENTS
+    assert locker.SUPPORTED_TOOLS == EXPECTED_PRODUCTION_COMPONENTS
+    assert "msgconvert" not in locker.SUPPORTED_TOOLS
 
 
 def test_one_command_wrapper_is_fail_closed_and_network_free() -> None:

@@ -25,7 +25,7 @@ except ModuleNotFoundError:
 
 SUPPORTED_TOOLS = {
     "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip",
-    "msgconvert", "llama_cpp", "semantic_model",
+    "llama_cpp", "semantic_model",
 }
 REQUIRED_TOOLS = {
     "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip",

@@ -277,6 +277,8 @@ def locate_existing_push_run(
     """Return the authoritative exact-SHA push run without retrying away failures."""
     candidates: list[dict[str, Any]] = []
     for run in api.runs(workflow, event="push"):
+        if run.get("event") != "push":
+            continue
         if run.get("head_sha") != sha:
             continue
         head_branch = str(run.get("head_branch") or "")

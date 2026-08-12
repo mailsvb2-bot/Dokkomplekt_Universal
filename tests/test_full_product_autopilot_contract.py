@@ -9,6 +9,12 @@ MATRIX = ROOT / "verification" / "autopilot" / "feature-matrix.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "full-product-autopilot.yml"
 PROVENANCE_WORKFLOW = ROOT / ".github" / "workflows" / "source-provenance.yml"
 SCRIPT = ROOT / "scripts" / "full_product_autopilot.py"
+AUTHORITATIVE_HOSTED_WORKFLOWS = (
+    ROOT / ".github" / "workflows" / "quality-gate.yml",
+    ROOT / ".github" / "workflows" / "source-provenance.yml",
+    ROOT / ".github" / "workflows" / "macos-smoke.yml",
+    ROOT / ".github" / "workflows" / "unsigned-preview.yml",
+)
 
 
 def load_autopilot_module():
@@ -91,11 +97,22 @@ def test_dispatched_source_provenance_checks_out_immutable_event_sha() -> None:
 
 def test_every_main_landing_runs_software_autopilot_without_starting_hardware() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    source = SCRIPT.read_text(encoding="utf-8")
     assert "push:\n    branches: [main]" in workflow
     push_trigger = workflow.split("  push:\n", 1)[1].split("  pull_request:\n", 1)[0]
     assert "paths:" not in push_trigger
     assert "github.event_name == 'workflow_dispatch' || github.event_name == 'push'" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.scope || 'software'" in workflow
+    assert "github.event_name == 'push' && '--reuse-existing' || ''" in workflow
+    assert "locate_existing_push_run" in source
+    assert 'api.runs(workflow, event="push")' in source
+    assert 'workflow in hosted_names and args.ref == "main"' in source
+    # Every main SHA must retain its own authoritative run; PRs still fall back to ref.
+    sha_group = "github.event_name == 'push' && github.sha || github.ref"
+    for path in AUTHORITATIVE_HOSTED_WORKFLOWS:
+        hosted = path.read_text(encoding="utf-8")
+        assert sha_group in hosted, path.name
+        assert "cancel-in-progress: true" in hosted, path.name
     # Write privilege is scoped to the orchestration job rather than the PR coverage/oracle jobs.
     assert "coverage-contract:\n    name: Capability coverage contract" in workflow
     assert "document-oracles:\n    name: Document visual oracle and synthetic corpus" in workflow

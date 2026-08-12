@@ -26,6 +26,7 @@ on:
       - 'scripts/prepare_sidecars.py'
       - 'scripts/assert_offline_runtime_ready.py'
       - 'scripts/probe_offline_runtime.py'
+      - 'scripts/verify_windows_runtime_app_parity.py'
       - 'scripts/prepackage_rust_gate.sh'
       - 'scripts/prepackage_rust_gate.bat'
       - 'scripts/run_rustsec_audit.py'
@@ -42,7 +43,8 @@ on:
       - 'tests/test_windows_signed_handoff.py'
       - 'tests/test_windows_runtime_kit.py'
       - 'tests/test_windows_runtime_lock_approval.py'
-      - 'tests/test_msgconvert_runtime_probe.py'
+      - 'tests/test_runtime_probe_surface.py'
+      - 'tests/test_windows_runtime_app_parity.py'
       - 'tests/test_rustsec_advisory_pin.py'
       - 'tests/test_v18_1_1_offline_runtime.py'
       - 'docs/TWO_RUNNER_TRUST_BOUNDARY.md'
@@ -130,6 +132,7 @@ jobs:
           tests/test_windows_signed_handoff.py
           tests/test_windows_runtime_kit.py
           tests/test_windows_runtime_lock_approval.py
-          tests/test_msgconvert_runtime_probe.py
+          tests/test_runtime_probe_surface.py
+          tests/test_windows_runtime_app_parity.py
           tests/test_rustsec_advisory_pin.py
           tests/test_v18_1_1_offline_runtime.py

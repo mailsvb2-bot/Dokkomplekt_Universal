@@ -71,7 +71,12 @@ jobs:
 
           msg_path = Path('src-tauri/src/universal_intake/msg.rs')
           msg = msg_path.read_text(encoding='utf-8')
-          msg = msg.replace('.map(|rtf| rtf_to_text(&rtf))', '.map(|rtf| rtf_to_text(rtf.as_bytes()))')
+          wrong = '.map(|rtf| rtf_to_text(rtf.as_bytes()))'
+          correct = '.map(|rtf| rtf_to_text(&rtf))'
+          if wrong in msg:
+              msg = msg.replace(wrong, correct, 1)
+          elif correct not in msg:
+              raise SystemExit('expected native RTF conversion contract not found')
           msg_path.write_text(msg, encoding='utf-8')
           PY
       - name: Add immutable real Outlook MSG fixture
@@ -108,7 +113,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo update -p msg_parser --precise 0.3.6 || cargo check -p dokkomplekt-tauri --tests
+          cargo check -p dokkomplekt-tauri --tests
           cargo fmt --all
       - name: Prove external MSG converter is gone from production path
         shell: bash

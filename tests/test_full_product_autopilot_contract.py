@@ -103,11 +103,25 @@ def test_every_main_landing_runs_software_autopilot_without_starting_hardware() 
 
 
 def test_software_pass_cannot_be_misrepresented_as_production_hardware_pass() -> None:
+    module = load_autopilot_module()
     source = SCRIPT.read_text(encoding="utf-8")
     assert 'result_name = "SOFTWARE PASS"' in source
     assert 'result_name = "FULL PRODUCTION PASS"' in source
     assert 'args.scope == "production-hardware" and args.ref != "main"' in source
-    assert "Physical Word/printer/reboot/production Authenticode acceptance was intentionally not claimed" in source
+
+    rendered = module.markdown_dispatch(
+        {
+            "result": "SOFTWARE PASS",
+            "scope": "software",
+            "sha": "a" * 40,
+            "coverage": {"valid": True, "feature_count": 37},
+            "workflows": [],
+            "failures": [],
+        }
+    )
+    assert "Physical Word/printer/reboot/production Authenticode acceptance was intentionally not claimed" in rendered
+    assert "FULL PRODUCTION PASS" not in rendered
+    assert "production-hardware" in rendered
 
 
 def test_hardware_gate_remains_real_physical_evidence_not_a_mock() -> None:

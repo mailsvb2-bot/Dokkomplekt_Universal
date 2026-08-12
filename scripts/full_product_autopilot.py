@@ -237,6 +237,12 @@ class GitHubApi:
         )
         return list((data or {}).get("workflow_runs", []))
 
+    def run(self, run_id: int) -> dict[str, Any]:
+        data = self.request("GET", f"/actions/runs/{run_id}")
+        if not isinstance(data, dict):
+            raise RuntimeError(f"GitHub Actions run {run_id} did not return an object")
+        return data
+
 
 def parse_github_time(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -373,6 +379,15 @@ def _refresh_run(
     sha: str,
     ref: str,
 ) -> dict[str, Any] | None:
+    current = state.get("run")
+    if isinstance(current, dict) and current.get("id") is not None:
+        # A GitHub re-run keeps the same workflow-run ID while advancing run_attempt
+        # and mutating status/conclusion. Refresh that exact authoritative identity
+        # instead of freezing the first completed snapshot or locating a fresh run.
+        refreshed = api.run(int(current["id"]))
+        if refreshed.get("id") != current.get("id"):
+            raise RuntimeError(f"{workflow}: authoritative run identity changed")
+        return refreshed
     if state["source"] == "reused-push":
         return locate_existing_push_run(api, workflow, sha, ref)
     return locate_dispatched_run(api, workflow, sha, state["requested_at"])
@@ -438,24 +453,42 @@ def dispatch_and_wait(args: argparse.Namespace) -> int:
         all_complete = True
         for workflow, state in dispatch_records.items():
             run = state["run"]
+            previous_signature = (
+                None if run is None else run.get("status"),
+                None if run is None else run.get("conclusion"),
+                None if run is None else run.get("run_attempt"),
+            )
+            # Refresh every authoritative run on every poll, including a completed
+            # reused push run: GitHub can re-run the same run ID after a failure.
+            refreshed = _refresh_run(api, workflow, state, args.sha, args.ref)
+            if refreshed is not None:
+                state["run"] = refreshed
+                run = refreshed
+                current_signature = (
+                    run.get("status"),
+                    run.get("conclusion"),
+                    run.get("run_attempt"),
+                )
+                if current_signature != previous_signature and run.get("status") == "completed":
+                    print(
+                        f"Completed {workflow} run #{run.get('run_number')} "
+                        f"attempt {run.get('run_attempt')}: {run.get('conclusion')}",
+                        flush=True,
+                    )
             if run is None or run.get("status") != "completed":
-                refreshed = _refresh_run(api, workflow, state, args.sha, args.ref)
-                if refreshed is not None:
-                    state["run"] = refreshed
-                    run = refreshed
-                    if run.get("status") == "completed":
-                        print(
-                            f"Completed {workflow} run #{run.get('run_number')}: "
-                            f"{run.get('conclusion')}",
-                            flush=True,
-                        )
-                if run is None or run.get("status") != "completed":
-                    all_complete = False
+                all_complete = False
         if all_complete:
             break
         time.sleep(args.poll_seconds)
     else:
         failures.append("timeout while waiting for authoritative workflows")
+
+    # Take one final exact-run snapshot immediately before the verdict so a
+    # same-ID rerun completed near the polling boundary cannot leave stale state.
+    for workflow, state in dispatch_records.items():
+        refreshed = _refresh_run(api, workflow, state, args.sha, args.ref)
+        if refreshed is not None:
+            state["run"] = refreshed
 
     workflows: list[dict[str, Any]] = []
     for workflow, state in dispatch_records.items():
@@ -481,6 +514,7 @@ def dispatch_and_wait(args: argparse.Namespace) -> int:
             "html_url": run.get("html_url"),
             "head_sha": run.get("head_sha"),
             "event": run.get("event"),
+            "run_attempt": run.get("run_attempt"),
         }
         workflows.append(item)
         if run.get("head_sha") != args.sha:
@@ -560,7 +594,8 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "reuse exact-SHA main push runs for hosted gates; never retry a failed "
-            "authoritative push run"
+            "authoritative push run by dispatching a replacement; never replace a failed authoritative "
+            "push run with a fresh dispatch; same-run rerun attempts remain authoritative"
         ),
     )
     dispatch.add_argument("--token-env", default="GH_TOKEN")

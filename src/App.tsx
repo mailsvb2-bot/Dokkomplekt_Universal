@@ -20,6 +20,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
+import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
@@ -71,8 +72,6 @@ function AppContent() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [templateText, setTemplateText] = useState('');
   const [buttonLabel, setButtonLabel] = useState('');
-  // Абсолютный путь DOCX в app_data/user-templates, куда Rust сохранил шаблон
-  // (выбранный файл или сгенерированный из вставленного текста).
   const [importedTemplatePath, setImportedTemplatePath] = useState<string | null>(null);
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
@@ -1173,16 +1172,7 @@ function AppContent() {
     if (staticRows.length) {
       setStatus(`Кнопки будут созданы. Шаблоны без полей будут копироваться без изменений: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
     }
-    const pendingById = new Map(pendingTemplates.map((item) => [item.document_id, item]));
-    const confirmedRows = rows.map((row) => {
-      const pending = pendingById.get(row.document_id);
-      return {
-        ...row,
-        editable_button_label: pending?.button_label.trim() || (rows.length === 1 ? buttonLabel.trim() : '') || row.editable_button_label,
-        popup_fields: pending?.popup_fields ?? (rows.length === 1 ? draftPopupFields : row.popup_fields ?? []),
-        domain_override: pending ? pending.domain_override : (rows.length === 1 ? draftDomainOverride : null),
-      };
-    });
+    const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
     if (!pack) return;
     setDocuments(pack.documents);
@@ -1508,9 +1498,7 @@ function AppContent() {
           onDraftPopupFieldsChange={setDraftPopupFields}
           onDraftDomainOverrideChange={setDraftDomainOverride}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
-          onPendingTemplateDomainChange={(documentId, value) => setPendingTemplates((previous) => (
-            withPendingTemplateDomain(previous, documentId, value)
-          ))}
+          onPendingTemplateDomainChange={(documentId, value) => setPendingTemplates((previous) => withPendingTemplateDomain(previous, documentId, value))}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}

@@ -1,0 +1,7 @@
+{
+  "schema": "dokkomplekt.exact-head-ci-trigger.v1",
+  "pull_request": 119,
+  "source_head": "e803459432aa9b6e1693420e65a2027d46acda41",
+  "purpose": "Trigger exact-head CI from a repository-owner commit after Source Provenance synchronized SOURCE_MANIFEST_SHA256.txt.",
+  "source_tree_changed": false
+}

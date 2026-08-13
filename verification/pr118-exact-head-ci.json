@@ -1,0 +1,6 @@
+{
+  "schema": "dokkomplekt.exact-head-ci-trigger.v1",
+  "pull_request": 118,
+  "purpose": "Trigger full PR verification after formatting and provenance synchronization.",
+  "source_head": "25f742bea0e891918214e4ecedb124e603dc92c8"
+}

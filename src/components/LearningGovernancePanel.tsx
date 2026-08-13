@@ -15,20 +15,25 @@ interface LearningGovernancePanelProps {
   onStatus(message: string): void;
 }
 
-const DOMAINS: Array<{ value: Exclude<DomainKind, { Custom: string }>; label: string }> = [
+type BuiltinDomainKind = Exclude<DomainKind, { Custom: string }>;
+type DomainChoice = BuiltinDomainKind | 'Custom';
+
+const DOMAINS: Array<{ value: DomainChoice; label: string }> = [
   { value: 'Generic', label: 'Универсальный' },
   { value: 'Medical', label: 'Медицина' },
   { value: 'Legal', label: 'Право' },
   { value: 'Hr', label: 'Кадры' },
   { value: 'Accounting', label: 'Бухгалтерия' },
   { value: 'Education', label: 'Образование' },
+  { value: 'Custom', label: 'Своя профессия' },
 ];
 
 export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
   const dialogs = useAppDialog();
   const [rules, setRules] = useState<LearnedScannerRule[]>([]);
   const [approvals, setApprovals] = useState<TemplateApprovalRecord[]>([]);
-  const [domain, setDomain] = useState<Exclude<DomainKind, { Custom: string }>>('Generic');
+  const [domainChoice, setDomainChoice] = useState<DomainChoice>('Generic');
+  const [customDomainId, setCustomDomainId] = useState('');
   const [clusterId, setClusterId] = useState('');
   const [packId, setPackId] = useState('');
   const [decision, setDecision] = useState<KitLearningDecision | null>(null);
@@ -98,6 +103,14 @@ export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
   }
 
   async function inspectDecision() {
+    setDecision(null);
+    const domain: DomainKind | null = domainChoice === 'Custom'
+      ? (customDomainId.trim() ? { Custom: customDomainId.trim() } : null)
+      : domainChoice;
+    if (!domain) {
+      props.onStatus('Укажите идентификатор своей профессии / профиля.');
+      return;
+    }
     if (!clusterId.trim()) {
       props.onStatus('Укажите идентификатор кластера для просмотра решения обученного комплекта.');
       return;
@@ -136,9 +149,15 @@ export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
       <section aria-label="Решение обученного комплекта">
         <h4>Автоподбор комплекта</h4>
         <div className="inlineInput governanceInputs">
-          <select value={domain} onChange={(event) => setDomain(event.target.value as typeof domain)} aria-label="Профиль решения">
+          <select value={domainChoice} onChange={(event) => setDomainChoice(event.target.value as DomainChoice)} aria-label="Профиль решения">
             {DOMAINS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
+          {domainChoice === 'Custom' && <input
+            value={customDomainId}
+            onChange={(event) => setCustomDomainId(event.target.value)}
+            placeholder="Своя профессия / профиль"
+            aria-label="Своя профессия / профиль"
+          />}
           <input value={clusterId} onChange={(event) => setClusterId(event.target.value)} placeholder="Идентификатор кластера" aria-label="Идентификатор кластера" />
           <input value={packId} onChange={(event) => setPackId(event.target.value)} placeholder="Набор шаблонов (необязательно)" aria-label="Идентификатор набора шаблонов" />
           <button className="softBtn" onClick={() => void inspectDecision()} disabled={busy}>Показать решение</button>

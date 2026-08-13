@@ -126,7 +126,8 @@ pub(crate) fn extract_declared_field(
                 .trim_start_matches([' ', ':', '-', '—', '№', '\t', '\u{00a0}'])
                 .trim();
             if !inline.is_empty() {
-                if let Some(value) = normalize_declared_value(&definition.kind, inline, default_year)
+                if let Some(value) =
+                    normalize_declared_value(&definition.kind, inline, default_year)
                 {
                     return Some(Field {
                         id: canonical_storage_field_id(&definition.id),
@@ -270,7 +271,10 @@ mod tests {
         assert_eq!(value(&document, "document.number"), Some("R-17"));
         assert_eq!(value(&document, "document.date"), Some("14.07.2026"));
         assert_eq!(value(&document, "org.name"), Some("ООО Ромашка"));
-        assert_eq!(value(&document, "subject.name"), Some("Иванов Иван Иванович"));
+        assert_eq!(
+            value(&document, "subject.name"),
+            Some("Иванов Иван Иванович")
+        );
     }
 
     #[test]

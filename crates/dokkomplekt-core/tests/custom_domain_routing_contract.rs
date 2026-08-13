@@ -1,8 +1,8 @@
+use dokkomplekt_core::core::{SourceDocument, TargetTemplate};
 use dokkomplekt_core::{
     plan_workflow, DocumentTemplateSpec, DomainKind, SemanticCase, UniversalDomain,
     UniversalPipelineFlags, UniversalPipelineInput, WorkflowFlags,
 };
-use dokkomplekt_core::core::{SourceDocument, TargetTemplate};
 
 #[test]
 fn custom_profession_stays_custom_in_universal_pipeline() {
@@ -40,7 +40,11 @@ fn custom_document_workflow_uses_only_its_declared_fields() {
         popup_configured: false,
     };
 
-    let plan = plan_workflow(&document, &SemanticCase::default(), &WorkflowFlags::default());
+    let plan = plan_workflow(
+        &document,
+        &SemanticCase::default(),
+        &WorkflowFlags::default(),
+    );
     let ids = plan
         .prompts
         .iter()

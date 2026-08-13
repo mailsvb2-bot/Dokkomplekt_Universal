@@ -1,0 +1,6 @@
+{
+  "schema": "dokkomplekt.exact-head-ci-trigger.v1",
+  "pull_request": 118,
+  "purpose": "Trigger full PR verification after the provenance bot synchronized SOURCE_MANIFEST_SHA256.txt.",
+  "source_head": "138b9e962cb66a530c67be424d606c52c0c80722"
+}

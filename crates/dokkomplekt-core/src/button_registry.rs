@@ -1,6 +1,7 @@
 use crate::{
-    analyze_template_text, create_document_spec, normalize_popup_fields, DocumentPack,
-    DocumentTemplateSpec, PopupFieldConfig, TemplateAnalysis,
+    analyze_template_text, create_document_spec, default_popup_fields_for_document,
+    normalize_popup_fields, DocumentPack, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
+    TemplateAnalysis,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -25,6 +26,8 @@ pub struct TemplateConfirmationRow {
     pub analysis: TemplateAnalysis,
     #[serde(default)]
     pub popup_fields: Vec<PopupFieldConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_override: Option<DomainKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,6 +119,7 @@ pub fn prepare_template_confirmations(
                 role_id: analysis.role_id.clone(),
                 is_static_copy: analysis.is_static,
                 popup_fields: preview_document.popup_fields,
+                domain_override: None,
                 analysis,
             }
         })
@@ -137,8 +141,63 @@ pub fn create_pack_from_confirmations(
                 &row.analysis,
                 Some(row.editable_button_label.as_str()),
             );
-            if !row.popup_fields.is_empty() {
-                doc.popup_fields = normalize_popup_fields(&row.popup_fields);
+            let detected_category = doc.category.clone();
+            let detected_popup_fields = normalize_popup_fields(&doc.popup_fields);
+            let submitted_popup_fields = normalize_popup_fields(&row.popup_fields);
+            let user_popup_changes = submitted_popup_fields
+                .iter()
+                .filter(|submitted| {
+                    detected_popup_fields
+                        .iter()
+                        .find(|default| default.field_id == submitted.field_id)
+                        != Some(*submitted)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if let Some(domain_override) = &row.domain_override {
+                match domain_override {
+                    DomainKind::Custom(profile) if profile.trim().is_empty() => warnings.push(format!(
+                        "{}: пустой пользовательский профиль проигнорирован; сохранено автоопределение",
+                        doc.button_label
+                    )),
+                    DomainKind::Custom(profile) => {
+                        doc.category = DomainKind::Custom(profile.trim().to_string());
+                    }
+                    domain => {
+                        doc.category = domain.clone();
+                    }
+                }
+            }
+
+            let category_changed = doc.category != detected_category;
+            if category_changed {
+                let mut rebuilt = default_popup_fields_for_document(&doc);
+                for changed in &user_popup_changes {
+                    if let Some(existing) = rebuilt
+                        .iter_mut()
+                        .find(|existing| existing.field_id == changed.field_id)
+                    {
+                        *existing = changed.clone();
+                    } else {
+                        rebuilt.push(changed.clone());
+                    }
+                }
+                doc.popup_fields = normalize_popup_fields(&rebuilt);
+                doc.popup_configured = !user_popup_changes.is_empty();
+                if doc.popup_configured {
+                    doc.required_fields = doc
+                        .popup_fields
+                        .iter()
+                        .filter(|field| field.required)
+                        .map(|field| field.field_id.clone())
+                        .chain(doc.required_fields.iter().cloned())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                }
+            } else if !row.popup_fields.is_empty() {
+                doc.popup_fields = submitted_popup_fields;
                 doc.popup_configured = true;
                 doc.required_fields = doc
                     .popup_fields
@@ -244,6 +303,100 @@ mod tests {
         ]);
         assert_eq!(rows[0].editable_button_label, "Выписной эпикриз");
         assert_eq!(rows[1].editable_button_label, "Выписной эпикриз 2");
+    }
+
+    #[test]
+    fn explicit_custom_domain_override_is_saved_in_document_pack() {
+        let mut rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "custom-report".into(),
+            template_path: "custom-report.docx".into(),
+            extracted_text: "Report\n{{custom.project}}".into(),
+            preferred_button_label: Some("Report".into()),
+        }]);
+        rows[0].domain_override = Some(DomainKind::Custom("  architecture  ".into()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+
+        assert_eq!(
+            result.pack.documents[0].category,
+            DomainKind::Custom("architecture".into())
+        );
+    }
+
+    #[test]
+    fn empty_custom_domain_override_fails_closed_to_detected_domain() {
+        let mut rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "custom-report".into(),
+            template_path: "custom-report.docx".into(),
+            extracted_text: "Report\n{{custom.project}}".into(),
+            preferred_button_label: Some("Report".into()),
+        }]);
+        let detected = create_pack_from_confirmations("detected", "Pack", &rows)
+            .pack
+            .documents[0]
+            .category
+            .clone();
+        rows[0].domain_override = Some(DomainKind::Custom("   ".into()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+
+        assert_eq!(result.pack.documents[0].category, detected);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("пустой пользовательский профиль")));
+    }
+
+    #[test]
+    fn domain_override_rebuilds_unedited_popup_defaults_for_new_domain() {
+        let mut rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "profiled".into(),
+            template_path: "profiled.docx".into(),
+            extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
+            preferred_button_label: Some("Report".into()),
+        }]);
+        assert!(rows[0]
+            .popup_fields
+            .iter()
+            .any(|field| field.field_id.starts_with("medical.")));
+        rows[0].domain_override = Some(DomainKind::Custom("architecture".into()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        let document = &result.pack.documents[0];
+
+        assert_eq!(document.category, DomainKind::Custom("architecture".into()));
+        assert!(!document.popup_configured);
+        assert!(document
+            .popup_fields
+            .iter()
+            .all(|field| !field.field_id.starts_with("medical.")));
+    }
+
+    #[test]
+    fn domain_override_preserves_only_user_changed_popup_fields() {
+        let mut rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "profiled".into(),
+            template_path: "profiled.docx".into(),
+            extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
+            preferred_button_label: Some("Report".into()),
+        }]);
+        rows[0]
+            .popup_fields
+            .push(PopupFieldConfig::new("custom.site", "Site"));
+        rows[0].domain_override = Some(DomainKind::Custom("architecture".into()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        let document = &result.pack.documents[0];
+
+        assert!(document.popup_configured);
+        assert!(document
+            .popup_fields
+            .iter()
+            .any(|field| field.field_id == "custom.site"));
+        assert!(document
+            .popup_fields
+            .iter()
+            .all(|field| !field.field_id.starts_with("medical.")));
     }
 
     #[test]

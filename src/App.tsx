@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
@@ -25,7 +25,7 @@ import {
   arrayBufferToBase64, createdPrintItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
-  replaceAllLiteral, type GuidedScannerState, type PendingTemplate,
+  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
 
@@ -76,6 +76,7 @@ function AppContent() {
   const [importedTemplatePath, setImportedTemplatePath] = useState<string | null>(null);
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
+  const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
   const [icdQuery, setIcdQuery] = useState('');
@@ -773,6 +774,7 @@ function AppContent() {
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
+    setDraftDomainOverride(null);
     setSetupOpen(false);
     setStatus('Выберите шаблоны Word в системном окне…');
 
@@ -796,6 +798,7 @@ function AppContent() {
         file_name: file.file_name,
         button_label: detectedLabel,
         popup_fields: analyzed.document.popup_fields ?? [],
+        domain_override: null,
       });
     }
     if (!importedRows.length) {
@@ -818,6 +821,7 @@ function AppContent() {
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
+    setDraftDomainOverride(null);
     setSetupOpen(true);
     setStatus('Вставьте текст документа, проверьте название кнопки и создайте шаблон.');
   }
@@ -845,6 +849,7 @@ function AppContent() {
         file_name: file.name,
         button_label: detectedLabel,
         popup_fields: analyzed.document.popup_fields ?? [],
+        domain_override: null,
       });
     }
     if (!importedRows.length) return;
@@ -1168,13 +1173,16 @@ function AppContent() {
     if (staticRows.length) {
       setStatus(`Кнопки будут созданы. Шаблоны без полей будут копироваться без изменений: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
     }
-    const labels = new Map(pendingTemplates.map((item) => [item.document_id, item.button_label.trim()]));
-    const popupById = new Map(pendingTemplates.map((item) => [item.document_id, item.popup_fields]));
-    const confirmedRows = rows.map((row) => ({
-      ...row,
-      editable_button_label: labels.get(row.document_id) || (rows.length === 1 ? buttonLabel.trim() : '') || row.editable_button_label,
-      popup_fields: popupById.get(row.document_id) ?? (rows.length === 1 ? draftPopupFields : row.popup_fields ?? []),
-    }));
+    const pendingById = new Map(pendingTemplates.map((item) => [item.document_id, item]));
+    const confirmedRows = rows.map((row) => {
+      const pending = pendingById.get(row.document_id);
+      return {
+        ...row,
+        editable_button_label: pending?.button_label.trim() || (rows.length === 1 ? buttonLabel.trim() : '') || row.editable_button_label,
+        popup_fields: pending?.popup_fields ?? (rows.length === 1 ? draftPopupFields : row.popup_fields ?? []),
+        domain_override: pending ? pending.domain_override : (rows.length === 1 ? draftDomainOverride : null),
+      };
+    });
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
     if (!pack) return;
     setDocuments(pack.documents);
@@ -1183,6 +1191,7 @@ function AppContent() {
     setImportedTemplatePath(null);
     setPendingTemplates([]);
     setDraftPopupFields([]);
+    setDraftDomainOverride(null);
     setSetupOpen(false);
     setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
   }
@@ -1493,10 +1502,15 @@ function AppContent() {
           previewTitle={previewTitle}
           pendingTemplates={pendingTemplates}
           draftPopupFields={draftPopupFields}
+          draftDomainOverride={draftDomainOverride}
           onTemplateTextChange={setTemplateText}
           onButtonLabelChange={setButtonLabel}
           onDraftPopupFieldsChange={setDraftPopupFields}
+          onDraftDomainOverrideChange={setDraftDomainOverride}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
+          onPendingTemplateDomainChange={(documentId, value) => setPendingTemplates((previous) => (
+            withPendingTemplateDomain(previous, documentId, value)
+          ))}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}

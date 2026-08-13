@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import type { PopupFieldConfig } from '../lib/types';
+import type { DomainKind, PopupFieldConfig } from '../lib/types';
 import { PopupFieldEditor, ensurePopupField } from './PopupFieldEditor';
 
 interface PendingTemplateView {
@@ -9,6 +9,7 @@ interface PendingTemplateView {
   button_label: string;
   extracted_text: string;
   popup_fields: PopupFieldConfig[];
+  domain_override?: DomainKind | null;
 }
 
 interface TemplateSetupModalProps {
@@ -17,10 +18,13 @@ interface TemplateSetupModalProps {
   previewTitle: string;
   pendingTemplates: PendingTemplateView[];
   draftPopupFields: PopupFieldConfig[];
+  draftDomainOverride?: DomainKind | null;
   onTemplateTextChange(value: string): void;
   onButtonLabelChange(value: string): void;
   onDraftPopupFieldsChange(fields: PopupFieldConfig[]): void;
+  onDraftDomainOverrideChange?(value: DomainKind | null): void;
   onPendingTemplateLabelChange(documentId: string, value: string): void;
+  onPendingTemplateDomainChange?(documentId: string, value: DomainKind | null): void;
   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
   onStartGuidedPendingScanner(documentId: string): void;
@@ -42,8 +46,9 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
     [activePendingId, props.pendingTemplates],
   );
   const invalidLabel = props.pendingTemplates.find((item) => !item.button_label.trim());
-  const batchReady = hasBatch && !invalidLabel;
-  const manualReady = Boolean(props.templateText.trim());
+  const invalidDomain = props.pendingTemplates.find((item) => hasInvalidCustomDomain(item.domain_override));
+  const batchReady = hasBatch && !invalidLabel && !invalidDomain;
+  const manualReady = Boolean(props.templateText.trim()) && !hasInvalidCustomDomain(props.draftDomainOverride);
   const confirmLabel = hasBatch ? `Создать кнопки (${props.pendingTemplates.length})` : 'Создать кнопку';
 
   useEffect(() => {
@@ -137,6 +142,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
               <table className="confirm"><tbody>
                 <tr><th>Документ</th><td>{props.previewTitle}</td></tr>
                 <tr><th>Название кнопки</th><td><input value={props.buttonLabel} placeholder={props.previewTitle} onChange={(event) => props.onButtonLabelChange(event.target.value)} /></td></tr>
+                <tr><th>Профиль</th><td><DomainOverrideEditor label="Шаблон" value={props.draftDomainOverride ?? null} onChange={(value) => props.onDraftDomainOverrideChange?.(value)} /></td></tr>
               </tbody></table>
               <button className="softBtn" type="button" onClick={props.onAnalyze}>Проверить шаблон</button>
               <details className="manualScannerDetails">
@@ -156,6 +162,11 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                     {item.file_name}
                   </button>
                   <input aria-label={`Название документа для ${item.file_name}`} value={item.button_label} onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)} />
+                  <DomainOverrideEditor
+                    label={item.file_name}
+                    value={item.domain_override ?? null}
+                    onChange={(value) => props.onPendingTemplateDomainChange?.(item.document_id, value)}
+                  />
                 </div>
               ))}
             </div>
@@ -163,8 +174,12 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             <div className={`readyMessage templateReadyMessage ${batchReady ? '' : 'warning'}`}>
               <i className={batchReady ? 'ti ti-circle-check' : 'ti ti-alert-triangle'} aria-hidden="true" />
               <div>
-                <strong>{batchReady ? 'Кнопки готовы к созданию' : 'Укажите название кнопки'}</strong>
-                <span>{batchReady ? 'Нажмите кнопку ниже. Неразмеченные шаблоны сохранят свою форму и будут доступны сразу.' : `Не заполнено название для ${invalidLabel?.file_name ?? 'одного шаблона'}.`}</span>
+                <strong>{batchReady ? 'Кнопки готовы к созданию' : invalidDomain ? 'Укажите свою профессию / профиль' : 'Укажите название кнопки'}</strong>
+                <span>{batchReady
+                  ? 'Нажмите кнопку ниже. Неразмеченные шаблоны сохранят свою форму и будут доступны сразу.'
+                  : invalidDomain
+                    ? `Не заполнена своя профессия / профиль для ${invalidDomain.file_name}.`
+                    : `Не заполнено название для ${invalidLabel?.file_name ?? 'одного шаблона'}.`}</span>
               </div>
             </div>
 
@@ -212,6 +227,40 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>{confirmLabel}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function hasInvalidCustomDomain(value: DomainKind | null | undefined): boolean {
+  return typeof value === 'object' && value !== null && 'Custom' in value && !value.Custom.trim();
+}
+
+function DomainOverrideEditor(props: {
+  label: string;
+  value: DomainKind | null;
+  onChange(value: DomainKind | null): void;
+}) {
+  const customValue = typeof props.value === 'object' && props.value !== null && 'Custom' in props.value
+    ? props.value.Custom
+    : null;
+  return (
+    <div className="inlineInput">
+      <select
+        aria-label={`Профиль для ${props.label}`}
+        value={customValue === null ? 'auto' : 'custom'}
+        onChange={(event) => props.onChange(event.target.value === 'custom' ? { Custom: customValue ?? '' } : null)}
+      >
+        <option value="auto">Профиль: автоматически</option>
+        <option value="custom">Своя профессия / профиль</option>
+      </select>
+      {customValue !== null ? (
+        <input
+          aria-label={`Своя профессия / профиль для ${props.label}`}
+          value={customValue}
+          placeholder="Например: архитектор"
+          onChange={(event) => props.onChange({ Custom: event.target.value })}
+        />
+      ) : null}
     </div>
   );
 }

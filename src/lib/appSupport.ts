@@ -15,7 +15,18 @@ export type PendingTemplate = {
   file_name: string;
   button_label: string;
   popup_fields: PopupFieldConfig[];
+  domain_override: DomainKind | null;
 };
+
+export function withPendingTemplateDomain(
+  items: PendingTemplate[],
+  documentId: string,
+  value: DomainKind | null,
+): PendingTemplate[] {
+  return items.map((item) => item.document_id === documentId
+    ? { ...item, domain_override: value }
+    : item);
+}
 
 export type PendingGeneration = {
   kind: 'single' | 'batch';

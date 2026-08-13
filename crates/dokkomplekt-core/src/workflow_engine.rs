@@ -304,7 +304,8 @@ fn domain_hint_from_kind(kind: &DomainKind) -> Option<UniversalDomain> {
         DomainKind::Hr => Some(UniversalDomain::Hr),
         DomainKind::Education => Some(UniversalDomain::Education),
         DomainKind::Accounting => Some(UniversalDomain::Accounting),
-        DomainKind::Generic | DomainKind::Custom(_) => None,
+        DomainKind::Custom(_) => Some(UniversalDomain::Custom),
+        DomainKind::Generic => None,
     }
 }
 
@@ -461,5 +462,13 @@ mod tests {
             .prompts
             .iter()
             .any(|prompt| prompt.field_id == "document.number"));
+    }
+
+    #[test]
+    fn custom_profession_is_pinned_to_custom_domain() {
+        assert_eq!(
+            domain_hint_from_kind(&DomainKind::Custom("architect".into())),
+            Some(UniversalDomain::Custom)
+        );
     }
 }

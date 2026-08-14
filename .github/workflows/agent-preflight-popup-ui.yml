@@ -21,7 +21,9 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply universal preflight popup
-        run: python3 scripts/agent_preflight_popup_patch.py
+        run: |
+          python3 scripts/agent_preflight_popup_patch.py
+          python3 scripts/agent_preflight_popup_tests_patch.py
       - name: Verify UI contract
         run: |
           npm ci
@@ -30,7 +32,7 @@ jobs:
       - name: Commit product changes and clean helpers
         shell: bash
         run: |
-          rm .github/workflows/agent-preflight-popup-ui.yml scripts/agent_preflight_popup_patch.py
+          rm .github/workflows/agent-preflight-popup-ui.yml scripts/agent_preflight_popup_patch.py scripts/agent_preflight_popup_tests_patch.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A

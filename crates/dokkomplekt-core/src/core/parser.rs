@@ -1,5 +1,5 @@
 use crate::data_schema_engine::{is_safe_field_id, UnifiedFieldDefinition, UnifiedFieldKind};
-use crate::domain_plugin_layer::{plugin_by_id, DomainPluginId};
+use crate::domain_plugin_layer::{builtin_domain_plugins_v2, plugin_by_id, DomainPluginId};
 use crate::label_search::find_label_end;
 use crate::{canonical_storage_field_id, parse_flexible_date};
 use chrono::{Datelike, Local};
@@ -176,16 +176,16 @@ pub(crate) fn extract_declared_field(
     None
 }
 
-/// Return the first following value line without crossing another declared Core
-/// field or an explicit section heading. A field label is structure, never data
-/// for the preceding field.
+/// Return the first following value line without crossing another declared
+/// field from any built-in domain or an explicit section heading. A field label
+/// is document structure, never data for the preceding field.
 fn next_declared_value<'a>(lines: &'a [&'a str], start: usize) -> Option<&'a str> {
     for line in lines.iter().skip(start) {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if starts_with_declared_core_label(line) || is_explicit_section_heading(line) {
+        if starts_with_declared_field_label(line) || is_explicit_section_heading(line) {
             return None;
         }
         return Some(line);
@@ -193,11 +193,11 @@ fn next_declared_value<'a>(lines: &'a [&'a str], start: usize) -> Option<&'a str
     None
 }
 
-fn starts_with_declared_core_label(line: &str) -> bool {
+fn starts_with_declared_field_label(line: &str) -> bool {
     let folded = line.trim_start().to_lowercase();
-    plugin_by_id(&DomainPluginId::Core)
-        .field_definitions
+    builtin_domain_plugins_v2()
         .into_iter()
+        .flat_map(|plugin| plugin.field_definitions.into_iter())
         .flat_map(|definition| definition.aliases.into_iter())
         .any(|alias| {
             let alias = alias.trim().to_lowercase();
@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn next_declared_label_is_never_consumed_as_previous_field_value() {
+    fn next_core_label_is_never_consumed_as_previous_field_value() {
         let document = parse_source_document(&SourceDocument {
             id: "field-boundary".into(),
             text: "Клиент\nДата документа: 14.07.2026".into(),
@@ -364,6 +364,16 @@ mod tests {
         });
         assert_eq!(value(&document, "subject.name"), None);
         assert_eq!(value(&document, "document.date"), Some("14.07.2026"));
+    }
+
+    #[test]
+    fn next_domain_label_is_never_consumed_as_core_field_value() {
+        let document = parse_source_document(&SourceDocument {
+            id: "cross-domain-boundary".into(),
+            text: "Клиент\nДиагноз: F32.1".into(),
+            metadata: BTreeMap::new(),
+        });
+        assert_eq!(value(&document, "subject.name"), None);
     }
 
     #[test]

@@ -28,13 +28,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
       - name: Check Rust formatting and macOS compilation
         run: |
-          if ! cargo fmt --all -- --check; then
-            cargo fmt --all
-            git diff -- crates > rustfmt.diff
-            exit 1
-          fi
+          cargo fmt --all -- --check
           cargo check --workspace --all-targets --locked
       - name: Check and test frontend
         run: |
@@ -77,7 +75,6 @@ jobs:
         with:
           name: macos-build-smoke-evidence
           path: |
-            rustfmt.diff
             macos-tauri-build.log
             macos-bundle-evidence.txt
             target/release/bundle/macos/**

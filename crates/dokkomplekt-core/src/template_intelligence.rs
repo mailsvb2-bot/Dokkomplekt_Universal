@@ -257,9 +257,11 @@ fn detect_role(text: &str, title: &str) -> String {
         "reception".into()
     } else if hay.contains("рвк") || hay.contains("военный комиссариат") {
         "rvk_act".into()
-    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр") {
+    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр")
+    {
         "commission".into()
-    } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию") {
+    } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию")
+    {
         "primary".into()
     } else if hay.contains("выпис") || hay.contains("эпикриз") {
         "discharge".into()

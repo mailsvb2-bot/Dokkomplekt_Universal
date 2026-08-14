@@ -307,7 +307,7 @@ fn fill_row(
             let value = if month.is_empty() || year.is_empty() {
                 atom_text(record, "date").unwrap_or_default()
             } else {
-                format!("{month}/{year}")
+                format!("{month:0>2}.{year:0>4}")
             };
             edits.push((start, end, replace_cell_text(&row_xml[start..end], &value)));
         }
@@ -677,6 +677,8 @@ mod tests {
         assert_eq!(report.final_rows, 1);
         assert!(report.xml.contains("11"));
         assert!(report.xml.contains("12"));
+        assert!(report.xml.contains("05.2026"));
+        assert!(!report.xml.contains("5/2026"));
         assert!(report.xml.contains("Основной статус"));
         assert!(report.xml.contains("Итоговый статус"));
         assert!(report.xml.contains("Совместный осмотр"));

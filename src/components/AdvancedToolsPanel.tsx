@@ -58,7 +58,9 @@ function diarySourceKey(value: string): string {
 }
 
 function diagnosisFromDiaryFileName(fileName: string): string {
-  return fileName.replace(/\.[^.]+$/, '').trim();
+  const stem = fileName.replace(/\.[^.]+$/, '').trim();
+  const icdCode = stem.match(/(?:^|[^\p{L}\p{N}])([A-Z]\d{2}(?:\.\d{1,4})?)(?=$|[^\p{L}\p{N}])/iu)?.[1];
+  return icdCode ?? stem;
 }
 
 export function AdvancedToolsPanel({
@@ -279,10 +281,13 @@ export function AdvancedToolsPanel({
       let current = blocks;
       let imported = 0;
       for (const file of files) {
-        if (!/\.txt$/i.test(file.name)) continue;
+        const supported = /\.(txt|docx|docm)$/i.test(file.name);
+        if (!supported) continue;
         const diagnosis = diagnosisFromDiaryFileName(file.name);
         const key = diarySourceKey(diagnosis);
-        const content = (await file.text()).trim();
+        const content = /\.txt$/i.test(file.name)
+          ? (await file.text()).trim()
+          : (await importLearningExampleFile(file.name, toBase64(await readBytes(file)))).extracted_text.trim();
         if (!key || !content) continue;
         current = await saveClauseBlock(
           `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
@@ -295,7 +300,7 @@ export function AdvancedToolsPanel({
     });
     if (!result) return;
     setBlocks(result.current);
-    onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя TXT используется как диагноз; данные сохранены локально.`);
+    onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; данные сохранены локально.`);
   }
 
   async function saveMedicalFinalDiary() {
@@ -562,12 +567,12 @@ export function AdvancedToolsPanel({
       {medicalAvailable && (
         <section className="utilityCard advancedCard">
           <strong>Медицина · источники дневников</strong>
-          <small>Совместимость с diary-filler: выберите TXT-файлы, названные по диагнозу (например F20.0.txt). Тексты сохраняются локально; чужой диагноз не подмешивается.</small>
+          <small>Совместимость с diary-filler: выберите TXT, DOCX или DOCM с пользовательскими текстами дневников. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; чужой диагноз не подмешивается.</small>
           <label className="utilBtn fileButton">
-            Импортировать «Тексты» (.txt)
+            Импортировать «Тексты» (TXT/DOCX/DOCM)
             <input
               type="file"
-              accept=".txt,text/plain"
+              accept=".txt,.docx,.docm,text/plain"
               multiple
               hidden
               onChange={(event) => { void importMedicalDiaryTexts(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ''; }}

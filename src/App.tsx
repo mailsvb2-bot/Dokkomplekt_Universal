@@ -109,9 +109,7 @@ function AppContent() {
         if (!alive) return;
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
-          setSelectedDocIds(res.pack.documents
-            .filter(shouldSelectDocumentByDefault)
-            .map((document) => document.id));
+          setSelectedDocIds(res.pack.documents.filter(shouldSelectDocumentByDefault).map((document) => document.id));
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
           setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');

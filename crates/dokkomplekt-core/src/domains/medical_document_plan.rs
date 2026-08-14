@@ -29,6 +29,20 @@ impl MedicalDocumentRole {
             Self::GenericMedical => "medical_generic",
         }
     }
+
+    pub fn from_role_id(raw: &str) -> Self {
+        match crate::domains::medical::canonical_medical_role(raw).as_str() {
+            "primary" => Self::PrimaryInspection,
+            "discharge" => Self::DischargeEpicrisis,
+            "diaries" => Self::Diary,
+            "rvk_act" => Self::RvkAct,
+            "commission" => Self::CommissionInspection,
+            "sick_leave_vk" => Self::SickLeaveCommission,
+            "vk_mse" => Self::VkMse,
+            "reception" => Self::ReceptionInspection,
+            _ => Self::GenericMedical,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,25 +100,34 @@ pub fn build_deep_diary_calendar(opts: DiaryCalendarOptions) -> Vec<DeepDiaryEnt
     entries
 }
 
+/// Single Medical-domain contract for required data and expected output sections.
+///
+/// The shape mirrors the proven legacy preflight semantics without leaking them
+/// into universal Core: admission is required for every medical output; history
+/// number is required for medical documents but not the diary-only flow; treatment
+/// is required for primary/discharge/commission/MSE/sick-leave VK and not for
+/// reception/RVK/diaries; discharge date is required only where the output period
+/// depends on it.
 pub fn build_medical_render_plan(
     role: MedicalDocumentRole,
     sick_leave_enabled: bool,
     treatment_found: bool,
 ) -> MedicalRenderPlan {
-    // This compatibility plan must use the same canonical ids as the live popup
-    // profile. Historical ids such as `rvk.district`, `commission.date`,
-    // `vk_mse.date` and `workplace.organization` created a split-brain contract:
-    // the UI could consider a form complete while the renderer still saw blanks.
-    let mut required = vec!["medical.case_number".into()];
+    let mut required = vec!["medical.admission_date".into(), "medical.diagnosis".into()];
+    if !matches!(role, MedicalDocumentRole::Diary) {
+        required.push("medical.case_number".into());
+    }
     let mut optional = Vec::new();
     let mut sections = Vec::new();
+
     match role {
         MedicalDocumentRole::DischargeEpicrisis => {
-            required.extend(["medical.discharge_date".into(), "medical.diagnosis".into()]);
+            required.push("medical.discharge_date".into());
             require_treatment_if_missing(&mut required, treatment_found);
             if sick_leave_enabled {
-                optional.push("medical.sick_leave_number".into());
+                required.push("medical.sick_leave_number".into());
             }
+            optional.extend(["medical.workplace".into(), "medical.position".into()]);
             sections.extend([
                 "demographics".into(),
                 "diagnosis".into(),
@@ -114,11 +137,7 @@ pub fn build_medical_render_plan(
             ]);
         }
         MedicalDocumentRole::Diary => {
-            required.extend([
-                "medical.admission_date".into(),
-                "medical.discharge_date".into(),
-                "medical.diagnosis".into(),
-            ]);
+            required.push("medical.discharge_date".into());
             optional.push("medical.treatment".into());
             sections.extend([
                 "calendar_entries".into(),
@@ -131,7 +150,6 @@ pub fn build_medical_render_plan(
                 "medical.discharge_date".into(),
                 "medical.rvk_commissariat".into(),
                 "medical.rvk_act_number".into(),
-                "medical.diagnosis".into(),
             ]);
             optional.push("medical.treatment".into());
             sections.extend([
@@ -144,7 +162,6 @@ pub fn build_medical_render_plan(
             required.extend([
                 "medical.commission_date".into(),
                 "medical.commission_number".into(),
-                "medical.diagnosis".into(),
             ]);
             require_treatment_if_missing(&mut required, treatment_found);
             sections.extend([
@@ -163,9 +180,8 @@ pub fn build_medical_render_plan(
                 "medical.sick_leave_commission_date".into(),
                 "medical.sick_leave_number".into(),
                 "medical.workplace".into(),
-                "medical.diagnosis".into(),
+                "medical.position".into(),
             ]);
-            optional.push("medical.position".into());
             require_treatment_if_missing(&mut required, treatment_found);
             sections.extend([
                 "work".into(),
@@ -182,9 +198,8 @@ pub fn build_medical_render_plan(
                 "medical.protocol_number".into(),
                 "medical.protocol_date".into(),
                 "medical.workplace".into(),
-                "medical.diagnosis".into(),
+                "medical.position".into(),
             ]);
-            optional.push("medical.position".into());
             require_treatment_if_missing(&mut required, treatment_found);
             sections.extend([
                 "work".into(),
@@ -195,8 +210,8 @@ pub fn build_medical_render_plan(
             ]);
         }
         MedicalDocumentRole::PrimaryInspection => {
-            required.extend(["medical.admission_date".into(), "medical.diagnosis".into()]);
             require_treatment_if_missing(&mut required, treatment_found);
+            optional.extend(["medical.workplace".into(), "medical.position".into()]);
             sections.extend([
                 "complaints".into(),
                 "anamnesis".into(),
@@ -207,7 +222,6 @@ pub fn build_medical_render_plan(
             ]);
         }
         MedicalDocumentRole::ReceptionInspection => {
-            required.extend(["medical.admission_date".into(), "medical.diagnosis".into()]);
             sections.extend([
                 "reception_status".into(),
                 "referral_phrase".into(),
@@ -215,10 +229,10 @@ pub fn build_medical_render_plan(
             ]);
         }
         MedicalDocumentRole::GenericMedical => {
-            required.push("medical.diagnosis".into());
             sections.push("generic_medical_template".into());
         }
     }
+
     required.sort();
     required.dedup();
     optional.retain(|field| !required.contains(field));
@@ -264,15 +278,44 @@ mod tests {
     }
 
     #[test]
-    fn discharge_plan_asks_treatment_only_if_missing() {
+    fn discharge_plan_asks_treatment_only_if_missing_and_sick_leave_when_enabled() {
         let missing = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, true, false);
         assert!(missing.required_fields.contains(&"medical.treatment".into()));
         assert!(missing
-            .optional_fields
+            .required_fields
             .contains(&"medical.sick_leave_number".into()));
 
         let parsed = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, false, true);
         assert!(!parsed.required_fields.contains(&"medical.treatment".into()));
+        assert!(!parsed
+            .required_fields
+            .contains(&"medical.sick_leave_number".into()));
+    }
+
+    #[test]
+    fn legacy_preflight_boundaries_are_preserved() {
+        let diary = build_medical_render_plan(MedicalDocumentRole::Diary, false, false);
+        assert!(!diary.required_fields.contains(&"medical.case_number".into()));
+        assert!(diary.required_fields.contains(&"medical.admission_date".into()));
+        assert!(diary.required_fields.contains(&"medical.discharge_date".into()));
+        assert!(!diary.required_fields.contains(&"medical.treatment".into()));
+
+        let reception = build_medical_render_plan(MedicalDocumentRole::ReceptionInspection, false, false);
+        assert!(reception.required_fields.contains(&"medical.case_number".into()));
+        assert!(reception.required_fields.contains(&"medical.admission_date".into()));
+        assert!(reception.required_fields.contains(&"medical.diagnosis".into()));
+        assert!(!reception.required_fields.contains(&"medical.treatment".into()));
+
+        for role in [
+            MedicalDocumentRole::PrimaryInspection,
+            MedicalDocumentRole::DischargeEpicrisis,
+            MedicalDocumentRole::CommissionInspection,
+            MedicalDocumentRole::VkMse,
+            MedicalDocumentRole::SickLeaveCommission,
+        ] {
+            let plan = build_medical_render_plan(role, false, false);
+            assert!(plan.required_fields.contains(&"medical.treatment".into()));
+        }
     }
 
     #[test]
@@ -309,6 +352,7 @@ mod tests {
         let mse = build_medical_render_plan(MedicalDocumentRole::VkMse, false, false);
         assert!(mse.required_fields.contains(&"medical.commission_date".into()));
         assert!(mse.required_fields.contains(&"medical.workplace".into()));
+        assert!(mse.required_fields.contains(&"medical.position".into()));
         assert!(mse.required_fields.contains(&"medical.diagnosis".into()));
         assert!(mse.required_fields.contains(&"medical.treatment".into()));
         assert!(!mse.required_fields.iter().any(|field| field == "vk_mse.date"));
@@ -332,6 +376,7 @@ mod tests {
         ];
         for (role, id) in roles {
             assert_eq!(role.role_id(), id);
+            assert_eq!(MedicalDocumentRole::from_role_id(id), role);
         }
     }
 }

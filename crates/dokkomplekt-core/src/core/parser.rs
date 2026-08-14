@@ -45,6 +45,32 @@ pub struct Field {
 /// `field.<id>` metadata. Those ids are validated structurally and therefore do
 /// not require a hardcoded profession in the Core.
 pub fn parse_source_document(source: &SourceDocument) -> ParsedDocument {
+    let default_year = default_year_for_source(source);
+    parse_source_document_with_resolved_year(source, default_year)
+}
+
+/// Parse a source using temporal context supplied by the caller.
+///
+/// A higher-level workflow already knows the intended default year and must not
+/// allow the Core to replace it with the machine clock or an unrelated year
+/// found elsewhere in the document. Invalid caller years deliberately fall back
+/// to the legacy source resolver so existing direct callers remain compatible.
+pub fn parse_source_document_with_default_year(
+    source: &SourceDocument,
+    default_year: i32,
+) -> ParsedDocument {
+    let resolved_year = if (1900..=2200).contains(&default_year) {
+        default_year
+    } else {
+        default_year_for_source(source)
+    };
+    parse_source_document_with_resolved_year(source, resolved_year)
+}
+
+fn parse_source_document_with_resolved_year(
+    source: &SourceDocument,
+    default_year: i32,
+) -> ParsedDocument {
     let title = source
         .text
         .lines()
@@ -52,7 +78,6 @@ pub fn parse_source_document(source: &SourceDocument) -> ParsedDocument {
         .find(|line| !line.is_empty())
         .unwrap_or("document")
         .to_string();
-    let default_year = default_year_for_source(source);
     let mut warnings = Vec::new();
     let mut fields = BTreeMap::<String, Field>::new();
 
@@ -136,12 +161,7 @@ pub(crate) fn extract_declared_field(
                     });
                 }
             }
-            if let Some(next) = lines
-                .iter()
-                .skip(line_index + 1)
-                .map(|line| line.trim())
-                .find(|line| !line.is_empty())
-            {
+            if let Some(next) = next_declared_value(&lines, line_index + 1) {
                 if let Some(value) = normalize_declared_value(&definition.kind, next, default_year)
                 {
                     return Some(Field {
@@ -154,6 +174,51 @@ pub(crate) fn extract_declared_field(
         }
     }
     None
+}
+
+/// Return the first following value line without crossing another declared Core
+/// field or an explicit section heading. A field label is structure, never data
+/// for the preceding field.
+fn next_declared_value<'a>(lines: &'a [&'a str], start: usize) -> Option<&'a str> {
+    for line in lines.iter().skip(start) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if starts_with_declared_core_label(line) || is_explicit_section_heading(line) {
+            return None;
+        }
+        return Some(line);
+    }
+    None
+}
+
+fn starts_with_declared_core_label(line: &str) -> bool {
+    let folded = line.trim_start().to_lowercase();
+    plugin_by_id(&DomainPluginId::Core)
+        .field_definitions
+        .into_iter()
+        .flat_map(|definition| definition.aliases.into_iter())
+        .any(|alias| {
+            let alias = alias.trim().to_lowercase();
+            folded.strip_prefix(&alias).is_some_and(|remainder| {
+                remainder
+                    .chars()
+                    .next()
+                    .is_none_or(|character| !character.is_alphanumeric())
+            })
+        })
+}
+
+fn is_explicit_section_heading(line: &str) -> bool {
+    if !line.trim_end().ends_with(':') {
+        return false;
+    }
+    let letters = line
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .collect::<Vec<_>>();
+    letters.len() >= 3 && letters.iter().all(|character| character.is_uppercase())
 }
 
 fn normalize_declared_value(
@@ -275,6 +340,41 @@ mod tests {
             value(&document, "subject.name"),
             Some("Иванов Иван Иванович")
         );
+    }
+
+    #[test]
+    fn explicit_default_year_overrides_clock_and_unrelated_document_years() {
+        let document = parse_source_document_with_default_year(
+            &SourceDocument {
+                id: "year-context".into(),
+                text: "Редакция 2026\ndocument.date: 14.07".into(),
+                metadata: BTreeMap::new(),
+            },
+            2025,
+        );
+        assert_eq!(value(&document, "document.date"), Some("14.07.2025"));
+    }
+
+    #[test]
+    fn next_declared_label_is_never_consumed_as_previous_field_value() {
+        let document = parse_source_document(&SourceDocument {
+            id: "field-boundary".into(),
+            text: "Клиент\nДата документа: 14.07.2026".into(),
+            metadata: BTreeMap::from([("default_year".into(), "2026".into())]),
+        });
+        assert_eq!(value(&document, "subject.name"), None);
+        assert_eq!(value(&document, "document.date"), Some("14.07.2026"));
+    }
+
+    #[test]
+    fn explicit_section_heading_stops_multiline_fallback() {
+        let document = parse_source_document(&SourceDocument {
+            id: "heading-boundary".into(),
+            text: "Клиент\nРЕКВИЗИТЫ:\nКомпания: ООО Ромашка".into(),
+            metadata: BTreeMap::new(),
+        });
+        assert_eq!(value(&document, "subject.name"), None);
+        assert_eq!(value(&document, "org.name"), Some("ООО Ромашка"));
     }
 
     #[test]

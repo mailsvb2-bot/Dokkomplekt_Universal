@@ -301,6 +301,6 @@ fn output_folder_name_uses_spaces_not_underscores() {
             FolderNamePart::AdmissionAndDischargeDates,
         ],
     );
-    assert_eq!(name, "Иванов И. И. 01.06.2026 - 03.06.2026");
+    assert_eq!(name, "Иванов И.И. 01.06.2026 - 03.06.2026");
     assert!(!name.contains('_'));
 }

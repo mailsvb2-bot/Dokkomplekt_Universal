@@ -17,6 +17,14 @@ pub enum SeriesCadence {
     DayOffsets(Vec<i32>),
     FixedTimes(Vec<String>),
     MinuteInterval(u32),
+    DayOffsetsFixedTimes {
+        day_offsets: Vec<i32>,
+        times: Vec<String>,
+    },
+    DayOffsetsMinuteInterval {
+        day_offsets: Vec<i32>,
+        minutes: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +127,63 @@ pub fn build_series_plan(
                 let date = start + Duration::days(i64::from(offset));
                 if date >= first && date <= end && !should_skip(date) {
                     push_entry(&mut entries, start, date, None)?;
+                }
+            }
+        }
+        SeriesCadence::DayOffsetsFixedTimes { day_offsets, times } => {
+            let times = normalize_times(times)?;
+            let mut offsets = day_offsets.clone();
+            offsets.sort_unstable();
+            offsets.dedup();
+            for offset in offsets {
+                if offset < request.start_offset_days {
+                    continue;
+                }
+                let date = start + Duration::days(i64::from(offset));
+                if date < first || date > end || should_skip(date) {
+                    continue;
+                }
+                for time in &times {
+                    push_entry(&mut entries, start, date, Some(*time))?;
+                }
+            }
+        }
+        SeriesCadence::DayOffsetsMinuteInterval {
+            day_offsets,
+            minutes,
+        } => {
+            if *minutes == 0 || *minutes > 24 * 60 {
+                return Err(SeriesPlanError::InvalidCadence(
+                    "интервал должен быть от 1 до 1440 минут".into(),
+                ));
+            }
+            let start_time = parse_time(request.day_start_time.as_deref().unwrap_or("00:00"))?;
+            let end_time = parse_time(request.day_end_time.as_deref().unwrap_or("23:59"))?;
+            if end_time < start_time {
+                return Err(SeriesPlanError::InvalidCadence(
+                    "время окончания дня раньше времени начала".into(),
+                ));
+            }
+            let mut offsets = day_offsets.clone();
+            offsets.sort_unstable();
+            offsets.dedup();
+            for offset in offsets {
+                if offset < request.start_offset_days {
+                    continue;
+                }
+                let date = start + Duration::days(i64::from(offset));
+                if date < first || date > end || should_skip(date) {
+                    continue;
+                }
+                let mut current_time = start_time;
+                while current_time <= end_time {
+                    push_entry(&mut entries, start, date, Some(current_time))?;
+                    let next = NaiveDateTime::new(date, current_time)
+                        + Duration::minutes(i64::from(*minutes));
+                    if next.date() != date {
+                        break;
+                    }
+                    current_time = next.time();
                 }
             }
         }
@@ -318,6 +383,46 @@ mod tests {
         assert_eq!(
             plan.iter().map(|x| x.time.as_deref()).collect::<Vec<_>>(),
             vec![Some("09:00"), Some("09:30"), Some("10:00")]
+        );
+    }
+
+    #[test]
+    fn selected_days_can_use_fixed_times_without_expanding_to_other_days() {
+        let mut req = request(SeriesCadence::DayOffsetsFixedTimes {
+            day_offsets: vec![1, 3],
+            times: vec!["08:00".into(), "20:00".into()],
+        });
+        req.end_date = "05.06.2026".into();
+        let plan = build_series_plan(&req).unwrap();
+        assert_eq!(
+            plan.iter().map(|x| x.datetime.as_str()).collect::<Vec<_>>(),
+            vec![
+                "02.06.2026 08:00",
+                "02.06.2026 20:00",
+                "04.06.2026 08:00",
+                "04.06.2026 20:00",
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_days_can_use_minute_rhythm_without_expanding_to_other_days() {
+        let mut req = request(SeriesCadence::DayOffsetsMinuteInterval {
+            day_offsets: vec![1, 3],
+            minutes: 240,
+        });
+        req.end_date = "05.06.2026".into();
+        req.day_start_time = Some("08:00".into());
+        req.day_end_time = Some("12:00".into());
+        let plan = build_series_plan(&req).unwrap();
+        assert_eq!(
+            plan.iter().map(|x| x.datetime.as_str()).collect::<Vec<_>>(),
+            vec![
+                "02.06.2026 08:00",
+                "02.06.2026 12:00",
+                "04.06.2026 08:00",
+                "04.06.2026 12:00",
+            ]
         );
     }
 

@@ -118,6 +118,7 @@ fn popup_stays_open_on_wrong_empty_required_value() {
             field_id: "medical.case_number".into(),
             title: "Номер истории болезни".into(),
             required: true,
+            skippable: false,
             current_value: None,
             validation_hint: None,
             input_kind: PromptInputKind::Text,

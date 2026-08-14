@@ -141,7 +141,7 @@ pub fn best_domain(analysis: &TemplateAnalysis) -> DomainKind {
 }
 
 fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize> {
-    let lower = text.to_lowercase();
+    let lower = text.to_lowercase().replace('ё', "е");
     let mut scores = BTreeMap::new();
     scores.insert(
         "generic".to_string(),
@@ -161,6 +161,8 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
         "комисс",
         "рвк",
         "мсэ",
+        "больнич",
+        "приемного покоя",
     ]
     .iter()
     .filter(|w| lower.contains(**w))
@@ -184,7 +186,7 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
         .filter(|w| lower.contains(**w))
         .count()
         + placeholders.iter().filter(|p| p.starts_with("hr.")).count() * 3;
-    let accounting = ["счет", "счёт", "инн", "кпп", "сумма", "итого"]
+    let accounting = ["счет", "инн", "кпп", "сумма", "итого"]
         .iter()
         .filter(|w| lower.contains(**w))
         .count()
@@ -219,7 +221,7 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
 }
 
 fn detect_role(text: &str, title: &str) -> String {
-    // Generated-document roles belong to the professional profile.  Keep the
+    // Generated-document roles belong to the professional profile. Keep the
     // recognizer conservative, but do not collapse distinct legacy forms into
     // a nearby medical role: their popup requisites and render contracts differ.
     let hay = format!("{}\n{}", title, text)
@@ -233,7 +235,7 @@ fn detect_role(text: &str, title: &str) -> String {
         "rvk_act".into()
     } else if hay.contains("вк больнич")
         || hay.contains("вк по больнич")
-        || hay.contains("продлен") && hay.contains("больнич")
+        || (hay.contains("продлен") && hay.contains("больнич"))
     {
         "sick_leave_vk".into()
     } else if hay.contains("мсэ") || hay.contains("вк на мсэ") {
@@ -334,21 +336,20 @@ mod alias_regression_tests {
 
     #[test]
     fn legacy_medical_templates_keep_distinct_generated_document_roles() {
-        assert_eq!(
-            analyze_template_text("ВК больничный\nВыписка из ПРОТОКОЛА №").role_id,
-            "sick_leave_vk"
-        );
-        assert_eq!(
-            analyze_template_text("Осмотр врача приёмного покоя\nЖалобы:").role_id,
-            "reception"
-        );
-        assert_eq!(
-            analyze_template_text("ВК на МСЭ\nВыписка из ПРОТОКОЛА №").role_id,
-            "vk_mse"
-        );
-        assert_eq!(
-            analyze_template_text("Совместный осмотр\nДата комиссии").role_id,
-            "commission"
-        );
+        let sick_leave = analyze_template_text("ВК больничный\nВыписка из ПРОТОКОЛА №");
+        assert_eq!(sick_leave.role_id, "sick_leave_vk");
+        assert_eq!(best_domain(&sick_leave), DomainKind::Medical);
+
+        let reception = analyze_template_text("Осмотр врача приёмного покоя\nЖалобы:");
+        assert_eq!(reception.role_id, "reception");
+        assert_eq!(best_domain(&reception), DomainKind::Medical);
+
+        let mse = analyze_template_text("ВК на МСЭ\nВыписка из ПРОТОКОЛА №");
+        assert_eq!(mse.role_id, "vk_mse");
+        assert_eq!(best_domain(&mse), DomainKind::Medical);
+
+        let commission = analyze_template_text("Совместный осмотр\nДата комиссии");
+        assert_eq!(commission.role_id, "commission");
+        assert_eq!(best_domain(&commission), DomainKind::Medical);
     }
 }

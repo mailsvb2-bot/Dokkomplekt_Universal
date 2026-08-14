@@ -27,13 +27,19 @@ pub fn escape_xml(value: &str) -> String {
 }
 pub fn render_diary_text_with_signatures(body: &str) -> String {
     let mut out = body.trim().to_string();
-    if !has_signature_line(&out, &["лечащий врач", "врач-психиатр", "врач психиатр"])
-    {
+    if !has_signature_line(
+        &out,
+        &["лечащий врач", "врач-психиатр", "врач психиатр"],
+    ) {
         out.push_str("\n\nЛечащий врач __________________ /____________/");
     }
     if !has_signature_line(
         &out,
-        &["заведующий отделением", "зав. отделением", "зав отделением"],
+        &[
+            "заведующий отделением",
+            "зав. отделением",
+            "зав отделением",
+        ],
     ) {
         out.push_str("\nЗаведующий отделением __________ /____________/");
     }
@@ -119,7 +125,11 @@ mod tests {
 
     #[test]
     fn docx_render_reports_missing_and_keeps_marker_in_strict() {
-        let r = render_docx_xml_template("<w:t>{{org.name}}</w:t>", &SemanticCase::default(), true);
+        let r = render_docx_xml_template(
+            "<w:t>{{org.name}}</w:t>",
+            &SemanticCase::default(),
+            true,
+        );
         assert_eq!(r.missing_fields, vec!["org.name".to_string()]);
         assert!(r.output_text.contains("{{org.name}}"));
     }

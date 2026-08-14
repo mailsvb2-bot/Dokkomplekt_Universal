@@ -1168,6 +1168,54 @@ fn render_preview(
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
+fn ensure_rendered_document_complete(
+    document: &DocumentTemplateSpec,
+    template_text: &str,
+    semantic_case: &SemanticCase,
+    rendered_path: &Path,
+) -> Result<(), String> {
+    let missing_required = document
+        .required_fields
+        .iter()
+        .filter(|field_id| !semantic_case.has(field_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let rendered_text = extract_docx_text(rendered_path).map_err(|error| {
+        format!(
+            "Не удалось проверить полноту созданного документа «{}»: {error}",
+            document.button_label
+        )
+    })?;
+    let requirements = dokkomplekt_core::required_blocks_for(document, template_text);
+    let unmet_blocks = dokkomplekt_core::unmet_blocks(
+        &requirements,
+        semantic_case,
+        &rendered_text,
+    );
+    if missing_required.is_empty() && unmet_blocks.is_empty() {
+        return Ok(());
+    }
+
+    let mut reasons = Vec::new();
+    if !missing_required.is_empty() {
+        reasons.push(format!(
+            "не заполнены обязательные поля: {}",
+            missing_required.join(", ")
+        ));
+    }
+    if !unmet_blocks.is_empty() {
+        reasons.push(format!(
+            "в готовом документе не подтверждены обязательные блоки: {}",
+            unmet_blocks.join(", ")
+        ));
+    }
+    Err(format!(
+        "Документ «{}» не опубликован: {}.",
+        document.button_label,
+        reasons.join("; ")
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 struct RenderDocxRequest {
     document_id: String,
@@ -1207,7 +1255,7 @@ fn render_docx(
     let hydrated = match hydrate_case_with_persistent_template_data(
         &app,
         &base_case,
-        &[template_text],
+        std::slice::from_ref(&template_text),
         true,
     ) {
         Ok(value) => value,
@@ -1232,6 +1280,17 @@ fn render_docx(
             return Err(error.to_string());
         }
     };
+    if let Err(error) = ensure_rendered_document_complete(
+        &doc,
+        &template_text,
+        &hydrated.case,
+        &reservation.path,
+    ) {
+        let _ = std::fs::remove_file(&reservation.path);
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
     if let Err(error) = template_snapshot.ensure_current() {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
@@ -1397,7 +1456,7 @@ fn render_docx_batch(
             let hydrated = hydrate_case_with_persistent_template_data(
                 &app,
                 &base_case,
-                &[template_text],
+                std::slice::from_ref(&template_text),
                 true,
             )?;
             for (field_id, value) in &hydrated.case.values {
@@ -1425,6 +1484,15 @@ fn render_docx_batch(
                 permit.watermark.as_deref(),
             ) {
                 return Err(format!("Не создан «{}»: {error}", document.button_label));
+            }
+            if let Err(error) = ensure_rendered_document_complete(
+                document,
+                &template_text,
+                &hydrated.case,
+                &reservation.path,
+            ) {
+                let _ = std::fs::remove_file(&reservation.path);
+                return Err(error);
             }
             paths.push(reservation.commit()?);
         }

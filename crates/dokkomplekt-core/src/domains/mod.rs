@@ -18,3 +18,4 @@ pub use legal::LegalProfile;
 pub use medical::{canonical_medical_role, medical_discharge_workflow, MedicalProfile};
 
 pub mod medical_document_plan;
+pub mod medical_semantics;

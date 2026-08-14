@@ -219,16 +219,30 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
 }
 
 fn detect_role(text: &str, title: &str) -> String {
-    let hay = format!("{}\n{}", title, text).to_lowercase();
+    // Generated-document roles belong to the professional profile.  Keep the
+    // recognizer conservative, but do not collapse distinct legacy forms into
+    // a nearby medical role: their popup requisites and render contracts differ.
+    let hay = format!("{}\n{}", title, text)
+        .to_lowercase()
+        .replace('ё', "е");
     if hay.contains("дневник") {
         "diaries".into()
     } else if hay.contains("выпис") || hay.contains("эпикриз") {
         "discharge".into()
     } else if hay.contains("рвк") || hay.contains("военный комиссариат") {
         "rvk_act".into()
-    } else if hay.contains("мсэ") || hay.contains("вк на") {
+    } else if hay.contains("вк больнич")
+        || hay.contains("вк по больнич")
+        || hay.contains("продлен") && hay.contains("больнич")
+    {
+        "sick_leave_vk".into()
+    } else if hay.contains("мсэ") || hay.contains("вк на мсэ") {
         "vk_mse".into()
-    } else if hay.contains("комисс") {
+    } else if hay.contains("осмотр врача приемного покоя")
+        || hay.contains("врач приемного покоя")
+    {
+        "reception".into()
+    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр") {
         "commission".into()
     } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию")
     {
@@ -316,5 +330,25 @@ mod alias_regression_tests {
         assert_eq!(hr.placeholders, vec!["employee.position"]);
         let medical = analyze_template_text("Выписной эпикриз\n{{Должность}}");
         assert_eq!(medical.placeholders, vec!["medical.position"]);
+    }
+
+    #[test]
+    fn legacy_medical_templates_keep_distinct_generated_document_roles() {
+        assert_eq!(
+            analyze_template_text("ВК больничный\nВыписка из ПРОТОКОЛА №").role_id,
+            "sick_leave_vk"
+        );
+        assert_eq!(
+            analyze_template_text("Осмотр врача приёмного покоя\nЖалобы:").role_id,
+            "reception"
+        );
+        assert_eq!(
+            analyze_template_text("ВК на МСЭ\nВыписка из ПРОТОКОЛА №").role_id,
+            "vk_mse"
+        );
+        assert_eq!(
+            analyze_template_text("Совместный осмотр\nДата комиссии").role_id,
+            "commission"
+        );
     }
 }

@@ -1,0 +1,46 @@
+name: One-time Rust diagnostic
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-time-rust-diagnostic-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'agent/full-functional-parity' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Diagnose cargo check
+        shell: bash
+        run: |
+          set +e
+          cargo check --workspace --all-targets --locked > /tmp/cargo-check.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo '::group::cargo check diagnostic'
+            tail -n 160 /tmp/cargo-check.log
+            echo '::endgroup::'
+            while IFS= read -r line; do
+              safe=${line//'%'/'%25'}
+              safe=${safe//$'\r'/'%0D'}
+              safe=${safe//$'\n'/'%0A'}
+              echo "::error::$safe"
+            done < <(tail -n 80 /tmp/cargo-check.log)
+            exit "$code"
+          fi
+          echo 'cargo check passed'

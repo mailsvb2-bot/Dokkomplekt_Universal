@@ -22,15 +22,45 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Apply verified UI selection patch, test, and clean staging files
+      - name: Apply safe default selection, test, and clean staging files
         shell: bash
         run: |
           set -euo pipefail
           branch="${GITHUB_REF_NAME}"
           git fetch origin "${branch}"
           git checkout -B "${branch}" "origin/${branch}"
-          git apply --check .agent-ui-selection.patch
-          git apply .agent-ui-selection.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          support = Path('src/lib/appSupport.ts')
+          text = support.read_text(encoding='utf-8')
+          anchor = "export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';\n\n"
+          helper = """export function shouldSelectDocumentByDefault(document: DocumentTemplateSpec): boolean {\n  if (document.category !== 'Medical') return true;\n  const role = document.role_id.trim().toLowerCase();\n  return !(\n    role === 'discharge'\n    || role.endsWith('.discharge')\n    || role === 'diary'\n    || role === 'diaries'\n    || role.endsWith('.diary')\n    || role.endsWith('.diaries')\n  );\n}\n\n"""
+          if 'export function shouldSelectDocumentByDefault' not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('appSupport anchor mismatch')
+              text = text.replace(anchor, anchor + helper, 1)
+              support.write_text(text, encoding='utf-8')
+
+          app = Path('src/App.tsx')
+          text = app.read_text(encoding='utf-8')
+          old_import = "  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,\n"
+          new_import = "  replaceAllLiteral, shouldSelectDocumentByDefault, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,\n"
+          if 'shouldSelectDocumentByDefault, withPendingTemplateDomain' not in text:
+              if text.count(old_import) != 1:
+                  raise SystemExit('App import anchor mismatch')
+              text = text.replace(old_import, new_import, 1)
+          old_selection = "          setSelectedDocIds(res.pack.documents.map((document) => document.id));\n"
+          new_selection = "          setSelectedDocIds(res.pack.documents\n            .filter(shouldSelectDocumentByDefault)\n            .map((document) => document.id));\n"
+          if '.filter(shouldSelectDocumentByDefault)' not in text:
+              if text.count(old_selection) != 1:
+                  raise SystemExit('App selection anchor mismatch')
+              text = text.replace(old_selection, new_selection, 1)
+          app.write_text(text, encoding='utf-8')
+
+          test = Path('src/lib/appSupport.selection.test.ts')
+          test.write_text("""import { describe, expect, it } from 'vitest';\nimport type { DocumentTemplateSpec, DomainKind } from './types';\nimport { shouldSelectDocumentByDefault } from './appSupport';\n\nfunction document(roleId: string, category: DomainKind, label = 'Переименовано пользователем'): DocumentTemplateSpec {\n  return {\n    id: `doc-${roleId}`,\n    button_label: label,\n    template_path: `${roleId}.docx`,\n    category,\n    role_id: roleId,\n    required_fields: [],\n    placeholders: [],\n    is_static_copy: false,\n    popup_fields: [],\n    popup_configured: false,\n  };\n}\n\ndescribe('default document selection', () => {\n  it('keeps medical discharge and diaries off regardless of renamed button labels', () => {\n    expect(shouldSelectDocumentByDefault(document('discharge', 'Medical', 'Мой документ'))).toBe(false);\n    expect(shouldSelectDocumentByDefault(document('diaries', 'Medical', 'Ежедневные записи'))).toBe(false);\n    expect(shouldSelectDocumentByDefault(document('medical.discharge', 'Medical'))).toBe(false);\n    expect(shouldSelectDocumentByDefault(document('medical.diary', 'Medical'))).toBe(false);\n  });\n\n  it('keeps other medical roles selected by default', () => {\n    for (const role of ['primary', 'rvk_act', 'commission', 'vk_mse', 'sick_leave_vk', 'reception']) {\n      expect(shouldSelectDocumentByDefault(document(role, 'Medical'))).toBe(true);\n    }\n  });\n\n  it('never applies medical defaults to other professions even when role ids collide', () => {\n    for (const category of ['Generic', 'Legal', 'Hr', 'Education', 'Accounting'] as DomainKind[]) {\n      expect(shouldSelectDocumentByDefault(document('discharge', category))).toBe(true);\n      expect(shouldSelectDocumentByDefault(document('diaries', category))).toBe(true);\n    }\n  });\n});\n""", encoding='utf-8')
+          PY
           npm ci
           npm run typecheck
           npx vitest run --config vitest.config.ts src/lib/appSupport.selection.test.ts src/App.test.tsx

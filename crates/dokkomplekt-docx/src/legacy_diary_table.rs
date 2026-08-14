@@ -6,7 +6,9 @@
 //! boundary and consumes the same canonical `SemanticCase.collections` data as
 //! the modern template renderer.
 
-use dokkomplekt_core::{prepare_professional_collections, SemanticAtom, SemanticCase, SemanticRecord};
+use dokkomplekt_core::{
+    prepare_professional_collections, SemanticAtom, SemanticCase, SemanticRecord,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct LegacyDiaryTableReport {
@@ -53,6 +55,11 @@ pub(crate) fn fill_legacy_diary_tables(
     let mut plans = Vec::new();
     for range in table_ranges {
         let table_xml = &xml[range.0..range.1];
+        // Modern collection-aware templates are handled by the canonical
+        // template engine. Never rewrite the same table twice.
+        if table_xml.contains("{{#each") || table_xml.contains("{{diary.") {
+            continue;
+        }
         let Some(layout) = detect_diary_table_layout(table_xml, strict)? else {
             continue;
         };
@@ -72,9 +79,9 @@ pub(crate) fn fill_legacy_diary_tables(
                         .into(),
                 );
             }
-            report.warnings.push(
-                "legacy_diary_table_without_recognizable_data_rows".into(),
-            );
+            report
+                .warnings
+                .push("legacy_diary_table_without_recognizable_data_rows".into());
             continue;
         }
         plans.push(TablePlan {
@@ -94,10 +101,8 @@ pub(crate) fn fill_legacy_diary_tables(
     // Ask the universal domain layer for the same collection used by modern
     // `{{#each diaries}}` templates. No scheduling/content rule is duplicated in
     // this Word compatibility adapter.
-    let prepared = prepare_professional_collections(
-        "{{#each diaries}}{{diary.text}}{{/each}}",
-        case,
-    );
+    let prepared =
+        prepare_professional_collections("{{#each diaries}}{{diary.text}}{{/each}}", case);
     let Some(entries) = prepared.collection("diaries") else {
         if strict {
             return Err(
@@ -131,7 +136,6 @@ pub(crate) fn fill_legacy_diary_tables(
         ));
     }
 
-    let mut cursor = 0usize;
     // Replace tables back-to-front to keep byte ranges stable.
     for plan in plans.iter().rev() {
         let table_xml = &xml[plan.range.0..plan.range.1];
@@ -169,8 +173,6 @@ pub(crate) fn fill_legacy_diary_tables(
         .take(report.filled_rows)
         .filter(|row| atom_bool(row, "is_final"))
         .count();
-    cursor += report.filled_rows;
-    debug_assert_eq!(cursor, report.filled_rows);
     if strict && report.final_rows != 1 {
         return Err(format!(
             "После заполнения legacy-дневников ожидалась ровно одна итоговая запись, получено {}.",
@@ -352,7 +354,10 @@ fn diary_cell_content(existing: &str, body: &str, record: &SemanticRecord) -> St
         .filter(|line| is_signature_line(line))
         .collect::<Vec<_>>();
 
-    let mut parts = structural.iter().map(|line| (*line).to_string()).collect::<Vec<_>>();
+    let mut parts = structural
+        .iter()
+        .map(|line| (*line).to_string())
+        .collect::<Vec<_>>();
     if !body.trim().is_empty() {
         parts.push(body.trim().to_string());
     }
@@ -385,7 +390,10 @@ fn atom_text(record: &SemanticRecord, key: &str) -> Option<String> {
 fn atom_bool(record: &SemanticRecord, key: &str) -> bool {
     match record.get(key) {
         Some(SemanticAtom::Boolean(value)) => *value,
-        Some(value) => matches!(value.as_text().trim().to_lowercase().as_str(), "1" | "true" | "да"),
+        Some(value) => matches!(
+            value.as_text().trim().to_lowercase().as_str(),
+            "1" | "true" | "да"
+        ),
         None => false,
     }
 }
@@ -454,7 +462,6 @@ fn replace_cell_text(cell_xml: &str, value: &str) -> String {
 
 fn visible_text(xml: &str) -> String {
     let mut output = String::new();
-    let mut cursor = 0usize;
     while let Some(relative) = xml[cursor..].find("<w:t") {
         let start = cursor + relative;
         let Some(open_end) = xml[start..].find('>').map(|offset| start + offset + 1) else {
@@ -494,7 +501,6 @@ fn decode_xml(value: &str) -> String {
 fn element_ranges(xml: &str, name: &str) -> Vec<(usize, usize)> {
     let marker = format!("<{name}");
     let mut ranges = Vec::new();
-    let mut cursor = 0usize;
     while let Some(relative) = xml[cursor..].find(&marker) {
         let start = cursor + relative;
         if !xml_name_boundary(xml.as_bytes().get(start + marker.len()).copied()) {
@@ -520,8 +526,12 @@ fn matching_element_end(xml: &str, start: usize, name: &str) -> Option<usize> {
     let mut depth = 1usize;
     let mut cursor = opening_end;
     while depth > 0 {
-        let next_open = xml[cursor..].find(&open_marker).map(|offset| cursor + offset);
-        let next_close = xml[cursor..].find(&close_marker).map(|offset| cursor + offset);
+        let next_open = xml[cursor..]
+            .find(&open_marker)
+            .map(|offset| cursor + offset);
+        let next_close = xml[cursor..]
+            .find(&close_marker)
+            .map(|offset| cursor + offset);
         match (next_open, next_close) {
             (_, None) => return None,
             (Some(open), Some(close)) if open < close => {
@@ -586,18 +596,34 @@ mod tests {
     }
 
     fn cell(text: &str) -> String {
-        format!("<w:tc><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>", escape_xml(text))
+        format!(
+            "<w:tc><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>",
+            escape_xml(text)
+        )
     }
 
     fn row(values: &[&str]) -> String {
-        format!("<w:tr>{}</w:tr>", values.iter().map(|value| cell(value)).collect::<String>())
+        format!(
+            "<w:tr>{}</w:tr>",
+            values.iter().map(|value| cell(value)).collect::<String>()
+        )
     }
 
     fn legacy_table() -> String {
         format!(
             "<w:document><w:body><w:tbl>{}{}{}{}{}</w:tbl></w:body></w:document>",
-            row(&["День госпитализации", "Число", "Месяц / год", "Дневник наблюдения"]),
-            row(&["1", "01", "", "Совместный осмотр.\nЛечащий врач ___\nЗаведующий отделением ___"]),
+            row(&[
+                "День госпитализации",
+                "Число",
+                "Месяц / год",
+                "Дневник наблюдения"
+            ]),
+            row(&[
+                "1",
+                "01",
+                "",
+                "Совместный осмотр.\nЛечащий врач ___\nЗаведующий отделением ___"
+            ]),
             row(&["2", "02", "", ""]),
             row(&["3", "03", "", ""]),
             row(&["4", "04", "", ""]),
@@ -622,7 +648,10 @@ mod tests {
 
     #[test]
     fn unrelated_table_is_untouched() {
-        let xml = format!("<w:document><w:body><w:tbl>{}</w:tbl></w:body></w:document>", row(&["Сумма", "Цена"]));
+        let xml = format!(
+            "<w:document><w:body><w:tbl>{}</w:tbl></w:body></w:document>",
+            row(&["Сумма", "Цена"])
+        );
         let report = fill_legacy_diary_tables(&xml, &medical_case(), true).unwrap();
         assert_eq!(report.xml, xml);
         assert_eq!(report.detected_tables, 0);
@@ -641,8 +670,8 @@ mod tests {
 
     #[test]
     fn nonmedical_case_cannot_silently_fill_detected_medical_table() {
-        let error = fill_legacy_diary_tables(&legacy_table(), &SemanticCase::default(), true)
-            .unwrap_err();
+        let error =
+            fill_legacy_diary_tables(&legacy_table(), &SemanticCase::default(), true).unwrap_err();
         assert!(error.contains("не смог построить коллекцию diaries"));
     }
 }

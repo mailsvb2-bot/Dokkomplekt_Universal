@@ -14,6 +14,7 @@ import { DocumentRail } from './components/DocumentRail';
 import { Workspace } from './components/Workspace';
 import { PopupDesignerModal } from './components/PopupDesignerModal';
 import { GuidedScannerModal } from './components/GuidedScannerModal';
+import { GenerationPreflightModal } from './components/GenerationPreflightModal';
 import { AppDialogProvider, useAppDialog } from './components/AppDialogProvider';
 import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
@@ -63,6 +64,7 @@ function AppContent() {
   const [plan, setPlan] = useState<WorkflowPlan | null>(null);
   const [preflightPlan, setPreflightPlan] = useState<WorkflowPlan | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
+  const [generationPreflightOpen, setGenerationPreflightOpen] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({}); const [skippedAnswers, setSkippedAnswers] = useState<Record<string, boolean>>({});
   const [sickLeave, setSickLeave] = useState(false);
 
@@ -571,6 +573,17 @@ function AppContent() {
       setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
       return;
     }
+    setGenerationPreflightOpen(true);
+    setStatus('Проверьте данные выбранного комплекта перед созданием.');
+  }
+
+  async function confirmGenerationPreflight() {
+    const workflow = preflightPlan;
+    if (!workflow || preflightLoading) return;
+    if (workflow.blocked) {
+      setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
+      return;
+    }
 
     if (workflow.prompts.length) {
       const missing = workflow.prompts.filter((prompt) => prompt.required && !skippedAnswers[prompt.field_id] && !(answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
@@ -593,7 +606,8 @@ function AppContent() {
       }
     }
 
-    setStatus('Данные проверены. Формируется комплект…');
+    setGenerationPreflightOpen(false);
+    setStatus('Данные подтверждены. Формируется комплект…');
     await performGenerateSelectedDocuments(selectedDocIds);
   }
 
@@ -1507,6 +1521,25 @@ function AppContent() {
           onDropFiles={processTemplateFiles}
           onCancel={() => setSetupOpen(false)}
           onConfirm={createButtonFromTemplate}
+        />
+      )}
+
+      {generationPreflightOpen && preflightPlan && (
+        <GenerationPreflightModal
+          plan={preflightPlan}
+          documents={documents}
+          selectedDocumentIds={selectedDocIds}
+          answers={answers}
+          skippedAnswers={skippedAnswers}
+          busy={busy}
+          loading={preflightLoading}
+          showSickLeaveOption={showSickLeaveOption}
+          sickLeaveEnabled={sickLeave}
+          setAnswers={setAnswers}
+          setSkippedAnswers={setSkippedAnswers}
+          onSickLeaveChange={setSickLeave}
+          onCancel={() => setGenerationPreflightOpen(false)}
+          onConfirm={() => void confirmGenerationPreflight()}
         />
       )}
 

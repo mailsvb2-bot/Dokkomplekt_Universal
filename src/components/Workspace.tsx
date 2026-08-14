@@ -429,13 +429,14 @@ export function Workspace(props: WorkspaceProps) {
   );
 }
 
-function WorkflowPromptField(props: {
+export function WorkflowPromptField(props: {
   prompt: PromptSpec;
   value: string;
   skipped: boolean;
   onChange(value: string): void;
   onSkipChange(value: boolean): void;
   onPin(): void;
+  showPin?: boolean;
 }) {
   const { prompt } = props;
   const kind = prompt.input_kind ?? 'text';
@@ -497,7 +498,7 @@ function WorkflowPromptField(props: {
           ) : null}
           {props.skipped ? <small className="skipWarning">Поле будет намеренно оставлено пустым только по вашему подтверждению.</small> : null}
         </span>
-        <button type="button" className="iconOnlyBtn" disabled={props.skipped} title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={props.onPin}><i className="ti ti-pin" aria-hidden="true" /></button>
+        {props.showPin !== false ? <button type="button" className="iconOnlyBtn" disabled={props.skipped} title="Использовать это значение во всех документах комплекта" aria-label={`Использовать ${prompt.title} во всех документах`} onClick={props.onPin}><i className="ti ti-pin" aria-hidden="true" /></button> : null}
       </div>
     </div>
   );

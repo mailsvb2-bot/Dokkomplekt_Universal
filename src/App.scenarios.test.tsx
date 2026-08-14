@@ -9,7 +9,7 @@ const accDoc = { id: 'acc_1', button_label: 'Счёт на оплату', templa
 const secondDoc = { id: 'doc_2', button_label: 'Сопроводительное письмо', template_path: 'b.docx', category: 'Generic', role_id: 'generic', required_fields: [], placeholders: [], is_static_copy: false };
 const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secondDoc] };
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
-const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
+const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
 function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing' } = {}) {
   let componentState = options.componentState ?? ((options.componentInstalled ?? true) ? 'downloaded' : 'missing');
@@ -282,8 +282,13 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByRole('button', { name: 'Использовать ИНН во всех документах' }));
     await waitFor(() => expect(parsePayload(calls, 'set_field')).toMatchObject({ req: { field_id: 'org.inn', value: '7701234567' } }));
 
-    // One action applies the visible answers and creates the selected package.
+    // Creation is deliberately two-step: the workspace action opens a blocking preflight,
+    // and no Rust apply/render call happens until the user confirms that modal.
+    const batchApplyCountBefore = calls.filter((call) => call.command === 'apply_popup_batch').length;
     await click(/Проверить и создать \(2\)/);
+    const batchPreflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    expect(calls.filter((call) => call.command === 'apply_popup_batch')).toHaveLength(batchApplyCountBefore);
+    fireEvent.click(within(batchPreflight).getByRole('button', { name: 'Создать документы' }));
     await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
       req: { document_ids: ['acc_1', 'doc_2'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
     }));
@@ -308,6 +313,8 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Проверить и создать \(1\)/ })).toBeTruthy());
     await click(/Проверить и создать \(1\)/);
+    const singlePreflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    fireEvent.click(within(singlePreflight).getByRole('button', { name: 'Создать документы' }));
     await waitFor(() => expect(parsePayload(calls, 'apply_popup')).toMatchObject({
       req: { document_id: 'acc_1', answers: [{ field_id: 'org.inn', value: '7701234567' }] },
     }));
@@ -513,6 +520,9 @@ describe('Полный прогон пользовательских сцена�
     expect(screen.getByRole('button', { name: 'Вернуться к заполнению' }).getAttribute('aria-pressed')).toBe('true');
 
     await click(/Проверить и создать \(2\)/);
+    const preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    expect(within(preflight).getByRole('button', { name: 'Вернуться к заполнению' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
     await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
       req: {
         document_ids: ['acc_1', 'doc_2'],

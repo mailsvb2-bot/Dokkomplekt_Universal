@@ -4,6 +4,9 @@ use crate::domains::medical_semantics::{
     SICK_LEAVE_VK_PROTOCOL_NUMBER, SICK_LEAVE_VK_WORKPLACE, VK_MSE_COMMISSION_DATE,
     VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE, VK_MSE_PROTOCOL_NUMBER, VK_MSE_WORKPLACE,
 };
+use crate::professional_records::{
+    DIARY_DAY_END_TIME, DIARY_DAY_START_TIME, DIARY_INTRADAY_RHYTHM, DIARY_SCHEDULE_STYLE,
+};
 use crate::{
     canonical_storage_field_id, is_valid_field_id, title_for_field, DocumentTemplateSpec,
     DomainKind, PopupFieldConfig, PromptAskMode, PromptInputKind,
@@ -354,6 +357,41 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
             if id == "medical.icd10" || id == "medical.diagnosis_code" {
                 config.input_kind = PromptInputKind::Icd10;
             }
+            if id == DIARY_SCHEDULE_STYLE {
+                config.input_kind = PromptInputKind::Select;
+                config.options = vec![
+                    "Каждый день".into(),
+                    "1, 2, 3, 7, затем 2 раза в неделю".into(),
+                    "Каждый день по времени".into(),
+                ];
+                config.allow_custom_option = true;
+                config.default_value = Some("Каждый день".into());
+                config.help_text = Some(
+                    "Можно ввести свои дни, например: 1, 4, 9. График задаёт специалист, а не количество строк в шаблоне".into(),
+                );
+            }
+            if id == DIARY_INTRADAY_RHYTHM {
+                config.input_kind = PromptInputKind::Select;
+                config.options = vec![
+                    "Один раз в день".into(),
+                    "Каждые 4 часа".into(),
+                    "Каждый час".into(),
+                    "Каждые 30 минут".into(),
+                    "Каждые 15 минут".into(),
+                    "Каждые 5 минут".into(),
+                ];
+                config.allow_custom_option = true;
+                config.default_value = Some("Один раз в день".into());
+                config.help_text = Some(
+                    "Можно ввести свой интервал (например, 90 минут) или список времени 08:00, 20:00".into(),
+                );
+            }
+            if matches!(id, DIARY_DAY_START_TIME | DIARY_DAY_END_TIME) {
+                config.input_kind = PromptInputKind::Text;
+                config.help_text = Some(
+                    "ЧЧ:ММ. Нужен для ритма в минутах/часах; без явных границ внутридневная серия не создаётся".into(),
+                );
+            }
             let linked_commission = match id {
                 VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE),
                 SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE),
@@ -412,6 +450,12 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
             if matches!(plan.role, MedicalDocumentRole::DischargeEpicrisis) {
                 add("medical.discharge_condition", false);
                 add("medical.recommendations", false);
+            }
+            if matches!(plan.role, MedicalDocumentRole::Diary) {
+                add(DIARY_SCHEDULE_STYLE, false);
+                add(DIARY_INTRADAY_RHYTHM, false);
+                add(DIARY_DAY_START_TIME, false);
+                add(DIARY_DAY_END_TIME, false);
             }
         }
         DomainKind::Legal => {
@@ -473,6 +517,24 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
             }
         }
         DomainKind::Generic | DomainKind::Custom(_) => {}
+    }
+    fields
+}
+
+pub fn profession_runtime_control_fields(category: &DomainKind, role_id: &str) -> BTreeSet<String> {
+    let mut fields = BTreeSet::new();
+    if matches!(category, DomainKind::Medical)
+        && matches!(
+            MedicalDocumentRole::from_role_id(role_id),
+            MedicalDocumentRole::Diary
+        )
+    {
+        fields.extend([
+            DIARY_SCHEDULE_STYLE.to_string(),
+            DIARY_INTRADAY_RHYTHM.to_string(),
+            DIARY_DAY_START_TIME.to_string(),
+            DIARY_DAY_END_TIME.to_string(),
+        ]);
     }
     fields
 }
@@ -593,6 +655,10 @@ pub fn popup_order(field_id: &str) -> usize {
         "org.kpp" | "accounting.kpp" => 100,
         "medical.diagnosis" | "medical.icd10" | "medical.diagnosis_code" => 110,
         "medical.treatment" => 120,
+        DIARY_SCHEDULE_STYLE => 121,
+        DIARY_INTRADAY_RHYTHM => 122,
+        DIARY_DAY_START_TIME => 123,
+        DIARY_DAY_END_TIME => 124,
         "medical.commission_date"
         | "medical.protocol_date"
         | "medical.sick_leave_commission_date"
@@ -733,6 +799,18 @@ mod tests {
         assert!(!fields
             .iter()
             .any(|field| field.field_id == "contract.subject"));
+    }
+
+    #[test]
+    fn diary_runtime_controls_are_profile_scoped_and_profession_safe() {
+        let medical = profession_runtime_control_fields(&DomainKind::Medical, "diaries");
+        assert!(medical.contains(DIARY_SCHEDULE_STYLE));
+        assert!(medical.contains(DIARY_INTRADAY_RHYTHM));
+        assert!(medical.contains(DIARY_DAY_START_TIME));
+        assert!(medical.contains(DIARY_DAY_END_TIME));
+        assert!(profession_runtime_control_fields(&DomainKind::Hr, "diaries").is_empty());
+        assert!(profession_runtime_control_fields(&DomainKind::Legal, "diaries").is_empty());
+        assert!(profession_runtime_control_fields(&DomainKind::Generic, "diaries").is_empty());
     }
 
     #[test]

@@ -73,7 +73,15 @@ pub fn apply_popup_answers(
         let value = answer.value.trim();
         if value.is_empty() {
             if answer.continue_without_value {
-                next.skip(&prompt.field_id);
+                if prompt.required && !prompt.skippable {
+                    still_missing.push(prompt.clone());
+                    validation_errors.push(format!(
+                        "{}: поле обязательно для выбранного шаблона и не может быть пропущено",
+                        prompt.title
+                    ));
+                } else {
+                    next.skip(&prompt.field_id);
+                }
             } else if prompt.required {
                 still_missing.push(prompt.clone());
             }
@@ -278,6 +286,7 @@ fn validate_date_order(
                     field_id: end_id.to_string(),
                     title: "Дата окончания периода".to_string(),
                     required: true,
+                    skippable: false,
                     current_value: case.get(end_id).map(str::to_string),
                     validation_hint: Some(
                         "Дата окончания не может быть раньше даты начала".to_string(),
@@ -335,6 +344,7 @@ mod tests {
                 field_id: "custom.required".into(),
                 title: "Обязательное поле".into(),
                 required: true,
+                skippable: false,
                 current_value: None,
                 validation_hint: None,
                 input_kind: PromptInputKind::Text,
@@ -364,7 +374,45 @@ mod tests {
     }
 
     #[test]
-    fn continue_without_required_allows_explicit_skip() {
+    fn hard_required_field_rejects_continue_without_and_preserves_original_case() {
+        let case = SemanticCase::default();
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![PromptSpec {
+                field_id: "custom.required".into(),
+                title: "Критическое поле".into(),
+                required: true,
+                skippable: false,
+                current_value: None,
+                validation_hint: None,
+                input_kind: PromptInputKind::Text,
+                ask_mode: crate::PromptAskMode::IfMissing,
+                options: Vec::new(),
+                allow_custom_option: false,
+                help_text: None,
+                section: None,
+                linked_to: None,
+                order: 500,
+            }],
+            blocked: false,
+            block_reasons: vec![],
+        };
+        let result = apply_popup_answers(
+            &case,
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.required".into(),
+                value: String::new(),
+                continue_without_value: true,
+            }],
+        );
+        assert!(!result.accepted);
+        assert!(!result.semantic_case.is_skipped("custom.required"));
+        assert!(case.skipped_fields.is_empty());
+    }
+
+    #[test]
+    fn explicitly_skippable_required_allows_explicit_skip() {
         let case = SemanticCase::default();
         let plan = WorkflowPlan {
             document_id: "x".into(),
@@ -372,6 +420,7 @@ mod tests {
                 field_id: "custom.note".into(),
                 title: "Note".into(),
                 required: true,
+                skippable: true,
                 current_value: None,
                 validation_hint: None,
                 input_kind: PromptInputKind::Text,
@@ -413,6 +462,7 @@ mod tests {
                 field_id: "custom.note".into(),
                 title: "Note".into(),
                 required: true,
+                skippable: true,
                 current_value: Some("Старое значение".into()),
                 validation_hint: None,
                 input_kind: PromptInputKind::Text,
@@ -467,6 +517,7 @@ mod tests {
                 field_id: "period.end_date".into(),
                 title: "Дата окончания".into(),
                 required: true,
+                skippable: false,
                 current_value: None,
                 validation_hint: None,
                 input_kind: PromptInputKind::Text,
@@ -505,6 +556,7 @@ mod tests {
                 field_id: "period.end_date".into(),
                 title: "Дата окончания".into(),
                 required: true,
+                skippable: false,
                 current_value: None,
                 validation_hint: None,
                 input_kind: PromptInputKind::Text,
@@ -540,6 +592,7 @@ mod tests {
                 field_id: "document.date".into(),
                 title: "Дата документа".into(),
                 required: true,
+                skippable: false,
                 current_value: None,
                 validation_hint: None,
                 input_kind: PromptInputKind::Date,

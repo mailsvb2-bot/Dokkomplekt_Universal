@@ -7,13 +7,17 @@
 
 use crate::{
     build_medical_diary_series, template_collection_references, DomainKind,
-    MedicalDiarySeriesRequest, SemanticAtom, SemanticCase, SemanticRecord,
+    MedicalDiarySeriesRequest, SemanticAtom, SemanticCase, SemanticRecord, SeriesCadence,
 };
 use chrono::{Datelike, Local, NaiveDate};
 
 const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
 const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
 const MIN_STATUS_LEN: usize = 25;
+pub const DIARY_SCHEDULE_STYLE: &str = "medical.diary_schedule_style";
+pub const DIARY_INTRADAY_RHYTHM: &str = "medical.diary_intraday_rhythm";
+pub const DIARY_DAY_START_TIME: &str = "medical.diary_day_start_time";
+pub const DIARY_DAY_END_TIME: &str = "medical.diary_day_end_time";
 
 /// Clone `case` and derive only the professional collections that the template
 /// actually references. Explicitly supplied collections always win.
@@ -59,14 +63,30 @@ fn build_medical_diary_rows(case: &SemanticCase) -> Option<Vec<SemanticRecord>> 
     let default_year = explicit_year(admission)
         .or_else(|| explicit_year(discharge))
         .unwrap_or_else(|| Local::now().year());
+    let cadence = resolve_diary_cadence(case).ok()?;
+    let day_start_time = case
+        .get(DIARY_DAY_START_TIME)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let day_end_time = case
+        .get(DIARY_DAY_END_TIME)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if cadence.as_ref().is_some_and(cadence_requires_time_window)
+        && (day_start_time.is_none() || day_end_time.is_none())
+    {
+        return None;
+    }
     let entries = build_medical_diary_series(&MedicalDiarySeriesRequest {
         admission_date: admission.to_string(),
         discharge_date: discharge.to_string(),
         default_year,
-        confirmed_cadence: None,
+        confirmed_cadence: cadence,
         profile_cadence: None,
-        day_start_time: None,
-        day_end_time: None,
+        day_start_time,
+        day_end_time,
         skip_weekdays: Vec::new(),
         excluded_dates: Vec::new(),
         force_final_discharge_entry: true,
@@ -164,6 +184,134 @@ fn build_medical_diary_rows(case: &SemanticCase) -> Option<Vec<SemanticRecord>> 
         })
         .collect::<Vec<_>>();
     (!rows.is_empty()).then_some(rows)
+}
+
+fn resolve_diary_cadence(case: &SemanticCase) -> Result<Option<SeriesCadence>, String> {
+    let schedule = case
+        .get(DIARY_SCHEDULE_STYLE)
+        .map(normalize_choice)
+        .filter(|value| !value.is_empty());
+    let rhythm = case
+        .get(DIARY_INTRADAY_RHYTHM)
+        .map(normalize_choice)
+        .filter(|value| !value.is_empty());
+    if schedule.is_none() && rhythm.is_none() {
+        return Ok(None);
+    }
+
+    let day_offsets = match schedule.as_deref() {
+        None | Some("каждый день") | Some("каждый день по времени") => {
+            None
+        }
+        Some(value) if value.replace(' ', "").starts_with("1,2,3,7") => {
+            Some(clinical_diary_offsets(3660))
+        }
+        Some(value) => Some(parse_day_offsets(value)?),
+    };
+
+    enum Rhythm {
+        Once,
+        Minutes(u32),
+        Fixed(Vec<String>),
+    }
+    let rhythm = match rhythm.as_deref() {
+        None | Some("один раз в день") => Rhythm::Once,
+        Some(value) if value.contains("4 час") => Rhythm::Minutes(240),
+        Some(value) if value.contains("каждый час") || value.contains("1 час") => {
+            Rhythm::Minutes(60)
+        }
+        Some(value) if value.contains("30 минут") => Rhythm::Minutes(30),
+        Some(value) if value.contains("15 минут") => Rhythm::Minutes(15),
+        Some(value) if value.contains("5 минут") => Rhythm::Minutes(5),
+        Some(value) if value.contains(':') => Rhythm::Fixed(parse_fixed_times(value)?),
+        Some(value) => Rhythm::Minutes(parse_custom_minutes(value)?),
+    };
+
+    Ok(Some(match (day_offsets, rhythm) {
+        (None, Rhythm::Once) => SeriesCadence::Daily,
+        (Some(offsets), Rhythm::Once) => SeriesCadence::DayOffsets(offsets),
+        (None, Rhythm::Minutes(minutes)) => SeriesCadence::MinuteInterval(minutes),
+        (Some(day_offsets), Rhythm::Minutes(minutes)) => SeriesCadence::DayOffsetsMinuteInterval {
+            day_offsets,
+            minutes,
+        },
+        (None, Rhythm::Fixed(times)) => SeriesCadence::FixedTimes(times),
+        (Some(day_offsets), Rhythm::Fixed(times)) => {
+            SeriesCadence::DayOffsetsFixedTimes { day_offsets, times }
+        }
+    }))
+}
+
+fn normalize_choice(value: &str) -> String {
+    value.trim().to_lowercase().replace('ё', "е")
+}
+
+fn parse_day_offsets(value: &str) -> Result<Vec<i32>, String> {
+    let values = value
+        .split([',', ';', ' '])
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| part.trim().parse::<i32>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "график дневников должен содержать номера дней через запятую".to_string())?;
+    if values.is_empty() || values.iter().any(|value| *value < 1) {
+        return Err("номера дней дневников должны быть положительными".into());
+    }
+    Ok(values)
+}
+
+fn clinical_diary_offsets(max_day: i32) -> Vec<i32> {
+    let mut values = vec![1, 2, 3, 7];
+    let mut current = 7;
+    let mut add_three = true;
+    while current < max_day {
+        current += if add_three { 3 } else { 4 };
+        add_three = !add_three;
+        if current <= max_day {
+            values.push(current);
+        }
+    }
+    values
+}
+
+fn parse_fixed_times(value: &str) -> Result<Vec<String>, String> {
+    let values = value
+        .split([',', ';', ' '])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if values.is_empty() || values.iter().any(|part| !part.contains(':')) {
+        return Err("время дневников задаётся как ЧЧ:ММ через запятую".into());
+    }
+    Ok(values)
+}
+
+fn parse_custom_minutes(value: &str) -> Result<u32, String> {
+    let digits = value
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect::<String>();
+    let amount = digits
+        .parse::<u32>()
+        .map_err(|_| "не удалось определить интервал дневников".to_string())?;
+    let minutes = if value.contains("час") {
+        amount
+            .checked_mul(60)
+            .ok_or_else(|| "слишком большой интервал".to_string())?
+    } else {
+        amount
+    };
+    if !(1..=1440).contains(&minutes) {
+        return Err("интервал дневников должен быть от 1 до 1440 минут".into());
+    }
+    Ok(minutes)
+}
+
+fn cadence_requires_time_window(cadence: &SeriesCadence) -> bool {
+    matches!(
+        cadence,
+        SeriesCadence::MinuteInterval(_) | SeriesCadence::DayOffsetsMinuteInterval { .. }
+    )
 }
 
 #[derive(Default)]
@@ -656,6 +804,102 @@ mod tests {
             row.insert("is_final".into(), SemanticAtom::Boolean(true));
         }
         row
+    }
+
+    #[test]
+    fn donor_clinical_schedule_and_intraday_rhythm_reach_real_diary_rows() {
+        let mut case = medical_case();
+        case.values.insert(
+            DIARY_SCHEDULE_STYLE.into(),
+            SemanticValue::new(
+                DIARY_SCHEDULE_STYLE,
+                "1, 2, 3, 7, затем 2 раза в неделю",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        case.values.insert(
+            DIARY_INTRADAY_RHYTHM.into(),
+            SemanticValue::new(
+                DIARY_INTRADAY_RHYTHM,
+                "Каждые 4 часа",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        for (id, value) in [
+            (DIARY_DAY_START_TIME, "08:00"),
+            (DIARY_DAY_END_TIME, "12:00"),
+        ] {
+            case.values.insert(
+                id.into(),
+                SemanticValue::new(id, value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        case.set_collection(
+            "medical_diary_texts",
+            vec![
+                text_row("Дневник A", Some("F20.0"), false),
+                text_row("Выписной дневник", Some("F20.0"), true),
+            ],
+        );
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.datetime}}|{{diary.text}}
+{{/each}}",
+            &case,
+        );
+        let rows = prepared.collection("diaries").expect("diary rows");
+        let datetimes = rows
+            .iter()
+            .filter_map(|row| row.get("datetime"))
+            .map(SemanticAtom::as_text)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            datetimes,
+            vec![
+                "11.05.2026 08:00",
+                "11.05.2026 12:00",
+                "12.05.2026 08:00",
+                "12.05.2026 12:00",
+                "13.05.2026 08:00",
+                "13.05.2026 12:00",
+            ]
+        );
+        assert_eq!(
+            rows.last().and_then(|row| row.get("is_final")),
+            Some(&SemanticAtom::Boolean(true))
+        );
+    }
+
+    #[test]
+    fn custom_doctor_selected_days_are_not_inferred_from_template_shape() {
+        let mut case = medical_case();
+        case.values.insert(
+            DIARY_SCHEDULE_STYLE.into(),
+            SemanticValue::new(
+                DIARY_SCHEDULE_STYLE,
+                "1, 3",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        let cadence = resolve_diary_cadence(&case).unwrap().unwrap();
+        assert_eq!(cadence, SeriesCadence::DayOffsets(vec![1, 3]));
+    }
+
+    #[test]
+    fn intraday_interval_without_explicit_window_fails_closed() {
+        let mut case = medical_case();
+        case.values.insert(
+            DIARY_INTRADAY_RHYTHM.into(),
+            SemanticValue::new(
+                DIARY_INTRADAY_RHYTHM,
+                "Каждые 5 минут",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        assert!(build_medical_diary_rows(&case).is_none());
     }
 
     #[test]

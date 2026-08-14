@@ -14,6 +14,11 @@ pub enum FolderNamePart {
     PeriodRange,
     PeriodStartMonth,
     PeriodEndMonth,
+    ShortPeriodStartDate,
+    ShortPeriodEndDate,
+    ShortPeriodRange,
+    PeriodStartMonthName,
+    PeriodEndMonthName,
     // Backward-compatible medical-profile names. They resolve through generic
     // period fields first, then medical aliases.
     AdmissionDate,
@@ -89,6 +94,42 @@ pub fn build_output_folder_name(case: &SemanticCase, parts: &[FolderNamePart]) -
                     .as_deref(),
                 &mut chunks,
             ),
+            FolderNamePart::ShortPeriodStartDate => push(
+                short_date(first(
+                    case,
+                    &["period.start_date", "medical.admission_date"],
+                ))
+                .as_deref(),
+                &mut chunks,
+            ),
+            FolderNamePart::ShortPeriodEndDate => push(
+                short_date(first(case, &["period.end_date", "medical.discharge_date"])).as_deref(),
+                &mut chunks,
+            ),
+            FolderNamePart::ShortPeriodRange => {
+                if let (Some(start), Some(end)) = (
+                    short_date(first(
+                        case,
+                        &["period.start_date", "medical.admission_date"],
+                    )),
+                    short_date(first(case, &["period.end_date", "medical.discharge_date"])),
+                ) {
+                    chunks.push(format!("{start}-{end}"));
+                }
+            }
+            FolderNamePart::PeriodStartMonthName => push(
+                month_name_from_date(first(
+                    case,
+                    &["period.start_date", "medical.admission_date"],
+                ))
+                .as_deref(),
+                &mut chunks,
+            ),
+            FolderNamePart::PeriodEndMonthName => push(
+                month_name_from_date(first(case, &["period.end_date", "medical.discharge_date"]))
+                    .as_deref(),
+                &mut chunks,
+            ),
         }
     }
     let name = sanitize_folder_name(&chunks.join(" "));
@@ -140,15 +181,18 @@ fn short_initials(name: &str) -> String {
     if parts.len() < 2 {
         return name.to_string();
     }
-    let mut out = parts[0].to_string();
+    let mut initials = String::new();
     for part in parts.iter().skip(1).take(2) {
         if let Some(ch) = part.chars().next() {
-            out.push(' ');
-            out.push(ch);
-            out.push('.');
+            initials.push(ch);
+            initials.push('.');
         }
     }
-    out
+    if initials.is_empty() {
+        parts[0].to_string()
+    } else {
+        format!("{} {initials}", parts[0])
+    }
 }
 fn surname_given_name(name: &str) -> String {
     name.split_whitespace()
@@ -156,6 +200,39 @@ fn surname_given_name(name: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+fn short_date(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    let parts = value.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 || parts[2].len() < 2 {
+        return Some(value.to_string());
+    }
+    let year = &parts[2][parts[2].len() - 2..];
+    Some(format!("{}.{}.{year}", parts[0], parts[1]))
+}
+
+fn month_name_from_date(value: Option<&str>) -> Option<String> {
+    let mut parts = value?.split('.');
+    let _day = parts.next()?;
+    let month = parts.next()?.parse::<usize>().ok()?;
+    let year = parts.next()?;
+    let names = [
+        "январь",
+        "февраль",
+        "март",
+        "апрель",
+        "май",
+        "июнь",
+        "июль",
+        "август",
+        "сентябрь",
+        "октябрь",
+        "ноябрь",
+        "декабрь",
+    ];
+    let name = names.get(month.checked_sub(1)?)?;
+    Some(format!("{name} {year}"))
+}
+
 fn month_from_date(value: Option<&str>) -> Option<String> {
     let mut parts = value?.split('.');
     let _day = parts.next()?;
@@ -234,6 +311,55 @@ mod tests {
                 ],
             ),
             "Иванов Иван 06.2026 07.2026"
+        );
+    }
+
+    #[test]
+    fn donor_short_date_range_is_available_without_changing_long_range() {
+        let mut case = SemanticCase::default();
+        for (id, value) in [
+            ("subject.name", "Петров Петр Петрович"),
+            ("period.start_date", "01.06.2026"),
+            ("period.end_date", "12.06.2026"),
+        ] {
+            case.values.insert(
+                id.into(),
+                SemanticValue::new(id, value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        assert_eq!(
+            build_output_folder_name(
+                &case,
+                &[
+                    FolderNamePart::ShortInitials,
+                    FolderNamePart::ShortPeriodRange
+                ],
+            ),
+            "Петров П.П. 01.06.26-12.06.26"
+        );
+    }
+
+    #[test]
+    fn donor_word_month_is_profession_neutral() {
+        let mut case = SemanticCase::default();
+        for (id, value) in [
+            ("subject.name", "Сидоров Сергей Сергеевич"),
+            ("period.start_date", "01.06.2026"),
+        ] {
+            case.values.insert(
+                id.into(),
+                SemanticValue::new(id, value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        assert_eq!(
+            build_output_folder_name(
+                &case,
+                &[
+                    FolderNamePart::FullSubjectName,
+                    FolderNamePart::PeriodStartMonthName
+                ],
+            ),
+            "Сидоров Сергей Сергеевич июнь 2026"
         );
     }
 

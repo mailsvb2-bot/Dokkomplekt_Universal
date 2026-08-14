@@ -1,9 +1,9 @@
 use crate::core::{SourceDocument, TargetTemplate};
 use crate::{
     canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
-    resolve_popup_default, run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind,
-    PopupFieldConfig, PromptAskMode, PromptSpec, SemanticCase, UniversalDomain,
-    UniversalPipelineFlags, UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
+    profession_runtime_control_fields, resolve_popup_default, run_universal_constructor_pipeline,
+    DocumentTemplateSpec, DomainKind, PopupFieldConfig, PromptAskMode, PromptSpec, SemanticCase,
+    UniversalDomain, UniversalPipelineFlags, UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -58,6 +58,14 @@ pub fn plan_workflow(
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .collect::<BTreeSet<_>>();
+    let hard_required = document
+        .required_fields
+        .iter()
+        .filter(|field_id| is_valid_field_id(field_id))
+        .map(|field_id| canonical_storage_field_id(field_id))
+        .filter(|field_id| relevant.contains(field_id))
+        .filter(|field_id| !suppressed.contains(field_id.as_str()))
+        .collect::<BTreeSet<_>>();
     let optional = pipeline
         .workflow
         .optional
@@ -93,7 +101,7 @@ pub fn plan_workflow(
 
     let mut prompts = configs
         .into_values()
-        .filter_map(|config| prompt_from_config(config, &required, case))
+        .filter_map(|config| prompt_from_config(config, &required, &hard_required, case))
         .collect::<Vec<_>>();
     prompts.sort_by(|a, b| a.order.cmp(&b.order).then(a.field_id.cmp(&b.field_id)));
     prompts.dedup_by(|a, b| a.field_id == b.field_id);
@@ -118,6 +126,7 @@ pub fn plan_workflow(
 }
 
 fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String> {
+    let runtime_controls = profession_runtime_control_fields(&document.category, &document.role_id);
     let explicit_popup_fields = document
         .popup_configured
         .then_some(document.popup_fields.iter().map(|field| &field.field_id))
@@ -128,6 +137,7 @@ fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String>
         .iter()
         .chain(document.required_fields.iter())
         .chain(explicit_popup_fields)
+        .chain(runtime_controls.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
         .collect()
@@ -193,6 +203,7 @@ pub fn plan_workflow_batch(
 fn prompt_from_config(
     config: PopupFieldConfig,
     required_fields: &BTreeSet<String>,
+    hard_required_fields: &BTreeSet<String>,
     case: &SemanticCase,
 ) -> Option<PromptSpec> {
     let existing = case.get(&config.field_id).map(str::to_string);
@@ -209,15 +220,25 @@ fn prompt_from_config(
         PromptAskMode::Confirm | PromptAskMode::IfMissing => existing.or(default_value),
     };
     let required = config.required || required_fields.contains(&config.field_id);
+    let skippable = required && !hard_required_fields.contains(&config.field_id);
     Some(PromptSpec {
         field_id: config.field_id,
         title: config.title,
         required,
+        skippable,
         current_value,
-        validation_hint: config
-            .help_text
-            .clone()
-            .or_else(|| Some("Заполните поле или явно разрешите продолжение без него".to_string())),
+        validation_hint: config.help_text.clone().or_else(|| {
+            if required && !skippable {
+                Some(
+                    "Обязательное поле выбранного шаблона: заполните его перед созданием"
+                        .to_string(),
+                )
+            } else if skippable {
+                Some("Заполните поле или явно разрешите продолжение без него".to_string())
+            } else {
+                None
+            }
+        }),
         input_kind: config.input_kind,
         ask_mode: config.ask_mode,
         options: config.options,
@@ -230,7 +251,10 @@ fn prompt_from_config(
 }
 
 fn merge_prompt(existing: &mut PromptSpec, incoming: PromptSpec) {
+    let existing_allows_skip = !existing.required || existing.skippable;
+    let incoming_allows_skip = !incoming.required || incoming.skippable;
     existing.required |= incoming.required;
+    existing.skippable = existing.required && existing_allows_skip && incoming_allows_skip;
     if ask_mode_rank(incoming.ask_mode) > ask_mode_rank(existing.ask_mode) {
         existing.ask_mode = incoming.ask_mode;
     }
@@ -377,6 +401,38 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn hard_template_requirements_are_not_skippable_in_any_profession() {
+        for (domain, role, field) in [
+            (DomainKind::Medical, "discharge", "medical.discharge_date"),
+            (DomainKind::Legal, "contract", "contract.number"),
+            (DomainKind::Hr, "order", "hr.order_number"),
+            (
+                DomainKind::Accounting,
+                "invoice",
+                "accounting.invoice_number",
+            ),
+            (DomainKind::Education, "certificate", "document.number"),
+            (
+                DomainKind::Custom("engineering".into()),
+                "report",
+                "custom.report_id",
+            ),
+        ] {
+            let mut doc = document("strict", field);
+            doc.category = domain;
+            doc.role_id = role.into();
+            let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+            let prompt = plan
+                .prompts
+                .iter()
+                .find(|prompt| prompt.field_id == field)
+                .unwrap_or_else(|| panic!("missing prompt for {field}"));
+            assert!(prompt.required, "{field} must remain required");
+            assert!(!prompt.skippable, "{field} must not be bypassable");
+        }
     }
 
     #[test]

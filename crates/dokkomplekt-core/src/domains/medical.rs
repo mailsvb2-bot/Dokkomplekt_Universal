@@ -10,31 +10,47 @@ pub struct MedicalProfile {
 pub fn canonical_medical_role(raw_role: &str) -> String {
     let normalized = normalize_role_slug(raw_role);
     match normalized.as_str() {
-        "discharge" | "discharge_epicrisis" | "выписной_эпикриз" | "выписка" | "эпикриз" => {
-            "discharge".into()
-        }
-        "diaries" | "diary" | "дневник" | "дневники" | "ежедневные_записи" => {
+        "discharge"
+        | "discharge_epicrisis"
+        | "dischargeepicrisis"
+        | "выписной_эпикриз"
+        | "выписка"
+        | "эпикриз" => "discharge".into(),
+        "diaries" | "diary" | "medicaldiary" | "дневник" | "дневники" | "ежедневные_записи" => {
             "diaries".into()
         }
-        "rvk_act" | "акт_для_рвк" | "акт_рвк" | "рвк" | "военный_комиссариат" | "военкомат" => {
-            "rvk_act".into()
-        }
-        "commission" | "комиссионный_осмотр" | "комиссия" | "врачебная_комиссия" => {
-            "commission".into()
-        }
-        "sick_leave_vk" | "вк_больничный" | "вк_по_больничному" | "продление_больничного" => {
-            "sick_leave_vk".into()
-        }
-        "vk_mse" | "вк_на_мсэ" | "мсэ" | "медико_социальная_экспертиза" => {
+        "rvk_act"
+        | "rvkact"
+        | "акт_для_рвк"
+        | "акт_рвк"
+        | "рвк"
+        | "военный_комиссариат"
+        | "военкомат" => "rvk_act".into(),
+        "commission"
+        | "commissioninspection"
+        | "jointmedicalexam"
+        | "совместный_осмотр"
+        | "комиссионный_осмотр"
+        | "комиссия"
+        | "врачебная_комиссия" => "commission".into(),
+        "sick_leave_vk"
+        | "sickleavevk"
+        | "вк_больничный"
+        | "вк_по_больничному"
+        | "продление_больничного" => "sick_leave_vk".into(),
+        "vk_mse" | "vkmse" | "вк_на_мсэ" | "мсэ" | "медико_социальная_экспертиза" => {
             "vk_mse".into()
         }
         "reception"
         | "reception_inspection"
+        | "receptioninspection"
         | "осмотр_врача_приемного_покоя"
         | "осмотр_врача_приёмного_покоя" => "reception".into(),
-        "primary" | "первичный_осмотр" | "направление_на_госпитализацию" | "направление" => {
-            "primary".into()
-        }
+        "primary"
+        | "primaryinspection"
+        | "первичный_осмотр"
+        | "направление_на_госпитализацию"
+        | "направление" => "primary".into(),
         _ => normalized,
     }
 }
@@ -113,5 +129,22 @@ mod donor_parity_tests {
             "reception"
         );
         assert_eq!(canonical_medical_role("Акт для РВК"), "rvk_act");
+        for (legacy, canonical) in [
+            ("primaryInspection", "primary"),
+            ("dischargeEpicrisis", "discharge"),
+            ("medicalDiary", "diaries"),
+            ("rvkAct", "rvk_act"),
+            ("jointMedicalExam", "commission"),
+            ("commissionInspection", "commission"),
+            ("sickLeaveVk", "sick_leave_vk"),
+            ("vkMse", "vk_mse"),
+            ("receptionInspection", "reception"),
+        ] {
+            assert_eq!(
+                canonical_medical_role(legacy),
+                canonical,
+                "legacy role {legacy}"
+            );
+        }
     }
 }

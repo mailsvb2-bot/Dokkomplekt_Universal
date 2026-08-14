@@ -485,7 +485,7 @@ function WorkflowPromptField(props: {
         <span className="clientFieldControl">
           {control}
           {hint ? <small>{hint}</small> : null}
-          {prompt.required ? (
+          {prompt.required && prompt.skippable ? (
             <button
               type="button"
               className="continueWithoutValue"

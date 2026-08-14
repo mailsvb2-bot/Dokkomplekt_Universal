@@ -415,6 +415,8 @@ pub struct PromptSpec {
     pub field_id: String,
     pub title: String,
     pub required: bool,
+    #[serde(default)]
+    pub skippable: bool,
     pub current_value: Option<String>,
     pub validation_hint: Option<String>,
     #[serde(default)]

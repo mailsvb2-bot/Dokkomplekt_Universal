@@ -41,6 +41,7 @@ export interface PromptSpec {
   field_id: string;
   title: string;
   required: boolean;
+  skippable?: boolean;
   current_value?: string | null;
   validation_hint?: string | null;
   input_kind?: PromptInputKind;
@@ -485,7 +486,9 @@ export type SeriesCadenceDto =
   | { kind: 'daily' }
   | { kind: 'day_offsets'; value: number[] }
   | { kind: 'fixed_times'; value: string[] }
-  | { kind: 'minute_interval'; value: number };
+  | { kind: 'minute_interval'; value: number }
+  | { kind: 'day_offsets_fixed_times'; value: { day_offsets: number[]; times: string[] } }
+  | { kind: 'day_offsets_minute_interval'; value: { day_offsets: number[]; minutes: number } };
 
 export interface SeriesPlanRequestDto {
   start_date: string;
@@ -519,6 +522,11 @@ export type FolderNamePartDto =
   | 'PeriodRange'
   | 'PeriodStartMonth'
   | 'PeriodEndMonth'
+  | 'ShortPeriodStartDate'
+  | 'ShortPeriodEndDate'
+  | 'ShortPeriodRange'
+  | 'PeriodStartMonthName'
+  | 'PeriodEndMonthName'
   | 'AdmissionDate'
   | 'DischargeDate'
   | 'AdmissionAndDischargeDates'

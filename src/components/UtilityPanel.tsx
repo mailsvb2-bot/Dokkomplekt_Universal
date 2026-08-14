@@ -52,6 +52,11 @@ const FOLDER_PART_OPTIONS: Array<{ value: FolderNamePartDto; label: string; sens
   { value: 'PeriodEndDate', label: 'окончание периода' },
   { value: 'PeriodStartMonth', label: 'месяц начала периода' },
   { value: 'PeriodEndMonth', label: 'месяц окончания периода' },
+  { value: 'ShortPeriodRange', label: 'период целиком · короткие даты' },
+  { value: 'ShortPeriodStartDate', label: 'начало периода · короткая дата' },
+  { value: 'ShortPeriodEndDate', label: 'окончание периода · короткая дата' },
+  { value: 'PeriodStartMonthName', label: 'месяц начала периода · словом' },
+  { value: 'PeriodEndMonthName', label: 'месяц окончания периода · словом' },
 ];
 
 export function UtilityPanel(props: UtilityPanelProps) {

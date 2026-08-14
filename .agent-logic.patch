@@ -1,0 +1,212 @@
+--- a/crates/dokkomplekt-core/src/field_registry.rs
++++ b/crates/dokkomplekt-core/src/field_registry.rs
+@@ -1180,6 +1180,9 @@
+ 
+ pub fn title_for_field(field_id: &str) -> String {
+     let canonical = crate::canonical_storage_field_id(field_id);
++    if let Some(title) = crate::domains::medical_semantics::title_for_role_scoped_field(&canonical) {
++        return title.to_string();
++    }
+     all_fields()
+         .into_iter()
+         .find(|field| field.id == canonical)
+--- a/crates/dokkomplekt-core/src/popup_profiles.rs
++++ b/crates/dokkomplekt-core/src/popup_profiles.rs
+@@ -1,4 +1,9 @@
+ use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
++use crate::domains::medical_semantics::{
++    SICK_LEAVE_VK_COMMISSION_DATE, SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_PROTOCOL_DATE,
++    SICK_LEAVE_VK_PROTOCOL_NUMBER, SICK_LEAVE_VK_WORKPLACE, VK_MSE_COMMISSION_DATE,
++    VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE, VK_MSE_PROTOCOL_NUMBER, VK_MSE_WORKPLACE,
++};
+ use crate::{
+     canonical_storage_field_id, is_valid_field_id, title_for_field, DocumentTemplateSpec,
+     DomainKind, PopupFieldConfig, PromptAskMode, PromptInputKind,
+@@ -349,13 +354,18 @@
+             if id == "medical.icd10" || id == "medical.diagnosis_code" {
+                 config.input_kind = PromptInputKind::Icd10;
+             }
+-            if matches!(
+-                id,
+-                "medical.protocol_date" | "medical.sick_leave_commission_date"
+-            ) {
+-                config.linked_to = Some("medical.commission_date".into());
++            let linked_commission = match id {
++                VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE),
++                SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE),
++                "medical.protocol_date" | "medical.sick_leave_commission_date" => {
++                    Some("medical.commission_date")
++                }
++                _ => None,
++            };
++            if let Some(linked_to) = linked_commission {
++                config.linked_to = Some(linked_to.into());
+                 config.help_text =
+-                    Some("Изначально повторяет дату комиссии; поле можно изменить вручную".into());
++                    Some("Изначально повторяет дату своей комиссии; поле можно изменить вручную".into());
+             }
+             if role_id.contains("diar") && id == "medical.discharge_date" {
+                 config.help_text = Some("Записи не будут создаваться после даты выписки".into());
+@@ -494,6 +504,10 @@
+             | "medical.commission_date"
+             | "medical.protocol_date"
+             | "medical.sick_leave_commission_date"
++            | VK_MSE_COMMISSION_DATE
++            | VK_MSE_PROTOCOL_DATE
++            | SICK_LEAVE_VK_COMMISSION_DATE
++            | SICK_LEAVE_VK_PROTOCOL_DATE
+     )
+ }
+ 
+@@ -517,6 +531,12 @@
+         "medical.protocol_number" | "medical.protocol_date" => {
+             role.contains("vk_mse") || role.contains("мсэ") || role.contains("sick_leave_vk")
+         }
++        VK_MSE_COMMISSION_DATE | VK_MSE_PROTOCOL_NUMBER | VK_MSE_PROTOCOL_DATE => {
++            role.contains("vk_mse") || role.contains("мсэ")
++        }
++        SICK_LEAVE_VK_COMMISSION_DATE
++        | SICK_LEAVE_VK_PROTOCOL_NUMBER
++        | SICK_LEAVE_VK_PROTOCOL_DATE => role.contains("sick_leave_vk"),
+         "medical.sick_leave_number" | "medical.sick_leave_commission_date" => true,
+         _ => false,
+     }
+@@ -530,6 +550,8 @@
+         || field_id == "contract.number"
+         || field_id == "medical.rvk_act_number"
+         || field_id == "medical.protocol_number"
++        || field_id == VK_MSE_PROTOCOL_NUMBER
++        || field_id == SICK_LEAVE_VK_PROTOCOL_NUMBER
+         || field_id == "medical.commission_number"
+         || field_id == "medical.sick_leave_number"
+         || (role.contains("commission") && field_id.contains("number"))
+@@ -572,11 +594,23 @@
+         "medical.treatment" => 120,
+         "medical.commission_date"
+         | "medical.protocol_date"
+-        | "medical.sick_leave_commission_date" => 130,
+-        "medical.protocol_number" | "medical.commission_number" | "medical.rvk_act_number" => 140,
++        | "medical.sick_leave_commission_date"
++        | VK_MSE_COMMISSION_DATE
++        | VK_MSE_PROTOCOL_DATE
++        | SICK_LEAVE_VK_COMMISSION_DATE
++        | SICK_LEAVE_VK_PROTOCOL_DATE => 130,
++        "medical.protocol_number"
++        | "medical.commission_number"
++        | "medical.rvk_act_number"
++        | VK_MSE_PROTOCOL_NUMBER
++        | SICK_LEAVE_VK_PROTOCOL_NUMBER => 140,
+         "medical.rvk_commissariat" => 150,
+-        "medical.workplace" | "employee.department" => 160,
+-        "medical.position" | "employee.position" | "hr.position" => 170,
++        "medical.workplace" | VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE | "employee.department" => 160,
++        "medical.position"
++        | VK_MSE_POSITION
++        | SICK_LEAVE_VK_POSITION
++        | "employee.position"
++        | "hr.position" => 170,
+         "amount.total" | "accounting.amount_total" | "contract.amount" | "legal.amount" => 180,
+         "amount.currency" | "accounting.currency" => 190,
+         _ => 500,
+@@ -698,20 +732,22 @@
+     }
+ 
+     #[test]
+-    fn medical_protocol_date_is_linked_but_independently_editable() {
+-        let config = popup_config_for_field(
+-            "medical.protocol_date",
+-            true,
+-            &DomainKind::Medical,
+-            "vk_mse",
+-        );
+-        let mut configured = config;
+-        apply_profession_defaults(&mut configured, &DomainKind::Medical, "vk_mse");
+-        assert_eq!(
+-            configured.linked_to.as_deref(),
+-            Some("medical.commission_date")
+-        );
+-        assert_eq!(configured.input_kind, PromptInputKind::Date);
++    fn role_scoped_protocol_dates_link_only_to_their_own_commission() {
++        for (role, protocol_date, commission_date) in [
++            ("vk_mse", VK_MSE_PROTOCOL_DATE, VK_MSE_COMMISSION_DATE),
++            (
++                "sick_leave_vk",
++                SICK_LEAVE_VK_PROTOCOL_DATE,
++                SICK_LEAVE_VK_COMMISSION_DATE,
++            ),
++        ] {
++            let mut configured =
++                popup_config_for_field(protocol_date, true, &DomainKind::Medical, role);
++            apply_profession_defaults(&mut configured, &DomainKind::Medical, role);
++            assert_eq!(configured.linked_to.as_deref(), Some(commission_date));
++            assert_eq!(configured.input_kind, PromptInputKind::Date);
++            assert_eq!(configured.ask_mode, PromptAskMode::Always);
++        }
+     }
+ 
+     #[test]
+--- a/tests/test_v18_0_3_regression_contracts.py
++++ b/tests/test_v18_0_3_regression_contracts.py
+@@ -90,8 +90,10 @@
+         pipeline = text("crates/dokkomplekt-core/src/universal_pipeline.rs")
+         self.assertIn('"sick_leave_vk"', medical)
+         self.assertIn('"reception"', medical)
+-        self.assertIn('"sick_leave_vk" => vec![', pipeline)
+-        self.assertIn('"reception" => vec![', pipeline)
++        self.assertIn("build_medical_render_plan(", pipeline)
++        self.assertIn("MedicalDocumentRole::from_role_id(role)", pipeline)
++        self.assertNotIn('"sick_leave_vk" => vec![', pipeline)
++        self.assertNotIn('"reception" => vec![', pipeline)
+ 
+ 
+ class CriticalSecurityRegressionContractTest(unittest.TestCase):
+--- a/tests/test_v18_0_4_professional_popup_contracts.py
++++ b/tests/test_v18_0_4_professional_popup_contracts.py
+@@ -64,16 +64,26 @@
+ 
+     def test_medical_donor_popup_fields_are_profile_scoped(self) -> None:
+         profiles = self.read("crates/dokkomplekt-core/src/popup_profiles.rs")
++        plan = self.read("crates/dokkomplekt-core/src/domains/medical_document_plan.rs")
++        semantics = self.read("crates/dokkomplekt-core/src/domains/medical_semantics.rs")
++        self.assertIn("build_medical_render_plan(", profiles)
++        self.assertIn("for field_id in &plan.required_fields", profiles)
+         for marker in [
+-            'add("medical.case_number", true)',
+-            'add("medical.discharge_date", true)',
+-            'add("medical.diagnosis", true)',
+-            'add("medical.treatment", true)',
+-            'add("medical.protocol_number", true)',
+-            'add("medical.rvk_commissariat", true)',
+-            'add("medical.sick_leave_number", true)',
++            '"medical.case_number"',
++            '"medical.discharge_date"',
++            '"medical.diagnosis"',
++            '"medical.treatment"',
++            '"medical.rvk_commissariat"',
++            '"medical.sick_leave_number"',
+         ]:
+-            self.assertIn(marker, profiles)
++            self.assertIn(marker, plan)
++        for scoped in [
++            '"medical.vk_mse.protocol_number"',
++            '"medical.vk_mse.protocol_date"',
++            '"medical.sick_leave_vk.protocol_number"',
++            '"medical.sick_leave_vk.protocol_date"',
++        ]:
++            self.assertIn(scoped, semantics)
+         neutral_core = "\n".join(
+             path.read_text(encoding="utf-8").lower()
+             for path in (ROOT / "crates/dokkomplekt-core/src/core").glob("*.rs")
+@@ -84,7 +94,11 @@
+         profiles = self.read("crates/dokkomplekt-core/src/popup_profiles.rs")
+         workspace = self.read("src/components/Workspace.tsx")
+         editor = self.read("src/components/PopupFieldEditor.tsx")
+-        self.assertIn('config.linked_to = Some("medical.commission_date".into())', profiles)
++        self.assertIn("VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE)", profiles)
++        self.assertIn(
++            "SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE)",
++            profiles,
++        )
+         self.assertIn("linkedPrompt.linked_to !== prompt.field_id", workspace)
+         self.assertIn("Повторять значение поля", editor)
+ 

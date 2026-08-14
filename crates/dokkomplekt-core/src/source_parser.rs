@@ -21,7 +21,8 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
         text: text.into(),
         metadata: Default::default(),
     };
-    let generic_parsed = crate::core::parse_source_document(&generic_source);
+    let generic_parsed =
+        crate::core::parse_source_document_with_default_year(&generic_source, default_year);
     let mut case = SemanticCase::default();
     let mut report = ParsedSourceReport {
         recognized_title: detect_source_title(text)
@@ -1348,6 +1349,14 @@ fn looks_like_person_name(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caller_default_year_reaches_core_only_date_alias() {
+        let text = "Редакция 2026\ndocument.date: 14.07";
+        let (case, _) = parse_source_text(text, 2025);
+        assert_eq!(case.get("document.date"), Some("14.07.2025"));
+    }
+
     #[test]
     fn unicode_lowercase_expansion_before_label_never_panics_or_mis_slices() {
         let text = "İ служебный префикс — Дата документа: 2026-05-12\nНомер документа: 42";
@@ -1382,10 +1391,10 @@ mod tests {
     #[test]
     fn extracts_items_collection_from_tabular_text() {
         let text = "СПЕЦИФИКАЦИЯ
-Наименование	Количество	Цена	Сумма
-Услуга аудита	2	1500,00	3000,00
-Подготовка отчёта	1	500,00	500,00
-Итого			3500,00";
+Наименование\tКоличество\tЦена\tСумма
+Услуга аудита\t2\t1500,00\t3000,00
+Подготовка отчёта\t1\t500,00\t500,00
+Итого\t\t\t3500,00";
         let (case, report) = parse_source_text(text, 2026);
         let items = case.collection("items").expect("items collection");
         assert_eq!(items.len(), 2);

@@ -496,7 +496,7 @@ describe('Tauri command DTO contracts', () => {
     await getAutomationMetrics();
     await getQueueStatus();
     await getCorpusStatus();
-    await getLearnedKitDecision('hr', 'employment-intake', 'hr.ru.v1');
+    await getLearnedKitDecision('Hr', 'employment-intake', 'hr.ru.v1');
     await exportCorpus('corpus.json', 500);
     await getCalibratedThresholdStatus();
     await importCalibratedThresholdsFile('thresholds.signed.json', 'e30=');
@@ -511,7 +511,7 @@ describe('Tauri command DTO contracts', () => {
       { command: 'get_automation_metrics', payload: undefined },
       { command: 'get_queue_status', payload: undefined },
       { command: 'get_corpus_status', payload: undefined },
-      { command: 'get_learned_kit_decision', payload: { req: { domain: 'hr', cluster_id: 'employment-intake', pack_id: 'hr.ru.v1' } } },
+      { command: 'get_learned_kit_decision', payload: { req: { domain: 'Hr', cluster_id: 'employment-intake', pack_id: 'hr.ru.v1' } } },
       { command: 'export_corpus', payload: { req: { output_path: 'corpus.json', limit: 500 } } },
       { command: 'get_calibrated_threshold_status', payload: undefined },
       { command: 'import_calibrated_thresholds', payload: { req: { path: null, file_name: 'thresholds.signed.json', bytes_base64: 'e30=' } } },

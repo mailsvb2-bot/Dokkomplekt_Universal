@@ -1,23 +1,14 @@
-//! Completeness contract: the composite blocks a created document MUST contain.
+//! Completeness contract for generated documents.
 //!
-//! The zero-touch promise is stronger than "no unfilled `{{placeholder}}` remains":
-//! a specialist drops one source document and expects the *whole* set to come out
-//! complete and correction-free. A template can be fully substituted yet still be an
-//! incomplete document of its kind — an epicrisis with no diagnosis, a diary with no
-//! signature section. This module encodes, per document role, the mandatory composite
-//! blocks such a document must contain, so an incomplete result is safely routed to
-//! `*_ТРЕБУЕТ_ВНИМАНИЯ.txt` instead of being emitted.
-//!
-//! Design notes:
-//! * The registry is data, keyed by the detected `role_id`/domain — easy to extend
-//!   with new document kinds without touching logic.
-//! * Generic/unknown roles declare **no** mandatory blocks, so the layer stays
-//!   domain-neutral and never over-blocks a plain user template.
-//! * A block is satisfied either by case data (fields) or by the presence of a
-//!   section header in the rendered text (markers). Checks lean toward a safe stop:
-//!   when a required block cannot be confirmed, nothing is created.
+//! A document is not complete merely because all placeholders were substituted:
+//! required semantic values must actually be visible in the rendered result.  The
+//! Medical profile therefore consumes the same canonical role plan as popup and
+//! workflow planning instead of maintaining another, drifting list of requirements.
+//! Unknown/custom roles stay template-driven and never inherit legacy medical rules.
 
-use crate::{DocumentTemplateSpec, DomainKind, SemanticCase};
+use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
+use crate::{title_for_field, DocumentTemplateSpec, DomainKind, SemanticCase};
+use std::collections::BTreeSet;
 
 /// How a required block is satisfied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +22,6 @@ pub enum BlockRequirement {
     /// The rendered document must contain this section header (case-insensitive).
     SectionMarker(String),
     /// The rendered document must contain a real signature line for one of the labels.
-    /// A narrative mention of a doctor is not sufficient.
     SignatureLine(Vec<String>),
 }
 
@@ -45,30 +35,36 @@ pub struct RequiredBlock {
 
 impl RequiredBlock {
     fn any_rendered(id: &str, title: &str, fields: &[&str]) -> Self {
-        RequiredBlock {
+        Self {
             id: id.to_string(),
             title: title.to_string(),
             requirement: BlockRequirement::AnyRenderedField(
-                fields.iter().map(|s| s.to_string()).collect(),
+                fields.iter().map(|field| (*field).to_string()).collect(),
             ),
         }
     }
 
-    /// Public constructor for [`BlockRequirement::AllFields`]: domain profiles that
-    /// require every field of a block (e.g. полный набор реквизитов организации)
-    /// build their blocks with it. Exercised by the unit test below.
+    fn rendered_field(field_id: &str) -> Self {
+        Self {
+            id: format!("rendered:{field_id}"),
+            title: title_for_field(field_id),
+            requirement: BlockRequirement::AnyRenderedField(vec![field_id.to_string()]),
+        }
+    }
+
+    /// Public constructor for domain profiles that require all fields of a block.
     pub fn all(id: &str, title: &str, fields: &[&str]) -> Self {
-        RequiredBlock {
+        Self {
             id: id.to_string(),
             title: title.to_string(),
             requirement: BlockRequirement::AllFields(
-                fields.iter().map(|s| s.to_string()).collect(),
+                fields.iter().map(|field| (*field).to_string()).collect(),
             ),
         }
     }
 
     fn signature(id: &str, title: &str, labels: &[&str]) -> Self {
-        RequiredBlock {
+        Self {
             id: id.to_string(),
             title: title.to_string(),
             requirement: BlockRequirement::SignatureLine(
@@ -84,118 +80,67 @@ const PATIENT_NAME_FIELDS: &[&str] = &[
     "patient.name",
     "patient.full_name",
 ];
-const DIAGNOSIS_FIELDS: &[&str] = &[
-    "medical.diagnosis",
-    "medical.diagnosis_main",
-    "diagnosis.main",
-    "diagnosis",
-];
-const TREATMENT_FIELDS: &[&str] = &[
-    "medical.treatment",
-    "medical.treatment_plan",
-    "treatment.plan",
-    "treatment",
-];
-const ADMISSION_DATE_FIELDS: &[&str] = &["medical.admission_date", "period.start_date"];
-const DISCHARGE_DATE_FIELDS: &[&str] = &["medical.discharge_date", "period.end_date"];
 
-/// The mandatory composite blocks for a configured document.
-///
-/// `template_text` is accepted for future template-driven inference; today the
-/// contract is driven by the detected role and domain.
+/// Mandatory composite blocks for a configured document.
 pub fn required_blocks_for(
     spec: &DocumentTemplateSpec,
     _template_text: &str,
 ) -> Vec<RequiredBlock> {
-    let mut blocks = if matches!(spec.category, DomainKind::Medical) {
-        medical_role_blocks(&spec.role_id)
-    } else {
-        Vec::new()
-    };
-
-    // Domain safety net: any medical document must at least identify its patient.
-    if matches!(spec.category, DomainKind::Medical)
-        && !blocks.iter().any(|b| b.id == "patient_identity")
-    {
-        blocks.push(RequiredBlock::any_rendered(
-            "patient_identity",
-            "Данные пациента (ФИО)",
-            PATIENT_NAME_FIELDS,
-        ));
+    if !matches!(spec.category, DomainKind::Medical) {
+        return Vec::new();
     }
 
+    let mut blocks = vec![RequiredBlock::any_rendered(
+        "patient_identity",
+        "Данные пациента (ФИО)",
+        PATIENT_NAME_FIELDS,
+    )];
+
+    let role = MedicalDocumentRole::from_role_id(&spec.role_id);
+    let plan = build_medical_render_plan(role.clone(), false, false);
+    let mut required = plan.required_fields.into_iter().collect::<BTreeSet<_>>();
+
+    // A template or a configured popup may legitimately add stricter fields than
+    // the built-in role profile (including a conditional sick-leave number).  Those
+    // requirements must also reach the post-render gate.
+    required.extend(
+        spec.required_fields
+            .iter()
+            .map(|field| crate::canonical_storage_field_id(field)),
+    );
+
+    for field_id in required {
+        blocks.push(RequiredBlock::rendered_field(&field_id));
+    }
+
+    add_role_signature_blocks(&mut blocks, &role);
     blocks
 }
 
-fn medical_role_blocks(role_id: &str) -> Vec<RequiredBlock> {
-    // Role identifiers may be namespaced by a profile (`medical.discharge`).
-    // Completeness semantics belong to the terminal role, not to spelling style.
-    let role = role_id.rsplit('.').next().unwrap_or(role_id);
+fn add_role_signature_blocks(blocks: &mut Vec<RequiredBlock>, role: &MedicalDocumentRole) {
     match role {
-        "discharge" => vec![
-            RequiredBlock::any_rendered(
-                "patient_identity",
-                "Данные пациента (ФИО)",
-                PATIENT_NAME_FIELDS,
-            ),
-            RequiredBlock::any_rendered("diagnosis", "Диагноз", DIAGNOSIS_FIELDS),
-            RequiredBlock::any_rendered("treatment", "Лечение", TREATMENT_FIELDS),
-            RequiredBlock::any_rendered(
-                "admission_date",
-                "Дата поступления",
-                ADMISSION_DATE_FIELDS,
-            ),
-            RequiredBlock::any_rendered("discharge_date", "Дата выписки", DISCHARGE_DATE_FIELDS),
-            RequiredBlock::signature(
+        MedicalDocumentRole::DischargeEpicrisis => blocks.push(RequiredBlock::signature(
+            "treating_physician_signature",
+            "Подпись лечащего врача",
+            &["лечащий врач", "врач-психиатр", "врач психиатр", "врач"],
+        )),
+        MedicalDocumentRole::Diary => {
+            blocks.push(RequiredBlock::signature(
                 "treating_physician_signature",
                 "Подпись лечащего врача",
-                &["лечащий врач", "врач-психиатр", "врач психиатр"],
-            ),
-        ],
-        "diaries" | "diary" => vec![
-            RequiredBlock::any_rendered(
-                "patient_identity",
-                "Данные пациента (ФИО)",
-                PATIENT_NAME_FIELDS,
-            ),
-            RequiredBlock::any_rendered("diagnosis", "Диагноз", DIAGNOSIS_FIELDS),
-            RequiredBlock::any_rendered(
-                "admission_date",
-                "Дата поступления",
-                ADMISSION_DATE_FIELDS,
-            ),
-            RequiredBlock::any_rendered("discharge_date", "Дата выписки", DISCHARGE_DATE_FIELDS),
-            RequiredBlock::signature(
-                "treating_physician_signature",
-                "Подпись лечащего врача",
-                &["лечащий врач", "врач-психиатр", "врач психиатр"],
-            ),
-            RequiredBlock::signature(
+                &["лечащий врач", "врач-психиатр", "врач психиатр", "врач"],
+            ));
+            blocks.push(RequiredBlock::signature(
                 "department_head_signature",
                 "Подпись заведующего отделением",
                 &["заведующий отделением", "зав. отделением", "зав отделением"],
-            ),
-        ],
-        "primary" => vec![
-            RequiredBlock::any_rendered(
-                "patient_identity",
-                "Данные пациента (ФИО)",
-                PATIENT_NAME_FIELDS,
-            ),
-            RequiredBlock::any_rendered("diagnosis", "Диагноз", DIAGNOSIS_FIELDS),
-            RequiredBlock::any_rendered("treatment", "Лечение", TREATMENT_FIELDS),
-        ],
-        "rvk_act" | "vk_mse" | "commission" => vec![RequiredBlock::any_rendered(
-            "patient_identity",
-            "Данные освидетельствуемого (ФИО)",
-            PATIENT_NAME_FIELDS,
-        )],
-        _ => Vec::new(),
+            ));
+        }
+        _ => {}
     }
 }
 
-/// Titles of every block that is **not** satisfied for this case + rendered text.
-/// An empty result means the document is structurally complete.
+/// Titles of every block that is not satisfied for this case + rendered text.
 pub fn unmet_blocks(
     blocks: &[RequiredBlock],
     case: &SemanticCase,
@@ -205,16 +150,14 @@ pub fn unmet_blocks(
     let mut unmet = Vec::new();
     for block in blocks {
         let satisfied = match &block.requirement {
-            BlockRequirement::AllFields(fields) => fields.iter().all(|f| case.has(f)),
-            BlockRequirement::AnyField(fields) => fields.iter().any(|f| case.has(f)),
+            BlockRequirement::AllFields(fields) => fields.iter().all(|field| case.has(field)),
+            BlockRequirement::AnyField(fields) => fields.iter().any(|field| case.has(field)),
             BlockRequirement::AnyRenderedField(fields) => fields.iter().any(|field_id| {
                 case.get(field_id)
                     .is_some_and(|value| rendered_contains_value(rendered_text, value))
             }),
             BlockRequirement::SectionMarker(marker) => haystack.contains(&marker.to_lowercase()),
-            BlockRequirement::SignatureLine(labels) => {
-                contains_signature_line(rendered_text, labels)
-            }
+            BlockRequirement::SignatureLine(labels) => contains_signature_line(rendered_text, labels),
         };
         if !satisfied {
             unmet.push(block.title.clone());
@@ -239,12 +182,7 @@ fn normalize_visible_text(value: &str) -> String {
 
 fn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {
     rendered_text.lines().any(|line| {
-        let normalized = line
-            .replace('\u{00a0}', " ")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase();
+        let normalized = normalize_visible_text(line);
         if normalized.is_empty() {
             return false;
         }
@@ -282,12 +220,12 @@ mod tests {
 
     fn case_with(pairs: &[(&str, &str)]) -> SemanticCase {
         let mut values = BTreeMap::new();
-        for (k, v) in pairs {
+        for (field_id, value) in pairs {
             values.insert(
-                (*k).to_string(),
+                (*field_id).to_string(),
                 SemanticValue {
-                    field_id: (*k).to_string(),
-                    value: (*v).to_string(),
+                    field_id: (*field_id).to_string(),
+                    value: (*value).to_string(),
                     source: ValueSource::UserConfirmed,
                     confidence: 1.0,
                     evidence: Vec::new(),
@@ -305,89 +243,106 @@ mod tests {
     fn generic_role_has_no_mandatory_blocks() {
         let blocks = required_blocks_for(&spec("generic", DomainKind::Generic), "любой текст");
         assert!(blocks.is_empty());
-        assert!(unmet_blocks(&blocks, &SemanticCase::default(), "").is_empty());
     }
 
     #[test]
     fn medical_role_names_do_not_leak_into_nonmedical_domains() {
-        let blocks = required_blocks_for(&spec("discharge", DomainKind::Generic), "");
-        assert!(blocks.is_empty());
-        let blocks = required_blocks_for(&spec("primary", DomainKind::Legal), "");
-        assert!(blocks.is_empty());
+        assert!(required_blocks_for(&spec("discharge", DomainKind::Generic), "").is_empty());
+        assert!(required_blocks_for(&spec("primary", DomainKind::Legal), "").is_empty());
     }
 
     #[test]
-    fn discharge_requires_diagnosis_and_signature() {
-        let blocks = required_blocks_for(&spec("discharge", DomainKind::Medical), "");
-        // Patient present, diagnosis present, signature section present -> complete.
-        let ok_case = case_with(&[
+    fn every_known_medical_role_enforces_the_same_canonical_required_fields() {
+        for role_id in [
+            "primary",
+            "discharge",
+            "diaries",
+            "rvk_act",
+            "commission",
+            "sick_leave_vk",
+            "vk_mse",
+            "reception",
+        ] {
+            let blocks = required_blocks_for(&spec(role_id, DomainKind::Medical), "");
+            let plan = build_medical_render_plan(
+                MedicalDocumentRole::from_role_id(role_id),
+                false,
+                false,
+            );
+            for field_id in plan.required_fields {
+                assert!(
+                    blocks.iter().any(|block| {
+                        matches!(
+                            &block.requirement,
+                            BlockRequirement::AnyRenderedField(fields)
+                                if fields == &vec![field_id.clone()]
+                        )
+                    }),
+                    "{role_id}: completeness gate misses {field_id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_medical_role_keeps_only_patient_and_template_requirements() {
+        let mut document = spec("unknown", DomainKind::Medical);
+        let blocks = required_blocks_for(&document, "");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].id, "patient_identity");
+
+        document.required_fields = vec!["custom.special_value".into()];
+        let blocks = required_blocks_for(&document, "");
+        assert!(blocks.iter().any(|block| block.id == "rendered:custom.special_value"));
+    }
+
+    #[test]
+    fn special_document_cannot_pass_when_required_value_never_reaches_render() {
+        let blocks = required_blocks_for(&spec("vk_mse", DomainKind::Medical), "");
+        let case = case_with(&[
             ("subject.name", "Иванов Иван"),
-            ("medical.diagnosis", "J06.9"),
-            ("medical.treatment", "Терапия"),
+            ("medical.case_number", "12345"),
             ("medical.admission_date", "01.06.2026"),
-            ("medical.discharge_date", "12.06.2026"),
+            ("medical.diagnosis", "F20.0"),
+            ("medical.treatment", "Терапия"),
+            ("medical.commission_date", "10.06.2026"),
+            ("medical.protocol_number", "77"),
+            ("medical.protocol_date", "10.06.2026"),
+            ("medical.workplace", "ООО Пример"),
+            ("medical.position", "Инженер"),
         ]);
-        let ok_text = concat!(
-            "Пациент: Иванов Иван\n",
-            "Диагноз: J06.9\n",
-            "Лечение: Терапия\n",
-            "Дата поступления: 01.06.2026\n",
-            "Дата выписки: 12.06.2026\n",
-            "Лечащий врач ______"
+        let rendered = concat!(
+            "Иванов Иван\nИстория болезни 12345\nПоступил 01.06.2026\n",
+            "Диагноз F20.0\nЛечение Терапия\nДата комиссии 10.06.2026\n",
+            "Дата протокола 10.06.2026\nООО Пример\nИнженер"
         );
-        assert!(unmet_blocks(&blocks, &ok_case, ok_text).is_empty());
-
-        // Missing clinical data and signature must all be surfaced, never hidden.
-        let bad_case = case_with(&[("subject.name", "Иванов Иван")]);
-        let unmet = unmet_blocks(&blocks, &bad_case, "Просто текст без подписи");
-        assert!(unmet.iter().any(|t| t.contains("Диагноз")));
-        assert!(unmet.iter().any(|t| t.contains("Лечение")));
-        assert!(unmet.iter().any(|t| t.contains("Дата поступления")));
-        assert!(unmet.iter().any(|t| t.contains("Дата выписки")));
-        assert!(unmet.iter().any(|t| t.contains("Подпись лечащего врача")));
+        let unmet = unmet_blocks(&blocks, &case, rendered);
+        assert_eq!(unmet, vec![title_for_field("medical.protocol_number")]);
     }
 
     #[test]
-    fn namespaced_discharge_requires_full_medical_contract() {
-        let blocks = required_blocks_for(&spec("medical.discharge", DomainKind::Medical), "");
-        let partial = case_with(&[
-            ("subject.name", "Иванов Иван"),
-            ("medical.diagnosis", "J06.9"),
-        ]);
-        let unmet = unmet_blocks(&blocks, &partial, "Лечащий врач ______");
-        assert!(unmet.iter().any(|title| title == "Лечение"));
-        assert!(unmet.iter().any(|title| title == "Дата поступления"));
-        assert!(unmet.iter().any(|title| title == "Дата выписки"));
-    }
-
-    #[test]
-    fn primary_requires_diagnosis_and_treatment() {
-        let blocks = required_blocks_for(&spec("medical.primary", DomainKind::Medical), "");
-        let case = case_with(&[("subject.name", "Иванов Иван")]);
-        let unmet = unmet_blocks(&blocks, &case, "");
-        assert!(unmet.iter().any(|title| title == "Диагноз"));
-        assert!(unmet.iter().any(|title| title == "Лечение"));
-    }
-
-    #[test]
-    fn case_value_that_never_reaches_rendered_document_is_incomplete() {
+    fn discharge_requires_every_semantic_value_and_signature_to_be_rendered() {
         let blocks = required_blocks_for(&spec("discharge", DomainKind::Medical), "");
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
+            ("medical.case_number", "12345"),
             ("medical.diagnosis", "J06.9"),
             ("medical.treatment", "Терапия"),
             ("medical.admission_date", "01.06.2026"),
             ("medical.discharge_date", "12.06.2026"),
         ]);
         let rendered = concat!(
-            "Пациент Иванов Иван\n",
-            "Диагноз J06.9\n",
-            "Дата поступления 01.06.2026\n",
-            "Дата выписки 12.06.2026\n",
-            "Лечащий врач ______"
+            "Пациент Иванов Иван\nИстория болезни 12345\nДиагноз J06.9\n",
+            "Лечение Терапия\nДата поступления 01.06.2026\n",
+            "Дата выписки 12.06.2026\nЛечащий врач ______"
         );
-        let unmet = unmet_blocks(&blocks, &case, rendered);
-        assert_eq!(unmet, vec!["Лечение".to_string()]);
+        assert!(unmet_blocks(&blocks, &case, rendered).is_empty());
+
+        let missing_treatment = rendered.replace("Лечение Терапия\n", "");
+        assert_eq!(
+            unmet_blocks(&blocks, &case, &missing_treatment),
+            vec![title_for_field("medical.treatment")]
+        );
     }
 
     #[test]
@@ -395,17 +350,18 @@ mod tests {
         let blocks = required_blocks_for(&spec("discharge", DomainKind::Medical), "");
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
+            ("medical.case_number", "12345"),
             ("medical.diagnosis", "J06.9"),
             ("medical.treatment", "Терапия"),
             ("medical.admission_date", "01.06.2026"),
             ("medical.discharge_date", "12.06.2026"),
         ]);
-        let unmet = unmet_blocks(
-            &blocks,
-            &case,
-            "Лечащий врач осмотрел пациента и продолжил наблюдение.",
+        let rendered = concat!(
+            "Иванов Иван 12345 J06.9 Терапия 01.06.2026 12.06.2026\n",
+            "Лечащий врач осмотрел пациента и продолжил наблюдение."
         );
-        assert!(unmet.iter().any(|title| title.contains("лечащего врача")));
+        let unmet = unmet_blocks(&blocks, &case, rendered);
+        assert!(unmet.iter().any(|title| title == "Подпись лечащего врача"));
     }
 
     #[test]
@@ -417,19 +373,14 @@ mod tests {
             ("medical.admission_date", "01.06.2026"),
             ("medical.discharge_date", "12.06.2026"),
         ]);
-        let medical_values = concat!(
-            "Пациент Иванов Иван\n",
-            "Диагноз F20.0\n",
-            "Дата поступления 01.06.2026\n",
-            "Дата выписки 12.06.2026\n"
+        let values = concat!(
+            "Иванов Иван\nF20.0\n01.06.2026\n12.06.2026\n",
+            "Лечащий врач __________________"
         );
-        let one_signature = format!("{medical_values}Лечащий врач __________________");
-        let unmet = unmet_blocks(&blocks, &case, &one_signature);
+        let unmet = unmet_blocks(&blocks, &case, values);
         assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);
 
-        let both = format!(
-            "{medical_values}Лечащий врач __________________\nЗаведующий отделением __________"
-        );
+        let both = format!("{values}\nЗаведующий отделением __________");
         assert!(unmet_blocks(&blocks, &case, &both).is_empty());
     }
 
@@ -440,13 +391,5 @@ mod tests {
         assert!(!unmet_blocks(std::slice::from_ref(&block), &partial, "").is_empty());
         let complete = case_with(&[("org.inn", "7736050003"), ("org.kpp", "773601001")]);
         assert!(unmet_blocks(&[block], &complete, "").is_empty());
-    }
-
-    #[test]
-    fn medical_category_adds_patient_identity_even_for_unknown_role() {
-        let blocks = required_blocks_for(&spec("unknown", DomainKind::Medical), "");
-        assert!(blocks.iter().any(|b| b.id == "patient_identity"));
-        let unmet = unmet_blocks(&blocks, &SemanticCase::default(), "текст");
-        assert!(unmet.iter().any(|t| t.contains("ФИО")));
     }
 }

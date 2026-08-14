@@ -1,0 +1,58 @@
+name: One-time clippy diagnostic
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-time-clippy-diagnostic-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'agent/full-functional-parity' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Reproduce candidate product fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re, textwrap
+          workflow = Path('.github/workflows/one-time-rust-diagnostic.yml').read_text(encoding='utf-8')
+          match = re.search(r"python - <<'PY'\n(.*?)\n          PY", workflow, re.S)
+          if not match:
+              raise SystemExit('embedded product patch not found')
+          script = textwrap.dedent(match.group(1))
+          exec(compile(script, '<embedded-product-patch>', 'exec'), {})
+          PY
+          cargo fmt --all
+      - name: Diagnose clippy warning
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets --locked -- -D warnings > /tmp/clippy.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            diagnostic=$(grep -E -B 6 -A 16 "error:|warning:|clippy::|-->" /tmp/clippy.log | tail -n 100 || true)
+            if [ -z "$diagnostic" ]; then diagnostic=$(tail -n 100 /tmp/clippy.log); fi
+            echo '::group::clippy diagnostic'
+            echo "$diagnostic"
+            echo '::endgroup::'
+            safe=${diagnostic//'%'/'%25'}
+            safe=${safe//$'\r'/'%0D'}
+            safe=${safe//$'\n'/'%0A'}
+            echo "::error title=clippy failure::$safe"
+            exit "$code"
+          fi
+          echo 'clippy passed'

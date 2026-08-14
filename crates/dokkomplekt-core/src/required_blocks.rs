@@ -103,7 +103,11 @@ pub fn required_blocks_for(
     spec: &DocumentTemplateSpec,
     _template_text: &str,
 ) -> Vec<RequiredBlock> {
-    let mut blocks = role_blocks(&spec.role_id);
+    let mut blocks = if matches!(spec.category, DomainKind::Medical) {
+        medical_role_blocks(&spec.role_id)
+    } else {
+        Vec::new()
+    };
 
     // Domain safety net: any medical document must at least identify its patient.
     if matches!(spec.category, DomainKind::Medical)
@@ -119,7 +123,7 @@ pub fn required_blocks_for(
     blocks
 }
 
-fn role_blocks(role_id: &str) -> Vec<RequiredBlock> {
+fn medical_role_blocks(role_id: &str) -> Vec<RequiredBlock> {
     // Role identifiers may be namespaced by a profile (`medical.discharge`).
     // Completeness semantics belong to the terminal role, not to spelling style.
     let role = role_id.rsplit('.').next().unwrap_or(role_id);
@@ -272,6 +276,14 @@ mod tests {
         let blocks = required_blocks_for(&spec("generic", DomainKind::Generic), "любой текст");
         assert!(blocks.is_empty());
         assert!(unmet_blocks(&blocks, &SemanticCase::default(), "").is_empty());
+    }
+
+    #[test]
+    fn medical_role_names_do_not_leak_into_nonmedical_domains() {
+        let blocks = required_blocks_for(&spec("discharge", DomainKind::Generic), "");
+        assert!(blocks.is_empty());
+        let blocks = required_blocks_for(&spec("primary", DomainKind::Legal), "");
+        assert!(blocks.is_empty());
     }
 
     #[test]

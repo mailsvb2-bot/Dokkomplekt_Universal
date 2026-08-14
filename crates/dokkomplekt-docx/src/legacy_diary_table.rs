@@ -428,40 +428,61 @@ fn replace_cell_text(cell_xml: &str, value: &str) -> String {
         return cell_xml.to_string();
     };
     let inner = &cell_xml[open_end..close_start];
-    let (properties, _) = if inner.trim_start().starts_with("<w:tcPr") {
+    let properties = if inner.trim_start().starts_with("<w:tcPr") {
         if let Some(start) = inner.find("<w:tcPr") {
             if let Some(end) = matching_element_end(inner, start, "w:tcPr") {
-                (&inner[..end], &inner[end..])
+                &inner[..end]
             } else {
-                ("", inner)
+                ""
             }
         } else {
-            ("", inner)
+            ""
         }
     } else {
-        ("", inner)
+        ""
     };
+    let paragraph_properties = first_element(inner, "w:pPr").unwrap_or("");
+    let run_properties = first_element(inner, "w:rPr").unwrap_or("");
     let paragraphs = value
         .split('\n')
         .map(|line| {
             format!(
-                "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+                "<w:p>{paragraph_properties}<w:r>{run_properties}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
                 escape_xml(line)
             )
         })
         .collect::<String>();
     format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}",
         &cell_xml[..open_end],
         properties,
         paragraphs,
-        &cell_xml[close_start..],
-        ""
+        &cell_xml[close_start..]
     )
 }
 
+fn first_element<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+    let (start, end) = element_ranges(xml, name).into_iter().next()?;
+    Some(&xml[start..end])
+}
+
 fn visible_text(xml: &str) -> String {
+    let paragraphs = element_ranges(xml, "w:p");
+    if paragraphs.is_empty() {
+        return visible_text_runs(xml);
+    }
+    paragraphs
+        .into_iter()
+        .map(|(start, end)| visible_text_runs(&xml[start..end]))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn visible_text_runs(xml: &str) -> String {
     let mut output = String::new();
+    let mut cursor = 0usize;
     while let Some(relative) = xml[cursor..].find("<w:t") {
         let start = cursor + relative;
         let Some(open_end) = xml[start..].find('>').map(|offset| start + offset + 1) else {
@@ -471,9 +492,6 @@ fn visible_text(xml: &str) -> String {
             break;
         };
         let close = open_end + close_relative;
-        if !output.is_empty() {
-            output.push(' ');
-        }
         output.push_str(&decode_xml(&xml[open_end..close]));
         cursor = close + "</w:t>".len();
     }
@@ -501,6 +519,7 @@ fn decode_xml(value: &str) -> String {
 fn element_ranges(xml: &str, name: &str) -> Vec<(usize, usize)> {
     let marker = format!("<{name}");
     let mut ranges = Vec::new();
+    let mut cursor = 0usize;
     while let Some(relative) = xml[cursor..].find(&marker) {
         let start = cursor + relative;
         if !xml_name_boundary(xml.as_bytes().get(start + marker.len()).copied()) {
@@ -644,6 +663,17 @@ mod tests {
         assert!(report.xml.contains("Совместный осмотр"));
         assert!(!report.xml.contains(">03<"));
         assert!(!report.xml.contains(">04<"));
+    }
+
+    #[test]
+    fn visible_text_preserves_paragraph_boundaries_and_split_runs() {
+        let xml = concat!(
+            "<w:tc>",
+            "<w:p><w:r><w:t>Совместный </w:t></w:r><w:r><w:t>осмотр</w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>Лечащий врач ___</w:t></w:r></w:p>",
+            "</w:tc>"
+        );
+        assert_eq!(visible_text(xml), "Совместный осмотр\nЛечащий врач ___");
     }
 
     #[test]

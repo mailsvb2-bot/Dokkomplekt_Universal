@@ -1,5 +1,5 @@
 use crate::data_schema_engine::{is_safe_field_id, UnifiedFieldDefinition, UnifiedFieldKind};
-use crate::domain_plugin_layer::{builtin_domain_plugins_v2, plugin_by_id, DomainPluginId};
+use crate::domain_plugin_layer::{plugin_by_id, DomainPluginId};
 use crate::label_search::find_label_end;
 use crate::{canonical_storage_field_id, parse_flexible_date};
 use chrono::{Datelike, Local};
@@ -176,16 +176,17 @@ pub(crate) fn extract_declared_field(
     None
 }
 
-/// Return the first following value line without crossing another declared
-/// field from any built-in domain or an explicit section heading. A field label
-/// is document structure, never data for the preceding field.
+/// Return the first following value line without crossing another structural
+/// field line or an explicit section heading. The Core deliberately recognizes
+/// structure rather than profession-specific vocabulary: a labelled line is
+/// document structure and must never become data for the preceding field.
 fn next_declared_value<'a>(lines: &'a [&'a str], start: usize) -> Option<&'a str> {
     for line in lines.iter().skip(start) {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if starts_with_declared_field_label(line) || is_explicit_section_heading(line) {
+        if looks_like_structured_field_line(line) || is_explicit_section_heading(line) {
             return None;
         }
         return Some(line);
@@ -193,11 +194,32 @@ fn next_declared_value<'a>(lines: &'a [&'a str], start: usize) -> Option<&'a str
     None
 }
 
-fn starts_with_declared_field_label(line: &str) -> bool {
+fn looks_like_structured_field_line(line: &str) -> bool {
+    if starts_with_declared_core_label(line) {
+        return true;
+    }
+
+    let Some((label, value)) = line.split_once(':') else {
+        return false;
+    };
+    let label = label.trim();
+    let value = value.trim();
+    if label.is_empty() || value.is_empty() || label.chars().count() > 80 {
+        return false;
+    }
+
+    let alphabetic = label.chars().filter(|character| character.is_alphabetic()).count();
+    let control_or_sentence_punctuation = label
+        .chars()
+        .any(|character| character.is_control() || matches!(character, '.' | '!' | '?' | ';'));
+    alphabetic >= 2 && !control_or_sentence_punctuation
+}
+
+fn starts_with_declared_core_label(line: &str) -> bool {
     let folded = line.trim_start().to_lowercase();
-    builtin_domain_plugins_v2()
+    plugin_by_id(&DomainPluginId::Core)
+        .field_definitions
         .into_iter()
-        .flat_map(|plugin| plugin.field_definitions.into_iter())
         .flat_map(|definition| definition.aliases.into_iter())
         .any(|alias| {
             let alias = alias.trim().to_lowercase();
@@ -367,10 +389,10 @@ mod tests {
     }
 
     #[test]
-    fn next_domain_label_is_never_consumed_as_core_field_value() {
+    fn unknown_labelled_line_is_never_consumed_as_core_field_value() {
         let document = parse_source_document(&SourceDocument {
-            id: "cross-domain-boundary".into(),
-            text: "Клиент\nДиагноз: F32.1".into(),
+            id: "structural-boundary".into(),
+            text: "Клиент\nПрофильное поле: Значение".into(),
             metadata: BTreeMap::new(),
         });
         assert_eq!(value(&document, "subject.name"), None);

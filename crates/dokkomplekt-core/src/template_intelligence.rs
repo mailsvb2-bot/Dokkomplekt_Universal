@@ -245,10 +245,6 @@ fn detect_role(text: &str, title: &str) -> String {
         .replace('ё', "е");
     if hay.contains("дневник") {
         "diaries".into()
-    } else if hay.contains("выпис") || hay.contains("эпикриз") {
-        "discharge".into()
-    } else if hay.contains("рвк") || hay.contains("военный комиссариат") {
-        "rvk_act".into()
     } else if hay.contains("вк больнич")
         || hay.contains("вк по больнич")
         || (hay.contains("продлен") && hay.contains("больнич"))
@@ -259,12 +255,14 @@ fn detect_role(text: &str, title: &str) -> String {
     } else if hay.contains("осмотр врача приемного покоя") || hay.contains("врач приемного покоя")
     {
         "reception".into()
-    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр")
-    {
+    } else if hay.contains("рвк") || hay.contains("военный комиссариат") {
+        "rvk_act".into()
+    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр") {
         "commission".into()
-    } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию")
-    {
+    } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию") {
         "primary".into()
+    } else if hay.contains("выпис") || hay.contains("эпикриз") {
+        "discharge".into()
     } else {
         "unknown".into()
     }

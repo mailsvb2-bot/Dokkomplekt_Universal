@@ -78,4 +78,12 @@ replace_in_test(
     '            skippable: true,\n',
 )
 
+# The integration test remains exact: it now locks the restored donor-visible format.
+replace_in_test(
+    'crates/dokkomplekt-core/tests/behavior_regressions.rs',
+    'output_folder_name_uses_spaces_not_underscores',
+    '"Иванов И. И. 01.06.2026 - 03.06.2026"',
+    '"Иванов И.И. 01.06.2026 - 03.06.2026"',
+)
+
 print('focused donor parity follow-up applied')

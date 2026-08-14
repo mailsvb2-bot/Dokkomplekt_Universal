@@ -4,6 +4,7 @@ use crate::core::{
     ValidationRule, Workflow,
 };
 use crate::domains;
+use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -103,20 +104,9 @@ pub fn required_fields_for_domain(
         }
     }
     if matches!(domain, UniversalDomain::Medical) {
-        for field in medical_role_fields(&role, flags) {
-            fields.insert(field);
-        }
-        if role == "diaries" {
-            fields.remove("medical.treatment");
-            fields.remove("medical.sick_leave_number");
-        }
-        if role == "primary" {
-            fields.remove("medical.case_number");
-        }
+        fields.extend(medical_role_fields(&role, flags));
     } else {
-        for field in nonmedical_role_fields(domain, &role) {
-            fields.insert(field);
-        }
+        fields.extend(nonmedical_role_fields(domain, &role));
     }
     fields.into_iter().collect()
 }
@@ -221,66 +211,12 @@ fn nonmedical_role_fields(domain: &UniversalDomain, role: &str) -> Vec<String> {
 }
 
 fn medical_role_fields(role: &str, flags: &UniversalPipelineFlags) -> Vec<String> {
-    match role {
-        "discharge" => {
-            let wf = domains::medical::medical_discharge_workflow(
-                "discharge",
-                true,
-                flags.sick_leave_enabled,
-            );
-            wf.requires
-                .into_iter()
-                .chain(wf.optional)
-                .chain(vec!["medical.diagnosis".to_string()])
-                .collect()
-        }
-        "diaries" => vec![
-            "medical.case_number".into(),
-            "medical.diagnosis".into(),
-            "medical.discharge_date".into(),
-        ],
-        "rvk_act" => vec![
-            "medical.case_number".into(),
-            "medical.diagnosis".into(),
-            "medical.discharge_date".into(),
-            "medical.rvk_commissariat".into(),
-            "medical.rvk_act_number".into(),
-            "medical.treatment".into(),
-        ],
-        "commission" => vec![
-            "medical.case_number".into(),
-            "medical.diagnosis".into(),
-            "medical.commission_date".into(),
-            "medical.commission_number".into(),
-            "medical.protocol_number".into(),
-            "medical.treatment".into(),
-        ],
-        "vk_mse" => vec![
-            "medical.case_number".into(),
-            "medical.diagnosis".into(),
-            "medical.workplace".into(),
-            "medical.position".into(),
-            "medical.protocol_number".into(),
-            "medical.treatment".into(),
-        ],
-        "sick_leave_vk" => vec![
-            "medical.case_number".into(),
-            "medical.diagnosis".into(),
-            "medical.commission_date".into(),
-            "medical.protocol_number".into(),
-            "medical.sick_leave_number".into(),
-            "medical.sick_leave_from".into(),
-            "medical.workplace".into(),
-            "medical.position".into(),
-        ],
-        "reception" => vec![
-            "medical.admission_date".into(),
-            "medical.diagnosis".into(),
-            "medical.treatment".into(),
-        ],
-        "primary" => vec!["medical.diagnosis".into(), "medical.treatment".into()],
-        _ => Vec::new(),
-    }
+    build_medical_render_plan(
+        MedicalDocumentRole::from_role_id(role),
+        flags.sick_leave_enabled,
+        false,
+    )
+    .required_fields
 }
 
 fn detect_domain_from_template(template: &TemplateStructure) -> UniversalDomain {
@@ -290,11 +226,17 @@ fn detect_domain_from_template(template: &TemplateStructure) -> UniversalDomain 
         template.document_type,
         template.fields.join(" ")
     )
-    .to_lowercase();
+    .to_lowercase()
+    .replace('ё', "е");
     if haystack.contains("medical.")
         || haystack.contains("выпис")
         || haystack.contains("дневник")
         || haystack.contains("диагноз")
+        || haystack.contains("больнич")
+        || haystack.contains("приемного покоя")
+        || haystack.contains("мсэ")
+        || haystack.contains("рвк")
+        || haystack.contains("комисс")
     {
         UniversalDomain::Medical
     } else if haystack.contains("contract.")
@@ -314,7 +256,6 @@ fn detect_domain_from_template(template: &TemplateStructure) -> UniversalDomain 
         UniversalDomain::Education
     } else if haystack.contains("accounting.")
         || haystack.contains("amount.")
-        || haystack.contains("счёт")
         || haystack.contains("счет")
         || haystack.contains("акт сверки")
     {
@@ -420,11 +361,11 @@ mod tests {
     }
 
     #[test]
-    fn medical_diary_slug_excludes_treatment_and_sick_leave() {
+    fn medical_diary_slug_excludes_case_treatment_and_sick_leave_unless_template_uses_them() {
         let structure = TemplateStructure {
             title: "Дневники".into(),
             document_type: "дневники".into(),
-            fields: vec!["medical.case_number".into(), "medical.diagnosis".into()],
+            fields: vec!["medical.diagnosis".into()],
             repeated_fields: Vec::new(),
             tables: Vec::new(),
             signatures: Vec::new(),
@@ -439,9 +380,80 @@ mod tests {
                 sick_leave_enabled: true,
             },
         );
+        assert!(fields.contains(&"medical.admission_date".to_string()));
         assert!(fields.contains(&"medical.discharge_date".to_string()));
+        assert!(!fields.contains(&"medical.case_number".to_string()));
         assert!(!fields.contains(&"medical.treatment".to_string()));
         assert!(!fields.contains(&"medical.sick_leave_number".to_string()));
+    }
+
+    #[test]
+    fn every_medical_role_uses_the_same_canonical_plan_as_the_domain_contract() {
+        let structure = |role: &str| TemplateStructure {
+            title: role.into(),
+            document_type: role.into(),
+            fields: Vec::new(),
+            repeated_fields: Vec::new(),
+            tables: Vec::new(),
+            signatures: Vec::new(),
+            input_zones: Vec::new(),
+            suggested_button_label: role.into(),
+        };
+        let flags = UniversalPipelineFlags {
+            sick_leave_enabled: true,
+        };
+        for role in [
+            "primary",
+            "discharge",
+            "diaries",
+            "rvk_act",
+            "commission",
+            "sick_leave_vk",
+            "vk_mse",
+            "reception",
+        ] {
+            let fields = required_fields_for_domain(
+                &UniversalDomain::Medical,
+                role,
+                &structure(role),
+                &flags,
+            );
+            let expected = build_medical_render_plan(
+                MedicalDocumentRole::from_role_id(role),
+                flags.sick_leave_enabled,
+                false,
+            )
+            .required_fields;
+            assert_eq!(fields, expected, "role contract drifted for {role}");
+        }
+    }
+
+    #[test]
+    fn reception_is_medical_but_does_not_require_treatment() {
+        let input = UniversalPipelineInput {
+            source_document: SourceDocument {
+                id: "s".into(),
+                text: "Первичный документ".into(),
+                metadata: BTreeMap::new(),
+            },
+            target_template: TargetTemplate {
+                id: "t".into(),
+                path: "reception.docx".into(),
+                text: "Осмотр врача приёмного покоя\n{{medical.diagnosis}}".into(),
+            },
+            domain_hint: None,
+            flags: UniversalPipelineFlags::default(),
+        };
+        let result = run_universal_constructor_pipeline(input);
+        assert_eq!(result.domain, UniversalDomain::Medical);
+        assert!(result
+            .workflow
+            .requires
+            .contains(&"medical.admission_date".to_string()));
+        assert!(!result
+            .workflow
+            .requires
+            .contains(&"medical.treatment".to_string()));
     }
 
     #[test]

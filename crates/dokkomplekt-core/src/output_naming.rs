@@ -5,12 +5,15 @@ use serde::{Deserialize, Serialize};
 pub enum FolderNamePart {
     FullSubjectName,
     ShortInitials,
+    SurnameGivenName,
     OrganizationName,
     DocumentNumber,
     DocumentDate,
     PeriodStartDate,
     PeriodEndDate,
     PeriodRange,
+    PeriodStartMonth,
+    PeriodEndMonth,
     // Backward-compatible medical-profile names. They resolve through generic
     // period fields first, then medical aliases.
     AdmissionDate,
@@ -33,6 +36,13 @@ pub fn build_output_folder_name(case: &SemanticCase, parts: &[FolderNamePart]) -
                     first(case, &["subject.name", "person.full_name", "patient.fio"])
                 {
                     chunks.push(short_initials(name));
+                }
+            }
+            FolderNamePart::SurnameGivenName => {
+                if let Some(name) =
+                    first(case, &["subject.name", "person.full_name", "patient.fio"])
+                {
+                    chunks.push(surname_given_name(name));
                 }
             }
             FolderNamePart::OrganizationName => push(
@@ -66,7 +76,7 @@ pub fn build_output_folder_name(case: &SemanticCase, parts: &[FolderNamePart]) -
                     chunks.push(format!("{start} - {end}"));
                 }
             }
-            FolderNamePart::AdmissionMonth => push(
+            FolderNamePart::PeriodStartMonth | FolderNamePart::AdmissionMonth => push(
                 month_from_date(first(
                     case,
                     &["period.start_date", "medical.admission_date"],
@@ -74,7 +84,7 @@ pub fn build_output_folder_name(case: &SemanticCase, parts: &[FolderNamePart]) -
                 .as_deref(),
                 &mut chunks,
             ),
-            FolderNamePart::DischargeMonth => push(
+            FolderNamePart::PeriodEndMonth | FolderNamePart::DischargeMonth => push(
                 month_from_date(first(case, &["period.end_date", "medical.discharge_date"]))
                     .as_deref(),
                 &mut chunks,
@@ -140,6 +150,12 @@ fn short_initials(name: &str) -> String {
     }
     out
 }
+fn surname_given_name(name: &str) -> String {
+    name.split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 fn month_from_date(value: Option<&str>) -> Option<String> {
     let mut parts = value?.split('.');
     let _day = parts.next()?;
@@ -195,6 +211,32 @@ mod tests {
             "Иванов Иван A 42 01.06.2026 - 30.06.2026"
         );
     }
+    #[test]
+    fn surname_given_name_and_generic_months_preserve_old_folder_choices() {
+        let mut case = SemanticCase::default();
+        for (id, value) in [
+            ("subject.name", "Иванов Иван Иванович"),
+            ("period.start_date", "01.06.2026"),
+            ("period.end_date", "31.07.2026"),
+        ] {
+            case.values.insert(
+                id.into(),
+                SemanticValue::new(id, value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        assert_eq!(
+            build_output_folder_name(
+                &case,
+                &[
+                    FolderNamePart::SurnameGivenName,
+                    FolderNamePart::PeriodStartMonth,
+                    FolderNamePart::PeriodEndMonth,
+                ],
+            ),
+            "Иванов Иван 06.2026 07.2026"
+        );
+    }
+
     #[test]
     fn reserved_windows_names_and_trailing_dots_are_neutralized() {
         assert_eq!(sanitize_folder_name("CON."), "_CON");

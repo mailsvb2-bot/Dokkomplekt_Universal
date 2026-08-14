@@ -4,6 +4,8 @@
 //! to touch OpenXML/ZIP. It repairs run-split placeholders, XML-escapes substituted values, and performs
 //! strict placeholder checks before writing a rendered DOCX.
 
+mod legacy_diary_table;
+
 use dokkomplekt_core::{
     render_docx_xml_template, render_text_template, RenderResult, SemanticCase,
 };
@@ -49,6 +51,8 @@ pub enum DocxError {
     TemplateLearningMap(String),
     #[error("unsafe active or externally linked content in DOCX template: {0}")]
     UnsafeActiveContent(String),
+    #[error("legacy diary table cannot be rendered safely: {0}")]
+    LegacyDiaryTable(String),
 }
 
 pub type DocxResult<T> = Result<T, DocxError>;
@@ -545,7 +549,23 @@ pub fn render_docx_file_with_watermark(
         }
         let mut xml = String::new();
         entry.read_to_string(&mut xml)?;
-        let prepared = promote_table_row_loops(&stitch_split_placeholders(&xml));
+        let mut prepared = promote_table_row_loops(&stitch_split_placeholders(&xml));
+        if name == "word/document.xml" {
+            let legacy = legacy_diary_table::fill_legacy_diary_tables(&prepared, case, strict)
+                .map_err(DocxError::LegacyDiaryTable)?;
+            if legacy.detected_tables > 0 {
+                aggregate.warnings.push(format!(
+                    "legacy_diary_table:tables={},rows={},filled={},removed_after_discharge={},final_rows={}",
+                    legacy.detected_tables,
+                    legacy.detected_rows,
+                    legacy.filled_rows,
+                    legacy.removed_after_discharge,
+                    legacy.final_rows
+                ));
+                extend_unique(&mut aggregate.warnings, legacy.warnings);
+            }
+            prepared = legacy.xml;
+        }
         let result = render_docx_xml_template(&prepared, case, strict);
         extend_unique(&mut aggregate.missing_fields, result.missing_fields);
         extend_unique(&mut aggregate.unknown_fields, result.unknown_fields);

@@ -45,10 +45,13 @@ const FOLDER_PART_OPTIONS: Array<{ value: FolderNamePartDto; label: string; sens
   { value: 'DocumentDate', label: 'дата документа' },
   { value: 'OrganizationName', label: 'организация' },
   { value: 'ShortInitials', label: 'фамилия и инициалы', sensitive: true },
+  { value: 'SurnameGivenName', label: 'фамилия и имя', sensitive: true },
   { value: 'FullSubjectName', label: 'полное имя', sensitive: true },
   { value: 'PeriodRange', label: 'период целиком' },
   { value: 'PeriodStartDate', label: 'начало периода' },
   { value: 'PeriodEndDate', label: 'окончание периода' },
+  { value: 'PeriodStartMonth', label: 'месяц начала периода' },
+  { value: 'PeriodEndMonth', label: 'месяц окончания периода' },
 ];
 
 export function UtilityPanel(props: UtilityPanelProps) {

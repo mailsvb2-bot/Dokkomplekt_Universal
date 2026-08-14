@@ -157,10 +157,12 @@ pub fn create_pack_from_confirmations(
 
             if let Some(domain_override) = &row.domain_override {
                 match domain_override {
-                    DomainKind::Custom(profile) if profile.trim().is_empty() => warnings.push(format!(
-                        "{}: пустой пользовательский профиль проигнорирован; сохранено автоопределение",
-                        doc.button_label
-                    )),
+                    DomainKind::Custom(profile) if profile.trim().is_empty() => warnings.push(
+                        format!(
+                            "{}: пустой пользовательский профиль проигнорирован; сохранено автоопределение",
+                            doc.button_label
+                        ),
+                    ),
                     DomainKind::Custom(profile) => {
                         doc.category = DomainKind::Custom(profile.trim().to_string());
                     }
@@ -185,30 +187,13 @@ pub fn create_pack_from_confirmations(
                 }
                 doc.popup_fields = normalize_popup_fields(&rebuilt);
                 doc.popup_configured = !user_popup_changes.is_empty();
-                if doc.popup_configured {
-                    doc.required_fields = doc
-                        .popup_fields
-                        .iter()
-                        .filter(|field| field.required)
-                        .map(|field| field.field_id.clone())
-                        .chain(doc.required_fields.iter().cloned())
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect();
-                }
             } else if !row.popup_fields.is_empty() {
                 doc.popup_fields = submitted_popup_fields;
                 doc.popup_configured = true;
-                doc.required_fields = doc
-                    .popup_fields
-                    .iter()
-                    .filter(|field| field.required)
-                    .map(|field| field.field_id.clone())
-                    .chain(doc.required_fields.iter().cloned())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
             }
+
+            synchronize_required_fields(&mut doc);
+
             if doc.is_static_copy {
                 warnings.push(format!(
                     "{}: статический шаблон без placeholder'ов; будет создана копия",
@@ -227,6 +212,26 @@ pub fn create_pack_from_confirmations(
         confirmations: rows.to_vec(),
         warnings,
     }
+}
+
+/// A button's requirements are derived from the final template + final popup
+/// configuration. Never carry requirements from a previously detected domain
+/// after the user changes the profession/profile.
+fn synchronize_required_fields(document: &mut DocumentTemplateSpec) {
+    document.required_fields = document
+        .placeholders
+        .iter()
+        .cloned()
+        .chain(
+            document
+                .popup_fields
+                .iter()
+                .filter(|field| field.required)
+                .map(|field| field.field_id.clone()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
 }
 
 pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) -> Vec<String> {
@@ -370,6 +375,34 @@ mod tests {
             .popup_fields
             .iter()
             .all(|field| !field.field_id.starts_with("medical.")));
+        assert!(document
+            .required_fields
+            .iter()
+            .all(|field| !field.starts_with("medical.")));
+        assert!(document
+            .required_fields
+            .iter()
+            .any(|field| field == "subject.name"));
+    }
+
+    #[test]
+    fn explicit_template_field_survives_domain_override() {
+        let mut rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "profiled".into(),
+            template_path: "profiled.docx".into(),
+            extracted_text: "Выписной эпикриз\n{{medical.diagnosis}}".into(),
+            preferred_button_label: Some("Report".into()),
+        }]);
+        rows[0].domain_override = Some(DomainKind::Custom("architecture".into()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        let document = &result.pack.documents[0];
+
+        assert_eq!(document.category, DomainKind::Custom("architecture".into()));
+        assert!(document
+            .required_fields
+            .iter()
+            .any(|field| field == "medical.diagnosis"));
     }
 
     #[test]
@@ -397,6 +430,10 @@ mod tests {
             .popup_fields
             .iter()
             .all(|field| !field.field_id.starts_with("medical.")));
+        assert!(document
+            .required_fields
+            .iter()
+            .all(|field| !field.starts_with("medical.")));
     }
 
     #[test]

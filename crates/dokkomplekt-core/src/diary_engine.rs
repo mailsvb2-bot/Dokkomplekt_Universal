@@ -259,8 +259,8 @@ pub fn build_medical_diary_series(
             datetime: entry.datetime,
             is_final_discharge_entry: final_index == Some(index),
             signatures: vec![
-                "Лечащий врач".to_string(),
-                "Заведующий отделением".to_string(),
+                "Лечащий врач __________________ /____________/".to_string(),
+                "Заведующий отделением __________ /____________/".to_string(),
             ],
         })
         .collect())

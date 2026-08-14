@@ -396,12 +396,28 @@ mod tests {
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
             ("medical.diagnosis", "J06.9"),
+            ("medical.treatment", "Терапия"),
+            ("medical.admission_date", "01.06.2026"),
+            ("medical.discharge_date", "12.06.2026"),
         ]);
         let docs = vec![medical_doc(
             "d1",
             "Выписной эпикриз",
-            "Пациент {{subject.name}}\nДиагноз {{medical.diagnosis}}\nЛечащий врач ______",
-            &["subject.name", "medical.diagnosis"],
+            concat!(
+                "Пациент {{subject.name}}\n",
+                "Диагноз {{medical.diagnosis}}\n",
+                "Лечение {{medical.treatment}}\n",
+                "Дата поступления {{medical.admission_date}}\n",
+                "Дата выписки {{medical.discharge_date}}\n",
+                "Лечащий врач ______"
+            ),
+            &[
+                "subject.name",
+                "medical.diagnosis",
+                "medical.treatment",
+                "medical.admission_date",
+                "medical.discharge_date",
+            ],
         )];
         let batch = plan_created_documents_batch(
             &case,

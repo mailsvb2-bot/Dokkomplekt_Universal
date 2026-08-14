@@ -164,7 +164,9 @@ describe('medical diary donor parity', () => {
 
     await waitFor(() => expect(savedRequest).not.toBeNull());
     expect(commands).toContain('import_learning_example_file');
-    expect(savedRequest?.block_id).toBe('professional.medical.diary.regular.f200');
-    expect(savedRequest?.content).toBe('Статус из таблицы DOCX');
+    expect(savedRequest).toMatchObject({
+      block_id: 'professional.medical.diary.regular.f200',
+      content: 'Статус из таблицы DOCX',
+    });
   });
 });

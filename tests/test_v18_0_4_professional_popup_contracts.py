@@ -18,20 +18,27 @@ class ProfessionalPopupContracts(unittest.TestCase):
         workflow = self.read("crates/dokkomplekt-core/src/workflow_engine.rs")
         main = self.read("src-tauri/src/main.rs")
         app = self.read("src/App.tsx")
+        preflight = self.read("src/hooks/useGenerationPreflight.ts")
         workspace = self.read("src/components/Workspace.tsx")
         self.assertIn("pub fn plan_workflow_batch", workflow)
         self.assertIn("fn get_workflow_plan_batch", main)
         self.assertIn("fn apply_popup_batch", main)
-        self.assertIn("applyPopupBatch(selectedDocIds", app)
+        self.assertIn("useGenerationPreflight({", app)
+        self.assertIn("applyPopupBatch(ids, sickLeave, payload)", app)
+        self.assertIn("requestWorkflowPlan(options.selectedDocumentIds)", preflight)
         self.assertIn("Проверить и создать", workspace)
 
     def test_invalid_required_value_keeps_preflight_visible(self) -> None:
         popup = self.read("crates/dokkomplekt-core/src/popup_engine.rs")
-        app = self.read("src/App.tsx")
+        preflight = self.read("src/hooks/useGenerationPreflight.ts")
         workspace = self.read("src/components/Workspace.tsx")
         self.assertIn("still_missing", popup)
-        self.assertIn("if (!applied.accepted)", app)
-        self.assertIn("Не заполнено обязательное поле", app)
+        self.assertIn("if (!applied.accepted)", preflight)
+        self.assertIn("Не заполнено обязательное поле", preflight)
+        self.assertLess(
+            preflight.index("if (!applied.accepted)"),
+            preflight.index("setGenerationPreflightOpen(false)"),
+        )
         self.assertIn("clientFields", workspace)
 
     def test_specialist_can_design_popup_without_editing_rust(self) -> None:

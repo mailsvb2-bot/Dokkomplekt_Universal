@@ -103,19 +103,22 @@ pub fn build_deep_diary_calendar(opts: DiaryCalendarOptions) -> Vec<DeepDiaryEnt
 /// Single Medical-domain contract for required data and expected output sections.
 ///
 /// The shape mirrors the proven legacy preflight semantics without leaking them
-/// into universal Core: admission is required for every medical output; history
-/// number is required for medical documents but not the diary-only flow; treatment
-/// is required for primary/discharge/commission/MSE/sick-leave VK and not for
-/// reception/RVK/diaries; discharge date is required only where the output period
-/// depends on it.
+/// into universal Core: admission is required for every known legacy medical
+/// output; history number is required for medical documents but not the diary-only
+/// flow; treatment is required for primary/discharge/commission/MSE/sick-leave VK
+/// and not for reception/RVK/diaries. Unknown medical templates remain driven only
+/// by their own fields and configured popup contract.
 pub fn build_medical_render_plan(
     role: MedicalDocumentRole,
     sick_leave_enabled: bool,
     treatment_found: bool,
 ) -> MedicalRenderPlan {
-    let mut required = vec!["medical.admission_date".into(), "medical.diagnosis".into()];
-    if !matches!(role, MedicalDocumentRole::Diary) {
-        required.push("medical.case_number".into());
+    let mut required = Vec::new();
+    if !matches!(role, MedicalDocumentRole::GenericMedical) {
+        required.extend(["medical.admission_date".into(), "medical.diagnosis".into()]);
+        if !matches!(role, MedicalDocumentRole::Diary) {
+            required.push("medical.case_number".into());
+        }
     }
     let mut optional = Vec::new();
     let mut sections = Vec::new();
@@ -316,6 +319,13 @@ mod tests {
             let plan = build_medical_render_plan(role, false, false);
             assert!(plan.required_fields.contains(&"medical.treatment".into()));
         }
+    }
+
+    #[test]
+    fn unknown_medical_role_does_not_inherit_legacy_requirements() {
+        let plan = build_medical_render_plan(MedicalDocumentRole::GenericMedical, false, false);
+        assert!(plan.required_fields.is_empty());
+        assert!(plan.optional_fields.is_empty());
     }
 
     #[test]

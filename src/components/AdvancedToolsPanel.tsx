@@ -108,7 +108,7 @@ export function AdvancedToolsPanel({
     [documents, selectedDocumentIds],
   );
   const versionedDocument = selectedDocuments.length === 1 ? selectedDocuments[0] : null;
-  const medicalSelected = selectedDocuments.some((document) => document.category === 'Medical');
+  const medicalAvailable = documents.some((document) => document.category === 'Medical');
   const medicalDiarySources = blocks.filter((block) =>
     block.block_id.startsWith(MEDICAL_DIARY_REGULAR_PREFIX) || block.block_id.startsWith(MEDICAL_DIARY_FINAL_PREFIX));
 
@@ -559,7 +559,7 @@ export function AdvancedToolsPanel({
         </div>
       </section>
 
-      {medicalSelected && (
+      {medicalAvailable && (
         <section className="utilityCard advancedCard">
           <strong>Медицина · источники дневников</strong>
           <small>Совместимость с diary-filler: выберите TXT-файлы, названные по диагнозу (например F20.0.txt). Тексты сохраняются локально; чужой диагноз не подмешивается.</small>

@@ -132,14 +132,18 @@ fn build_medical_diary_rows(case: &SemanticCase) -> Option<Vec<SemanticRecord>> 
                 "is_final".into(),
                 SemanticAtom::Boolean(entry.is_final_discharge_entry),
             );
-            row.insert(
-                "treating_physician_signature".into(),
-                SemanticAtom::Text("Лечащий врач __________________ /____________/".into()),
-            );
-            row.insert(
-                "department_head_signature".into(),
-                SemanticAtom::Text("Заведующий отделением __________ /____________/".into()),
-            );
+            if let Some(signature) = entry.signatures.first() {
+                row.insert(
+                    "treating_physician_signature".into(),
+                    SemanticAtom::Text(signature.clone()),
+                );
+            }
+            if let Some(signature) = entry.signatures.get(1) {
+                row.insert(
+                    "department_head_signature".into(),
+                    SemanticAtom::Text(signature.clone()),
+                );
+            }
 
             let body = if entry.is_final_discharge_entry {
                 final_text.clone()

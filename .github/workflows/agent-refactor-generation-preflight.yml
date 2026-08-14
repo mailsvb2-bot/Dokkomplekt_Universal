@@ -1,0 +1,48 @@
+name: Agent Refactor Generation Preflight
+
+on:
+  push:
+    branches:
+      - agent/donor-parity-final-audit
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/donor-parity-final-audit
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Split preflight orchestration from App
+        run: python3 scripts/agent_refactor_generation_preflight.py
+      - name: Enforce architecture and UI contracts
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = len(Path('src/App.tsx').read_text(encoding='utf-8').splitlines())
+          assert lines < 1550, f'App.tsx remains oversized: {lines}'
+          assert Path('src/hooks/useGenerationPreflight.ts').is_file()
+          print(f'App.tsx lines: {lines}')
+          PY
+          npm ci
+          npm run typecheck
+          npm test -- --run
+      - name: Commit product refactor and clean helpers
+        shell: bash
+        run: |
+          rm .github/workflows/agent-refactor-generation-preflight.yml scripts/agent_refactor_generation_preflight.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Split generation preflight orchestration from App"
+          git fetch origin agent/donor-parity-final-audit
+          git rebase origin/agent/donor-parity-final-audit
+          git push origin HEAD:agent/donor-parity-final-audit

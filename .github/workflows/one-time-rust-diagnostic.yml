@@ -1,57 +1,108 @@
-name: One-time Rust diagnostic
+name: One-time rendered completeness fix
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: one-time-rust-diagnostic-${{ github.head_ref }}
-  cancel-in-progress: true
+  group: one-time-rendered-completeness-${{ github.head_ref }}
+  cancel-in-progress: false
 
 jobs:
-  diagnose:
+  repair:
     if: github.head_ref == 'agent/full-functional-parity' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
-      - name: Restore Rust build cache
-        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-compile-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-audit-0.22.2
-          restore-keys: |
-            rust-compile-${{ runner.os }}-
-      - name: Install Linux Tauri compile dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - name: Diagnose workspace tests
+          components: rustfmt, clippy
+      - name: Apply rendered-value completeness contract
         shell: bash
         run: |
-          set +e
-          cargo test --workspace --locked > /tmp/cargo-test.log 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            echo '::group::cargo test diagnostic'
-            tail -n 260 /tmp/cargo-test.log
-            echo '::endgroup::'
-            diagnostic=$(grep -E -B 8 -A 18 "FAILED|panicked at|assertion .* failed|failures:|test result: FAILED|error: test failed" /tmp/cargo-test.log | tail -n 120 || true)
-            if [ -z "$diagnostic" ]; then
-              diagnostic=$(tail -n 80 /tmp/cargo-test.log)
-            fi
-            safe=${diagnostic//'%'/'%25'}
-            safe=${safe//$'\r'/'%0D'}
-            safe=${safe//$'\n'/'%0A'}
-            echo "::error title=workspace test failure::$safe"
-            exit "$code"
-          fi
-          echo 'workspace tests passed'
+          python - <<'PY'
+          from pathlib import Path
+
+          required = Path('crates/dokkomplekt-core/src/required_blocks.rs')
+          text = required.read_text(encoding='utf-8')
+
+          text = text.replace(
+              '''    /// At least one of the listed fields must carry a value.\n    AnyField(Vec<String>),''',
+              '''    /// At least one of the listed fields must carry a value.\n    AnyField(Vec<String>),\n    /// At least one field must carry a value and that value must be visible in the rendered document.\n    AnyRenderedField(Vec<String>),''',
+              1,
+          )
+
+          old = '''    fn any(id: &str, title: &str, fields: &[&str]) -> Self {\n        RequiredBlock {\n            id: id.to_string(),\n            title: title.to_string(),\n            requirement: BlockRequirement::AnyField(fields.iter().map(|s| s.to_string()).collect()),\n        }\n    }\n'''
+          new = '''    fn any_rendered(id: &str, title: &str, fields: &[&str]) -> Self {\n        RequiredBlock {\n            id: id.to_string(),\n            title: title.to_string(),\n            requirement: BlockRequirement::AnyRenderedField(\n                fields.iter().map(|s| s.to_string()).collect(),\n            ),\n        }\n    }\n'''
+          if old not in text:
+              raise SystemExit('RequiredBlock::any anchor not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('RequiredBlock::any(', 'RequiredBlock::any_rendered(')
+
+          old = '''            BlockRequirement::AllFields(fields) => fields.iter().all(|f| case.has(f)),\n            BlockRequirement::AnyField(fields) => fields.iter().any(|f| case.has(f)),\n            BlockRequirement::SectionMarker(marker) => haystack.contains(&marker.to_lowercase()),'''
+          new = '''            BlockRequirement::AllFields(fields) => fields.iter().all(|f| case.has(f)),\n            BlockRequirement::AnyField(fields) => fields.iter().any(|f| case.has(f)),\n            BlockRequirement::AnyRenderedField(fields) => fields.iter().any(|field_id| {\n                case.get(field_id).is_some_and(|value| {\n                    rendered_contains_value(rendered_text, value)\n                })\n            }),\n            BlockRequirement::SectionMarker(marker) => haystack.contains(&marker.to_lowercase()),'''
+          if old not in text:
+              raise SystemExit('unmet block match anchor not found')
+          text = text.replace(old, new, 1)
+
+          marker = '''fn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {'''
+          helper = '''fn rendered_contains_value(rendered_text: &str, value: &str) -> bool {\n    let needle = normalize_visible_text(value);\n    !needle.is_empty() && normalize_visible_text(rendered_text).contains(&needle)\n}\n\nfn normalize_visible_text(value: &str) -> String {\n    value\n        .replace('\\u{00a0}', " ")\n        .split_whitespace()\n        .collect::<Vec<_>>()\n        .join(" ")\n        .to_lowercase()\n}\n\nfn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {'''
+          if marker not in text:
+              raise SystemExit('signature helper anchor not found')
+          text = text.replace(marker, helper, 1)
+
+          text = text.replace(
+              '''        let ok_text = "Диагноз: J06.9\\nЛечащий врач ______";''',
+              '''        let ok_text = concat!(\n            "Пациент: Иванов Иван\\n",\n            "Диагноз: J06.9\\n",\n            "Лечение: Терапия\\n",\n            "Дата поступления: 01.06.2026\\n",\n            "Дата выписки: 12.06.2026\\n",\n            "Лечащий врач ______"\n        );''',
+              1,
+          )
+
+          old = '''        let one_signature = "Лечащий врач __________________";\n        let unmet = unmet_blocks(&blocks, &case, one_signature);\n        assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);\n\n        let both = concat!(\n            "Лечащий врач __________________\\n",\n            "Заведующий отделением __________"\n        );\n        assert!(unmet_blocks(&blocks, &case, both).is_empty());'''
+          new = '''        let medical_values = concat!(\n            "Пациент Иванов Иван\\n",\n            "Диагноз F20.0\\n",\n            "Дата поступления 01.06.2026\\n",\n            "Дата выписки 12.06.2026\\n"\n        );\n        let one_signature = format!("{medical_values}Лечащий врач __________________");\n        let unmet = unmet_blocks(&blocks, &case, &one_signature);\n        assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);\n\n        let both = format!(\n            "{medical_values}Лечащий врач __________________\\nЗаведующий отделением __________"\n        );\n        assert!(unmet_blocks(&blocks, &case, &both).is_empty());'''
+          if old not in text:
+              raise SystemExit('diaries signature fixture anchor not found')
+          text = text.replace(old, new, 1)
+
+          test_anchor = '''    #[test]\n    fn narrative_doctor_mention_is_not_a_signature() {'''
+          test_insert = '''    #[test]\n    fn case_value_that_never_reaches_rendered_document_is_incomplete() {\n        let blocks = required_blocks_for(&spec("discharge", DomainKind::Medical), "");\n        let case = case_with(&[\n            ("subject.name", "Иванов Иван"),\n            ("medical.diagnosis", "J06.9"),\n            ("medical.treatment", "Терапия"),\n            ("medical.admission_date", "01.06.2026"),\n            ("medical.discharge_date", "12.06.2026"),\n        ]);\n        let rendered = concat!(\n            "Пациент Иванов Иван\\n",\n            "Диагноз J06.9\\n",\n            "Дата поступления 01.06.2026\\n",\n            "Дата выписки 12.06.2026\\n",\n            "Лечащий врач ______"\n        );\n        let unmet = unmet_blocks(&blocks, &case, rendered);\n        assert_eq!(unmet, vec!["Лечение".to_string()]);\n    }\n\n    #[test]\n    fn narrative_doctor_mention_is_not_a_signature() {'''
+          if test_anchor not in text:
+              raise SystemExit('required-block regression insertion anchor not found')
+          text = text.replace(test_anchor, test_insert, 1)
+          required.write_text(text, encoding='utf-8')
+
+          created = Path('crates/dokkomplekt-core/src/created_documents.rs')
+          text = created.read_text(encoding='utf-8')
+          old = '''        let case = case_with(&[\n            ("subject.name", "Иванов Иван"),\n            ("medical.diagnosis", "J06.9"),\n        ]);\n        let docs = vec![medical_doc(\n            "d1",\n            "Выписной эпикриз",\n            "Пациент {{subject.name}}\\nДиагноз {{medical.diagnosis}}\\nЛечащий врач ______",\n            &["subject.name", "medical.diagnosis"],\n        )];'''
+          new = '''        let case = case_with(&[\n            ("subject.name", "Иванов Иван"),\n            ("medical.diagnosis", "J06.9"),\n            ("medical.treatment", "Терапия"),\n            ("medical.admission_date", "01.06.2026"),\n            ("medical.discharge_date", "12.06.2026"),\n        ]);\n        let docs = vec![medical_doc(\n            "d1",\n            "Выписной эпикриз",\n            concat!(\n                "Пациент {{subject.name}}\\n",\n                "Диагноз {{medical.diagnosis}}\\n",\n                "Лечение {{medical.treatment}}\\n",\n                "Дата поступления {{medical.admission_date}}\\n",\n                "Дата выписки {{medical.discharge_date}}\\n",\n                "Лечащий врач ______"\n            ),\n            &[\n                "subject.name",\n                "medical.diagnosis",\n                "medical.treatment",\n                "medical.admission_date",\n                "medical.discharge_date",\n            ],\n        )];'''
+          if old not in text:
+              raise SystemExit('created_documents complete medical fixture anchor not found')
+          text = text.replace(old, new, 1)
+          created.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo test -p dokkomplekt-core required_blocks --lib
+          cargo test -p dokkomplekt-core created_documents::tests::medical_document_with_all_blocks_is_created --lib
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          git diff --check
+      - name: Commit product fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/dokkomplekt-core/src/required_blocks.rs crates/dokkomplekt-core/src/created_documents.rs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Require medical completeness values in rendered documents'
+          for attempt in 1 2 3 4; do
+            if git push origin HEAD:${{ github.head_ref }}; then exit 0; fi
+            git pull --rebase origin ${{ github.head_ref }}
+          done
+          git push origin HEAD:${{ github.head_ref }}

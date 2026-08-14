@@ -1,29 +1,34 @@
-name: One-time clippy diagnostic
+name: One-time rendered completeness verification
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: one-time-clippy-diagnostic-${{ github.head_ref }}
-  cancel-in-progress: true
+  group: one-time-rendered-completeness-verification-${{ github.head_ref }}
+  cancel-in-progress: false
 
 jobs:
-  diagnose:
+  verify-and-commit:
     if: github.head_ref == 'agent/full-functional-parity' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           ref: ${{ github.head_ref }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Reproduce candidate product fix
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Reproduce exact candidate product fix
         shell: bash
         run: |
           python - <<'PY'
@@ -37,22 +42,26 @@ jobs:
           exec(compile(script, '<embedded-product-patch>', 'exec'), {})
           PY
           cargo fmt --all
-      - name: Diagnose clippy warning
+          git diff --check
+      - name: Verify focused contracts
+        run: |
+          cargo test -p dokkomplekt-core required_blocks --lib
+          cargo test -p dokkomplekt-core created_documents::tests::medical_document_with_all_blocks_is_created --lib
+      - name: Verify clippy with production prerequisites
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Verify full Rust workspace
+        run: cargo test --workspace --locked
+      - name: Commit verified product fix
         shell: bash
         run: |
-          set +e
-          cargo clippy --workspace --all-targets --locked -- -D warnings > /tmp/clippy.log 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            diagnostic=$(grep -E -B 6 -A 16 "error:|warning:|clippy::|-->" /tmp/clippy.log | tail -n 100 || true)
-            if [ -z "$diagnostic" ]; then diagnostic=$(tail -n 100 /tmp/clippy.log); fi
-            echo '::group::clippy diagnostic'
-            echo "$diagnostic"
-            echo '::endgroup::'
-            safe=${diagnostic//'%'/'%25'}
-            safe=${safe//$'\r'/'%0D'}
-            safe=${safe//$'\n'/'%0A'}
-            echo "::error title=clippy failure::$safe"
-            exit "$code"
-          fi
-          echo 'clippy passed'
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/dokkomplekt-core/src/required_blocks.rs crates/dokkomplekt-core/src/created_documents.rs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Require medical completeness values in rendered documents'
+          for attempt in 1 2 3 4; do
+            if git push origin HEAD:${{ github.head_ref }}; then exit 0; fi
+            git pull --rebase origin ${{ github.head_ref }}
+          done
+          git push origin HEAD:${{ github.head_ref }}

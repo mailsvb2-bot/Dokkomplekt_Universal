@@ -104,7 +104,6 @@ pub use popup_engine::*;
 pub use popup_profiles::*;
 pub use print_triage::*;
 pub use priority::*;
-pub use product_access::*;
 pub use professional_records::*;
 pub use record_series::*;
 pub use rewrite_audit::*;

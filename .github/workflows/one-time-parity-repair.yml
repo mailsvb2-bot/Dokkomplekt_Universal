@@ -1,0 +1,262 @@
+name: One-time parity repair
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-parity-repair-${{ github.head_ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.head_ref == 'agent/full-functional-parity' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Repair DOCX compatibility and domain boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          legacy = Path('crates/dokkomplekt-docx/src/legacy_diary_table.rs')
+          text = legacy.read_text(encoding='utf-8')
+
+          old = '''fn replace_cell_text(cell_xml: &str, value: &str) -> String {
+              let Some(open_end) = cell_xml.find('>').map(|offset| offset + 1) else {
+                  return cell_xml.to_string();
+              };
+              let Some(close_start) = cell_xml.rfind("</w:tc>") else {
+                  return cell_xml.to_string();
+              };
+              let inner = &cell_xml[open_end..close_start];
+              let (properties, _) = if inner.trim_start().starts_with("<w:tcPr") {
+                  if let Some(start) = inner.find("<w:tcPr") {
+                      if let Some(end) = matching_element_end(inner, start, "w:tcPr") {
+                          (&inner[..end], &inner[end..])
+                      } else {
+                          ("", inner)
+                      }
+                  } else {
+                      ("", inner)
+                  }
+              } else {
+                  ("", inner)
+              };
+              let paragraphs = value
+                  .split('\\n')
+                  .map(|line| {
+                      format!(
+                          "<w:p><w:r><w:t xml:space=\\\"preserve\\\">{}</w:t></w:r></w:p>",
+                          escape_xml(line)
+                      )
+                  })
+                  .collect::<String>();
+              format!(
+                  "{}{}{}{}{}",
+                  &cell_xml[..open_end],
+                  properties,
+                  paragraphs,
+                  &cell_xml[close_start..],
+                  ""
+              )
+          }
+
+          fn visible_text(xml: &str) -> String {
+              let mut output = String::new();
+              while let Some(relative) = xml[cursor..].find("<w:t") {
+                  let start = cursor + relative;
+                  let Some(open_end) = xml[start..].find('>').map(|offset| start + offset + 1) else {
+                      break;
+                  };
+                  let Some(close_relative) = xml[open_end..].find("</w:t>") else {
+                      break;
+                  };
+                  let close = open_end + close_relative;
+                  if !output.is_empty() {
+                      output.push(' ');
+                  }
+                  output.push_str(&decode_xml(&xml[open_end..close]));
+                  cursor = close + "</w:t>".len();
+              }
+              output
+          }
+          '''
+          new = '''fn replace_cell_text(cell_xml: &str, value: &str) -> String {
+              let Some(open_end) = cell_xml.find('>').map(|offset| offset + 1) else {
+                  return cell_xml.to_string();
+              };
+              let Some(close_start) = cell_xml.rfind("</w:tc>") else {
+                  return cell_xml.to_string();
+              };
+              let inner = &cell_xml[open_end..close_start];
+              let properties = if inner.trim_start().starts_with("<w:tcPr") {
+                  if let Some(start) = inner.find("<w:tcPr") {
+                      if let Some(end) = matching_element_end(inner, start, "w:tcPr") {
+                          &inner[..end]
+                      } else {
+                          ""
+                      }
+                  } else {
+                      ""
+                  }
+              } else {
+                  ""
+              };
+              let paragraph_properties = first_element(inner, "w:pPr").unwrap_or("");
+              let run_properties = first_element(inner, "w:rPr").unwrap_or("");
+              let paragraphs = value
+                  .split('\\n')
+                  .map(|line| {
+                      format!(
+                          "<w:p>{paragraph_properties}<w:r>{run_properties}<w:t xml:space=\\\"preserve\\\">{}</w:t></w:r></w:p>",
+                          escape_xml(line)
+                      )
+                  })
+                  .collect::<String>();
+              format!(
+                  "{}{}{}{}",
+                  &cell_xml[..open_end],
+                  properties,
+                  paragraphs,
+                  &cell_xml[close_start..]
+              )
+          }
+
+          fn first_element<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+              let (start, end) = element_ranges(xml, name).into_iter().next()?;
+              Some(&xml[start..end])
+          }
+
+          fn visible_text(xml: &str) -> String {
+              let paragraphs = element_ranges(xml, "w:p");
+              if paragraphs.is_empty() {
+                  return visible_text_runs(xml);
+              }
+              paragraphs
+                  .into_iter()
+                  .map(|(start, end)| visible_text_runs(&xml[start..end]))
+                  .map(|value| value.trim().to_string())
+                  .filter(|value| !value.is_empty())
+                  .collect::<Vec<_>>()
+                  .join("\\n")
+          }
+
+          fn visible_text_runs(xml: &str) -> String {
+              let mut output = String::new();
+              let mut cursor = 0usize;
+              while let Some(relative) = xml[cursor..].find("<w:t") {
+                  let start = cursor + relative;
+                  let Some(open_end) = xml[start..].find('>').map(|offset| start + offset + 1) else {
+                      break;
+                  };
+                  let Some(close_relative) = xml[open_end..].find("</w:t>") else {
+                      break;
+                  };
+                  let close = open_end + close_relative;
+                  output.push_str(&decode_xml(&xml[open_end..close]));
+                  cursor = close + "</w:t>".len();
+              }
+              output
+          }
+          '''
+          if old not in text:
+              raise SystemExit('legacy render/text block anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''fn element_ranges(xml: &str, name: &str) -> Vec<(usize, usize)> {
+              let marker = format!("<{name}");
+              let mut ranges = Vec::new();
+              while let Some(relative) = xml[cursor..].find(&marker) {'''
+          new = '''fn element_ranges(xml: &str, name: &str) -> Vec<(usize, usize)> {
+              let marker = format!("<{name}");
+              let mut ranges = Vec::new();
+              let mut cursor = 0usize;
+              while let Some(relative) = xml[cursor..].find(&marker) {'''
+          if old not in text:
+              raise SystemExit('element_ranges anchor not found')
+          text = text.replace(old, new, 1)
+
+          test_anchor = '''    #[test]
+              fn unrelated_table_is_untouched() {'''
+          test_insert = '''    #[test]
+              fn visible_text_preserves_paragraph_boundaries_and_split_runs() {
+                  let xml = concat!(
+                      "<w:tc>",
+                      "<w:p><w:r><w:t>Совместный </w:t></w:r><w:r><w:t>осмотр</w:t></w:r></w:p>",
+                      "<w:p><w:r><w:t>Лечащий врач ___</w:t></w:r></w:p>",
+                      "</w:tc>"
+                  );
+                  assert_eq!(visible_text(xml), "Совместный осмотр\\nЛечащий врач ___");
+              }
+
+              #[test]
+              fn unrelated_table_is_untouched() {'''
+          if test_anchor not in text:
+              raise SystemExit('legacy test anchor not found')
+          text = text.replace(test_anchor, test_insert, 1)
+          legacy.write_text(text, encoding='utf-8')
+
+          required = Path('crates/dokkomplekt-core/src/required_blocks.rs')
+          text = required.read_text(encoding='utf-8')
+          old = '''    let mut blocks = role_blocks(&spec.role_id);
+
+              // Domain safety net: any medical document must at least identify its patient.'''
+          new = '''    let mut blocks = if matches!(spec.category, DomainKind::Medical) {
+                  medical_role_blocks(&spec.role_id)
+              } else {
+                  Vec::new()
+              };
+
+              // Domain safety net: any medical document must at least identify its patient.'''
+          if old not in text:
+              raise SystemExit('required_blocks domain anchor not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('fn role_blocks(role_id: &str) -> Vec<RequiredBlock> {', 'fn medical_role_blocks(role_id: &str) -> Vec<RequiredBlock> {', 1)
+
+          test_anchor = '''    #[test]
+              fn discharge_requires_diagnosis_and_signature() {'''
+          test_insert = '''    #[test]
+              fn medical_role_names_do_not_leak_into_nonmedical_domains() {
+                  let blocks = required_blocks_for(&spec("discharge", DomainKind::Generic), "");
+                  assert!(blocks.is_empty());
+                  let blocks = required_blocks_for(&spec("primary", DomainKind::Legal), "");
+                  assert!(blocks.is_empty());
+              }
+
+              #[test]
+              fn discharge_requires_diagnosis_and_signature() {'''
+          if test_anchor not in text:
+              raise SystemExit('required_blocks test anchor not found')
+          text = text.replace(test_anchor, test_insert, 1)
+          required.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo test -p dokkomplekt-docx legacy_diary_table --lib
+          cargo test -p dokkomplekt-core required_blocks --lib
+          git diff --check
+      - name: Commit repaired product code
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/dokkomplekt-docx/src/legacy_diary_table.rs crates/dokkomplekt-core/src/required_blocks.rs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Fix legacy diary XML traversal and medical domain boundary'
+          for attempt in 1 2 3 4; do
+            if git push origin HEAD:${{ github.head_ref }}; then exit 0; fi
+            git pull --rebase origin ${{ github.head_ref }}
+          done
+          git push origin HEAD:${{ github.head_ref }}

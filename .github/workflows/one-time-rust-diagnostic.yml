@@ -58,11 +58,11 @@ jobs:
               raise SystemExit('signature helper anchor not found')
           text = text.replace(marker, helper, 1)
 
-          text = text.replace(
-              '''        let ok_text = "Диагноз: J06.9\\nЛечащий врач ______";''',
-              '''        let ok_text = concat!(\n            "Пациент: Иванов Иван\\n",\n            "Диагноз: J06.9\\n",\n            "Лечение: Терапия\\n",\n            "Дата поступления: 01.06.2026\\n",\n            "Дата выписки: 12.06.2026\\n",\n            "Лечащий врач ______"\n        );''',
-              1,
-          )
+          old = '''        let ok_text = "Диагноз: J06.9\\nЛечащий врач ______";'''
+          new = '''        let ok_text = concat!(\n            "Пациент: Иванов Иван\\n",\n            "Диагноз: J06.9\\n",\n            "Лечение: Терапия\\n",\n            "Дата поступления: 01.06.2026\\n",\n            "Дата выписки: 12.06.2026\\n",\n            "Лечащий врач ______"\n        );'''
+          if old not in text:
+              raise SystemExit('discharge complete fixture anchor not found')
+          text = text.replace(old, new, 1)
 
           old = '''        let one_signature = "Лечащий врач __________________";\n        let unmet = unmet_blocks(&blocks, &case, one_signature);\n        assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);\n\n        let both = concat!(\n            "Лечащий врач __________________\\n",\n            "Заведующий отделением __________"\n        );\n        assert!(unmet_blocks(&blocks, &case, both).is_empty());'''
           new = '''        let medical_values = concat!(\n            "Пациент Иванов Иван\\n",\n            "Диагноз F20.0\\n",\n            "Дата поступления 01.06.2026\\n",\n            "Дата выписки 12.06.2026\\n"\n        );\n        let one_signature = format!("{medical_values}Лечащий врач __________________");\n        let unmet = unmet_blocks(&blocks, &case, &one_signature);\n        assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);\n\n        let both = format!(\n            "{medical_values}Лечащий врач __________________\\nЗаведующий отделением __________"\n        );\n        assert!(unmet_blocks(&blocks, &case, &both).is_empty());'''
@@ -86,12 +86,18 @@ jobs:
           text = text.replace(old, new, 1)
           created.write_text(text, encoding='utf-8')
           PY
-          cargo fmt --all
-          cargo test -p dokkomplekt-core required_blocks --lib
-          cargo test -p dokkomplekt-core created_documents::tests::medical_document_with_all_blocks_is_created --lib
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo test --workspace --locked
-          git diff --check
+      - name: Format product fix
+        run: cargo fmt --all
+      - name: Verify required-block contract
+        run: cargo test -p dokkomplekt-core required_blocks --lib
+      - name: Verify complete medical created-document fixture
+        run: cargo test -p dokkomplekt-core created_documents::tests::medical_document_with_all_blocks_is_created --lib
+      - name: Verify clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Verify full Rust workspace
+        run: cargo test --workspace --locked
+      - name: Verify patch hygiene
+        run: git diff --check
       - name: Commit product fix
         shell: bash
         run: |

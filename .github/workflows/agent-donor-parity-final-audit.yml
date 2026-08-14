@@ -28,6 +28,7 @@ jobs:
 
       - name: Apply audited donor parity patches
         run: |
+          python3 .agent_patch_bootstrap.py
           python3 .agent_patch_general.py
           python3 .agent_patch_diary.py
           cargo fmt --all
@@ -46,7 +47,7 @@ jobs:
 
       - name: Publish tested product commit and self-clean
         run: |
-          git rm .github/workflows/agent-donor-parity-final-audit.yml .agent_patch_general.py .agent_patch_diary.py
+          git rm .github/workflows/agent-donor-parity-final-audit.yml .agent_patch_bootstrap.py .agent_patch_general.py .agent_patch_diary.py
           git config user.name "mailsvb2-bot"
           git config user.email "mailsvb2@gmail.com"
           git add -A

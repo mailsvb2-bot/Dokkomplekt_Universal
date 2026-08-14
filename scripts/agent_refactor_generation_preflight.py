@@ -1,10 +1,7 @@
 from pathlib import Path
 
 HOOK = r'''import { useState, type Dispatch, type SetStateAction } from 'react';
-import type { WorkflowPlan } from '../lib/types';
-
-type PopupAnswer = { field_id: string; value: string; continue_without_value: boolean };
-type PopupApplyResult = { accepted: boolean; still_missing?: string[]; message?: string };
+import type { PopupAnswerDto, PopupApplyResult, WorkflowPlan } from '../lib/types';
 
 interface UseGenerationPreflightOptions {
   selectedDocumentIds: string[];
@@ -15,7 +12,7 @@ interface UseGenerationPreflightOptions {
   setPreflightPlan: Dispatch<SetStateAction<WorkflowPlan | null>>;
   setStatus(message: string): void;
   requestWorkflowPlan(documentIds: string[]): Promise<WorkflowPlan | null | undefined>;
-  applyAnswers(documentIds: string[], answers: PopupAnswer[]): Promise<PopupApplyResult | null | undefined>;
+  applyAnswers(documentIds: string[], answers: PopupAnswerDto[]): Promise<PopupApplyResult | null | undefined>;
   onConfirmed(documentIds: string[]): Promise<void>;
 }
 
@@ -62,7 +59,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
         options.setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`);
         return;
       }
-      const payload = workflow.prompts.map((prompt) => ({
+      const payload: PopupAnswerDto[] = workflow.prompts.map((prompt) => ({
         field_id: prompt.field_id,
         value: options.skippedAnswers[prompt.field_id] ? '' : options.answers[prompt.field_id] ?? prompt.current_value ?? '',
         continue_without_value: Boolean(options.skippedAnswers[prompt.field_id]),
@@ -70,7 +67,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       const applied = await options.applyAnswers(options.selectedDocumentIds, payload);
       if (!applied) return;
       if (!applied.accepted) {
-        options.setStatus(applied.message || `Не заполнено полей: ${applied.still_missing?.length ?? 0}`);
+        options.setStatus(applied.message || `Не заполнено полей: ${applied.still_missing.length}`);
         return;
       }
     }

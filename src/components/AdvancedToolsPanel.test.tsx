@@ -91,3 +91,80 @@ describe('starter content packs', () => {
     expect(commands).toContain('confirm_template_setup');
   });
 });
+
+describe('medical diary donor parity', () => {
+  afterEach(() => {
+    __resetInvokeForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('imports DOCX diary sources through universal intake and binds an ICD code from the file name', async () => {
+    const commands: string[] = [];
+    let savedRequest: { block_id: string; title: string; content: string } | null = null;
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
+      commands.push(command);
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'get_process_blueprints') {
+        return { selected_process_id: null, processes: [], notice: '' } as T;
+      }
+      if (command === 'import_learning_example_file') {
+        const req = payload as { req?: { file_name?: string } };
+        expect(req.req?.file_name).toBe('Дневники F20.0 с датами.docx');
+        return {
+          source_path: '/app-data/diary-source.docx',
+          source_kind: 'docx',
+          extracted_text: 'Статус из таблицы DOCX',
+          warnings: [],
+        } as T;
+      }
+      if (command === 'save_clause_block') {
+        savedRequest = (payload?.req ?? payload) as typeof savedRequest;
+        return [{
+          block_id: savedRequest?.block_id ?? '',
+          title: savedRequest?.title ?? '',
+          content: savedRequest?.content ?? '',
+          updated_at: '2026-08-14T00:00:00Z',
+        }] as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const medicalDocument: DocumentTemplateSpec = {
+      id: 'medical.diaries',
+      button_label: 'Дневники наблюдения',
+      template_path: '/templates/diaries.docx',
+      category: 'Medical',
+      role_id: 'diaries',
+      required_fields: [],
+      placeholders: ['diary.text'],
+      is_static_copy: false,
+    };
+    render(
+      <AdvancedToolsPanel
+        documents={[medicalDocument]}
+        selectedDocumentIds={[]}
+        outputRoot="output"
+        onStatus={vi.fn()}
+        onDocumentsChanged={vi.fn()}
+      />,
+    );
+
+    const label = screen.getByText('Импортировать «Тексты» (TXT/DOCX/DOCM)').closest('label');
+    const input = label?.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    expect(input?.getAttribute('accept')).toContain('.docx');
+    expect(input?.getAttribute('accept')).toContain('.docm');
+
+    const file = new File(
+      [new Uint8Array([0x50, 0x4b, 0x03, 0x04])],
+      'Дневники F20.0 с датами.docx',
+      { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+    );
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+
+    await waitFor(() => expect(savedRequest).not.toBeNull());
+    expect(commands).toContain('import_learning_example_file');
+    expect(savedRequest?.block_id).toBe('professional.medical.diary.regular.f200');
+    expect(savedRequest?.content).toBe('Статус из таблицы DOCX');
+  });
+});

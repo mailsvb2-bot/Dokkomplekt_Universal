@@ -48,7 +48,7 @@ jobs:
 
       - name: Publish tested product commit and self-clean
         run: |
-          git rm .github/workflows/agent-donor-parity-final-audit.yml .agent_patch_bootstrap.py .agent_patch_general.py .agent_patch_diary.py .agent_patch_followup.py
+          git rm -f .github/workflows/agent-donor-parity-final-audit.yml .agent_patch_bootstrap.py .agent_patch_general.py .agent_patch_diary.py .agent_patch_followup.py
           git config user.name "mailsvb2-bot"
           git config user.email "mailsvb2@gmail.com"
           git add -A

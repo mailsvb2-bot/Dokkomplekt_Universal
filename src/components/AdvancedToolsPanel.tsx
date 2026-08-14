@@ -59,7 +59,7 @@ function diarySourceKey(value: string): string {
 
 function diagnosisFromDiaryFileName(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '').trim();
-  const icdCode = stem.match(/(?:^|[^\p{L}\p{N}])([A-TV-Z]\d{2}(?:\.\d{1,4})?)(?=$|[^\p{L}\p{N}])/iu)?.[1];
+  const icdCode = stem.match(/(?:^|[^\p{L}\p{N}])([A-Z]\d{2}(?:\.\d{1,4})?)(?=$|[^\p{L}\p{N}])/iu)?.[1];
   return icdCode ?? stem;
 }
 
@@ -201,7 +201,7 @@ export function AdvancedToolsPanel({
         common_suffix: field.common_suffix,
       }));
     if (!confirmed.length) {
-      onStatus('Подтвердите хотя бы одно найдененное поле.');
+      onStatus('Подтвердите хотя бы одно найденное поле.');
       return;
     }
     const result = await execute('применение подтверждённой карты', () =>

@@ -353,6 +353,12 @@ fn diary_cell_content(existing: &str, body: &str, record: &SemanticRecord) -> St
         .copied()
         .filter(|line| is_signature_line(line))
         .collect::<Vec<_>>();
+    let has_treating_signature = existing_signatures
+        .iter()
+        .any(|line| is_treating_signature(line));
+    let has_department_head_signature = existing_signatures
+        .iter()
+        .any(|line| is_department_head_signature(line));
 
     let mut parts = structural
         .iter()
@@ -361,26 +367,39 @@ fn diary_cell_content(existing: &str, body: &str, record: &SemanticRecord) -> St
     if !body.trim().is_empty() {
         parts.push(body.trim().to_string());
     }
-    if existing_signatures.is_empty() {
+    parts.extend(existing_signatures.into_iter().map(str::to_string));
+    if !has_treating_signature {
         if let Some(value) = atom_text(record, "treating_physician_signature") {
             parts.push(value);
         }
+    }
+    if !has_department_head_signature {
         if let Some(value) = atom_text(record, "department_head_signature") {
             parts.push(value);
         }
-    } else {
-        parts.extend(existing_signatures.into_iter().map(str::to_string));
     }
     parts.join("\n")
 }
 
-fn is_signature_line(value: &str) -> bool {
+fn has_signature_cue(value: &str) -> bool {
     let normalized = normalize(value);
-    (normalized.contains("лечащий врач")
-        || normalized.contains("зав. отдел")
+    value.contains("___") || normalized.contains("подпись") || value.contains("/____")
+}
+
+fn is_treating_signature(value: &str) -> bool {
+    normalize(value).contains("лечащий врач") && has_signature_cue(value)
+}
+
+fn is_department_head_signature(value: &str) -> bool {
+    let normalized = normalize(value);
+    (normalized.contains("зав. отдел")
         || normalized.contains("зав отдел")
         || normalized.contains("заведующ") && normalized.contains("отдел"))
-        && (value.contains("___") || normalized.contains("подпись") || value.contains("/____"))
+        && has_signature_cue(value)
+}
+
+fn is_signature_line(value: &str) -> bool {
+    is_treating_signature(value) || is_department_head_signature(value)
 }
 
 fn atom_text(record: &SemanticRecord, key: &str) -> Option<String> {
@@ -663,6 +682,24 @@ mod tests {
         assert!(report.xml.contains("Совместный осмотр"));
         assert!(!report.xml.contains(">03<"));
         assert!(!report.xml.contains(">04<"));
+    }
+
+    #[test]
+    fn missing_second_signature_is_added_without_replacing_existing_one() {
+        let mut record = SemanticRecord::new();
+        record.insert("text".into(), SemanticAtom::Text("Статус".into()));
+        record.insert(
+            "treating_physician_signature".into(),
+            SemanticAtom::Text("Лечащий врач GENERATED".into()),
+        );
+        record.insert(
+            "department_head_signature".into(),
+            SemanticAtom::Text("Заведующий отделением GENERATED".into()),
+        );
+        let result = diary_cell_content("Лечащий врач ___", "Статус", &record);
+        assert!(result.contains("Лечащий врач ___"));
+        assert!(!result.contains("Лечащий врач GENERATED"));
+        assert!(result.contains("Заведующий отделением GENERATED"));
     }
 
     #[test]

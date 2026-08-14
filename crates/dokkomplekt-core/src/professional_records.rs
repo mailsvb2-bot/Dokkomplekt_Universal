@@ -177,7 +177,7 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
     }
 
     let target = normalize_match(diagnosis);
-    let matching = all
+    let exact = all
         .iter()
         .copied()
         .filter(|row| {
@@ -186,8 +186,15 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
-    let selected = if !matching.is_empty() {
-        matching
+    let compatible = if exact.is_empty() {
+        unambiguous_compatible_rows(&all, &target)
+    } else {
+        Vec::new()
+    };
+    let selected = if !exact.is_empty() {
+        exact
+    } else if !compatible.is_empty() {
+        compatible
     } else {
         // Unscoped rows are reusable within the active medical profile. Rows
         // explicitly assigned to a different diagnosis must never leak across.
@@ -219,20 +226,68 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
     // namespaced sources without a medical database or a second semantic brain.
     let key = source_key(diagnosis);
     if result.regular.is_empty() {
-        let regular_id = format!("professional.medical.diary.regular.{key}");
-        if let Some(content) = case.blocks.get(&regular_id) {
+        if let Some(content) = persistent_source(case, "professional.medical.diary.regular.", &key)
+        {
             result.regular = split_status_source(content);
         }
     }
     if result.final_text.is_none() {
-        let final_id = format!("professional.medical.diary.final.{key}");
-        result.final_text = case
-            .blocks
-            .get(&final_id)
+        result.final_text = persistent_source(case, "professional.medical.diary.final.", &key)
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
     }
     result
+}
+
+fn unambiguous_compatible_rows<'a>(
+    rows: &[&'a SemanticRecord],
+    target: &str,
+) -> Vec<&'a SemanticRecord> {
+    let mut candidates = rows
+        .iter()
+        .copied()
+        .filter_map(|row| {
+            let diagnosis = atom_text(row, "diagnosis")?;
+            let normalized = normalize_match(&diagnosis);
+            diagnosis_compatible(&normalized, target).then_some((normalized, row))
+        })
+        .collect::<Vec<_>>();
+    let mut keys = candidates
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    if keys.len() != 1 {
+        return Vec::new();
+    }
+    candidates.drain(..).map(|(_, row)| row).collect()
+}
+
+fn diagnosis_compatible(candidate: &str, target: &str) -> bool {
+    let candidate = source_key(candidate);
+    let target = source_key(target);
+    candidate.len() >= 3
+        && target.len() >= 3
+        && (candidate.contains(&target) || target.contains(&candidate))
+}
+
+fn persistent_source<'a>(case: &'a SemanticCase, prefix: &str, key: &str) -> Option<&'a str> {
+    let exact = format!("{prefix}{key}");
+    if let Some(value) = case.blocks.get(&exact) {
+        return Some(value.as_str());
+    }
+    let mut candidates = case
+        .blocks
+        .iter()
+        .filter_map(|(id, value)| {
+            let suffix = id.strip_prefix(prefix)?;
+            diagnosis_compatible(suffix, key).then_some((suffix, value.as_str()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(right.0));
+    candidates.dedup_by(|left, right| left.0 == right.0);
+    (candidates.len() == 1).then(|| candidates[0].1)
 }
 
 fn source_key(value: &str) -> String {
@@ -414,6 +469,40 @@ mod tests {
             prepared.collection("diaries").unwrap()[0]["text"].as_text(),
             "Ручной дневник"
         );
+    }
+
+    #[test]
+    fn unambiguous_parent_diagnosis_source_matches_more_specific_code() {
+        let mut case = medical_case();
+        case.blocks.insert(
+            "professional.medical.diary.regular.f20".into(),
+            "Профессиональный статус для родительского кода диагноза.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f20".into(),
+            "Итоговый статус родительского кода.".into(),
+        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}\n{{/each}}", &case, true);
+        assert!(rendered.output_text.contains("родительского кода"));
+        assert!(rendered.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn ambiguous_partial_diagnosis_sources_are_not_guessed() {
+        let mut case = medical_case();
+        case.values.get_mut("medical.diagnosis").unwrap().value = "F20".into();
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Статус F20.0".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f201".into(),
+            "Статус F20.1".into(),
+        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}{{/each}}", &case, true);
+        assert!(!rendered.missing_fields.is_empty() || !rendered.unknown_fields.is_empty());
     }
 
     #[test]

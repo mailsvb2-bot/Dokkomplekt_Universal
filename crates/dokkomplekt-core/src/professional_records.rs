@@ -111,10 +111,17 @@ fn build_medical_diary_rows(case: &SemanticCase) -> Option<Vec<SemanticRecord>> 
                     "day_number".into(),
                     SemanticAtom::Text(format!("{:02}", date.day())),
                 );
-                row.insert("month".into(), SemanticAtom::Integer(i64::from(date.month())));
+                row.insert(
+                    "month".into(),
+                    SemanticAtom::Integer(i64::from(date.month())),
+                );
                 row.insert("year".into(), SemanticAtom::Integer(i64::from(date.year())));
             }
-            if let Some(time) = entry.time.as_deref().filter(|value| !value.trim().is_empty()) {
+            if let Some(time) = entry
+                .time
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
                 row.insert("time".into(), SemanticAtom::Text(time.to_string()));
             }
             row.insert(
@@ -188,7 +195,9 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
         // Unscoped rows are reusable within the active medical profile. Rows
         // explicitly assigned to a different diagnosis must never leak across.
         all.into_iter()
-            .filter(|row| atom_text(row, "diagnosis").is_none_or(|value| value.trim().is_empty()))
+            .filter(|row| {
+                atom_text(row, "diagnosis").is_none_or(|value| value.trim().is_empty())
+            })
             .collect::<Vec<_>>()
     };
 
@@ -237,7 +246,13 @@ fn normalize_match(value: &str) -> String {
         .to_lowercase()
         .replace('ё', "е")
         .chars()
-        .map(|character| if character.is_alphanumeric() { character } else { ' ' })
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -300,11 +315,23 @@ mod tests {
         );
         let template = "{{#each diaries}}{{diary.date}}|{{diary.text}}|{{diary.treating_physician_signature}}|{{diary.department_head_signature}}\n{{/each}}";
         let rendered = render_text_template(template, &case, true);
-        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
-        assert!(rendered.unknown_fields.is_empty(), "{:?}", rendered.unknown_fields);
+        assert!(
+            rendered.missing_fields.is_empty(),
+            "{:?}",
+            rendered.missing_fields
+        );
+        assert!(
+            rendered.unknown_fields.is_empty(),
+            "{:?}",
+            rendered.unknown_fields
+        );
         assert!(rendered.output_text.contains("11.05.2026|Дневник A"));
         assert!(rendered.output_text.contains("12.05.2026|Дневник B"));
-        assert!(rendered.output_text.contains("13.05.2026|Выписной дневник"));
+        assert!(
+            rendered
+                .output_text
+                .contains("13.05.2026|Выписной дневник")
+        );
         assert!(!rendered.output_text.contains("Чужой диагноз"));
         assert_eq!(rendered.output_text.matches("Лечащий врач").count(), 3);
         assert_eq!(
@@ -333,7 +360,8 @@ mod tests {
         let mut row = SemanticRecord::new();
         row.insert("text".into(), SemanticAtom::Text("Ручной дневник".into()));
         case.set_collection("diaries", vec![row]);
-        let prepared = prepare_professional_collections("{{#each diaries}}{{diary.text}}{{/each}}", &case);
+        let prepared =
+            prepare_professional_collections("{{#each diaries}}{{diary.text}}{{/each}}", &case);
         assert_eq!(
             prepared.collection("diaries").unwrap()[0]["text"].as_text(),
             "Ручной дневник"
@@ -343,7 +371,8 @@ mod tests {
     #[test]
     fn nonmedical_case_does_not_receive_medical_diaries() {
         let case = SemanticCase::default();
-        let prepared = prepare_professional_collections("{{#each diaries}}{{diary.date}}{{/each}}", &case);
+        let prepared =
+            prepare_professional_collections("{{#each diaries}}{{diary.date}}{{/each}}", &case);
         assert!(prepared.collection("diaries").is_none());
     }
 }

@@ -33,58 +33,57 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           engine = Path('crates/dokkomplekt-core/src/diary_engine.rs')
           text = engine.read_text(encoding='utf-8')
-          old = '''            signatures: vec![
-                      "Лечащий врач".to_string(),
-                      "Заведующий отделением".to_string(),
-                  ],'''
-          new = '''            signatures: vec![
-                      "Лечащий врач __________________ /____________/".to_string(),
-                      "Заведующий отделением __________ /____________/".to_string(),
-                  ],'''
-          if old not in text:
-              raise SystemExit('diary engine signature anchor not found')
-          engine.write_text(text.replace(old, new, 1), encoding='utf-8')
+          text, count = re.subn(
+              r'"Лечащий врач"\.to_string\(\),\s*"Заведующий отделением"\.to_string\(\),',
+              '"Лечащий врач __________________ /____________/".to_string(),\n                "Заведующий отделением __________ /____________/".to_string(),',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('diary engine signature pattern not found exactly once')
+          engine.write_text(text, encoding='utf-8')
 
           pro = Path('crates/dokkomplekt-core/src/professional_records.rs')
           text = pro.read_text(encoding='utf-8')
-          old = '''            row.insert(
-                      "treating_physician_signature".into(),
-                      SemanticAtom::Text("Лечащий врач __________________ /____________/".into()),
-                  );
-                  row.insert(
-                      "department_head_signature".into(),
-                      SemanticAtom::Text("Заведующий отделением __________ /____________/".into()),
-                  );
-
-                  let body = if entry.is_final_discharge_entry {'''
-          new = '''            if let Some(signature) = entry.signatures.first() {
-                      row.insert(
-                          "treating_physician_signature".into(),
-                          SemanticAtom::Text(signature.clone()),
-                      );
-                  }
-                  if let Some(signature) = entry.signatures.get(1) {
-                      row.insert(
-                          "department_head_signature".into(),
-                          SemanticAtom::Text(signature.clone()),
-                      );
-                  }
-
-                  let body = if entry.is_final_discharge_entry {'''
-          if old not in text:
-              raise SystemExit('professional signature anchor not found')
-          pro.write_text(text.replace(old, new, 1), encoding='utf-8')
+          pattern = re.compile(
+              r'\s*row\.insert\(\s*"treating_physician_signature"\.into\(\),\s*SemanticAtom::Text\("Лечащий врач __________________ /____________/"\.into\(\)\),\s*\);\s*'
+              r'row\.insert\(\s*"department_head_signature"\.into\(\),\s*SemanticAtom::Text\("Заведующий отделением __________ /____________/"\.into\(\)\),\s*\);',
+              re.S,
+          )
+          replacement = '''
+            if let Some(signature) = entry.signatures.first() {
+                row.insert(
+                    "treating_physician_signature".into(),
+                    SemanticAtom::Text(signature.clone()),
+                );
+            }
+            if let Some(signature) = entry.signatures.get(1) {
+                row.insert(
+                    "department_head_signature".into(),
+                    SemanticAtom::Text(signature.clone()),
+                );
+            }'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('professional signature pattern not found exactly once')
+          pro.write_text(text, encoding='utf-8')
 
           ui = Path('src/components/AdvancedToolsPanel.tsx')
           text = ui.read_text(encoding='utf-8')
-          old = '''  const medicalSelected = selectedDocuments.some((document) => document.category === 'Medical');'''
-          new = '''  const medicalAvailable = documents.some((document) => document.category === 'Medical');'''
-          if old not in text:
-              raise SystemExit('medical visibility anchor not found')
-          text = text.replace(old, new, 1).replace('{medicalSelected && (', '{medicalAvailable && (', 1)
+          if 'const medicalSelected = selectedDocuments.some' not in text:
+              raise SystemExit('medical visibility declaration not found')
+          text = text.replace(
+              "  const medicalSelected = selectedDocuments.some((document) => document.category === 'Medical');",
+              "  const medicalAvailable = documents.some((document) => document.category === 'Medical');",
+              1,
+          )
+          if '{medicalSelected && (' not in text:
+              raise SystemExit('medical visibility use not found')
+          text = text.replace('{medicalSelected && (', '{medicalAvailable && (', 1)
           ui.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all

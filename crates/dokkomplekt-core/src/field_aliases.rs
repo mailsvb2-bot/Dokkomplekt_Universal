@@ -1,16 +1,13 @@
 //! Canonical semantic field identifiers and compatibility aliases.
 //!
-//! The project has accumulated several generations of field ids.  Keeping those
+//! The project has accumulated several generations of field ids. Keeping those
 //! ids as independent values is dangerous: a parser can fill one id while a
-//! template asks for another one with the same meaning.  This module defines a
-//! single storage id for true synonyms and a much smaller set of read-only
-//! fallbacks for document-specific convenience ids.
+//! template asks for another one with the same meaning. This module defines a
+//! single storage id for true synonyms and a smaller set of read-only fallbacks
+//! for document-specific convenience ids.
 
 /// Return the canonical storage id for aliases that are semantically identical.
-///
-/// This function intentionally does **not** collapse role-dependent fields such
-/// as `subject.name` and `employee.name`, or `document.number` and
-/// `contract.number`. Those values can legitimately differ in one case.
+/// Role-dependent fields are intentionally never collapsed here.
 pub fn canonical_storage_field_id(raw: &str) -> String {
     let field = raw.trim();
     match field {
@@ -41,7 +38,6 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
 }
 
 /// Every historical storage id that is equivalent to the requested field.
-/// The canonical id is always the first item.
 pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
     match canonical_storage_field_id(raw).as_str() {
         "medical.icd10" => &["medical.icd10", "medical.diagnosis_code"],
@@ -89,13 +85,26 @@ pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
 }
 
 /// Read-only convenience fallbacks. These are not storage aliases because both
-/// ids may coexist with different values in one multi-document case.
+/// ids may coexist with different values in one multi-document case. Scoped
+/// Medical values therefore fall back to old generic storage only for migration;
+/// the inverse direction is handled per document at render time.
 pub fn contextual_fallback_field_ids(raw: &str) -> &'static [&'static str] {
     match raw.trim() {
         "accounting.invoice_number" => &["document.number"],
         "accounting.invoice_date" => &["document.date"],
         "document.number" => &["accounting.invoice_number"],
         "document.date" => &["accounting.invoice_date"],
+        "medical.vk_mse.commission_date" | "medical.sick_leave_vk.commission_date" => {
+            &["medical.commission_date"]
+        }
+        "medical.vk_mse.protocol_number" | "medical.sick_leave_vk.protocol_number" => {
+            &["medical.protocol_number"]
+        }
+        "medical.vk_mse.protocol_date" | "medical.sick_leave_vk.protocol_date" => {
+            &["medical.protocol_date"]
+        }
+        "medical.vk_mse.workplace" | "medical.sick_leave_vk.workplace" => &["medical.workplace"],
+        "medical.vk_mse.position" | "medical.sick_leave_vk.position" => &["medical.position"],
         _ => &[],
     }
 }
@@ -141,5 +150,26 @@ mod tests {
             canonical_storage_field_id("contract.number"),
             "contract.number"
         );
+        assert_eq!(
+            canonical_storage_field_id("medical.vk_mse.protocol_number"),
+            "medical.vk_mse.protocol_number"
+        );
+        assert_eq!(
+            canonical_storage_field_id("medical.sick_leave_vk.protocol_number"),
+            "medical.sick_leave_vk.protocol_number"
+        );
+    }
+
+    #[test]
+    fn role_scoped_medical_fields_can_read_legacy_values_without_collapsing_storage() {
+        assert_eq!(
+            contextual_fallback_field_ids("medical.vk_mse.protocol_number"),
+            &["medical.protocol_number"]
+        );
+        assert_eq!(
+            contextual_fallback_field_ids("medical.sick_leave_vk.protocol_number"),
+            &["medical.protocol_number"]
+        );
+        assert!(contextual_fallback_field_ids("medical.protocol_number").is_empty());
     }
 }

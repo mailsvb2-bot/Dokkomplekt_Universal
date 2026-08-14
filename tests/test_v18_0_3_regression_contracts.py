@@ -90,8 +90,10 @@ class MedicalProfileParityContractTest(unittest.TestCase):
         pipeline = text("crates/dokkomplekt-core/src/universal_pipeline.rs")
         self.assertIn('"sick_leave_vk"', medical)
         self.assertIn('"reception"', medical)
-        self.assertIn('"sick_leave_vk" => vec![', pipeline)
-        self.assertIn('"reception" => vec![', pipeline)
+        self.assertIn("build_medical_render_plan(", pipeline)
+        self.assertIn("MedicalDocumentRole::from_role_id(role)", pipeline)
+        self.assertNotIn('"sick_leave_vk" => vec![', pipeline)
+        self.assertNotIn('"reception" => vec![', pipeline)
 
 
 class CriticalSecurityRegressionContractTest(unittest.TestCase):

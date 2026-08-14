@@ -1,3 +1,9 @@
+use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
+use crate::domains::medical_semantics::{
+    SICK_LEAVE_VK_COMMISSION_DATE, SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_PROTOCOL_DATE,
+    SICK_LEAVE_VK_PROTOCOL_NUMBER, SICK_LEAVE_VK_WORKPLACE, VK_MSE_COMMISSION_DATE,
+    VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE, VK_MSE_PROTOCOL_NUMBER, VK_MSE_WORKPLACE,
+};
 use crate::{
     canonical_storage_field_id, is_valid_field_id, title_for_field, DocumentTemplateSpec,
     DomainKind, PopupFieldConfig, PromptAskMode, PromptInputKind,
@@ -348,13 +354,19 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
             if id == "medical.icd10" || id == "medical.diagnosis_code" {
                 config.input_kind = PromptInputKind::Icd10;
             }
-            if matches!(
-                id,
-                "medical.protocol_date" | "medical.sick_leave_commission_date"
-            ) {
-                config.linked_to = Some("medical.commission_date".into());
-                config.help_text =
-                    Some("Изначально повторяет дату комиссии; поле можно изменить вручную".into());
+            let linked_commission = match id {
+                VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE),
+                SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE),
+                "medical.protocol_date" | "medical.sick_leave_commission_date" => {
+                    Some("medical.commission_date")
+                }
+                _ => None,
+            };
+            if let Some(linked_to) = linked_commission {
+                config.linked_to = Some(linked_to.into());
+                config.help_text = Some(
+                    "Изначально повторяет дату своей комиссии; поле можно изменить вручную".into(),
+                );
             }
             if role_id.contains("diar") && id == "medical.discharge_date" {
                 config.help_text = Some("Записи не будут создаваться после даты выписки".into());
@@ -387,53 +399,19 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
     };
     match category {
         DomainKind::Medical => {
-            if role.contains("discharge") || role.contains("выпис") {
-                add("medical.case_number", true);
-                add("medical.discharge_date", true);
-                add("medical.diagnosis", true);
-                add("medical.treatment", true);
+            // One source of truth: popup requirements come from the same
+            // Medical role plan as the universal pipeline and completeness gate.
+            let plan =
+                build_medical_render_plan(MedicalDocumentRole::from_role_id(role_id), false, false);
+            for field_id in &plan.required_fields {
+                add(field_id, true);
+            }
+            for field_id in &plan.optional_fields {
+                add(field_id, false);
+            }
+            if matches!(plan.role, MedicalDocumentRole::DischargeEpicrisis) {
                 add("medical.discharge_condition", false);
                 add("medical.recommendations", false);
-            } else if role.contains("rvk") || role.contains("рвк") {
-                add("medical.case_number", true);
-                add("medical.discharge_date", true);
-                add("medical.rvk_act_number", true);
-                add("medical.rvk_commissariat", true);
-                add("medical.diagnosis", true);
-                add("medical.treatment", false);
-            } else if role.contains("vk_mse") || role.contains("мсэ") {
-                add("medical.case_number", true);
-                add("medical.commission_date", true);
-                add("medical.protocol_number", true);
-                add("medical.protocol_date", true);
-                add("medical.workplace", true);
-                add("medical.position", false);
-            } else if role.contains("sick_leave_vk") || role.contains("больнич") {
-                add("medical.case_number", true);
-                add("medical.commission_date", true);
-                add("medical.protocol_number", true);
-                add("medical.protocol_date", true);
-                add("medical.sick_leave_commission_date", true);
-                add("medical.sick_leave_number", true);
-                add("medical.workplace", true);
-                add("medical.position", false);
-            } else if role.contains("commission") || role.contains("совмест") {
-                add("medical.case_number", true);
-                add("medical.commission_date", true);
-                add("medical.commission_number", true);
-            } else if role.contains("diar") || role.contains("днев") {
-                add("medical.admission_date", true);
-                add("medical.discharge_date", true);
-                add("medical.diagnosis", true);
-                add("medical.treatment", false);
-            } else if role.contains("primary")
-                || role.contains("reception")
-                || role.contains("первич")
-            {
-                add("medical.case_number", true);
-                add("medical.admission_date", true);
-                add("medical.diagnosis", true);
-                add("medical.treatment", false);
             }
         }
         DomainKind::Legal => {
@@ -527,6 +505,10 @@ fn is_document_date(field_id: &str) -> bool {
             | "medical.commission_date"
             | "medical.protocol_date"
             | "medical.sick_leave_commission_date"
+            | VK_MSE_COMMISSION_DATE
+            | VK_MSE_PROTOCOL_DATE
+            | SICK_LEAVE_VK_COMMISSION_DATE
+            | SICK_LEAVE_VK_PROTOCOL_DATE
     )
 }
 
@@ -550,6 +532,12 @@ fn should_ask_fresh_each_run(field_id: &str, role_id: &str) -> bool {
         "medical.protocol_number" | "medical.protocol_date" => {
             role.contains("vk_mse") || role.contains("мсэ") || role.contains("sick_leave_vk")
         }
+        VK_MSE_COMMISSION_DATE | VK_MSE_PROTOCOL_NUMBER | VK_MSE_PROTOCOL_DATE => {
+            role.contains("vk_mse") || role.contains("мсэ")
+        }
+        SICK_LEAVE_VK_COMMISSION_DATE
+        | SICK_LEAVE_VK_PROTOCOL_NUMBER
+        | SICK_LEAVE_VK_PROTOCOL_DATE => role.contains("sick_leave_vk"),
         "medical.sick_leave_number" | "medical.sick_leave_commission_date" => true,
         _ => false,
     }
@@ -563,6 +551,8 @@ fn should_confirm_each_run(field_id: &str, role_id: &str) -> bool {
         || field_id == "contract.number"
         || field_id == "medical.rvk_act_number"
         || field_id == "medical.protocol_number"
+        || field_id == VK_MSE_PROTOCOL_NUMBER
+        || field_id == SICK_LEAVE_VK_PROTOCOL_NUMBER
         || field_id == "medical.commission_number"
         || field_id == "medical.sick_leave_number"
         || (role.contains("commission") && field_id.contains("number"))
@@ -605,11 +595,26 @@ pub fn popup_order(field_id: &str) -> usize {
         "medical.treatment" => 120,
         "medical.commission_date"
         | "medical.protocol_date"
-        | "medical.sick_leave_commission_date" => 130,
-        "medical.protocol_number" | "medical.commission_number" | "medical.rvk_act_number" => 140,
+        | "medical.sick_leave_commission_date"
+        | VK_MSE_COMMISSION_DATE
+        | VK_MSE_PROTOCOL_DATE
+        | SICK_LEAVE_VK_COMMISSION_DATE
+        | SICK_LEAVE_VK_PROTOCOL_DATE => 130,
+        "medical.protocol_number"
+        | "medical.commission_number"
+        | "medical.rvk_act_number"
+        | VK_MSE_PROTOCOL_NUMBER
+        | SICK_LEAVE_VK_PROTOCOL_NUMBER => 140,
         "medical.rvk_commissariat" => 150,
-        "medical.workplace" | "employee.department" => 160,
-        "medical.position" | "employee.position" | "hr.position" => 170,
+        "medical.workplace"
+        | VK_MSE_WORKPLACE
+        | SICK_LEAVE_VK_WORKPLACE
+        | "employee.department" => 160,
+        "medical.position"
+        | VK_MSE_POSITION
+        | SICK_LEAVE_VK_POSITION
+        | "employee.position"
+        | "hr.position" => 170,
         "amount.total" | "accounting.amount_total" | "contract.amount" | "legal.amount" => 180,
         "amount.currency" | "accounting.currency" => 190,
         _ => 500,
@@ -731,21 +736,90 @@ mod tests {
     }
 
     #[test]
-    fn medical_protocol_date_is_linked_but_independently_editable() {
-        let config = popup_config_for_field(
-            "medical.protocol_date",
-            true,
-            &DomainKind::Medical,
-            "vk_mse",
-        );
-        let mut configured = config;
-        apply_profession_defaults(&mut configured, &DomainKind::Medical, "vk_mse");
-        assert_eq!(
-            configured.linked_to.as_deref(),
-            Some("medical.commission_date")
-        );
-        assert_eq!(configured.input_kind, PromptInputKind::Date);
+    fn role_scoped_protocol_dates_link_only_to_their_own_commission() {
+        for (role, protocol_date, commission_date) in [
+            ("vk_mse", VK_MSE_PROTOCOL_DATE, VK_MSE_COMMISSION_DATE),
+            (
+                "sick_leave_vk",
+                SICK_LEAVE_VK_PROTOCOL_DATE,
+                SICK_LEAVE_VK_COMMISSION_DATE,
+            ),
+        ] {
+            let mut configured =
+                popup_config_for_field(protocol_date, true, &DomainKind::Medical, role);
+            apply_profession_defaults(&mut configured, &DomainKind::Medical, role);
+            assert_eq!(configured.linked_to.as_deref(), Some(commission_date));
+            assert_eq!(configured.input_kind, PromptInputKind::Date);
+            assert_eq!(configured.ask_mode, PromptAskMode::Always);
+        }
     }
+
+    #[test]
+    fn medical_role_popups_follow_the_canonical_role_plan() {
+        for role in [
+            "primary",
+            "discharge",
+            "diaries",
+            "rvk_act",
+            "commission",
+            "sick_leave_vk",
+            "vk_mse",
+            "reception",
+        ] {
+            let document = DocumentTemplateSpec {
+                id: role.into(),
+                button_label: role.into(),
+                template_path: format!("{role}.docx"),
+                category: DomainKind::Medical,
+                role_id: role.into(),
+                required_fields: Vec::new(),
+                placeholders: Vec::new(),
+                is_static_copy: false,
+                popup_fields: Vec::new(),
+                popup_configured: false,
+            };
+            let fields = default_popup_fields_for_document(&document);
+            let plan =
+                build_medical_render_plan(MedicalDocumentRole::from_role_id(role), false, false);
+            for required in plan.required_fields {
+                let config = fields
+                    .iter()
+                    .find(|field| field.field_id == required)
+                    .unwrap_or_else(|| panic!("{role}: popup misses required {required}"));
+                assert!(config.required, "{role}: {required} is not required");
+            }
+            for optional in plan.optional_fields {
+                assert!(
+                    fields.iter().any(|field| field.field_id == optional),
+                    "{role}: popup misses optional {optional}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reception_does_not_inherit_primary_treatment_prompt() {
+        let document = DocumentTemplateSpec {
+            id: "reception".into(),
+            button_label: "Осмотр врача приёмного покоя".into(),
+            template_path: "reception.docx".into(),
+            category: DomainKind::Medical,
+            role_id: "reception".into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        let fields = default_popup_fields_for_document(&document);
+        assert!(fields
+            .iter()
+            .any(|field| field.field_id == "medical.admission_date" && field.required));
+        assert!(!fields
+            .iter()
+            .any(|field| field.field_id == "medical.treatment"));
+    }
+
     #[test]
     fn accounting_namespace_does_not_force_number_input() {
         assert_eq!(

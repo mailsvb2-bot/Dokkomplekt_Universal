@@ -8,6 +8,19 @@ export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
 
+export function shouldSelectDocumentByDefault(document: DocumentTemplateSpec): boolean {
+  if (document.category !== 'Medical') return true;
+  const role = document.role_id.trim().toLowerCase();
+  return !(
+    role === 'discharge'
+    || role.endsWith('.discharge')
+    || role === 'diary'
+    || role === 'diaries'
+    || role.endsWith('.diary')
+    || role.endsWith('.diaries')
+  );
+}
+
 export type PendingTemplate = {
   document_id: string;
   template_path: string;

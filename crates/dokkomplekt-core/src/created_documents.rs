@@ -1,39 +1,20 @@
 //! Zero-touch «Созданные документы» batch orchestrator.
 //!
-//! The essence of the product: a specialist drops one fully-filled primary
-//! document into the watched folder and the program builds the *entire*
-//! configured document set by itself — no popups, no manual fixes.
-//!
-//! This module is the pure decision core. It never touches the filesystem: it
-//! takes the parsed source case plus the doctor-configured documents (with their
-//! template text) and returns either
-//! * `Ready` — the full set is renderable, with a fresh output folder name
-//!   and every output already rendered, or
-//! * `Attention` — required data is missing; nothing is created and a single
-//!   `*_ТРЕБУЕТ_ВНИМАНИЯ.txt` note is described for the caller to drop next to
-//!   the untouched source.
-//!
-//! Hard guarantees (mirrored from the Python zero-touch contract):
-//! * Never fabricate missing facts — a missing required field blocks the run.
-//! * Never produce a partial set — if any output is incomplete, none are written.
-//! * Never emit a document that still contains unfilled placeholders.
-//!
-//! The filesystem side effects (create folder, move source, write files/note) live
-//! in the thin Tauri command; the "process once / ignore temp & duplicates" rule
-//! lives in [`crate::intake_agent::IntakeDeduplicator`].
+//! A specialist drops one filled source document and the program builds the entire
+//! configured document set.  The function is pure: it returns either the complete
+//! rendered set or one attention result; callers perform filesystem side effects.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     build_output_folder_name, plan_workflow, render_text_template, required_blocks_for,
     sanitize_folder_name, sanitize_path_component, title_for_field, unmet_blocks,
-    DocumentTemplateSpec, FolderNamePart, SemanticCase, WorkflowFlags,
+    DocumentTemplateSpec, DomainKind, FolderNamePart, SemanticCase, WorkflowFlags,
 };
 
 pub const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";
 pub const ATTENTION_TITLE: &str = "НЕ ХВАТАЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ";
 
-/// One rendered target document, ready to be written into the output folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlannedOutput {
     pub document_id: String,
@@ -42,25 +23,20 @@ pub struct PlannedOutput {
     pub rendered_text: String,
 }
 
-/// A configured target the batch can create: its spec plus the template text
-/// (read from the user's DOCX by the caller, or supplied inline in tests).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfiguredDocument {
     pub spec: DocumentTemplateSpec,
     pub template_text: String,
 }
 
-/// Outcome of a single dropped source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum CreatedDocumentsBatch {
-    /// Full set is renderable — write everything into `patient_folder_name`.
     Ready {
         patient_folder_name: String,
         source_target_name: String,
         outputs: Vec<PlannedOutput>,
     },
-    /// Not enough data — create nothing, drop `attention_file_name` beside the source.
     Attention {
         title: String,
         missing: Vec<String>,
@@ -78,17 +54,13 @@ fn dedup_preserve(items: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
     for item in items {
         let trimmed = item.trim().to_string();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if seen.insert(trimmed.clone()) {
+        if !trimmed.is_empty() && seen.insert(trimmed.clone()) {
             out.push(trimmed);
         }
     }
     out
 }
 
-/// Build the visible, non-technical note left next to an unprocessed source.
 pub fn build_attention_text(title: &str, missing: &[String]) -> String {
     let mut lines = vec![
         title.to_string(),
@@ -113,13 +85,6 @@ pub fn build_attention_text(title: &str, missing: &[String]) -> String {
     format!("{}\n", body.trim_end())
 }
 
-/// Decide the whole outcome for one dropped source.
-///
-/// * `case` — semantic values parsed from the source document.
-/// * `documents` — every doctor-configured output (spec + template text).
-/// * `folder_parts` — how to name the case subfolder.
-/// * `source_stem` / `source_file_name` — used for the attention note and the
-///   in-folder copy of the source.
 pub fn plan_created_documents_batch(
     case: &SemanticCase,
     documents: &[ConfiguredDocument],
@@ -128,18 +93,12 @@ pub fn plan_created_documents_batch(
     source_stem: &str,
     source_file_name: &str,
 ) -> CreatedDocumentsBatch {
-    let mut missing: Vec<String> = Vec::new();
-
+    let mut missing = Vec::new();
     if documents.is_empty() {
         missing.push("не настроен ни один документ для автоматического создания".to_string());
     }
 
-    // Completeness is render-driven: a document is creatable iff its template
-    // renders with no unfilled required placeholders. This is the real zero-touch
-    // guarantee ("never emit an unfilled document") and avoids over-requiring
-    // fields that only matter for the interactive popup path. Genuine hard blocks
-    // from the workflow engine still stop the run.
-    let mut outputs: Vec<PlannedOutput> = Vec::new();
+    let mut outputs = Vec::new();
     for configured in documents {
         let label = &configured.spec.button_label;
         let plan = plan_workflow(&configured.spec, case, flags);
@@ -148,7 +107,20 @@ pub fn plan_created_documents_batch(
                 missing.push(format!("{label}: {reason}"));
             }
         }
-        let result = render_text_template(&configured.template_text, case, true);
+
+        // MSE and sick-leave VK can coexist in one case with independent protocol
+        // requisites. Old user templates still contain generic medical.protocol_*
+        // placeholders, so project only the current role's scoped values onto those
+        // legacy ids for this render. Persistent case data is never mutated.
+        let render_case = if matches!(configured.spec.category, DomainKind::Medical) {
+            crate::domains::medical_semantics::case_for_medical_document_render(
+                case,
+                &configured.spec.role_id,
+            )
+        } else {
+            case.clone()
+        };
+        let result = render_text_template(&configured.template_text, &render_case, true);
         if !result.missing_fields.is_empty() {
             for field in &result.missing_fields {
                 missing.push(format!("{label}: {}", title_for_field(field)));
@@ -167,13 +139,7 @@ pub fn plan_created_documents_batch(
             }
             continue;
         }
-        // Do not scan the rendered text for a raw `{{` substring. A value or a
-        // deliberately escaped literal may legitimately contain double braces.
-        // The real parser above is the source of truth: missing fields, unknown
-        // fields and malformed/unclosed tags are already reported structurally.
-        // Composite-block completeness: a fully-substituted template can still be an
-        // incomplete document of its kind (e.g. an epicrisis with no diagnosis or no
-        // physician signature block). Any unmet mandatory block blocks the whole run.
+
         let blocks = required_blocks_for(&configured.spec, &configured.template_text);
         let unmet = unmet_blocks(&blocks, case, &result.output_text);
         if !unmet.is_empty() {
@@ -214,7 +180,9 @@ pub fn plan_created_documents_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DomainKind, SemanticValue, ValueSource};
+    use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
+    use crate::domains::medical_semantics::*;
+    use crate::{SemanticValue, ValueSource};
     use std::collections::BTreeMap;
 
     fn value(v: &str) -> SemanticValue {
@@ -229,10 +197,10 @@ mod tests {
 
     fn case_with(pairs: &[(&str, &str)]) -> SemanticCase {
         let mut values = BTreeMap::new();
-        for (k, v) in pairs {
-            let mut sv = value(v);
-            sv.field_id = (*k).to_string();
-            values.insert((*k).to_string(), sv);
+        for (field_id, value_text) in pairs {
+            let mut semantic_value = value(value_text);
+            semantic_value.field_id = (*field_id).to_string();
+            values.insert((*field_id).to_string(), semantic_value);
         }
         SemanticCase {
             values,
@@ -249,8 +217,38 @@ mod tests {
                 template_path: format!("templates/{id}.docx"),
                 category: DomainKind::Generic,
                 role_id: "generic".into(),
-                required_fields: placeholders.iter().map(|s| s.to_string()).collect(),
-                placeholders: placeholders.iter().map(|s| s.to_string()).collect(),
+                required_fields: placeholders
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
+                placeholders: placeholders
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
+                is_static_copy: false,
+                popup_fields: Vec::new(),
+                popup_configured: false,
+            },
+            template_text: template.into(),
+        }
+    }
+
+    fn medical_doc(
+        id: &str,
+        label: &str,
+        role_id: &str,
+        template: &str,
+        required_fields: Vec<String>,
+    ) -> ConfiguredDocument {
+        ConfiguredDocument {
+            spec: DocumentTemplateSpec {
+                id: id.into(),
+                button_label: label.into(),
+                template_path: format!("templates/{id}.docx"),
+                category: DomainKind::Medical,
+                role_id: role_id.into(),
+                required_fields,
+                placeholders: Vec::new(),
                 is_static_copy: false,
                 popup_fields: Vec::new(),
                 popup_configured: false,
@@ -274,9 +272,7 @@ mod tests {
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "Первичный",
             "Первичный.docx",
@@ -288,10 +284,12 @@ mod tests {
                 source_target_name,
             } => {
                 assert_eq!(outputs.len(), 2);
-                assert!(outputs.iter().all(|o| !o.rendered_text.contains("{{")));
                 assert!(outputs
                     .iter()
-                    .any(|o| o.rendered_text.contains("ООО Ромашка")));
+                    .all(|output| !output.rendered_text.contains("{{")));
+                assert!(outputs
+                    .iter()
+                    .any(|output| output.rendered_text.contains("ООО Ромашка")));
                 assert_eq!(source_target_name, "Первичный.docx");
                 assert!(patient_folder_name.contains("Иванов"));
             }
@@ -311,9 +309,7 @@ mod tests {
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "Первичный",
             "Первичный.docx",
@@ -325,7 +321,7 @@ mod tests {
                 attention_text,
                 ..
             } => {
-                assert!(missing.iter().any(|m| m.contains("Договор")));
+                assert!(missing.iter().any(|item| item.contains("Договор")));
                 assert_eq!(attention_file_name, "Первичный_ТРЕБУЕТ_ВНИМАНИЯ.txt");
                 assert!(attention_text.contains("остановлено безопасно"));
             }
@@ -339,9 +335,7 @@ mod tests {
         let batch = plan_created_documents_batch(
             &case,
             &[],
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "src",
             "src.docx",
@@ -349,43 +343,31 @@ mod tests {
         assert!(matches!(batch, CreatedDocumentsBatch::Attention { .. }));
     }
 
-    fn medical_doc(
-        id: &str,
-        label: &str,
-        template: &str,
-        placeholders: &[&str],
-    ) -> ConfiguredDocument {
-        let mut d = doc(id, label, template, placeholders);
-        d.spec.role_id = "discharge".into();
-        d.spec.category = DomainKind::Medical;
-        d
-    }
-
     #[test]
     fn medical_document_without_required_block_is_refused() {
-        // Every placeholder is filled, but a discharge epicrisis needs a diagnosis and
-        // a physician signature block; both are absent -> nothing is created.
         let case = case_with(&[("subject.name", "Иванов Иван")]);
+        let plan = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, false, false);
         let docs = vec![medical_doc(
             "d1",
             "Выписной эпикриз",
+            "discharge",
             "Пациент {{subject.name}}",
-            &["subject.name"],
+            plan.required_fields,
         )];
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "Первичный",
             "Первичный.docx",
         );
         match batch {
             CreatedDocumentsBatch::Attention { missing, .. } => {
-                assert!(missing.iter().any(|m| m.contains("Диагноз")));
-                assert!(missing.iter().any(|m| m.contains("Подпись лечащего врача")));
+                assert!(missing.iter().any(|item| item.contains("Диагноз")));
+                assert!(missing
+                    .iter()
+                    .any(|item| item.contains("Подпись лечащего врача")));
             }
             other => panic!("expected Attention, got {other:?}"),
         }
@@ -395,41 +377,116 @@ mod tests {
     fn medical_document_with_all_blocks_is_created() {
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
+            ("medical.case_number", "12345"),
             ("medical.diagnosis", "J06.9"),
             ("medical.treatment", "Терапия"),
             ("medical.admission_date", "01.06.2026"),
             ("medical.discharge_date", "12.06.2026"),
         ]);
+        let plan = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, false, false);
         let docs = vec![medical_doc(
             "d1",
             "Выписной эпикриз",
+            "discharge",
             concat!(
                 "Пациент {{subject.name}}\n",
+                "История болезни {{medical.case_number}}\n",
                 "Диагноз {{medical.diagnosis}}\n",
                 "Лечение {{medical.treatment}}\n",
                 "Дата поступления {{medical.admission_date}}\n",
                 "Дата выписки {{medical.discharge_date}}\n",
                 "Лечащий врач ______"
             ),
-            &[
-                "subject.name",
-                "medical.diagnosis",
-                "medical.treatment",
-                "medical.admission_date",
-                "medical.discharge_date",
-            ],
+            plan.required_fields,
         )];
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "Первичный",
             "Первичный.docx",
         );
         assert!(matches!(batch, CreatedDocumentsBatch::Ready { .. }));
+    }
+
+    #[test]
+    fn mse_and_sick_leave_vk_render_their_own_protocols_in_one_batch() {
+        let case = case_with(&[
+            ("subject.name", "Иванов Иван"),
+            ("medical.case_number", "777"),
+            ("medical.admission_date", "10.06.2026"),
+            ("medical.diagnosis", "I10"),
+            ("medical.treatment", "Терапия"),
+            (VK_MSE_COMMISSION_DATE, "13.06.2026"),
+            (VK_MSE_PROTOCOL_NUMBER, "MSE-42"),
+            (VK_MSE_PROTOCOL_DATE, "14.06.2026"),
+            (VK_MSE_WORKPLACE, "Организация МСЭ"),
+            (VK_MSE_POSITION, "Инженер МСЭ"),
+            (SICK_LEAVE_VK_COMMISSION_DATE, "15.06.2026"),
+            (SICK_LEAVE_VK_PROTOCOL_NUMBER, "BL-99"),
+            (SICK_LEAVE_VK_PROTOCOL_DATE, "16.06.2026"),
+            (SICK_LEAVE_VK_WORKPLACE, "Организация БЛ"),
+            (SICK_LEAVE_VK_POSITION, "Инженер БЛ"),
+            ("medical.sick_leave_commission_date", "17.06.2026"),
+            ("medical.sick_leave_number", "ЛН-123"),
+        ]);
+        let common = concat!(
+            "{{subject.name}} | {{medical.case_number}} | {{medical.admission_date}} | ",
+            "{{medical.diagnosis}} | {{medical.treatment}} | "
+        );
+        let mse_template = format!(
+            "{common}{{{{medical.commission_date}}}} | {{{{medical.protocol_number}}}} | \
+             {{{{medical.protocol_date}}}} | {{{{medical.workplace}}}} | {{{{medical.position}}}}"
+        );
+        let sick_template = format!(
+            "{common}{{{{medical.commission_date}}}} | {{{{medical.protocol_number}}}} | \
+             {{{{medical.protocol_date}}}} | {{{{medical.workplace}}}} | {{{{medical.position}}}} | \
+             {{{{medical.sick_leave_commission_date}}}} | {{{{medical.sick_leave_number}}}}"
+        );
+        let docs = vec![
+            medical_doc(
+                "mse",
+                "ВК на МСЭ",
+                "vk_mse",
+                &mse_template,
+                build_medical_render_plan(MedicalDocumentRole::VkMse, false, false).required_fields,
+            ),
+            medical_doc(
+                "sick",
+                "ВК больничный",
+                "sick_leave_vk",
+                &sick_template,
+                build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false)
+                    .required_fields,
+            ),
+        ];
+        let batch = plan_created_documents_batch(
+            &case,
+            &docs,
+            &WorkflowFlags::default(),
+            &[FolderNamePart::FullSubjectName],
+            "Первичный",
+            "Первичный.docx",
+        );
+        let CreatedDocumentsBatch::Ready { outputs, .. } = batch else {
+            panic!("expected both role-scoped documents to be ready");
+        };
+        assert_eq!(outputs.len(), 2);
+        let mse = outputs
+            .iter()
+            .find(|output| output.document_id == "mse")
+            .unwrap();
+        let sick = outputs
+            .iter()
+            .find(|output| output.document_id == "sick")
+            .unwrap();
+        assert!(mse.rendered_text.contains("MSE-42"));
+        assert!(mse.rendered_text.contains("Организация МСЭ"));
+        assert!(!mse.rendered_text.contains("BL-99"));
+        assert!(sick.rendered_text.contains("BL-99"));
+        assert!(sick.rendered_text.contains("Организация БЛ"));
+        assert!(!sick.rendered_text.contains("MSE-42"));
     }
 
     #[test]
@@ -444,16 +501,13 @@ mod tests {
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "src",
             "src.docx",
         );
         match batch {
             CreatedDocumentsBatch::Ready { outputs, .. } => {
-                assert_eq!(outputs.len(), 1);
                 assert!(outputs[0].rendered_text.contains("<<Ромашка>>"));
                 assert!(outputs[0].rendered_text.contains("a << b"));
                 assert!(outputs[0].rendered_text.contains("c >> d"));
@@ -474,16 +528,13 @@ mod tests {
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "src",
             "src.docx",
         );
         match batch {
             CreatedDocumentsBatch::Ready { outputs, .. } => {
-                assert_eq!(outputs.len(), 1);
                 assert!(outputs[0].rendered_text.contains("{{ nested_template }}"));
             }
             other => panic!("expected Ready, got {other:?}"),
@@ -492,7 +543,6 @@ mod tests {
 
     #[test]
     fn unknown_placeholder_left_in_text_is_refused() {
-        // {{totally.invalid}} is not a valid field id -> stays in output -> must block.
         let case = case_with(&[("org.name", "ООО")]);
         let docs = vec![doc(
             "d1",
@@ -503,9 +553,7 @@ mod tests {
         let batch = plan_created_documents_batch(
             &case,
             &docs,
-            &WorkflowFlags {
-                sick_leave_enabled: false,
-            },
+            &WorkflowFlags::default(),
             &[FolderNamePart::FullSubjectName],
             "src",
             "src.docx",

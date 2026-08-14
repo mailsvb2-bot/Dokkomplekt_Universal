@@ -6,29 +6,34 @@ use std::collections::BTreeMap;
 
 pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
     let title = detect_title(text).unwrap_or_else(|| "Документ".to_string());
+    let role_id = detect_role(text, &title);
     let raw_placeholders = template_field_references(text);
     let initial_scores = score_domains(text, &raw_placeholders);
     let preferred_domain = domain_from_scores(&initial_scores);
     let placeholders = raw_placeholders
         .iter()
         .filter_map(|placeholder| {
-            canonical_field_id_for_domain(placeholder, Some(&preferred_domain))
+            canonical_template_field(placeholder, &preferred_domain, &role_id)
         })
         .collect::<Vec<_>>();
     let unknown_placeholders = raw_placeholders
         .iter()
         .filter(|placeholder| {
-            canonical_field_id_for_domain(placeholder, Some(&preferred_domain)).is_none()
+            canonical_template_field(placeholder, &preferred_domain, &role_id).is_none()
         })
         .cloned()
         .collect::<Vec<_>>();
     let known = known_field_ids();
     let custom_count = placeholders
         .iter()
-        .filter(|placeholder| !known.contains(*placeholder) && is_valid_field_id(placeholder))
+        .filter(|placeholder| {
+            !known.contains(*placeholder)
+                && crate::domains::medical_semantics::title_for_role_scoped_field(placeholder)
+                    .is_none()
+                && is_valid_field_id(placeholder)
+        })
         .count();
     let domain_scores = score_domains(text, &placeholders);
-    let role_id = detect_role(text, &title);
     let suggested_button_label = normalize_button_label(&title);
     let is_static = raw_placeholders.is_empty();
     let mut warnings = Vec::new();
@@ -55,6 +60,20 @@ pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
         warnings,
         template_errors: inspect_template_syntax(text),
     }
+}
+
+fn canonical_template_field(
+    placeholder: &str,
+    domain: &DomainKind,
+    role_id: &str,
+) -> Option<String> {
+    canonical_field_id_for_domain(placeholder, Some(domain)).map(|field_id| {
+        if matches!(domain, DomainKind::Medical) {
+            crate::domains::medical_semantics::scope_legacy_field_for_role(role_id, &field_id)
+        } else {
+            field_id
+        }
+    })
 }
 
 pub fn detect_title(text: &str) -> Option<String> {
@@ -141,7 +160,7 @@ pub fn best_domain(analysis: &TemplateAnalysis) -> DomainKind {
 }
 
 fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize> {
-    let lower = text.to_lowercase();
+    let lower = text.to_lowercase().replace('ё', "е");
     let mut scores = BTreeMap::new();
     scores.insert(
         "generic".to_string(),
@@ -161,6 +180,8 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
         "комисс",
         "рвк",
         "мсэ",
+        "больнич",
+        "приемного покоя",
     ]
     .iter()
     .filter(|w| lower.contains(**w))
@@ -184,7 +205,7 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
         .filter(|w| lower.contains(**w))
         .count()
         + placeholders.iter().filter(|p| p.starts_with("hr.")).count() * 3;
-    let accounting = ["счет", "счёт", "инн", "кпп", "сумма", "итого"]
+    let accounting = ["счет", "инн", "кпп", "сумма", "итого"]
         .iter()
         .filter(|w| lower.contains(**w))
         .count()
@@ -219,20 +240,31 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
 }
 
 fn detect_role(text: &str, title: &str) -> String {
-    let hay = format!("{}\n{}", title, text).to_lowercase();
+    let hay = format!("{}\n{}", title, text)
+        .to_lowercase()
+        .replace('ё', "е");
     if hay.contains("дневник") {
         "diaries".into()
-    } else if hay.contains("выпис") || hay.contains("эпикриз") {
-        "discharge".into()
+    } else if hay.contains("вк больнич")
+        || hay.contains("вк по больнич")
+        || (hay.contains("продлен") && hay.contains("больнич"))
+    {
+        "sick_leave_vk".into()
+    } else if hay.contains("мсэ") || hay.contains("вк на мсэ") {
+        "vk_mse".into()
+    } else if hay.contains("осмотр врача приемного покоя") || hay.contains("врач приемного покоя")
+    {
+        "reception".into()
     } else if hay.contains("рвк") || hay.contains("военный комиссариат") {
         "rvk_act".into()
-    } else if hay.contains("мсэ") || hay.contains("вк на") {
-        "vk_mse".into()
-    } else if hay.contains("комисс") {
+    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр")
+    {
         "commission".into()
     } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию")
     {
         "primary".into()
+    } else if hay.contains("выпис") || hay.contains("эпикриз") {
+        "discharge".into()
     } else {
         "unknown".into()
     }
@@ -275,6 +307,9 @@ fn normalize_button_label(title: &str) -> String {
 #[cfg(test)]
 mod alias_regression_tests {
     use super::*;
+    use crate::domains::medical_semantics::{
+        SICK_LEAVE_VK_PROTOCOL_NUMBER, VK_MSE_PROTOCOL_NUMBER,
+    };
 
     #[test]
     fn button_label_truncation_preserves_utf8_boundaries() {
@@ -316,5 +351,33 @@ mod alias_regression_tests {
         assert_eq!(hr.placeholders, vec!["employee.position"]);
         let medical = analyze_template_text("Выписной эпикриз\n{{Должность}}");
         assert_eq!(medical.placeholders, vec!["medical.position"]);
+    }
+
+    #[test]
+    fn legacy_medical_templates_keep_distinct_generated_document_roles() {
+        let sick_leave = analyze_template_text("ВК больничный\nВыписка из ПРОТОКОЛА №");
+        assert_eq!(sick_leave.role_id, "sick_leave_vk");
+        assert_eq!(best_domain(&sick_leave), DomainKind::Medical);
+
+        let reception = analyze_template_text("Осмотр врача приёмного покоя\nЖалобы:");
+        assert_eq!(reception.role_id, "reception");
+        assert_eq!(best_domain(&reception), DomainKind::Medical);
+
+        let mse = analyze_template_text("ВК на МСЭ\nВыписка из ПРОТОКОЛА №");
+        assert_eq!(mse.role_id, "vk_mse");
+        assert_eq!(best_domain(&mse), DomainKind::Medical);
+
+        let commission = analyze_template_text("Совместный осмотр\nДата комиссии");
+        assert_eq!(commission.role_id, "commission");
+        assert_eq!(best_domain(&commission), DomainKind::Medical);
+    }
+
+    #[test]
+    fn same_legacy_protocol_field_is_scoped_by_document_role() {
+        let mse = analyze_template_text("ВК на МСЭ\n{{medical.protocol_number}}");
+        let sick = analyze_template_text("ВК больничный\n{{medical.protocol_number}}");
+        assert_eq!(mse.placeholders, vec![VK_MSE_PROTOCOL_NUMBER]);
+        assert_eq!(sick.placeholders, vec![SICK_LEAVE_VK_PROTOCOL_NUMBER]);
+        assert_ne!(mse.placeholders, sick.placeholders);
     }
 }

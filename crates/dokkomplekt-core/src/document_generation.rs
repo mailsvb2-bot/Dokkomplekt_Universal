@@ -1,12 +1,15 @@
 use crate::{
-    render_advanced_text_template, render_advanced_xml_template, RenderResult, SemanticCase,
+    prepare_professional_collections, render_advanced_text_template, render_advanced_xml_template,
+    RenderResult, SemanticCase,
 };
 
 pub fn render_text_template(template: &str, case: &SemanticCase, strict: bool) -> RenderResult {
-    render_advanced_text_template(template, case, strict)
+    let prepared = prepare_professional_collections(template, case);
+    render_advanced_text_template(template, &prepared, strict)
 }
 pub fn render_docx_xml_template(template: &str, case: &SemanticCase, strict: bool) -> RenderResult {
-    render_advanced_xml_template(template, case, strict)
+    let prepared = prepare_professional_collections(template, case);
+    render_advanced_xml_template(template, &prepared, strict)
 }
 pub fn escape_xml(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 8);

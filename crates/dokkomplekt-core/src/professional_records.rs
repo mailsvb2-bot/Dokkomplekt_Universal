@@ -195,9 +195,7 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
         // Unscoped rows are reusable within the active medical profile. Rows
         // explicitly assigned to a different diagnosis must never leak across.
         all.into_iter()
-            .filter(|row| {
-                atom_text(row, "diagnosis").is_none_or(|value| value.trim().is_empty())
-            })
+            .filter(|row| atom_text(row, "diagnosis").is_none_or(|value| value.trim().is_empty()))
             .collect::<Vec<_>>()
     };
 
@@ -327,15 +325,14 @@ mod tests {
         );
         assert!(rendered.output_text.contains("11.05.2026|Дневник A"));
         assert!(rendered.output_text.contains("12.05.2026|Дневник B"));
-        assert!(
-            rendered
-                .output_text
-                .contains("13.05.2026|Выписной дневник")
-        );
+        assert!(rendered.output_text.contains("13.05.2026|Выписной дневник"));
         assert!(!rendered.output_text.contains("Чужой диагноз"));
         assert_eq!(rendered.output_text.matches("Лечащий врач").count(), 3);
         assert_eq!(
-            rendered.output_text.matches("Заведующий отделением").count(),
+            rendered
+                .output_text
+                .matches("Заведующий отделением")
+                .count(),
             3
         );
     }

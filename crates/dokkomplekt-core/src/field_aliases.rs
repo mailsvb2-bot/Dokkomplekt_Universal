@@ -103,9 +103,7 @@ pub fn contextual_fallback_field_ids(raw: &str) -> &'static [&'static str] {
         "medical.vk_mse.protocol_date" | "medical.sick_leave_vk.protocol_date" => {
             &["medical.protocol_date"]
         }
-        "medical.vk_mse.workplace" | "medical.sick_leave_vk.workplace" => {
-            &["medical.workplace"]
-        }
+        "medical.vk_mse.workplace" | "medical.sick_leave_vk.workplace" => &["medical.workplace"],
         "medical.vk_mse.position" | "medical.sick_leave_vk.position" => &["medical.position"],
         _ => &[],
     }
@@ -117,11 +115,23 @@ mod tests {
 
     #[test]
     fn true_synonyms_share_one_storage_id() {
-        assert_eq!(canonical_storage_field_id("medical.diagnosis_code"), "medical.icd10");
+        assert_eq!(
+            canonical_storage_field_id("medical.diagnosis_code"),
+            "medical.icd10"
+        );
         assert_eq!(canonical_storage_field_id("organization.name"), "org.name");
-        assert_eq!(canonical_storage_field_id("hr.employee_name"), "employee.name");
-        assert_eq!(canonical_storage_field_id("legal.contract_number"), "contract.number");
-        assert_eq!(canonical_storage_field_id("accounting.client"), "counterparty.name");
+        assert_eq!(
+            canonical_storage_field_id("hr.employee_name"),
+            "employee.name"
+        );
+        assert_eq!(
+            canonical_storage_field_id("legal.contract_number"),
+            "contract.number"
+        );
+        assert_eq!(
+            canonical_storage_field_id("accounting.client"),
+            "counterparty.name"
+        );
         assert_eq!(
             storage_equivalent_field_ids("counterparty.name"),
             &["counterparty.name", "accounting.client"]
@@ -132,8 +142,14 @@ mod tests {
     fn role_dependent_fields_are_not_collapsed() {
         assert_eq!(canonical_storage_field_id("subject.name"), "subject.name");
         assert_eq!(canonical_storage_field_id("employee.name"), "employee.name");
-        assert_eq!(canonical_storage_field_id("document.number"), "document.number");
-        assert_eq!(canonical_storage_field_id("contract.number"), "contract.number");
+        assert_eq!(
+            canonical_storage_field_id("document.number"),
+            "document.number"
+        );
+        assert_eq!(
+            canonical_storage_field_id("contract.number"),
+            "contract.number"
+        );
         assert_eq!(
             canonical_storage_field_id("medical.vk_mse.protocol_number"),
             "medical.vk_mse.protocol_number"

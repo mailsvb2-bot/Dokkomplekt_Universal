@@ -359,7 +359,17 @@ fn strip_one_metadata_prefix(value: &str) -> String {
 
 fn strip_label_prefix(value: &str) -> Option<&str> {
     let lower = value.to_lowercase().replace('ё', "е");
-    for label in ["дата", "число", "номер", "запись", "дневник", "no.", "no", "n", "№"] {
+    for label in [
+        "дата",
+        "число",
+        "номер",
+        "запись",
+        "дневник",
+        "no.",
+        "no",
+        "n",
+        "№",
+    ] {
         if !lower.starts_with(label) {
             continue;
         }
@@ -368,7 +378,10 @@ fn strip_label_prefix(value: &str) -> Option<&str> {
         if let Some(after_number_sign) = rest.strip_prefix('№') {
             rest = after_number_sign.trim_start();
         }
-        let digit_count = rest.chars().take_while(|character| character.is_ascii_digit()).count();
+        let digit_count = rest
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .count();
         if digit_count > 0 {
             rest = &rest[digit_count..];
             rest = rest.trim_start();
@@ -443,7 +456,11 @@ fn looks_like_date_token(token: &str) -> bool {
         .split(['.', '/', '-'])
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
-    if !(2..=3).contains(&parts.len()) || parts.iter().any(|part| !part.chars().all(|c| c.is_ascii_digit())) {
+    if !(2..=3).contains(&parts.len())
+        || parts
+            .iter()
+            .any(|part| !part.chars().all(|c| c.is_ascii_digit()))
+    {
         return false;
     }
     let first = parts[0].parse::<u32>().ok();
@@ -458,7 +475,10 @@ fn looks_like_date_token(token: &str) -> bool {
 }
 
 fn looks_like_time_token(token: &str) -> bool {
-    let Some((hour, minute)) = token.trim_matches(|c: char| !c.is_ascii_digit() && c != ':').split_once(':') else {
+    let Some((hour, minute)) = token
+        .trim_matches(|c: char| !c.is_ascii_digit() && c != ':')
+        .split_once(':')
+    else {
         return false;
     };
     hour.parse::<u32>().is_ok_and(|value| value <= 23)
@@ -469,7 +489,10 @@ fn trim_leading_separators(value: &str) -> String {
     value
         .trim_start_matches(|character: char| {
             character.is_whitespace()
-                || matches!(character, ':' | '.' | ';' | ',' | ')' | ']' | '-' | '–' | '—')
+                || matches!(
+                    character,
+                    ':' | '.' | ';' | ',' | ')' | ']' | '-' | '–' | '—'
+                )
         })
         .trim()
         .to_string()
@@ -503,9 +526,11 @@ fn is_source_noise(value: &str) -> bool {
     ) {
         return true;
     }
-    value
-        .chars()
-        .all(|character| character.is_ascii_digit() || character.is_whitespace() || matches!(character, '.' | '/' | '-'))
+    value.chars().all(|character| {
+        character.is_ascii_digit()
+            || character.is_whitespace()
+            || matches!(character, '.' | '/' | '-')
+    })
 }
 
 fn looks_like_status(value: &str) -> bool {
@@ -647,14 +672,28 @@ mod tests {
         );
         let template = "{{#each diaries}}{{diary.date}}|{{diary.text}}|{{diary.treating_physician_signature}}|{{diary.department_head_signature}}\n{{/each}}";
         let rendered = render_text_template(template, &case, true);
-        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
-        assert!(rendered.unknown_fields.is_empty(), "{:?}", rendered.unknown_fields);
+        assert!(
+            rendered.missing_fields.is_empty(),
+            "{:?}",
+            rendered.missing_fields
+        );
+        assert!(
+            rendered.unknown_fields.is_empty(),
+            "{:?}",
+            rendered.unknown_fields
+        );
         assert!(rendered.output_text.contains("11.05.2026|Дневник A"));
         assert!(rendered.output_text.contains("12.05.2026|Дневник B"));
         assert!(rendered.output_text.contains("13.05.2026|Выписной дневник"));
         assert!(!rendered.output_text.contains("Чужой диагноз"));
         assert_eq!(rendered.output_text.matches("Лечащий врач").count(), 3);
-        assert_eq!(rendered.output_text.matches("Заведующий отделением").count(), 3);
+        assert_eq!(
+            rendered
+                .output_text
+                .matches("Заведующий отделением")
+                .count(),
+            3
+        );
     }
 
     #[test]
@@ -677,10 +716,8 @@ mod tests {
         let mut row = SemanticRecord::new();
         row.insert("text".into(), SemanticAtom::Text("Ручной дневник".into()));
         case.set_collection("diaries", vec![row]);
-        let prepared = prepare_professional_collections(
-            "{{#each diaries}}{{diary.text}}{{/each}}",
-            &case,
-        );
+        let prepared =
+            prepare_professional_collections("{{#each diaries}}{{diary.text}}{{/each}}", &case);
         assert_eq!(
             prepared.collection("diaries").unwrap()[0]["text"].as_text(),
             "Ручной дневник"
@@ -698,11 +735,8 @@ mod tests {
             "professional.medical.diary.final.f20".into(),
             "Итоговый статус родительского кода.".into(),
         );
-        let rendered = render_text_template(
-            "{{#each diaries}}{{diary.text}}\n{{/each}}",
-            &case,
-            true,
-        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}\n{{/each}}", &case, true);
         assert!(rendered.output_text.contains("родительского кода"));
         assert!(rendered.missing_fields.is_empty());
     }
@@ -719,11 +753,8 @@ mod tests {
             "professional.medical.diary.regular.f201".into(),
             "Статус F20.1".into(),
         );
-        let rendered = render_text_template(
-            "{{#each diaries}}{{diary.text}}{{/each}}",
-            &case,
-            true,
-        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}{{/each}}", &case, true);
         assert!(!rendered.missing_fields.is_empty() || !rendered.unknown_fields.is_empty());
     }
 
@@ -743,10 +774,20 @@ mod tests {
             &case,
             true,
         );
-        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
-        assert!(rendered.output_text.contains("Первый профессиональный статус"));
-        assert!(rendered.output_text.contains("Второй профессиональный статус"));
-        assert!(rendered.output_text.contains("Подтверждённый специалистом итоговый дневник"));
+        assert!(
+            rendered.missing_fields.is_empty(),
+            "{:?}",
+            rendered.missing_fields
+        );
+        assert!(rendered
+            .output_text
+            .contains("Первый профессиональный статус"));
+        assert!(rendered
+            .output_text
+            .contains("Второй профессиональный статус"));
+        assert!(rendered
+            .output_text
+            .contains("Подтверждённый специалистом итоговый дневник"));
     }
 
     #[test]
@@ -786,15 +827,12 @@ mod tests {
                 ),
             ],
         );
-        let rendered = render_text_template(
-            "{{#each diaries}}{{diary.text}}\n{{/each}}",
-            &case,
-            true,
-        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}\n{{/each}}", &case, true);
         assert!(rendered.missing_fields.is_empty(), "{rendered:?}");
-        assert!(rendered.output_text.contains(
-            "Пациент спокоен, доступен контакту, жалоб не предъявляет."
-        ));
+        assert!(rendered
+            .output_text
+            .contains("Пациент спокоен, доступен контакту, жалоб не предъявляет."));
         assert!(rendered
             .output_text
             .contains("Итоговое состояние устойчивое, рекомендации разъяснены."));
@@ -805,10 +843,8 @@ mod tests {
     #[test]
     fn nonmedical_case_does_not_receive_medical_diaries() {
         let case = SemanticCase::default();
-        let prepared = prepare_professional_collections(
-            "{{#each diaries}}{{diary.date}}{{/each}}",
-            &case,
-        );
+        let prepared =
+            prepare_professional_collections("{{#each diaries}}{{diary.date}}{{/each}}", &case);
         assert!(prepared.collection("diaries").is_none());
     }
 }

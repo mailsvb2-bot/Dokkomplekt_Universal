@@ -157,7 +157,9 @@ pub fn unmet_blocks(
                     .is_some_and(|value| rendered_contains_value(rendered_text, value))
             }),
             BlockRequirement::SectionMarker(marker) => haystack.contains(&marker.to_lowercase()),
-            BlockRequirement::SignatureLine(labels) => contains_signature_line(rendered_text, labels),
+            BlockRequirement::SignatureLine(labels) => {
+                contains_signature_line(rendered_text, labels)
+            }
         };
         if !satisfied {
             unmet.push(block.title.clone());
@@ -264,11 +266,8 @@ mod tests {
             "reception",
         ] {
             let blocks = required_blocks_for(&spec(role_id, DomainKind::Medical), "");
-            let plan = build_medical_render_plan(
-                MedicalDocumentRole::from_role_id(role_id),
-                false,
-                false,
-            );
+            let plan =
+                build_medical_render_plan(MedicalDocumentRole::from_role_id(role_id), false, false);
             for field_id in plan.required_fields {
                 assert!(
                     blocks.iter().any(|block| {
@@ -293,7 +292,9 @@ mod tests {
 
         document.required_fields = vec!["custom.special_value".into()];
         let blocks = required_blocks_for(&document, "");
-        assert!(blocks.iter().any(|block| block.id == "rendered:custom.special_value"));
+        assert!(blocks
+            .iter()
+            .any(|block| block.id == "rendered:custom.special_value"));
     }
 
     #[test]

@@ -195,7 +195,11 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
         .iter()
         .filter(|w| lower.contains(**w))
         .count()
-        + placeholders.iter().filter(|p| p.starts_with("legal.")).count() * 3;
+        + placeholders
+            .iter()
+            .filter(|p| p.starts_with("legal."))
+            .count()
+            * 3;
     let hr = ["сотрудник", "должность", "отдел", "приказ", "кадров"]
         .iter()
         .filter(|w| lower.contains(**w))
@@ -252,11 +256,11 @@ fn detect_role(text: &str, title: &str) -> String {
         "sick_leave_vk".into()
     } else if hay.contains("мсэ") || hay.contains("вк на мсэ") {
         "vk_mse".into()
-    } else if hay.contains("осмотр врача приемного покоя")
-        || hay.contains("врач приемного покоя")
+    } else if hay.contains("осмотр врача приемного покоя") || hay.contains("врач приемного покоя")
     {
         "reception".into()
-    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр") {
+    } else if hay.contains("совместный осмотр") || hay.contains("комиссионный осмотр")
+    {
         "commission".into()
     } else if hay.contains("первичный осмотр") || hay.contains("направление на госпитализацию")
     {
@@ -318,7 +322,10 @@ mod alias_regression_tests {
 
     #[test]
     fn short_unicode_button_label_is_unchanged() {
-        assert_eq!(normalize_button_label("Выписной эпикриз 🧾"), "Выписной эпикриз 🧾");
+        assert_eq!(
+            normalize_button_label("Выписной эпикриз 🧾"),
+            "Выписной эпикриз 🧾"
+        );
     }
 
     #[test]

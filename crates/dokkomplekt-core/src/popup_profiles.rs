@@ -390,11 +390,8 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
         DomainKind::Medical => {
             // One source of truth: popup requirements come from the same
             // Medical role plan as the universal pipeline and completeness gate.
-            let plan = build_medical_render_plan(
-                MedicalDocumentRole::from_role_id(role_id),
-                false,
-                false,
-            );
+            let plan =
+                build_medical_render_plan(MedicalDocumentRole::from_role_id(role_id), false, false);
             for field_id in &plan.required_fields {
                 add(field_id, true);
             }
@@ -742,11 +739,8 @@ mod tests {
                 popup_configured: false,
             };
             let fields = default_popup_fields_for_document(&document);
-            let plan = build_medical_render_plan(
-                MedicalDocumentRole::from_role_id(role),
-                false,
-                false,
-            );
+            let plan =
+                build_medical_render_plan(MedicalDocumentRole::from_role_id(role), false, false);
             for required in plan.required_fields {
                 let config = fields
                     .iter()

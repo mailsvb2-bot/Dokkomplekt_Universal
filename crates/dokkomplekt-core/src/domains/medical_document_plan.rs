@@ -278,7 +278,8 @@ mod tests {
 
     #[test]
     fn discharge_preserves_legacy_preflight_boundaries() {
-        let missing = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, true, false);
+        let missing =
+            build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, true, false);
         for field in [
             "medical.case_number",
             "medical.admission_date",
@@ -287,27 +288,42 @@ mod tests {
             "medical.treatment",
             "medical.sick_leave_number",
         ] {
-            assert!(missing.required_fields.contains(&field.to_string()), "missing {field}");
+            assert!(
+                missing.required_fields.contains(&field.to_string()),
+                "missing {field}"
+            );
         }
-        let parsed = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, false, true);
+        let parsed =
+            build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, false, true);
         assert!(!parsed.required_fields.contains(&"medical.treatment".into()));
-        assert!(!parsed.required_fields.contains(&"medical.sick_leave_number".into()));
+        assert!(!parsed
+            .required_fields
+            .contains(&"medical.sick_leave_number".into()));
     }
 
     #[test]
     fn diary_is_the_only_known_role_without_case_number() {
         let diary = build_medical_render_plan(MedicalDocumentRole::Diary, false, false);
-        assert!(!diary.required_fields.contains(&"medical.case_number".into()));
-        assert!(diary.required_fields.contains(&"medical.admission_date".into()));
-        assert!(diary.required_fields.contains(&"medical.discharge_date".into()));
+        assert!(!diary
+            .required_fields
+            .contains(&"medical.case_number".into()));
+        assert!(diary
+            .required_fields
+            .contains(&"medical.admission_date".into()));
+        assert!(diary
+            .required_fields
+            .contains(&"medical.discharge_date".into()));
         assert!(!diary.required_fields.contains(&"medical.treatment".into()));
     }
 
     #[test]
     fn reception_does_not_require_treatment() {
-        let plan = build_medical_render_plan(MedicalDocumentRole::ReceptionInspection, false, false);
+        let plan =
+            build_medical_render_plan(MedicalDocumentRole::ReceptionInspection, false, false);
         assert!(plan.required_fields.contains(&"medical.case_number".into()));
-        assert!(plan.required_fields.contains(&"medical.admission_date".into()));
+        assert!(plan
+            .required_fields
+            .contains(&"medical.admission_date".into()));
         assert!(plan.required_fields.contains(&"medical.diagnosis".into()));
         assert!(!plan.required_fields.contains(&"medical.treatment".into()));
     }
@@ -322,13 +338,24 @@ mod tests {
     #[test]
     fn mse_and_sick_leave_vk_have_distinct_storage_fields() {
         let mse = build_medical_render_plan(MedicalDocumentRole::VkMse, false, false);
-        let sick = build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false);
+        let sick =
+            build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false);
         assert!(mse.required_fields.contains(&VK_MSE_PROTOCOL_NUMBER.into()));
-        assert!(sick.required_fields.contains(&SICK_LEAVE_VK_PROTOCOL_NUMBER.into()));
-        assert!(!mse.required_fields.contains(&SICK_LEAVE_VK_PROTOCOL_NUMBER.into()));
-        assert!(!sick.required_fields.contains(&VK_MSE_PROTOCOL_NUMBER.into()));
-        assert!(!mse.required_fields.contains(&"medical.protocol_number".into()));
-        assert!(!sick.required_fields.contains(&"medical.protocol_number".into()));
+        assert!(sick
+            .required_fields
+            .contains(&SICK_LEAVE_VK_PROTOCOL_NUMBER.into()));
+        assert!(!mse
+            .required_fields
+            .contains(&SICK_LEAVE_VK_PROTOCOL_NUMBER.into()));
+        assert!(!sick
+            .required_fields
+            .contains(&VK_MSE_PROTOCOL_NUMBER.into()));
+        assert!(!mse
+            .required_fields
+            .contains(&"medical.protocol_number".into()));
+        assert!(!sick
+            .required_fields
+            .contains(&"medical.protocol_number".into()));
     }
 
     #[test]
@@ -346,7 +373,11 @@ mod tests {
             let plan = build_medical_render_plan(role, false, false);
             assert!(!plan.required_fields.iter().any(|field| matches!(
                 field.as_str(),
-                "rvk.district" | "commission.date" | "vk_mse.date" | "workplace.organization" | "medical.sick_leave_from"
+                "rvk.district"
+                    | "commission.date"
+                    | "vk_mse.date"
+                    | "workplace.organization"
+                    | "medical.sick_leave_from"
             )));
         }
     }

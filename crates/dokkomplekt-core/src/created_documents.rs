@@ -217,8 +217,14 @@ mod tests {
                 template_path: format!("templates/{id}.docx"),
                 category: DomainKind::Generic,
                 role_id: "generic".into(),
-                required_fields: placeholders.iter().map(|field| (*field).to_string()).collect(),
-                placeholders: placeholders.iter().map(|field| (*field).to_string()).collect(),
+                required_fields: placeholders
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
+                placeholders: placeholders
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect(),
                 is_static_copy: false,
                 popup_fields: Vec::new(),
                 popup_configured: false,
@@ -256,7 +262,12 @@ mod tests {
         let case = case_with(&[("subject.name", "Иванов Иван"), ("org.name", "ООО Ромашка")]);
         let docs = vec![
             doc("d1", "Договор", "Организация {{org.name}}", &["org.name"]),
-            doc("d2", "Справка", "Пациент {{subject.name}}", &["subject.name"]),
+            doc(
+                "d2",
+                "Справка",
+                "Пациент {{subject.name}}",
+                &["subject.name"],
+            ),
         ];
         let batch = plan_created_documents_batch(
             &case,
@@ -273,8 +284,12 @@ mod tests {
                 source_target_name,
             } => {
                 assert_eq!(outputs.len(), 2);
-                assert!(outputs.iter().all(|output| !output.rendered_text.contains("{{")));
-                assert!(outputs.iter().any(|output| output.rendered_text.contains("ООО Ромашка")));
+                assert!(outputs
+                    .iter()
+                    .all(|output| !output.rendered_text.contains("{{")));
+                assert!(outputs
+                    .iter()
+                    .any(|output| output.rendered_text.contains("ООО Ромашка")));
                 assert_eq!(source_target_name, "Первичный.docx");
                 assert!(patient_folder_name.contains("Иванов"));
             }
@@ -285,7 +300,12 @@ mod tests {
     #[test]
     fn missing_required_field_blocks_and_creates_nothing() {
         let case = case_with(&[("subject.name", "Иванов Иван")]);
-        let docs = vec![doc("d1", "Договор", "Организация {{org.name}}", &["org.name"])];
+        let docs = vec![doc(
+            "d1",
+            "Договор",
+            "Организация {{org.name}}",
+            &["org.name"],
+        )];
         let batch = plan_created_documents_batch(
             &case,
             &docs,
@@ -345,7 +365,9 @@ mod tests {
         match batch {
             CreatedDocumentsBatch::Attention { missing, .. } => {
                 assert!(missing.iter().any(|item| item.contains("Диагноз")));
-                assert!(missing.iter().any(|item| item.contains("Подпись лечащего врача")));
+                assert!(missing
+                    .iter()
+                    .any(|item| item.contains("Подпись лечащего врача")));
             }
             other => panic!("expected Attention, got {other:?}"),
         }
@@ -451,8 +473,14 @@ mod tests {
             panic!("expected both role-scoped documents to be ready");
         };
         assert_eq!(outputs.len(), 2);
-        let mse = outputs.iter().find(|output| output.document_id == "mse").unwrap();
-        let sick = outputs.iter().find(|output| output.document_id == "sick").unwrap();
+        let mse = outputs
+            .iter()
+            .find(|output| output.document_id == "mse")
+            .unwrap();
+        let sick = outputs
+            .iter()
+            .find(|output| output.document_id == "sick")
+            .unwrap();
         assert!(mse.rendered_text.contains("MSE-42"));
         assert!(mse.rendered_text.contains("Организация МСЭ"));
         assert!(!mse.rendered_text.contains("BL-99"));

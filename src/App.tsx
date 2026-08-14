@@ -26,7 +26,7 @@ import {
   arrayBufferToBase64, createdPrintItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
-  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
+  replaceAllLiteral, shouldSelectDocumentByDefault, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
 
@@ -109,7 +109,9 @@ function AppContent() {
         if (!alive) return;
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
-          setSelectedDocIds(res.pack.documents.map((document) => document.id));
+          setSelectedDocIds(res.pack.documents
+            .filter(shouldSelectDocumentByDefault)
+            .map((document) => document.id));
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
           setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');

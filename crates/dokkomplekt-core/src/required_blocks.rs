@@ -318,7 +318,10 @@ mod tests {
             "Дата протокола 10.06.2026\nООО Пример\nИнженер"
         );
         let unmet = unmet_blocks(&blocks, &case, rendered);
-        assert_eq!(unmet, vec![title_for_field("medical.protocol_number")]);
+        assert_eq!(
+            unmet,
+            vec![title_for_field("medical.vk_mse.protocol_number")]
+        );
     }
 
     #[test]

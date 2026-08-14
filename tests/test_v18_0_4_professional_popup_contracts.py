@@ -64,16 +64,26 @@ class ProfessionalPopupContracts(unittest.TestCase):
 
     def test_medical_donor_popup_fields_are_profile_scoped(self) -> None:
         profiles = self.read("crates/dokkomplekt-core/src/popup_profiles.rs")
+        plan = self.read("crates/dokkomplekt-core/src/domains/medical_document_plan.rs")
+        semantics = self.read("crates/dokkomplekt-core/src/domains/medical_semantics.rs")
+        self.assertIn("build_medical_render_plan(", profiles)
+        self.assertIn("for field_id in &plan.required_fields", profiles)
         for marker in [
-            'add("medical.case_number", true)',
-            'add("medical.discharge_date", true)',
-            'add("medical.diagnosis", true)',
-            'add("medical.treatment", true)',
-            'add("medical.protocol_number", true)',
-            'add("medical.rvk_commissariat", true)',
-            'add("medical.sick_leave_number", true)',
+            '"medical.case_number"',
+            '"medical.discharge_date"',
+            '"medical.diagnosis"',
+            '"medical.treatment"',
+            '"medical.rvk_commissariat"',
+            '"medical.sick_leave_number"',
         ]:
-            self.assertIn(marker, profiles)
+            self.assertIn(marker, plan)
+        for scoped in [
+            '"medical.vk_mse.protocol_number"',
+            '"medical.vk_mse.protocol_date"',
+            '"medical.sick_leave_vk.protocol_number"',
+            '"medical.sick_leave_vk.protocol_date"',
+        ]:
+            self.assertIn(scoped, semantics)
         neutral_core = "\n".join(
             path.read_text(encoding="utf-8").lower()
             for path in (ROOT / "crates/dokkomplekt-core/src/core").glob("*.rs")
@@ -84,7 +94,11 @@ class ProfessionalPopupContracts(unittest.TestCase):
         profiles = self.read("crates/dokkomplekt-core/src/popup_profiles.rs")
         workspace = self.read("src/components/Workspace.tsx")
         editor = self.read("src/components/PopupFieldEditor.tsx")
-        self.assertIn('config.linked_to = Some("medical.commission_date".into())', profiles)
+        self.assertIn("VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE)", profiles)
+        self.assertIn(
+            "SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE)",
+            profiles,
+        )
         self.assertIn("linkedPrompt.linked_to !== prompt.field_id", workspace)
         self.assertIn("Повторять значение поля", editor)
 

@@ -1180,6 +1180,10 @@ pub fn is_valid_field_id(field_id: &str) -> bool {
 
 pub fn title_for_field(field_id: &str) -> String {
     let canonical = crate::canonical_storage_field_id(field_id);
+    if let Some(title) = crate::domains::medical_semantics::title_for_role_scoped_field(&canonical)
+    {
+        return title.to_string();
+    }
     all_fields()
         .into_iter()
         .find(|field| field.id == canonical)

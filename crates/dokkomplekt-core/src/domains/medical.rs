@@ -44,6 +44,8 @@ pub fn canonical_medical_role(raw_role: &str) -> String {
         "reception"
         | "reception_inspection"
         | "receptioninspection"
+        | "admission_doctor_referral"
+        | "admissiondoctorreferral"
         | "осмотр_врача_приемного_покоя"
         | "осмотр_врача_приёмного_покоя" => "reception".into(),
         "primary"
@@ -139,6 +141,7 @@ mod donor_parity_tests {
             ("sickLeaveVk", "sick_leave_vk"),
             ("vkMse", "vk_mse"),
             ("receptionInspection", "reception"),
+            ("admission_doctor_referral", "reception"),
         ] {
             assert_eq!(
                 canonical_medical_role(legacy),

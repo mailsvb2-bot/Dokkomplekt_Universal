@@ -46,6 +46,20 @@ interface Props {
 }
 
 const YEAR = new Date().getFullYear();
+const MEDICAL_DIARY_REGULAR_PREFIX = 'professional.medical.diary.regular.';
+const MEDICAL_DIARY_FINAL_PREFIX = 'professional.medical.diary.final.';
+
+function diarySourceKey(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function diagnosisFromDiaryFileName(fileName: string): string {
+  return fileName.replace(/\.[^.]+$/, '').trim();
+}
 
 export function AdvancedToolsPanel({
   documents,
@@ -60,6 +74,8 @@ export function AdvancedToolsPanel({
   const [blockId, setBlockId] = useState('');
   const [blockTitle, setBlockTitle] = useState('');
   const [blockContent, setBlockContent] = useState('');
+  const [diaryFinalDiagnosis, setDiaryFinalDiagnosis] = useState('');
+  const [diaryFinalText, setDiaryFinalText] = useState('');
   const [tableText, setTableText] = useState('');
   const [table, setTable] = useState<MailMergeTable | null>(null);
   const [markupPath, setMarkupPath] = useState('');
@@ -92,6 +108,9 @@ export function AdvancedToolsPanel({
     [documents, selectedDocumentIds],
   );
   const versionedDocument = selectedDocuments.length === 1 ? selectedDocuments[0] : null;
+  const medicalSelected = selectedDocuments.some((document) => document.category === 'Medical');
+  const medicalDiarySources = blocks.filter((block) =>
+    block.block_id.startsWith(MEDICAL_DIARY_REGULAR_PREFIX) || block.block_id.startsWith(MEDICAL_DIARY_FINAL_PREFIX));
 
   useEffect(() => {
     if (!versionedDocument) {
@@ -252,6 +271,48 @@ export function AdvancedToolsPanel({
   async function removeBlock(id: string) {
     const result = await execute('удаление блока', () => deleteClauseBlock(id));
     if (result) setBlocks(result);
+  }
+
+  async function importMedicalDiaryTexts(files: File[]) {
+    if (!files.length) return;
+    const result = await execute('импорт текстов дневников', async () => {
+      let current = blocks;
+      let imported = 0;
+      for (const file of files) {
+        if (!/\.txt$/i.test(file.name)) continue;
+        const diagnosis = diagnosisFromDiaryFileName(file.name);
+        const key = diarySourceKey(diagnosis);
+        const content = (await file.text()).trim();
+        if (!key || !content) continue;
+        current = await saveClauseBlock(
+          `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
+          `Тексты дневников: ${diagnosis}`,
+          content,
+        );
+        imported += 1;
+      }
+      return { current, imported };
+    });
+    if (!result) return;
+    setBlocks(result.current);
+    onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя TXT используется как диагноз; данные сохранены локально.`);
+  }
+
+  async function saveMedicalFinalDiary() {
+    const diagnosis = diaryFinalDiagnosis.trim();
+    const key = diarySourceKey(diagnosis);
+    if (!key || !diaryFinalText.trim()) {
+      onStatus('Для итогового дневника укажите диагноз и подтверждённый специалистом текст.');
+      return;
+    }
+    const result = await execute('сохранение итогового дневника', () => saveClauseBlock(
+      `${MEDICAL_DIARY_FINAL_PREFIX}${key}`,
+      `Итоговый дневник: ${diagnosis}`,
+      diaryFinalText.trim(),
+    ));
+    if (!result) return;
+    setBlocks(result);
+    onStatus(`Итоговый дневник для ${diagnosis} сохранён локально и будет использоваться только в медицинском профиле.`);
   }
 
   async function inspectTable() {
@@ -497,6 +558,36 @@ export function AdvancedToolsPanel({
           ))}
         </div>
       </section>
+
+      {medicalSelected && (
+        <section className="utilityCard advancedCard">
+          <strong>Медицина · источники дневников</strong>
+          <small>Совместимость с diary-filler: выберите TXT-файлы, названные по диагнозу (например F20.0.txt). Тексты сохраняются локально; чужой диагноз не подмешивается.</small>
+          <label className="utilBtn fileButton">
+            Импортировать «Тексты» (.txt)
+            <input
+              type="file"
+              accept=".txt,text/plain"
+              multiple
+              hidden
+              onChange={(event) => { void importMedicalDiaryTexts(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ''; }}
+            />
+          </label>
+          <input value={diaryFinalDiagnosis} onChange={(event) => setDiaryFinalDiagnosis(event.target.value)} placeholder="диагноз для итогового дневника, например F20.0" />
+          <textarea value={diaryFinalText} onChange={(event) => setDiaryFinalText(event.target.value)} placeholder="подтверждённый специалистом итоговый дневник" />
+          <button disabled={busy || !diaryFinalDiagnosis.trim() || !diaryFinalText.trim()} className="utilBtn" onClick={saveMedicalFinalDiary}>Сохранить итоговый дневник</button>
+          {medicalDiarySources.length > 0 && (
+            <div className="advancedList">
+              {medicalDiarySources.map((block) => (
+                <div key={block.block_id} className="advancedListRow">
+                  <span>{block.title || block.block_id}</span>
+                  <button disabled={busy} className="utilBtn danger" onClick={() => void removeBlock(block.block_id)}>Удалить</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="utilityCard advancedCard">
         <strong>Библиотека блоков</strong>

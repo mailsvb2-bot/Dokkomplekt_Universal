@@ -175,9 +175,6 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
             all.extend(rows);
         }
     }
-    if all.is_empty() {
-        return DiaryTextSources::default();
-    }
 
     let target = normalize_match(diagnosis);
     let matching = all
@@ -216,7 +213,61 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
             result.regular.push(text);
         }
     }
+
+    // Persistent profile sources reuse the existing local clause-block store.
+    // This keeps storage universal: other professions may introduce their own
+    // namespaced sources without a medical database or a second semantic brain.
+    let key = source_key(diagnosis);
+    if result.regular.is_empty() {
+        let regular_id = format!("professional.medical.diary.regular.{key}");
+        if let Some(content) = case.blocks.get(&regular_id) {
+            result.regular = split_status_source(content);
+        }
+    }
+    if result.final_text.is_none() {
+        let final_id = format!("professional.medical.diary.final.{key}");
+        result.final_text = case
+            .blocks
+            .get(&final_id)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
     result
+}
+
+fn source_key(value: &str) -> String {
+    normalize_match(value)
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn split_status_source(content: &str) -> Vec<String> {
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let paragraphs = normalized
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if paragraphs.len() > 1 {
+        return paragraphs;
+    }
+    let lines = normalized
+        .lines()
+        .map(str::trim)
+        .filter(|value| value.chars().count() >= 25)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if lines.len() > 1 {
+        lines
+    } else {
+        normalized
+            .trim()
+            .is_empty()
+            .then(Vec::new)
+            .unwrap_or_else(|| vec![normalized.trim().to_string()])
+    }
 }
 
 fn record_is_final(row: &SemanticRecord) -> bool {
@@ -363,6 +414,38 @@ mod tests {
             prepared.collection("diaries").unwrap()[0]["text"].as_text(),
             "Ручной дневник"
         );
+    }
+
+    #[test]
+    fn persistent_clause_block_sources_feed_medical_diaries() {
+        let mut case = medical_case();
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Первый профессиональный статус достаточно длинный для источника.\n\nВторой профессиональный статус также хранится локально.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200".into(),
+            "Подтверждённый специалистом итоговый дневник.".into(),
+        );
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.date}}|{{diary.text}}\n{{/each}}",
+            &case,
+            true,
+        );
+        assert!(
+            rendered.missing_fields.is_empty(),
+            "{:?}",
+            rendered.missing_fields
+        );
+        assert!(rendered
+            .output_text
+            .contains("Первый профессиональный статус"));
+        assert!(rendered
+            .output_text
+            .contains("Второй профессиональный статус"));
+        assert!(rendered
+            .output_text
+            .contains("Подтверждённый специалистом итоговый дневник"));
     }
 
     #[test]

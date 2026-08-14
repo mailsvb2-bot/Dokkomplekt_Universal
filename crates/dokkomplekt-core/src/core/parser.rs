@@ -208,7 +208,10 @@ fn looks_like_structured_field_line(line: &str) -> bool {
         return false;
     }
 
-    let alphabetic = label.chars().filter(|character| character.is_alphabetic()).count();
+    let alphabetic = label
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
     let control_or_sentence_punctuation = label
         .chars()
         .any(|character| character.is_control() || matches!(character, '.' | '!' | '?' | ';'));

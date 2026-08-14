@@ -20,6 +20,7 @@ import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
+import { useGenerationPreflight } from './hooks/useGenerationPreflight';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import {
@@ -64,7 +65,6 @@ function AppContent() {
   const [plan, setPlan] = useState<WorkflowPlan | null>(null);
   const [preflightPlan, setPreflightPlan] = useState<WorkflowPlan | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
-  const [generationPreflightOpen, setGenerationPreflightOpen] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({}); const [skippedAnswers, setSkippedAnswers] = useState<Record<string, boolean>>({});
   const [sickLeave, setSickLeave] = useState(false);
 
@@ -553,64 +553,6 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function generateSelectedDocuments() {
-    if (!selectedDocIds.length) {
-      setStatus('Отметьте хотя бы один документ для комплекта.');
-      return;
-    }
-    if (preflightLoading) {
-      setStatus('Подождите: программа ещё проверяет выбранный комплект.');
-      return;
-    }
-
-    const workflow = preflightPlan ?? await run(
-      selectedDocIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch',
-      () => loadWorkflowPlan(selectedDocIds),
-    );
-    if (!workflow) return;
-    setPreflightPlan(workflow);
-    if (workflow.blocked) {
-      setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
-      return;
-    }
-    setGenerationPreflightOpen(true);
-    setStatus('Проверьте данные выбранного комплекта перед созданием.');
-  }
-
-  async function confirmGenerationPreflight() {
-    const workflow = preflightPlan;
-    if (!workflow || preflightLoading) return;
-    if (workflow.blocked) {
-      setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
-      return;
-    }
-
-    if (workflow.prompts.length) {
-      const missing = workflow.prompts.filter((prompt) => prompt.required && !skippedAnswers[prompt.field_id] && !(answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
-      if (missing.length) {
-        setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`);
-        return;
-      }
-      const payload = workflow.prompts.map((prompt) => ({
-        field_id: prompt.field_id,
-        value: skippedAnswers[prompt.field_id] ? '' : answers[prompt.field_id] ?? prompt.current_value ?? '',
-        continue_without_value: Boolean(skippedAnswers[prompt.field_id]),
-      }));
-      const applied = selectedDocIds.length === 1
-        ? await run('apply_popup', () => applyPopup(selectedDocIds[0], sickLeave, payload))
-        : await run('apply_popup_batch', () => applyPopupBatch(selectedDocIds, sickLeave, payload));
-      if (!applied) return;
-      if (!applied.accepted) {
-        setStatus(applied.message || `Не заполнено полей: ${applied.still_missing?.length ?? 0}`);
-        return;
-      }
-    }
-
-    setGenerationPreflightOpen(false);
-    setStatus('Данные подтверждены. Формируется комплект…');
-    await performGenerateSelectedDocuments(selectedDocIds);
-  }
-
   async function performGenerateSelectedDocuments(documentIds: string[]) {
     const res = await run('render_docx_batch', () => renderDocxBatch(
       documentIds,
@@ -632,6 +574,15 @@ function AppContent() {
       ? getWorkflowPlan(documentIds[0], sickLeave)
       : getWorkflowPlanBatch(documentIds, sickLeave);
   }
+
+  const { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
+    selectedDocumentIds: selectedDocIds, preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
+    requestWorkflowPlan: (ids) => run(ids.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(ids)),
+    applyAnswers: (ids, payload) => ids.length === 1
+      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload))
+      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload)),
+    onConfirmed: performGenerateSelectedDocuments,
+  });
 
   function openPopupDesigner() {
     if (!activeDoc) return;
@@ -1420,7 +1371,7 @@ function AppContent() {
             onUnderstand={understand}
             onPinField={pinField}
             onPreview={previewNow}
-            onCreateSelected={generateSelectedDocuments}
+            onCreateSelected={openGenerationPreflight}
           />
           <DocumentRail
             documents={visibleDocs}

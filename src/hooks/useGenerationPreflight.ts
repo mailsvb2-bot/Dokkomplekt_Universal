@@ -1,6 +1,4 @@
-from pathlib import Path
-
-HOOK = r'''import { useState, type Dispatch, type SetStateAction } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import type { PopupAnswerDto, PopupApplyResult, WorkflowPlan } from '../lib/types';
 
 interface UseGenerationPreflightOptions {
@@ -78,32 +76,3 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
 
   return { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight };
 }
-'''
-Path('src/hooks/useGenerationPreflight.ts').write_text(HOOK, encoding='utf-8')
-
-app = Path('src/App.tsx')
-text = app.read_text(encoding='utf-8')
-anchor = "import { useActionRunner } from './hooks/useActionRunner';\n"
-assert text.count(anchor) == 1
-text = text.replace(anchor, anchor + "import { useGenerationPreflight } from './hooks/useGenerationPreflight';\n", 1)
-text = text.replace("  const [generationPreflightOpen, setGenerationPreflightOpen] = useState(false);\n", "", 1)
-
-start = text.index('  async function generateSelectedDocuments() {')
-end = text.index('  async function performGenerateSelectedDocuments', start)
-text = text[:start] + text[end:]
-
-hook_anchor = "  async function loadWorkflowPlan(documentIds: string[]): Promise<WorkflowPlan> {\n    return documentIds.length === 1\n      ? getWorkflowPlan(documentIds[0], sickLeave)\n      : getWorkflowPlanBatch(documentIds, sickLeave);\n  }\n"
-assert text.count(hook_anchor) == 1
-hook_usage = hook_anchor + """
-  const { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
-    selectedDocumentIds: selectedDocIds, preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
-    requestWorkflowPlan: (ids) => run(ids.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(ids)),
-    applyAnswers: (ids, payload) => ids.length === 1
-      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload))
-      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload)),
-    onConfirmed: performGenerateSelectedDocuments,
-  });
-"""
-text = text.replace(hook_anchor, hook_usage, 1)
-text = text.replace('onCreateSelected={generateSelectedDocuments}', 'onCreateSelected={openGenerationPreflight}')
-app.write_text(text, encoding='utf-8')

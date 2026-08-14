@@ -50,3 +50,5 @@ jobs:
             git rebase "origin/${branch}"
           done
           exit 1
+
+# One-shot branch repair: this workflow removes itself after successful application.

@@ -86,6 +86,14 @@ const DIAGNOSIS_FIELDS: &[&str] = &[
     "diagnosis.main",
     "diagnosis",
 ];
+const TREATMENT_FIELDS: &[&str] = &[
+    "medical.treatment",
+    "medical.treatment_plan",
+    "treatment.plan",
+    "treatment",
+];
+const ADMISSION_DATE_FIELDS: &[&str] = &["medical.admission_date", "period.start_date"];
+const DISCHARGE_DATE_FIELDS: &[&str] = &["medical.discharge_date", "period.end_date"];
 
 /// The mandatory composite blocks for a configured document.
 ///
@@ -112,8 +120,10 @@ pub fn required_blocks_for(
 }
 
 fn role_blocks(role_id: &str) -> Vec<RequiredBlock> {
-    match role_id {
-        // Discharge epicrisis: who, what diagnosis, and a physician signature block.
+    // Role identifiers may be namespaced by a profile (`medical.discharge`).
+    // Completeness semantics belong to the terminal role, not to spelling style.
+    let role = role_id.rsplit('.').next().unwrap_or(role_id);
+    match role {
         "discharge" => vec![
             RequiredBlock::any(
                 "patient_identity",
@@ -121,19 +131,24 @@ fn role_blocks(role_id: &str) -> Vec<RequiredBlock> {
                 PATIENT_NAME_FIELDS,
             ),
             RequiredBlock::any("diagnosis", "Диагноз", DIAGNOSIS_FIELDS),
+            RequiredBlock::any("treatment", "Лечение", TREATMENT_FIELDS),
+            RequiredBlock::any("admission_date", "Дата поступления", ADMISSION_DATE_FIELDS),
+            RequiredBlock::any("discharge_date", "Дата выписки", DISCHARGE_DATE_FIELDS),
             RequiredBlock::signature(
                 "treating_physician_signature",
                 "Подпись лечащего врача",
                 &["лечащий врач", "врач-психиатр", "врач психиатр"],
             ),
         ],
-        // Diaries: patient identity and a signature section.
-        "diaries" => vec![
+        "diaries" | "diary" => vec![
             RequiredBlock::any(
                 "patient_identity",
                 "Данные пациента (ФИО)",
                 PATIENT_NAME_FIELDS,
             ),
+            RequiredBlock::any("diagnosis", "Диагноз", DIAGNOSIS_FIELDS),
+            RequiredBlock::any("admission_date", "Дата поступления", ADMISSION_DATE_FIELDS),
+            RequiredBlock::any("discharge_date", "Дата выписки", DISCHARGE_DATE_FIELDS),
             RequiredBlock::signature(
                 "treating_physician_signature",
                 "Подпись лечащего врача",
@@ -145,13 +160,20 @@ fn role_blocks(role_id: &str) -> Vec<RequiredBlock> {
                 &["заведующий отделением", "зав. отделением", "зав отделением"],
             ),
         ],
-        // Commission / examination acts: identify the examined person.
-        "rvk_act" | "vk_mse" | "commission" | "primary" => vec![RequiredBlock::any(
+        "primary" => vec![
+            RequiredBlock::any(
+                "patient_identity",
+                "Данные пациента (ФИО)",
+                PATIENT_NAME_FIELDS,
+            ),
+            RequiredBlock::any("diagnosis", "Диагноз", DIAGNOSIS_FIELDS),
+            RequiredBlock::any("treatment", "Лечение", TREATMENT_FIELDS),
+        ],
+        "rvk_act" | "vk_mse" | "commission" => vec![RequiredBlock::any(
             "patient_identity",
             "Данные освидетельствуемого (ФИО)",
             PATIENT_NAME_FIELDS,
         )],
-        // Generic / unknown: no mandatory composite blocks (domain-neutral).
         _ => Vec::new(),
     }
 }
@@ -259,15 +281,43 @@ mod tests {
         let ok_case = case_with(&[
             ("subject.name", "Иванов Иван"),
             ("medical.diagnosis", "J06.9"),
+            ("medical.treatment", "Терапия"),
+            ("medical.admission_date", "01.06.2026"),
+            ("medical.discharge_date", "12.06.2026"),
         ]);
         let ok_text = "Диагноз: J06.9\nЛечащий врач ______";
         assert!(unmet_blocks(&blocks, &ok_case, ok_text).is_empty());
 
-        // Missing diagnosis and missing signature section -> two unmet blocks.
+        // Missing clinical data and signature must all be surfaced, never hidden.
         let bad_case = case_with(&[("subject.name", "Иванов Иван")]);
         let unmet = unmet_blocks(&blocks, &bad_case, "Просто текст без подписи");
         assert!(unmet.iter().any(|t| t.contains("Диагноз")));
+        assert!(unmet.iter().any(|t| t.contains("Лечение")));
+        assert!(unmet.iter().any(|t| t.contains("Дата поступления")));
+        assert!(unmet.iter().any(|t| t.contains("Дата выписки")));
         assert!(unmet.iter().any(|t| t.contains("Подпись лечащего врача")));
+    }
+
+    #[test]
+    fn namespaced_discharge_requires_full_medical_contract() {
+        let blocks = required_blocks_for(&spec("medical.discharge", DomainKind::Medical), "");
+        let partial = case_with(&[
+            ("subject.name", "Иванов Иван"),
+            ("medical.diagnosis", "J06.9"),
+        ]);
+        let unmet = unmet_blocks(&blocks, &partial, "Лечащий врач ______");
+        assert!(unmet.iter().any(|title| title == "Лечение"));
+        assert!(unmet.iter().any(|title| title == "Дата поступления"));
+        assert!(unmet.iter().any(|title| title == "Дата выписки"));
+    }
+
+    #[test]
+    fn primary_requires_diagnosis_and_treatment() {
+        let blocks = required_blocks_for(&spec("medical.primary", DomainKind::Medical), "");
+        let case = case_with(&[("subject.name", "Иванов Иван")]);
+        let unmet = unmet_blocks(&blocks, &case, "");
+        assert!(unmet.iter().any(|title| title == "Диагноз"));
+        assert!(unmet.iter().any(|title| title == "Лечение"));
     }
 
     #[test]
@@ -276,6 +326,9 @@ mod tests {
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
             ("medical.diagnosis", "J06.9"),
+            ("medical.treatment", "Терапия"),
+            ("medical.admission_date", "01.06.2026"),
+            ("medical.discharge_date", "12.06.2026"),
         ]);
         let unmet = unmet_blocks(
             &blocks,
@@ -288,7 +341,12 @@ mod tests {
     #[test]
     fn diaries_require_both_signature_lines() {
         let blocks = required_blocks_for(&spec("diaries", DomainKind::Medical), "");
-        let case = case_with(&[("subject.name", "Иванов Иван")]);
+        let case = case_with(&[
+            ("subject.name", "Иванов Иван"),
+            ("medical.diagnosis", "F20.0"),
+            ("medical.admission_date", "01.06.2026"),
+            ("medical.discharge_date", "12.06.2026"),
+        ]);
         let one_signature = "Лечащий врач __________________";
         let unmet = unmet_blocks(&blocks, &case, one_signature);
         assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);

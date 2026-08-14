@@ -6,29 +6,34 @@ use std::collections::BTreeMap;
 
 pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
     let title = detect_title(text).unwrap_or_else(|| "Документ".to_string());
+    let role_id = detect_role(text, &title);
     let raw_placeholders = template_field_references(text);
     let initial_scores = score_domains(text, &raw_placeholders);
     let preferred_domain = domain_from_scores(&initial_scores);
     let placeholders = raw_placeholders
         .iter()
         .filter_map(|placeholder| {
-            canonical_field_id_for_domain(placeholder, Some(&preferred_domain))
+            canonical_template_field(placeholder, &preferred_domain, &role_id)
         })
         .collect::<Vec<_>>();
     let unknown_placeholders = raw_placeholders
         .iter()
         .filter(|placeholder| {
-            canonical_field_id_for_domain(placeholder, Some(&preferred_domain)).is_none()
+            canonical_template_field(placeholder, &preferred_domain, &role_id).is_none()
         })
         .cloned()
         .collect::<Vec<_>>();
     let known = known_field_ids();
     let custom_count = placeholders
         .iter()
-        .filter(|placeholder| !known.contains(*placeholder) && is_valid_field_id(placeholder))
+        .filter(|placeholder| {
+            !known.contains(*placeholder)
+                && crate::domains::medical_semantics::title_for_role_scoped_field(placeholder)
+                    .is_none()
+                && is_valid_field_id(placeholder)
+        })
         .count();
     let domain_scores = score_domains(text, &placeholders);
-    let role_id = detect_role(text, &title);
     let suggested_button_label = normalize_button_label(&title);
     let is_static = raw_placeholders.is_empty();
     let mut warnings = Vec::new();
@@ -55,6 +60,20 @@ pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
         warnings,
         template_errors: inspect_template_syntax(text),
     }
+}
+
+fn canonical_template_field(
+    placeholder: &str,
+    domain: &DomainKind,
+    role_id: &str,
+) -> Option<String> {
+    canonical_field_id_for_domain(placeholder, Some(domain)).map(|field_id| {
+        if matches!(domain, DomainKind::Medical) {
+            crate::domains::medical_semantics::scope_legacy_field_for_role(role_id, &field_id)
+        } else {
+            field_id
+        }
+    })
 }
 
 pub fn detect_title(text: &str) -> Option<String> {
@@ -176,11 +195,7 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
         .iter()
         .filter(|w| lower.contains(**w))
         .count()
-        + placeholders
-            .iter()
-            .filter(|p| p.starts_with("legal."))
-            .count()
-            * 3;
+        + placeholders.iter().filter(|p| p.starts_with("legal.")).count() * 3;
     let hr = ["сотрудник", "должность", "отдел", "приказ", "кадров"]
         .iter()
         .filter(|w| lower.contains(**w))
@@ -221,9 +236,6 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
 }
 
 fn detect_role(text: &str, title: &str) -> String {
-    // Generated-document roles belong to the professional profile. Keep the
-    // recognizer conservative, but do not collapse distinct legacy forms into
-    // a nearby medical role: their popup requisites and render contracts differ.
     let hay = format!("{}\n{}", title, text)
         .to_lowercase()
         .replace('ё', "е");
@@ -291,6 +303,9 @@ fn normalize_button_label(title: &str) -> String {
 #[cfg(test)]
 mod alias_regression_tests {
     use super::*;
+    use crate::domains::medical_semantics::{
+        SICK_LEAVE_VK_PROTOCOL_NUMBER, VK_MSE_PROTOCOL_NUMBER,
+    };
 
     #[test]
     fn button_label_truncation_preserves_utf8_boundaries() {
@@ -303,10 +318,7 @@ mod alias_regression_tests {
 
     #[test]
     fn short_unicode_button_label_is_unchanged() {
-        assert_eq!(
-            normalize_button_label("Выписной эпикриз 🧾"),
-            "Выписной эпикриз 🧾"
-        );
+        assert_eq!(normalize_button_label("Выписной эпикриз 🧾"), "Выписной эпикриз 🧾");
     }
 
     #[test]
@@ -351,5 +363,14 @@ mod alias_regression_tests {
         let commission = analyze_template_text("Совместный осмотр\nДата комиссии");
         assert_eq!(commission.role_id, "commission");
         assert_eq!(best_domain(&commission), DomainKind::Medical);
+    }
+
+    #[test]
+    fn same_legacy_protocol_field_is_scoped_by_document_role() {
+        let mse = analyze_template_text("ВК на МСЭ\n{{medical.protocol_number}}");
+        let sick = analyze_template_text("ВК больничный\n{{medical.protocol_number}}");
+        assert_eq!(mse.placeholders, vec![VK_MSE_PROTOCOL_NUMBER]);
+        assert_eq!(sick.placeholders, vec![SICK_LEAVE_VK_PROTOCOL_NUMBER]);
+        assert_ne!(mse.placeholders, sick.placeholders);
     }
 }

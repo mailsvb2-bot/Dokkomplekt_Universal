@@ -13,6 +13,7 @@ use chrono::{Datelike, Local, NaiveDate};
 
 const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
 const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
+const MIN_STATUS_LEN: usize = 25;
 
 /// Clone `case` and derive only the professional collections that the template
 /// actually references. Explicitly supplied collections always win.
@@ -77,9 +78,8 @@ fn build_medical_diary_rows(case: &SemanticCase) -> Option<Vec<SemanticRecord>> 
     let final_from_block = case
         .blocks
         .get("medical.diary.final_text")
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+        .map(|value| clean_diary_source_text(value))
+        .filter(|value| !value.is_empty() && !is_source_noise(value));
     let final_from_condition = case
         .get("medical.discharge_condition")
         .map(str::trim)
@@ -208,20 +208,25 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
     };
 
     let mut result = DiaryTextSources::default();
+    let mut seen_regular = Vec::<String>::new();
     for row in selected {
-        let Some(text) = atom_text(row, "text")
-            .or_else(|| atom_text(row, "body"))
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
+        let Some(raw_text) = atom_text(row, "text").or_else(|| atom_text(row, "body")) else {
             continue;
         };
+        let text = clean_diary_source_text(&raw_text);
+        if text.is_empty() || is_source_noise(&text) {
+            continue;
+        }
         if record_is_final(row) {
             if result.final_text.is_none() {
                 result.final_text = Some(text);
             }
         } else {
-            result.regular.push(text);
+            let key = normalize_match(&text);
+            if !seen_regular.iter().any(|seen| seen == &key) {
+                seen_regular.push(key);
+                result.regular.push(text);
+            }
         }
     }
 
@@ -237,8 +242,8 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
     }
     if result.final_text.is_none() {
         result.final_text = persistent_source(case, "professional.medical.diary.final.", &key)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+            .map(clean_diary_source_text)
+            .filter(|value| !value.is_empty() && !is_source_noise(value));
     }
     result
 }
@@ -301,32 +306,251 @@ fn source_key(value: &str) -> String {
         .collect()
 }
 
+/// Clean one specialist-owned diary text without rewriting its clinical meaning.
+///
+/// This deliberately ports only the safe donor behaviour: invisible characters,
+/// leading date/number/label metadata, template headings and signature lines are
+/// removed. Clinical wording itself is left untouched and no ready-made medical
+/// text is invented.
+fn clean_diary_source_text(content: &str) -> String {
+    let mut value = normalize_source_whitespace(content);
+    for _ in 0..12 {
+        let next = strip_one_metadata_prefix(&value);
+        if next == value {
+            break;
+        }
+        value = next;
+    }
+    trim_leading_separators(&value)
+}
+
+fn normalize_source_whitespace(content: &str) -> String {
+    content
+        .chars()
+        .filter(|character| {
+            !matches!(
+                character,
+                '\u{00ad}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}'
+            )
+        })
+        .map(|character| match character {
+            '\u{00a0}' | '\n' | '\r' | '\t' => ' ',
+            other => other,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_one_metadata_prefix(value: &str) -> String {
+    let trimmed = value.trim_start();
+    if let Some(rest) = strip_label_prefix(trimmed) {
+        return trim_leading_separators(rest);
+    }
+    if let Some(rest) = strip_date_prefix(trimmed) {
+        return trim_leading_separators(rest);
+    }
+    if let Some(rest) = strip_number_prefix(trimmed) {
+        return trim_leading_separators(rest);
+    }
+    trimmed.to_string()
+}
+
+fn strip_label_prefix(value: &str) -> Option<&str> {
+    let lower = value.to_lowercase().replace('ё', "е");
+    for label in ["дата", "число", "номер", "запись", "дневник", "no.", "no", "n", "№"] {
+        if !lower.starts_with(label) {
+            continue;
+        }
+        let mut rest = &value[label.len()..];
+        rest = rest.trim_start();
+        if let Some(after_number_sign) = rest.strip_prefix('№') {
+            rest = after_number_sign.trim_start();
+        }
+        let digit_count = rest.chars().take_while(|character| character.is_ascii_digit()).count();
+        if digit_count > 0 {
+            rest = &rest[digit_count..];
+            rest = rest.trim_start();
+        }
+        if rest.starts_with([':', '.', '-', '–', '—']) || digit_count > 0 {
+            return Some(rest);
+        }
+    }
+    None
+}
+
+fn strip_number_prefix(value: &str) -> Option<&str> {
+    let digit_count = value
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    if digit_count == 0 {
+        return None;
+    }
+    let rest = &value[digit_count..];
+    let trimmed = rest.trim_start();
+    if trimmed.starts_with(['.', ')', ']', ':', '-', '–', '—']) {
+        return Some(trimmed);
+    }
+    if first_token_is_date(trimmed) {
+        return Some(trimmed);
+    }
+    None
+}
+
+fn strip_date_prefix(value: &str) -> Option<&str> {
+    let mut end = 0usize;
+    for (index, character) in value.char_indices() {
+        if character.is_whitespace() {
+            break;
+        }
+        end = index + character.len_utf8();
+    }
+    if end == 0 || !looks_like_date_token(&value[..end]) {
+        return None;
+    }
+    let mut rest = value[end..].trim_start();
+    if let Some(after_year_marker) = rest.strip_prefix("г.") {
+        rest = after_year_marker.trim_start();
+    } else if let Some(after_year_marker) = rest.strip_prefix('г') {
+        rest = after_year_marker.trim_start();
+    }
+    if let Some(token) = rest.split_whitespace().next() {
+        if looks_like_time_token(token) {
+            rest = rest[token.len()..].trim_start();
+        }
+    }
+    Some(rest)
+}
+
+fn first_token_is_date(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .next()
+        .is_some_and(looks_like_date_token)
+}
+
+fn looks_like_date_token(token: &str) -> bool {
+    if token.is_empty()
+        || !token
+            .chars()
+            .all(|character| character.is_ascii_digit() || matches!(character, '.' | '/' | '-'))
+    {
+        return false;
+    }
+    let parts = token
+        .split(['.', '/', '-'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if !(2..=3).contains(&parts.len()) || parts.iter().any(|part| !part.chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    let first = parts[0].parse::<u32>().ok();
+    let second = parts[1].parse::<u32>().ok();
+    match (parts.len(), first, second) {
+        (3, Some(year), Some(month)) if parts[0].len() == 4 => {
+            (1900..=2200).contains(&year) && (1..=12).contains(&month)
+        }
+        (_, Some(day), Some(month)) => (1..=31).contains(&day) && (1..=12).contains(&month),
+        _ => false,
+    }
+}
+
+fn looks_like_time_token(token: &str) -> bool {
+    let Some((hour, minute)) = token.trim_matches(|c: char| !c.is_ascii_digit() && c != ':').split_once(':') else {
+        return false;
+    };
+    hour.parse::<u32>().is_ok_and(|value| value <= 23)
+        && minute.parse::<u32>().is_ok_and(|value| value <= 59)
+}
+
+fn trim_leading_separators(value: &str) -> String {
+    value
+        .trim_start_matches(|character: char| {
+            character.is_whitespace()
+                || matches!(character, ':' | '.' | ';' | ',' | ')' | ']' | '-' | '–' | '—')
+        })
+        .trim()
+        .to_string()
+}
+
+fn is_signature_line(value: &str) -> bool {
+    let normalized = normalize_match(value);
+    normalized.starts_with("лечащий врач")
+        || normalized.starts_with("зав отделением")
+        || normalized.starts_with("заведующий отделением")
+        || normalized.starts_with("заведующая отделением")
+}
+
+fn is_source_noise(value: &str) -> bool {
+    let normalized = normalize_match(value);
+    if normalized.is_empty() || is_signature_line(value) {
+        return true;
+    }
+    if normalized.starts_with("совместный осмотр") {
+        return true;
+    }
+    if matches!(
+        normalized.as_str(),
+        "дневник наблюдения"
+            | "день госпитализации"
+            | "число"
+            | "дата"
+            | "месяц год"
+            | "месяц"
+            | "год"
+    ) {
+        return true;
+    }
+    value
+        .chars()
+        .all(|character| character.is_ascii_digit() || character.is_whitespace() || matches!(character, '.' | '/' | '-'))
+}
+
+fn looks_like_status(value: &str) -> bool {
+    let cleaned = clean_diary_source_text(value);
+    cleaned.chars().count() >= MIN_STATUS_LEN && !is_source_noise(&cleaned)
+}
+
 fn split_status_source(content: &str) -> Vec<String> {
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
     let paragraphs = normalized
         .split("\n\n")
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
         .collect::<Vec<_>>();
-    if paragraphs.len() > 1 {
-        return paragraphs;
-    }
-    let lines = normalized
-        .lines()
-        .map(str::trim)
-        .filter(|value| value.chars().count() >= 25)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if lines.len() > 1 {
-        lines
+    let candidates = if paragraphs.len() > 1 {
+        paragraphs
     } else {
         normalized
-            .trim()
-            .is_empty()
-            .then(Vec::new)
-            .unwrap_or_else(|| vec![normalized.trim().to_string()])
+            .lines()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+    };
+
+    let mut result = Vec::new();
+    let mut seen = Vec::<String>::new();
+    for candidate in candidates {
+        let cleaned = clean_diary_source_text(candidate);
+        if !looks_like_status(&cleaned) {
+            continue;
+        }
+        let key = normalize_match(&cleaned);
+        if seen.iter().any(|value| value == &key) {
+            continue;
+        }
+        seen.push(key);
+        result.push(cleaned);
     }
+    if result.is_empty() {
+        let cleaned = clean_diary_source_text(&normalized);
+        if looks_like_status(&cleaned) {
+            result.push(cleaned);
+        }
+    }
+    result
 }
 
 fn record_is_final(row: &SemanticRecord) -> bool {
@@ -423,28 +647,14 @@ mod tests {
         );
         let template = "{{#each diaries}}{{diary.date}}|{{diary.text}}|{{diary.treating_physician_signature}}|{{diary.department_head_signature}}\n{{/each}}";
         let rendered = render_text_template(template, &case, true);
-        assert!(
-            rendered.missing_fields.is_empty(),
-            "{:?}",
-            rendered.missing_fields
-        );
-        assert!(
-            rendered.unknown_fields.is_empty(),
-            "{:?}",
-            rendered.unknown_fields
-        );
+        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
+        assert!(rendered.unknown_fields.is_empty(), "{:?}", rendered.unknown_fields);
         assert!(rendered.output_text.contains("11.05.2026|Дневник A"));
         assert!(rendered.output_text.contains("12.05.2026|Дневник B"));
         assert!(rendered.output_text.contains("13.05.2026|Выписной дневник"));
         assert!(!rendered.output_text.contains("Чужой диагноз"));
         assert_eq!(rendered.output_text.matches("Лечащий врач").count(), 3);
-        assert_eq!(
-            rendered
-                .output_text
-                .matches("Заведующий отделением")
-                .count(),
-            3
-        );
+        assert_eq!(rendered.output_text.matches("Заведующий отделением").count(), 3);
     }
 
     #[test]
@@ -467,8 +677,10 @@ mod tests {
         let mut row = SemanticRecord::new();
         row.insert("text".into(), SemanticAtom::Text("Ручной дневник".into()));
         case.set_collection("diaries", vec![row]);
-        let prepared =
-            prepare_professional_collections("{{#each diaries}}{{diary.text}}{{/each}}", &case);
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.text}}{{/each}}",
+            &case,
+        );
         assert_eq!(
             prepared.collection("diaries").unwrap()[0]["text"].as_text(),
             "Ручной дневник"
@@ -486,8 +698,11 @@ mod tests {
             "professional.medical.diary.final.f20".into(),
             "Итоговый статус родительского кода.".into(),
         );
-        let rendered =
-            render_text_template("{{#each diaries}}{{diary.text}}\n{{/each}}", &case, true);
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.text}}\n{{/each}}",
+            &case,
+            true,
+        );
         assert!(rendered.output_text.contains("родительского кода"));
         assert!(rendered.missing_fields.is_empty());
     }
@@ -504,8 +719,11 @@ mod tests {
             "professional.medical.diary.regular.f201".into(),
             "Статус F20.1".into(),
         );
-        let rendered =
-            render_text_template("{{#each diaries}}{{diary.text}}{{/each}}", &case, true);
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.text}}{{/each}}",
+            &case,
+            true,
+        );
         assert!(!rendered.missing_fields.is_empty() || !rendered.unknown_fields.is_empty());
     }
 
@@ -525,27 +743,72 @@ mod tests {
             &case,
             true,
         );
-        assert!(
-            rendered.missing_fields.is_empty(),
-            "{:?}",
-            rendered.missing_fields
+        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
+        assert!(rendered.output_text.contains("Первый профессиональный статус"));
+        assert!(rendered.output_text.contains("Второй профессиональный статус"));
+        assert!(rendered.output_text.contains("Подтверждённый специалистом итоговый дневник"));
+    }
+
+    #[test]
+    fn donor_style_metadata_signatures_and_duplicates_are_removed_from_status_sources() {
+        let source = concat!(
+            "Дневник № 12: 11.05.2026 08:30 Состояние стабильное, контакт продуктивный, назначения выполняет.\n\n",
+            "11.05.2026 Состояние стабильное, контакт продуктивный, назначения выполняет.\n\n",
+            "Лечащий врач __________________ /____________/\n\n",
+            "Заведующий отделением __________ /____________/\n\n",
+            "Число\n"
         );
+        let statuses = split_status_source(source);
+        assert_eq!(statuses.len(), 1, "{statuses:?}");
+        assert_eq!(
+            statuses[0],
+            "Состояние стабильное, контакт продуктивный, назначения выполняет."
+        );
+        assert!(!statuses[0].contains("11.05.2026"));
+        assert!(!statuses[0].contains("Лечащий врач"));
+    }
+
+    #[test]
+    fn explicit_collection_text_is_cleaned_without_changing_clinical_wording() {
+        let mut case = medical_case();
+        case.set_collection(
+            "medical_diary_texts",
+            vec![
+                text_row(
+                    "№1) 11.05.2026 Пациент спокоен, доступен контакту, жалоб не предъявляет.",
+                    Some("F20.0"),
+                    false,
+                ),
+                text_row(
+                    "13.05.2026 Итоговое состояние устойчивое, рекомендации разъяснены.",
+                    Some("F20.0"),
+                    true,
+                ),
+            ],
+        );
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.text}}\n{{/each}}",
+            &case,
+            true,
+        );
+        assert!(rendered.missing_fields.is_empty(), "{rendered:?}");
+        assert!(rendered.output_text.contains(
+            "Пациент спокоен, доступен контакту, жалоб не предъявляет."
+        ));
         assert!(rendered
             .output_text
-            .contains("Первый профессиональный статус"));
-        assert!(rendered
-            .output_text
-            .contains("Второй профессиональный статус"));
-        assert!(rendered
-            .output_text
-            .contains("Подтверждённый специалистом итоговый дневник"));
+            .contains("Итоговое состояние устойчивое, рекомендации разъяснены."));
+        assert!(!rendered.output_text.contains("№1)"));
+        assert!(!rendered.output_text.contains("11.05.2026 Пациент"));
     }
 
     #[test]
     fn nonmedical_case_does_not_receive_medical_diaries() {
         let case = SemanticCase::default();
-        let prepared =
-            prepare_professional_collections("{{#each diaries}}{{diary.date}}{{/each}}", &case);
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}}{{/each}}",
+            &case,
+        );
         assert!(prepared.collection("diaries").is_none());
     }
 }

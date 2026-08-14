@@ -117,7 +117,7 @@ export function LearningGovernancePanel(props: LearningGovernancePanelProps) {
     }
     setBusy(true);
     try {
-      const loaded = await getLearnedKitDecision(domain as unknown as string, clusterId.trim(), packId.trim() || undefined);
+      const loaded = await getLearnedKitDecision(domain, clusterId.trim(), packId.trim() || undefined);
       setDecision(loaded);
       props.onStatus(loaded ? 'Решение обученного комплекта загружено.' : 'Для этого кластера ещё нет устойчивого обученного решения.');
     } catch (error) {

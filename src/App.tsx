@@ -23,6 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight } from './hooks/useGenerationPreflight';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
+import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
@@ -103,6 +104,18 @@ function AppContent() {
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
   const [guidedScanner, setGuidedScanner] = useState<GuidedScannerState | null>(null);
+
+  const { markupPendingTemplate, learnPendingTemplateFromExamples } = createPendingTemplateIntelligenceHandlers({
+  pendingTemplates,
+  setPendingTemplates,
+  importedTemplatePath,
+  setImportedTemplatePath,
+  templateText,
+  setTemplateText,
+  setStatus,
+  run,
+  confirm: dialogs.confirm,
+});
 
   useEffect(() => {
     let alive = true;
@@ -846,120 +859,6 @@ function AppContent() {
     setPendingTemplates((previous) => previous.map((item) => (
       item.document_id === documentId ? { ...item, popup_fields: fields } : item
     )));
-  }
-
-  async function markupPendingTemplate(
-    documentId: string,
-    selectedText: string,
-    fieldId: string,
-    action: 'replace' | 'insert_after',
-  ) {
-    const current = pendingTemplates.find((item) => item.document_id === documentId);
-    const value = selectedText.trim();
-    const normalizedField = fieldId.trim();
-    if (!current || !value || !normalizedField) {
-      setStatus('Выделите значение в шаблоне и укажите смысловое поле.');
-      return;
-    }
-    const outputPath = cursorMarkedTemplatePath(current.template_path, documentId);
-    const report = await run('apply_template_markup_command', () => applyTemplateMarkup(
-      current.template_path,
-      outputPath,
-      [{ field_id: normalizedField, value, action }],
-    ));
-    if (!report) return;
-    if (!report.replaced_occurrences) {
-      setStatus('Выделенный фрагмент не найден в видимом тексте DOCX/DOCM. Исходный шаблон не изменён.');
-      return;
-    }
-    const placeholder = `{{${normalizedField}}}`;
-    const visibleReplacement = action === 'replace' ? placeholder : `${value}${placeholder}`;
-    setPendingTemplates((previous) => previous.map((item) => item.document_id === documentId
-      ? {
-          ...item,
-          template_path: report.output_path,
-          extracted_text: replaceAllLiteral(item.extracted_text, value, visibleReplacement),
-        }
-      : item));
-    if (importedTemplatePath === current.template_path) setImportedTemplatePath(report.output_path);
-    if (templateText === current.extracted_text) {
-      setTemplateText(replaceAllLiteral(templateText, value, visibleReplacement));
-    }
-    setStatus(`Шаблон размечен. Обновлено мест: ${report.replaced_occurrences}. Исходный файл сохранён.`);
-  }
-
-async function learnPendingTemplateFromExamples(documentId: string, files: File[]) {
-    const current = pendingTemplates.find((item) => item.document_id === documentId);
-    if (!current) return;
-    if (files.length < 3 || files.length > 10) {
-      setStatus('Для обучения выберите от 3 до 10 заполненных примеров одного и того же шаблона.');
-      return;
-    }
-
-    const completedExamplePaths: string[] = [];
-    for (const file of files) {
-      const buffer = await readFileBytes(file);
-      const imported = await run('import_learning_example_file', () =>
-        importLearningExampleFile(file.name, arrayBufferToBase64(buffer)));
-      if (!imported) return;
-      completedExamplePaths.push(imported.source_path);
-    }
-    const learned = await run('learn_template_from_examples_command', () => learnTemplateFromExamples({
-      blankTemplatePath: current.template_path,
-      completedExamplePaths,
-      defaultYear: DEFAULT_YEAR,
-    }));
-    if (!learned) return;
-    const confidentFields = learned.fields.filter((field) => field.confidence >= 0.9);
-    if (!confidentFields.length) {
-      setStatus('Примеры изучены, но однозначных полей не найдено. Шаблон не изменён — используйте ручную разметку или покажите место в Word.');
-      return;
-    }
-    const previewFields = confidentFields
-      .slice(0, 8)
-      .map((field) => `${field.field_id} (${Math.round(field.confidence * 100)}%)`)
-      .join(', ');
-    const accepted = await dialogs.confirm({
-      title: 'Применить найденную карту шаблона?',
-      message: `Найдено надёжных полей: ${confidentFields.length}. ${previewFields}${confidentFields.length > 8 ? '…' : ''}. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
-      confirmLabel: 'Применить карту',
-    });
-    if (!accepted) {
-      setStatus('Обучение отменено на этапе подтверждения. Исходный шаблон не изменён.');
-      return;
-    }
-
-    const outputPath = cursorMarkedTemplatePath(current.template_path, `${documentId}-learned`);
-    const applied = await run('apply_template_learning_map', () => applyTemplateLearningMap(
-      current.template_path,
-      outputPath,
-      confidentFields.map((field) => ({
-        field_id: field.field_id,
-        line_index: field.line_index,
-        blank_line: field.blank_line,
-        common_prefix: field.common_prefix,
-        common_suffix: field.common_suffix,
-      })),
-    ));
-    if (!applied) return;
-    if (!applied.applied_field_ids.length) {
-      setStatus('Карта не смогла однозначно примениться к шаблону. Исходный файл не изменён.');
-      return;
-    }
-    const analyzed = await run('analyze_template_file', () =>
-      analyzeTemplateFile(applied.output_path, current.document_id, current.button_label));
-    if (!analyzed) return;
-    setPendingTemplates((previous) => previous.map((item) => item.document_id === documentId
-      ? {
-          ...item,
-          template_path: applied.output_path,
-          extracted_text: analyzed.extracted_text,
-          popup_fields: analyzed.document.popup_fields ?? item.popup_fields,
-        }
-      : item));
-    if (importedTemplatePath === current.template_path) setImportedTemplatePath(applied.output_path);
-    if (templateText === current.extracted_text) setTemplateText(analyzed.extracted_text);
-    setStatus(`Шаблон обучен: подтверждено и размечено полей — ${applied.applied_field_ids.length}. Исходный Word сохранён без изменений.`);
   }
 
   async function startGuidedSourceScanner(preselectedFieldId = '') {

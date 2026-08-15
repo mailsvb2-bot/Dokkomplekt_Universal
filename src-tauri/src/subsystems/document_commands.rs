@@ -532,8 +532,7 @@ fn confirm_template_setup(
             LegacyTemplateInferenceSummary::default(),
         )
     };
-    let mut incoming =
-        create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
+    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
     let template_snapshots = rows
         .iter()
         .map(|row| {

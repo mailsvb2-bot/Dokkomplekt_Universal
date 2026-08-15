@@ -48,6 +48,51 @@ pub fn infer_legacy_template_fields(
             continue;
         }
 
+        // A standalone blank must be handled before generic inline-blank
+        // detection: otherwise the empty prefix is seen first and a valid
+        // donor-style `Label\n________` pair is discarded.
+        if is_blank_only(line) {
+            if line_index == 0 {
+                continue;
+            }
+            let Some(previous_index) = previous_nonempty_line(&lines, line_index) else {
+                continue;
+            };
+            if previous_index + 1 != line_index {
+                continue;
+            }
+            let previous = lines[previous_index].trim();
+            if previous.contains("{{")
+                || previous.contains("}}")
+                || find_explicit_blank(previous).is_some()
+            {
+                continue;
+            }
+            let label = clean_label(previous);
+            if label.is_empty() || is_too_generic_label(&label) {
+                continue;
+            }
+            let Some(field_id) = resolve_label(&label, preferred_domain, role_id) else {
+                continue;
+            };
+            push_if_unique_target(
+                &mut candidates,
+                &target_counts,
+                LegacyTemplateFieldCandidate {
+                    title: title_for_field(&field_id),
+                    field_id,
+                    line_index,
+                    blank_line: line.to_string(),
+                    common_prefix: String::new(),
+                    common_suffix: String::new(),
+                    confidence: 0.97,
+                    reason: "однозначная подпись непосредственно перед уникальной пустой строкой"
+                        .into(),
+                },
+            );
+            continue;
+        }
+
         if let Some((blank_start, blank_end)) = find_explicit_blank(line) {
             let prefix = &line[..blank_start];
             let suffix = &line[blank_end..];
@@ -70,46 +115,7 @@ pub fn infer_legacy_template_fields(
                     );
                 }
             }
-            continue;
         }
-
-        if !is_blank_only(line) || line_index == 0 {
-            continue;
-        }
-        let Some(previous_index) = previous_nonempty_line(&lines, line_index) else {
-            continue;
-        };
-        if previous_index + 1 != line_index {
-            continue;
-        }
-        let previous = lines[previous_index].trim();
-        if previous.contains("{{")
-            || previous.contains("}}")
-            || find_explicit_blank(previous).is_some()
-        {
-            continue;
-        }
-        let label = clean_label(previous);
-        if label.is_empty() || is_too_generic_label(&label) {
-            continue;
-        }
-        let Some(field_id) = resolve_label(&label, preferred_domain, role_id) else {
-            continue;
-        };
-        push_if_unique_target(
-            &mut candidates,
-            &target_counts,
-            LegacyTemplateFieldCandidate {
-                title: title_for_field(&field_id),
-                field_id,
-                line_index,
-                blank_line: line.to_string(),
-                common_prefix: String::new(),
-                common_suffix: String::new(),
-                confidence: 0.97,
-                reason: "однозначная подпись непосредственно перед уникальной пустой строкой".into(),
-            },
-        );
     }
 
     // A single visible target may never represent two meanings. This also makes

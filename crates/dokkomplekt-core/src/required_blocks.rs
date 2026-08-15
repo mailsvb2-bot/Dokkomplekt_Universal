@@ -81,6 +81,54 @@ const PATIENT_NAME_FIELDS: &[&str] = &[
     "patient.full_name",
 ];
 
+// These are role labels, not clinical prose. They are intentionally kept inside
+// the Medical-profile completeness contract so no medical assumptions leak into
+// the profession-neutral renderer or other domains.
+const MEDICAL_SIGNER_ROLE_HINTS: &[&str] = &[
+    "лечащий врач",
+    "врач-психиатр",
+    "врач психиатр",
+    "заведующий отделением",
+    "заведующая отделением",
+    "зав. отделением",
+    "зав отделением",
+    "зав. отд.",
+    "зав. отд",
+    "зав отд",
+    "заместитель главного врача",
+    "зам. главного врача",
+    "зам главного врача",
+    "зам. гл. врача",
+    "зам гл врача",
+    "зам глав врача",
+];
+
+const NARRATIVE_SIGNATURE_TERMS: &[&str] = &[
+    "осмотрел",
+    "осмотрела",
+    "осмотрен",
+    "осмотрена",
+    "наблюдал",
+    "наблюдала",
+    "наблюдение",
+    "назначил",
+    "назначила",
+    "рекомендовал",
+    "рекомендовала",
+    "провел",
+    "провёл",
+    "провела",
+    "лечил",
+    "лечила",
+    "продолжил",
+    "продолжила",
+    "пациент",
+    "пациента",
+    "пациентка",
+    "пациентки",
+    "состояние",
+];
+
 /// Mandatory composite blocks for a configured document.
 pub fn required_blocks_for(
     spec: &DocumentTemplateSpec,
@@ -98,6 +146,10 @@ pub fn required_blocks_for(
 
     let role = MedicalDocumentRole::from_role_id(&spec.role_id);
     let plan = build_medical_render_plan(role.clone(), false, false);
+    let signatures_required = plan
+        .output_sections
+        .iter()
+        .any(|section| section == "signatures");
     let mut required = plan.required_fields.into_iter().collect::<BTreeSet<_>>();
 
     // A template or a configured popup may legitimately add stricter fields than
@@ -113,31 +165,91 @@ pub fn required_blocks_for(
         blocks.push(RequiredBlock::rendered_field(&field_id));
     }
 
-    add_role_signature_blocks(&mut blocks, &role);
+    add_role_signature_blocks(&mut blocks, &role, signatures_required);
     blocks
 }
 
-fn add_role_signature_blocks(blocks: &mut Vec<RequiredBlock>, role: &MedicalDocumentRole) {
+fn add_role_signature_blocks(
+    blocks: &mut Vec<RequiredBlock>,
+    role: &MedicalDocumentRole,
+    signatures_required: bool,
+) {
+    if !signatures_required {
+        return;
+    }
+
     match role {
-        MedicalDocumentRole::DischargeEpicrisis => blocks.push(RequiredBlock::signature(
-            "treating_physician_signature",
-            "Подпись лечащего врача",
-            &["лечащий врач", "врач-психиатр", "врач психиатр", "врач"],
-        )),
+        MedicalDocumentRole::PrimaryInspection => {
+            add_psychiatrist_signature(blocks);
+            add_department_head_signature(blocks);
+        }
+        MedicalDocumentRole::DischargeEpicrisis => {
+            add_department_head_signature(blocks);
+            add_psychiatrist_signature(blocks);
+        }
         MedicalDocumentRole::Diary => {
             blocks.push(RequiredBlock::signature(
                 "treating_physician_signature",
                 "Подпись лечащего врача",
-                &["лечащий врач", "врач-психиатр", "врач психиатр", "врач"],
+                &["лечащий врач", "врач-психиатр", "врач психиатр"],
             ));
+            add_department_head_signature(blocks);
+        }
+        MedicalDocumentRole::RvkAct | MedicalDocumentRole::CommissionInspection => {
+            add_deputy_chief_signature(blocks);
+            add_department_head_signature(blocks);
+            add_psychiatrist_signature(blocks);
+        }
+        MedicalDocumentRole::SickLeaveCommission | MedicalDocumentRole::VkMse => {
+            add_department_head_signature(blocks);
             blocks.push(RequiredBlock::signature(
-                "department_head_signature",
-                "Подпись заведующего отделением",
-                &["заведующий отделением", "зав. отделением", "зав отделением"],
+                "treating_physician_signature",
+                "Подпись лечащего врача",
+                &["лечащий врач", "врач-психиатр", "врач психиатр"],
             ));
         }
-        _ => {}
+        MedicalDocumentRole::ReceptionInspection => add_psychiatrist_signature(blocks),
+        MedicalDocumentRole::GenericMedical => {}
     }
+}
+
+fn add_psychiatrist_signature(blocks: &mut Vec<RequiredBlock>) {
+    blocks.push(RequiredBlock::signature(
+        "psychiatrist_signature",
+        "Подпись врача-психиатра",
+        &["врач-психиатр", "врач психиатр", "лечащий врач"],
+    ));
+}
+
+fn add_department_head_signature(blocks: &mut Vec<RequiredBlock>) {
+    blocks.push(RequiredBlock::signature(
+        "department_head_signature",
+        "Подпись заведующего отделением",
+        &[
+            "заведующий отделением",
+            "заведующая отделением",
+            "зав. отделением",
+            "зав отделением",
+            "зав. отд.",
+            "зав. отд",
+            "зав отд",
+        ],
+    ));
+}
+
+fn add_deputy_chief_signature(blocks: &mut Vec<RequiredBlock>) {
+    blocks.push(RequiredBlock::signature(
+        "deputy_chief_physician_signature",
+        "Подпись заместителя главного врача",
+        &[
+            "заместитель главного врача",
+            "зам. главного врача",
+            "зам главного врача",
+            "зам. гл. врача",
+            "зам гл врача",
+            "зам глав врача",
+        ],
+    ));
 }
 
 /// Titles of every block that is not satisfied for this case + rendered text.
@@ -185,17 +297,56 @@ fn normalize_visible_text(value: &str) -> String {
 fn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {
     rendered_text.lines().any(|line| {
         let normalized = normalize_visible_text(line);
-        if normalized.is_empty() {
+        if normalized.is_empty()
+            || !labels
+                .iter()
+                .any(|label| normalized.contains(&label.to_lowercase()))
+        {
             return false;
         }
+
         let has_signature_cue = normalized.contains("___")
             || normalized.contains("подпись")
             || normalized.contains("/____")
             || normalized.contains("м.п.");
-        has_signature_cue
-            && labels
-                .iter()
-                .any(|label| normalized.contains(&label.to_lowercase()))
+        has_signature_cue || looks_like_structured_signer_line(&normalized, labels)
+    })
+}
+
+fn looks_like_structured_signer_line(normalized: &str, labels: &[String]) -> bool {
+    let signer_role_count = MEDICAL_SIGNER_ROLE_HINTS
+        .iter()
+        .filter(|label| normalized.contains(**label))
+        .count();
+    if signer_role_count >= 2 && normalized.split_whitespace().count() >= 5 {
+        return true;
+    }
+
+    let Some(label) = labels
+        .iter()
+        .map(|label| label.to_lowercase())
+        .find(|label| normalized.starts_with(label))
+    else {
+        return false;
+    };
+    let Some(rest) = normalized.strip_prefix(&label) else {
+        return false;
+    };
+    let signer = rest.trim_start_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(character, ':' | '-' | '–' | '—' | '.' | '/' | '\\' | '|')
+    });
+    if signer.is_empty() {
+        return false;
+    }
+
+    let words = signer.split_whitespace().collect::<Vec<_>>();
+    if words.len() > 4 {
+        return false;
+    }
+    !words.iter().any(|word| {
+        let normalized_word = word.trim_matches(|character: char| !character.is_alphabetic());
+        NARRATIVE_SIGNATURE_TERMS.contains(&normalized_word)
     })
 }
 
@@ -284,6 +435,32 @@ mod tests {
     }
 
     #[test]
+    fn every_canonical_signature_section_has_a_post_render_contract() {
+        let expected = [
+            ("primary", 2usize),
+            ("discharge", 2),
+            ("diaries", 2),
+            ("rvk_act", 3),
+            ("commission", 3),
+            ("sick_leave_vk", 2),
+            ("vk_mse", 2),
+            ("reception", 1),
+        ];
+        for (role_id, expected_count) in expected {
+            let role = MedicalDocumentRole::from_role_id(role_id);
+            let plan = build_medical_render_plan(role, false, false);
+            assert!(plan.output_sections.iter().any(|section| section == "signatures"));
+
+            let blocks = required_blocks_for(&spec(role_id, DomainKind::Medical), "");
+            let actual = blocks
+                .iter()
+                .filter(|block| matches!(block.requirement, BlockRequirement::SignatureLine(_)))
+                .count();
+            assert_eq!(actual, expected_count, "{role_id}: signature contract drift");
+        }
+    }
+
+    #[test]
     fn unknown_medical_role_keeps_only_patient_and_template_requirements() {
         let mut document = spec("unknown", DomainKind::Medical);
         let blocks = required_blocks_for(&document, "");
@@ -318,9 +495,16 @@ mod tests {
             "Дата протокола 10.06.2026\nООО Пример\nИнженер"
         );
         let unmet = unmet_blocks(&blocks, &case, rendered);
-        assert_eq!(
-            unmet,
-            vec![title_for_field("medical.vk_mse.protocol_number")]
+        assert!(
+            unmet
+                .iter()
+                .any(|title| title == &title_for_field("medical.vk_mse.protocol_number")),
+            "missing role-scoped protocol number must remain visible in completeness errors: {unmet:?}"
+        );
+        assert!(
+            unmet.iter().any(|title| title == "Подпись заведующего отделением")
+                && unmet.iter().any(|title| title == "Подпись лечащего врача"),
+            "special medical document without its donor signature block must fail closed: {unmet:?}"
         );
     }
 
@@ -338,7 +522,7 @@ mod tests {
         let rendered = concat!(
             "Пациент Иванов Иван\nИстория болезни 12345\nДиагноз J06.9\n",
             "Лечение Терапия\nДата поступления 01.06.2026\n",
-            "Дата выписки 12.06.2026\nЛечащий врач ______"
+            "Дата выписки 12.06.2026\nЗав. отд. Петров П.П. Врач-психиатр Иванов И.И."
         );
         assert!(unmet_blocks(&blocks, &case, rendered).is_empty());
 
@@ -347,6 +531,19 @@ mod tests {
             unmet_blocks(&blocks, &case, &missing_treatment),
             vec![title_for_field("medical.treatment")]
         );
+    }
+
+    #[test]
+    fn donor_style_named_signer_line_is_a_signature_without_underscores() {
+        let physician = vec!["врач психиатр".to_string(), "врач-психиатр".to_string()];
+        assert!(contains_signature_line(
+            "Врач психиатр Иванов Иван Иванович",
+            &physician
+        ));
+        assert!(contains_signature_line(
+            "Зав. отд. Петров П.П. Врач-психиатр Иванов И.И.",
+            &physician
+        ));
     }
 
     #[test]
@@ -365,7 +562,10 @@ mod tests {
             "Лечащий врач осмотрел пациента и продолжил наблюдение."
         );
         let unmet = unmet_blocks(&blocks, &case, rendered);
-        assert!(unmet.iter().any(|title| title == "Подпись лечащего врача"));
+        assert!(unmet.iter().any(|title| title == "Подпись врача-психиатра"));
+        assert!(unmet
+            .iter()
+            .any(|title| title == "Подпись заведующего отделением"));
     }
 
     #[test]

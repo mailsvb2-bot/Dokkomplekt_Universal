@@ -155,6 +155,9 @@ fn resolve_label(
     role_id: Option<&str>,
 ) -> Option<String> {
     let field_id = canonical_field_id_for_domain(label, preferred_domain)?;
+    if !field_is_allowed_in_domain(&field_id, preferred_domain) {
+        return None;
+    }
     if matches!(preferred_domain, Some(DomainKind::Medical)) {
         Some(crate::domains::medical_semantics::scope_legacy_field_for_role(
             role_id.unwrap_or_default(),
@@ -162,6 +165,26 @@ fn resolve_label(
         ))
     } else {
         Some(field_id)
+    }
+}
+
+/// Template auto-markup is intentionally stricter than ordinary alias lookup.
+/// A globally unique alias from another profession must not be imported into a
+/// selected document domain merely because no competing alias exists there.
+/// Generic fields are shared infrastructure and remain available everywhere.
+fn field_is_allowed_in_domain(field_id: &str, preferred_domain: Option<&DomainKind>) -> bool {
+    let Some(preferred_domain) = preferred_domain else {
+        return true;
+    };
+    let Some(definition) = crate::all_fields()
+        .into_iter()
+        .find(|definition| definition.id == field_id)
+    else {
+        return false;
+    };
+    match preferred_domain {
+        DomainKind::Generic | DomainKind::Custom(_) => definition.domain == DomainKind::Generic,
+        domain => definition.domain == DomainKind::Generic || definition.domain == *domain,
     }
 }
 

@@ -14,6 +14,7 @@ const base = {
   onPendingTemplateLabelChange: vi.fn(),
   onPendingPopupFieldsChange: vi.fn(),
   onMarkupPendingTemplate: vi.fn(async () => undefined),
+  onLearnPendingTemplate: vi.fn(async () => undefined),
   onStartGuidedPendingScanner: vi.fn(),
   onAnalyze: vi.fn(),
   onPickFile: vi.fn(),

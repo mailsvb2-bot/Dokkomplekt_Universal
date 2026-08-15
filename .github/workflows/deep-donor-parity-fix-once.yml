@@ -15,7 +15,7 @@ jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
@@ -35,132 +35,176 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           def replace_once(path: str, old: str, new: str) -> None:
               p = Path(path)
               text = p.read_text(encoding='utf-8')
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f'{path}: expected exactly one match, got {count}: {old[:100]!r}')
+                  raise SystemExit(f'{path}: expected exactly one match, got {count}: {old[:120]!r}')
               p.write_text(text.replace(old, new, 1), encoding='utf-8')
 
-          # 1. Render-only projection for ambiguous legacy medical aliases.
-          path = 'crates/dokkomplekt-core/src/domains/medical_semantics.rs'
-          marker = "pub fn title_for_role_scoped_field(field_id: &str) -> Option<&'static str> {"
-          helper = '''/// Prepare one template render without leaking ambiguous medical aliases across roles.
-          /// Non-medical and medical roles without scoped bindings remain semantically unchanged.
-          pub fn case_for_role_scoped_template_render(
-              case: &SemanticCase,
-              template_text: &str,
-          ) -> SemanticCase {
-              let analysis = crate::analyze_template_text(template_text);
-              if role_scoped_bindings(&analysis.role_id).is_empty() {
-                  case.clone()
-              } else {
-                  case_for_medical_document_render(case, &analysis.role_id)
+          # Domain router: only Medical may project medical legacy aliases. A legal/HR/custom
+          # document cannot acquire medical behavior even if a role id happens to collide.
+          path = 'crates/dokkomplekt-core/src/domains/mod.rs'
+          marker = 'pub mod medical_semantics;\n'
+          addition = dedent('''
+
+          /// Prepare an ephemeral case for one document render.
+          ///
+          /// Profession-specific compatibility belongs behind this domain boundary. Persistent
+          /// semantic storage is never rewritten, and non-medical domains are returned unchanged.
+          pub fn case_for_document_render(
+              case: &crate::SemanticCase,
+              category: &crate::DomainKind,
+              role_id: &str,
+          ) -> crate::SemanticCase {
+              match category {
+                  crate::DomainKind::Medical => {
+                      medical_semantics::case_for_medical_document_render(case, role_id)
+                  }
+                  _ => case.clone(),
               }
           }
 
-          '''
-          replace_once(path, marker, helper + marker)
+          #[cfg(test)]
+          mod render_case_tests {
+              use super::*;
+              use crate::{SemanticCase, SemanticValue, ValueSource};
 
-          test_marker = '''    #[test]
-              fn legacy_generic_value_is_not_destroyed_when_scoped_value_is_missing() {'''
-          # The source indentation is four spaces; keep exact marker after dedenting below.
-          test_marker = test_marker.replace('              fn ', '    fn ')
-          tests = '''    #[test]
-          fn template_render_projects_only_the_role_that_owns_legacy_vk_aliases() {
-              let mut case = SemanticCase::default();
-              put(&mut case, VK_MSE_PROTOCOL_NUMBER, "MSE-10");
-              put(&mut case, SICK_LEAVE_VK_PROTOCOL_NUMBER, "SL-20");
-
-              let mse = case_for_role_scoped_template_render(
-                  &case,
-                  "ВК на МСЭ\nНомер протокола {{medical.protocol_number}}",
-              );
-              let sick = case_for_role_scoped_template_render(
-                  &case,
-                  "ВК по больничному листу\nНомер протокола {{medical.protocol_number}}",
-              );
-
-              assert_eq!(mse.get("medical.protocol_number"), Some("MSE-10"));
-              assert_eq!(sick.get("medical.protocol_number"), Some("SL-20"));
-              assert_eq!(case.get("medical.protocol_number"), None);
-          }
-
-          #[test]
-          fn template_render_does_not_apply_medical_scoping_to_other_professions() {
-              let mut case = SemanticCase::default();
-              put(&mut case, VK_MSE_PROTOCOL_NUMBER, "MSE-10");
-              put(&mut case, "medical.protocol_number", "LEGACY-KEEP");
-
-              let legal = case_for_role_scoped_template_render(
-                  &case,
-                  "Юридическое заключение\nНомер дела {{case.number}}",
-              );
-              assert_eq!(legal.get("medical.protocol_number"), Some("LEGACY-KEEP"));
-          }
-
-          '''
-          # YAML indentation adds ten spaces to here-doc content; cargo fmt normalizes Rust itself.
-          tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in tests.splitlines()) + '\n'
-          replace_once(path, test_marker, tests + test_marker)
-
-          # 2. Common DOCX seam: text placeholders and image fields use the same projected case.
-          path = 'src-tauri/src/subsystems/desktop_io.rs'
-          old = '''    let template_text = extract_docx_text(template_path).map_err(|e| e.to_string())?;
-              let image_fields = resolve_template_image_fields(app, &template_text, case)?;
-              let result =
-                  render_docx_file_with_watermark(template_path, output_path, case, strict, watermark)
-                      .map_err(|e| e.to_string())?;'''
-          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines())
-          new = '''    let template_text = extract_docx_text(template_path).map_err(|e| e.to_string())?;
-              let render_case =
-                  dokkomplekt_core::domains::medical_semantics::case_for_role_scoped_template_render(
-                      case,
-                      &template_text,
+              fn put(case: &mut SemanticCase, field_id: &str, value: &str) {
+                  case.values.insert(
+                      field_id.to_string(),
+                      SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
                   );
-              let image_fields = resolve_template_image_fields(app, &template_text, &render_case)?;
-              let result = render_docx_file_with_watermark(
-                  template_path,
-                  output_path,
-                  &render_case,
-                  strict,
-                  watermark,
-              )
-              .map_err(|e| e.to_string())?;'''
-          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines())
-          replace_once(path, old, new)
-          replace_once(
-              path,
-              "        let value = case\n            .values\n            .get(field_id)",
-              "        let value = render_case\n            .values\n            .get(field_id)",
-          )
+              }
 
-          # 3. Zero-touch must verify the actual written DOCX exactly like manual batch.
+              #[test]
+              fn document_render_scopes_medical_role_without_medicalizing_other_domains() {
+                  let mut case = SemanticCase::default();
+                  put(
+                      &mut case,
+                      medical_semantics::VK_MSE_PROTOCOL_NUMBER,
+                      "MSE-10",
+                  );
+
+                  let medical = case_for_document_render(&case, &crate::DomainKind::Medical, "vk_mse");
+                  let legal = case_for_document_render(&case, &crate::DomainKind::Legal, "vk_mse");
+
+                  assert_eq!(medical.get("medical.protocol_number"), Some("MSE-10"));
+                  assert_eq!(legal.get("medical.protocol_number"), None);
+                  assert_eq!(case.get("medical.protocol_number"), None);
+              }
+          }
+          ''').lstrip('\n')
+          replace_once(path, marker, marker + addition)
+
+          # Manual single render: stable document role/category, not template wording, drives aliases.
           path = 'src-tauri/src/subsystems/document_commands.rs'
+          old = dedent('''
+              let render_result = render_docx_with_assets(
+                  &app,
+                  template_snapshot.path(),
+                  &reservation.path,
+                  &hydrated.case,
+                  req.strict,
+                  permit.watermark.as_deref(),
+              );
+          ''').lstrip('\n')
+          new = dedent('''
+              let render_case = dokkomplekt_core::domains::case_for_document_render(
+                  &hydrated.case,
+                  &doc.category,
+                  &doc.role_id,
+              );
+              let render_result = render_docx_with_assets(
+                  &app,
+                  template_snapshot.path(),
+                  &reservation.path,
+                  &render_case,
+                  req.strict,
+                  permit.watermark.as_deref(),
+              );
+          ''').lstrip('\n')
+          replace_once(path, old, new)
+
+          # Manual batch render: each selected document gets its own role-scoped ephemeral case.
+          old = dedent('''
+                      if let Err(error) = render_docx_with_assets(
+                          &app,
+                          template_snapshot.path(),
+                          &reservation.path,
+                          &hydrated.case,
+                          req.strict,
+                          permit.watermark.as_deref(),
+                      ) {
+          ''').lstrip('\n')
+          new = dedent('''
+                      let render_case = dokkomplekt_core::domains::case_for_document_render(
+                          &hydrated.case,
+                          &document.category,
+                          &document.role_id,
+                      );
+                      if let Err(error) = render_docx_with_assets(
+                          &app,
+                          template_snapshot.path(),
+                          &reservation.path,
+                          &render_case,
+                          req.strict,
+                          permit.watermark.as_deref(),
+                      ) {
+          ''').lstrip('\n')
+          replace_once(path, old, new)
+
+          # Make the post-render verifier reusable by sibling zero-touch runtime.
           replace_once(
               path,
-              "fn ensure_rendered_document_complete(\n",
-              "pub(super) fn ensure_rendered_document_complete(\n",
+              'fn ensure_rendered_document_complete(\n',
+              'pub(super) fn ensure_rendered_document_complete(\n',
           )
 
+          # Zero-touch/background render: same stable role projection AND same verification of
+          # the actual generated DOCX before it can be counted/published.
           path = 'src-tauri/src/subsystems/automation_runtime.rs'
-          needle = '''                        .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
-                                  rerendered_documents = rerendered_documents.saturating_add(1);'''
-          needle = '\n'.join(line[10:] if line.startswith('          ') else line for line in needle.splitlines())
-          replacement = '''                        .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
+          old = dedent('''
+                                  render_docx_with_assets(
+                                      app,
+                                      template_snapshot.path(),
+                                      &out_path,
+                                      &hydrated.case,
+                                      true,
+                                      permit.watermark.as_deref(),
+                                  )
+                                  .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
+                                  rerendered_documents = rerendered_documents.saturating_add(1);
+          ''').lstrip('\n')
+          new = dedent('''
+                                  let render_case = dokkomplekt_core::domains::case_for_document_render(
+                                      &hydrated.case,
+                                      &doc.category,
+                                      &doc.role_id,
+                                  );
+                                  render_docx_with_assets(
+                                      app,
+                                      template_snapshot.path(),
+                                      &out_path,
+                                      &render_case,
+                                      true,
+                                      permit.watermark.as_deref(),
+                                  )
+                                  .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
                                   super::document_commands::ensure_rendered_document_complete(
                                       doc,
                                       &template_text,
                                       &hydrated.case,
                                       &out_path,
                                   )?;
-                                  rerendered_documents = rerendered_documents.saturating_add(1);'''
-          replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement.splitlines())
-          replace_once(path, needle, replacement)
+                                  rerendered_documents = rerendered_documents.saturating_add(1);
+          ''').lstrip('\n')
+          replace_once(path, old, new)
 
-          # 4. Persist the profession-neutral user output root.
+          # Persist the profession-neutral output root as a user preference.
           path = 'src/lib/appSupport.ts'
           replace_once(
               path,
@@ -168,7 +212,8 @@ jobs:
               "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\nexport const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';\n",
           )
           marker = 'export function loadOutputFolderParts(): FolderNamePartDto[] {'
-          helper = '''export function loadOutputRoot(): string {
+          helper = dedent('''
+          export function loadOutputRoot(): string {
             try {
               const value = localStorage.getItem(OUTPUT_ROOT_KEY)?.trim();
               if (value) return value;
@@ -182,35 +227,35 @@ jobs:
             try { localStorage.setItem(OUTPUT_ROOT_KEY, normalized); } catch { /* storage may be unavailable */ }
           }
 
-          '''
-          helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines()) + '\n'
+          ''').lstrip('\n')
           replace_once(path, marker, helper + marker)
 
           path = 'src/App.tsx'
           replace_once(
               path,
-              "  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,\n",
-              "  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,\n",
+              '  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,\n',
+              '  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,\n',
           )
           replace_once(
               path,
-              "  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,\n",
-              "  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,\n",
+              '  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,\n',
+              '  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,\n',
           )
           replace_once(
               path,
               "  const [outputRoot, setOutputRoot] = useState('output/Готовые документы');\n",
-              "  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);\n",
+              '  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);\n',
           )
-          marker = '''  useEffect(() => {
-              void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {'''
-          marker = '\n'.join(line[10:] if line.startswith('          ') else line for line in marker.splitlines())
-          insertion = '''  useEffect(() => {
+          marker = dedent('''
+            useEffect(() => {
+              void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {
+          ''').lstrip('\n')
+          insertion = dedent('''
+            useEffect(() => {
               saveOutputRoot(outputRoot);
             }, [outputRoot]);
 
-          '''
-          insertion = '\n'.join(line[10:] if line.startswith('          ') else line for line in insertion.splitlines()) + '\n'
+          ''').lstrip('\n')
           replace_once(path, marker, insertion + marker)
 
           path = 'src/lib/appSupport.selection.test.ts'
@@ -220,11 +265,11 @@ jobs:
               "import { loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';\n",
           )
           marker = "describe('default document selection', () => {"
-          output_tests = '''describe('output root persistence', () => {
+          tests = dedent('''
+          describe('output root persistence', () => {
             it('remembers the user-selected generic output folder across restarts', () => {
               localStorage.removeItem(OUTPUT_ROOT_KEY);
               expect(loadOutputRoot()).toBe('output/Готовые документы');
-
               saveOutputRoot('  D:/Работа/Готовые документы  ');
               expect(loadOutputRoot()).toBe('D:/Работа/Готовые документы');
             });
@@ -236,28 +281,28 @@ jobs:
             });
           });
 
-          '''
-          output_tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in output_tests.splitlines()) + '\n'
-          replace_once(path, marker, output_tests + marker)
+          ''').lstrip('\n')
+          replace_once(path, marker, tests + marker)
           PY
 
           cargo fmt --all
           rm .github/workflows/deep-donor-parity-fix-once.yml
 
       - name: Targeted Rust regression
-        run: cargo test -p dokkomplekt-core medical_semantics
+        run: cargo test -p dokkomplekt-core document_render_scopes_medical_role_without_medicalizing_other_domains
       - name: Targeted UI regression
         run: |
           npm ci
           npx vitest run --config vitest.config.ts src/lib/appSupport.selection.test.ts
+      - name: Compile Tauri runtime paths
+        run: cargo check -p dokkomplekt-tauri
       - name: Commit audited fixes and remove one-shot workflow
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/dokkomplekt-core/src/domains/medical_semantics.rs \
-                  src-tauri/src/subsystems/desktop_io.rs \
+          git add crates/dokkomplekt-core/src/domains/mod.rs \
                   src-tauri/src/subsystems/document_commands.rs \
                   src-tauri/src/subsystems/automation_runtime.rs \
                   src/lib/appSupport.ts src/lib/appSupport.selection.test.ts src/App.tsx \

@@ -474,13 +474,13 @@ fn medical_diary_semantic_compatible(candidate: &str, target: &str) -> bool {
 
     // Severity is clinically meaningful. If both sides state it explicitly,
     // contradictory severities are never treated as compatible.
-    match (
-        medical_diary_severity(&candidate),
-        medical_diary_severity(&target),
-    ) {
-        (Some(left), Some(right)) if left != right => false,
-        _ => true,
-    }
+    !matches!(
+        (
+            medical_diary_severity(&candidate),
+            medical_diary_severity(&target),
+        ),
+        (Some(left), Some(right)) if left != right
+    )
 }
 
 fn medical_diary_semantic_markers(value: &str) -> Vec<&'static str> {

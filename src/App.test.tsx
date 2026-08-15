@@ -76,6 +76,9 @@ describe('App', () => {
     const calls = installTemplateMock(true);
     render(<App />);
     await selectTemplateAndCreateButton();
+    const inferenceConfirm = await screen.findByRole('button', { name: 'Найти и разметить' });
+    expect(inferenceConfirm).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Акт выполненных работ' })).toBeTruthy());
     expect(calls).toContain('pick_template_files');
     expect(calls).toContain('confirm_template_setup');

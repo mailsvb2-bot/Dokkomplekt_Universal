@@ -30,13 +30,16 @@ pub fn infer_legacy_template_fields(
     role_id: Option<&str>,
 ) -> Vec<LegacyTemplateFieldCandidate> {
     let lines = text.lines().map(str::trim_end).collect::<Vec<_>>();
-    let target_counts = lines.iter().fold(BTreeMap::<String, usize>::new(), |mut counts, line| {
-        let normalized = line.trim().to_string();
-        if !normalized.is_empty() {
-            *counts.entry(normalized).or_default() += 1;
-        }
-        counts
-    });
+    let target_counts =
+        lines
+            .iter()
+            .fold(BTreeMap::<String, usize>::new(), |mut counts, line| {
+                let normalized = line.trim().to_string();
+                if !normalized.is_empty() {
+                    *counts.entry(normalized).or_default() += 1;
+                }
+                counts
+            });
 
     let mut candidates = Vec::new();
     for (line_index, raw_line) in lines.iter().enumerate() {
@@ -80,7 +83,10 @@ pub fn infer_legacy_template_fields(
             continue;
         }
         let previous = lines[previous_index].trim();
-        if previous.contains("{{") || previous.contains("}}") || find_explicit_blank(previous).is_some() {
+        if previous.contains("{{")
+            || previous.contains("}}")
+            || find_explicit_blank(previous).is_some()
+        {
             continue;
         }
         let label = clean_label(previous);
@@ -236,7 +242,8 @@ mod tests {
     #[test]
     fn infers_safe_same_line_generic_and_medical_fields() {
         let text = "Первичный осмотр\nФ.И.О. ____________________\nДиагноз: ____________";
-        let fields = infer_legacy_template_fields(text, Some(&DomainKind::Medical), Some("primary"));
+        let fields =
+            infer_legacy_template_fields(text, Some(&DomainKind::Medical), Some("primary"));
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].field_id, "subject.name");
         assert_eq!(fields[1].field_id, "medical.diagnosis");
@@ -258,8 +265,10 @@ mod tests {
             Some(&DomainKind::Legal),
             Some("unknown"),
         );
-        assert_eq!(legal.len(), 1);
-        assert_ne!(legal[0].field_id, "medical.position");
+        assert!(
+            legal.is_empty(),
+            "a label that belongs to other domains must remain unresolved in Legal"
+        );
     }
 
     #[test]

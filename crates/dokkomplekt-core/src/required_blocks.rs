@@ -104,29 +104,56 @@ const MEDICAL_SIGNER_ROLE_HINTS: &[&str] = &[
 ];
 
 const NARRATIVE_SIGNATURE_TERMS: &[&str] = &[
+    "осмотр",
     "осмотрел",
     "осмотрела",
+    "осмотрели",
+    "осматривал",
+    "осматривала",
+    "осматривали",
     "осмотрен",
     "осмотрена",
     "наблюдал",
     "наблюдала",
+    "наблюдали",
     "наблюдение",
     "назначил",
     "назначила",
+    "назначили",
     "рекомендовал",
     "рекомендовала",
+    "рекомендовали",
     "провел",
     "провёл",
     "провела",
+    "провели",
     "лечил",
     "лечила",
+    "лечили",
     "продолжил",
     "продолжила",
+    "продолжили",
+    "участвовал",
+    "участвовала",
+    "участвовали",
     "пациент",
     "пациента",
     "пациентка",
     "пациентки",
     "состояние",
+];
+
+const NON_SIGNER_FILLER_WORDS: &[&str] = &[
+    "и",
+    "с",
+    "со",
+    "совместно",
+    "при",
+    "участии",
+    "вместе",
+    "члены",
+    "членов",
+    "комиссии",
 ];
 
 /// Mandatory composite blocks for a configured document.
@@ -314,27 +341,29 @@ fn contains_signature_line(rendered_text: &str, labels: &[String]) -> bool {
 }
 
 fn looks_like_structured_signer_line(normalized: &str, labels: &[String]) -> bool {
-    let signer_role_count = MEDICAL_SIGNER_ROLE_HINTS
-        .iter()
-        .filter(|label| normalized.contains(**label))
-        .count();
-    if signer_role_count >= 2 && normalized.split_whitespace().count() >= 5 {
-        return true;
-    }
+    labels.iter().any(|requested_label| {
+        let label = requested_label.to_lowercase();
+        let Some(start) = normalized.find(&label) else {
+            return false;
+        };
+        let rest = &normalized[start + label.len()..];
+        let next_role = MEDICAL_SIGNER_ROLE_HINTS
+            .iter()
+            .filter_map(|hint| rest.find(hint))
+            .min()
+            .unwrap_or(rest.len());
+        plausible_signer_name(&rest[..next_role])
+    })
+}
 
-    let Some(label) = labels
-        .iter()
-        .map(|label| label.to_lowercase())
-        .find(|label| normalized.starts_with(label))
-    else {
-        return false;
-    };
-    let Some(rest) = normalized.strip_prefix(&label) else {
-        return false;
-    };
-    let signer = rest.trim_start_matches(|character: char| {
+fn plausible_signer_name(value: &str) -> bool {
+    let signer = value.trim_start_matches(|character: char| {
         character.is_whitespace()
             || matches!(character, ':' | '-' | '–' | '—' | '.' | '/' | '\\' | '|')
+    });
+    let signer = signer.trim_end_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
     });
     if signer.is_empty() {
         return false;
@@ -344,10 +373,21 @@ fn looks_like_structured_signer_line(normalized: &str, labels: &[String]) -> boo
     if words.len() > 4 {
         return false;
     }
-    !words.iter().any(|word| {
-        let normalized_word = word.trim_matches(|character: char| !character.is_alphabetic());
-        NARRATIVE_SIGNATURE_TERMS.contains(&normalized_word)
-    })
+    let normalized_words = words
+        .iter()
+        .map(|word| word.trim_matches(|character: char| !character.is_alphabetic()))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if normalized_words.is_empty()
+        || normalized_words
+            .iter()
+            .all(|word| NON_SIGNER_FILLER_WORDS.contains(word))
+    {
+        return false;
+    }
+    !normalized_words
+        .iter()
+        .any(|word| NARRATIVE_SIGNATURE_TERMS.contains(word))
 }
 
 #[cfg(test)]
@@ -572,6 +612,23 @@ mod tests {
         assert!(unmet
             .iter()
             .any(|title| title == "Подпись заведующего отделением"));
+    }
+
+    #[test]
+    fn combined_narrative_roles_are_not_mistaken_for_signatures() {
+        let deputy = vec![
+            "заместитель главного врача".to_string(),
+            "зам. главного врача".to_string(),
+            "зам главного врача".to_string(),
+        ];
+        let head = vec![
+            "заведующий отделением".to_string(),
+            "зав. отделением".to_string(),
+        ];
+        let narrative =
+            "Зам. главного врача и заведующий отделением осмотрели пациента совместно.";
+        assert!(!contains_signature_line(narrative, &deputy));
+        assert!(!contains_signature_line(narrative, &head));
     }
 
     #[test]

@@ -67,10 +67,29 @@ jobs:
           test ! -e scripts/apply_donor_parity_fix_once.py
           test ! -e .github/workflows/deep-donor-parity-fix-once.yml
 
-      - name: Commit audited fixes
+      - name: Commit audited fixes on latest branch head
+        env:
+          BRANCH: fix/medical-diary-source-parity-20260815
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "fix: preserve donor document completion contracts"
-          git push origin HEAD:fix/medical-diary-source-parity-20260815
+
+          # Source Provenance may have advanced the PR branch while the long
+          # regression suite was running. Preserve that fast-forward history
+          # instead of force-pushing over it, then rebuild the manifest against
+          # the actual rebased tree.
+          git fetch origin "${BRANCH}"
+          remote_head="$(git rev-parse FETCH_HEAD)"
+          if [ "${remote_head}" != "$(git rev-parse HEAD^)" ]; then
+            git rebase -X theirs "${remote_head}"
+          fi
+
+          python scripts/verify_source_manifest.py --candidate SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
+          git diff HEAD^ --check
+          git push origin "HEAD:${BRANCH}"

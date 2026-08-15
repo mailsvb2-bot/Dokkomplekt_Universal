@@ -449,14 +449,20 @@ mod tests {
         for (role_id, expected_count) in expected {
             let role = MedicalDocumentRole::from_role_id(role_id);
             let plan = build_medical_render_plan(role, false, false);
-            assert!(plan.output_sections.iter().any(|section| section == "signatures"));
+            assert!(plan
+                .output_sections
+                .iter()
+                .any(|section| section == "signatures"));
 
             let blocks = required_blocks_for(&spec(role_id, DomainKind::Medical), "");
             let actual = blocks
                 .iter()
                 .filter(|block| matches!(block.requirement, BlockRequirement::SignatureLine(_)))
                 .count();
-            assert_eq!(actual, expected_count, "{role_id}: signature contract drift");
+            assert_eq!(
+                actual, expected_count,
+                "{role_id}: signature contract drift"
+            );
         }
     }
 

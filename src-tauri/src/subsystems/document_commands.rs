@@ -1264,11 +1264,16 @@ fn render_docx(
             return Err(error);
         }
     };
+    let render_case = dokkomplekt_core::domains::case_for_document_render(
+        &hydrated.case,
+        &doc.category,
+        &doc.role_id,
+    );
     let render_result = render_docx_with_assets(
         &app,
         template_snapshot.path(),
         &reservation.path,
-        &hydrated.case,
+        &render_case,
         req.strict,
         permit.watermark.as_deref(),
     );
@@ -1283,7 +1288,7 @@ fn render_docx(
     if let Err(error) = ensure_rendered_document_complete(
         &doc,
         &template_text,
-        &hydrated.case,
+        &render_case,
         &reservation.path,
     ) {
         let _ = std::fs::remove_file(&reservation.path);
@@ -1475,11 +1480,16 @@ fn render_docx_batch(
                 extension
             ));
             let reservation = UniqueFileReservation::acquire(&desired_name)?;
+            let render_case = dokkomplekt_core::domains::case_for_document_render(
+                &hydrated.case,
+                &document.category,
+                &document.role_id,
+            );
             if let Err(error) = render_docx_with_assets(
                 &app,
                 template_snapshot.path(),
                 &reservation.path,
-                &hydrated.case,
+                &render_case,
                 req.strict,
                 permit.watermark.as_deref(),
             ) {
@@ -1488,7 +1498,7 @@ fn render_docx_batch(
             if let Err(error) = ensure_rendered_document_complete(
                 document,
                 &template_text,
-                &hydrated.case,
+                &render_case,
                 &reservation.path,
             ) {
                 let _ = std::fs::remove_file(&reservation.path);

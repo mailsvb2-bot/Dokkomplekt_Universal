@@ -25,10 +25,10 @@ import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, createdPrintItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
-  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
-  replaceAllLiteral, shouldSelectDocumentByDefault, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
+  arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,
+  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
 
@@ -96,7 +96,7 @@ function AppContent() {
   const [seriesSkipWeekends, setSeriesSkipWeekends] = useState(false);
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
-  const [outputRoot, setOutputRoot] = useState('output/Готовые документы');
+  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
@@ -111,7 +111,7 @@ function AppContent() {
         if (!alive) return;
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
-          setSelectedDocIds(res.pack.documents.filter(shouldSelectDocumentByDefault).map((document) => document.id));
+          setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
           setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
         } else if (res?.has_user_buttons === false) {
           setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');
@@ -133,6 +133,10 @@ function AppContent() {
       .catch(() => { /* browser/tests */ });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    saveOutputRoot(outputRoot);
+  }, [outputRoot]);
 
   useEffect(() => {
     void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {
@@ -1141,7 +1145,7 @@ function AppContent() {
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
     if (!pack) return;
     setDocuments(pack.documents);
-    setSelectedDocIds(pack.documents.map((document) => document.id));
+    setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]);
@@ -1235,7 +1239,7 @@ function AppContent() {
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));
-    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(res.pack.documents.map((document) => document.id)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`); }
+    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`); }
   }
   async function checkAccess() {
     const res = await run('validate_product_access', () => validateProductAccess(null));

@@ -29,6 +29,7 @@ export type AnalyzeTemplateResponse = {
   document: DocumentTemplateSpec;
   analysis_json: unknown;
   core_pipeline_json?: unknown;
+  extracted_text: string;
 };
 
 
@@ -94,8 +95,8 @@ export async function registerLearnedTemplate(documentId: string, buttonLabel: s
   return callRust('register_learned_template', { req: { document_id: documentId, button_label: buttonLabel, template_path: templatePath } });
 }
 
-export async function confirmTemplateSetup(rows: TemplateConfirmationRowDto[]): Promise<DocumentPack> {
-  return callRust('confirm_template_setup', { req: { rows } });
+export async function confirmTemplateSetup(rows: TemplateConfirmationRowDto[], autoInferStaticTemplates = false): Promise<DocumentPack> {
+  return callRust('confirm_template_setup', { req: { rows, auto_infer_static_templates: autoInferStaticTemplates } });
 }
 
 export async function renameDocumentButton(documentId: string, buttonLabel: string): Promise<DocumentPack> {

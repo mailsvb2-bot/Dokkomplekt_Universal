@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
-  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
+  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
-  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
+  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
@@ -23,6 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight } from './hooks/useGenerationPreflight';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
+import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
@@ -78,6 +79,7 @@ function AppContent() {
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
+  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(false);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
   const [icdQuery, setIcdQuery] = useState('');
@@ -102,6 +104,18 @@ function AppContent() {
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
   const [guidedScanner, setGuidedScanner] = useState<GuidedScannerState | null>(null);
+
+  const { markupPendingTemplate, learnPendingTemplateFromExamples } = createPendingTemplateIntelligenceHandlers({
+  pendingTemplates,
+  setPendingTemplates,
+  importedTemplatePath,
+  setImportedTemplatePath,
+  templateText,
+  setTemplateText,
+  setStatus,
+  run,
+  confirm: dialogs.confirm,
+});
 
   useEffect(() => {
     let alive = true;
@@ -737,6 +751,7 @@ function AppContent() {
   }
 
   async function openTemplateSetup() {
+    setAutoInferStaticTemplates(false);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -784,6 +799,7 @@ function AppContent() {
   }
 
   function openTextTemplateSetup() {
+    setAutoInferStaticTemplates(false);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -843,46 +859,6 @@ function AppContent() {
     setPendingTemplates((previous) => previous.map((item) => (
       item.document_id === documentId ? { ...item, popup_fields: fields } : item
     )));
-  }
-
-  async function markupPendingTemplate(
-    documentId: string,
-    selectedText: string,
-    fieldId: string,
-    action: 'replace' | 'insert_after',
-  ) {
-    const current = pendingTemplates.find((item) => item.document_id === documentId);
-    const value = selectedText.trim();
-    const normalizedField = fieldId.trim();
-    if (!current || !value || !normalizedField) {
-      setStatus('Выделите значение в шаблоне и укажите смысловое поле.');
-      return;
-    }
-    const outputPath = cursorMarkedTemplatePath(current.template_path, documentId);
-    const report = await run('apply_template_markup_command', () => applyTemplateMarkup(
-      current.template_path,
-      outputPath,
-      [{ field_id: normalizedField, value, action }],
-    ));
-    if (!report) return;
-    if (!report.replaced_occurrences) {
-      setStatus('Выделенный фрагмент не найден в видимом тексте DOCX/DOCM. Исходный шаблон не изменён.');
-      return;
-    }
-    const placeholder = `{{${normalizedField}}}`;
-    const visibleReplacement = action === 'replace' ? placeholder : `${value}${placeholder}`;
-    setPendingTemplates((previous) => previous.map((item) => item.document_id === documentId
-      ? {
-          ...item,
-          template_path: report.output_path,
-          extracted_text: replaceAllLiteral(item.extracted_text, value, visibleReplacement),
-        }
-      : item));
-    if (importedTemplatePath === current.template_path) setImportedTemplatePath(report.output_path);
-    if (templateText === current.extracted_text) {
-      setTemplateText(replaceAllLiteral(templateText, value, visibleReplacement));
-    }
-    setStatus(`Шаблон размечен. Обновлено мест: ${report.replaced_occurrences}. Исходный файл сохранён.`);
   }
 
   async function startGuidedSourceScanner(preselectedFieldId = '') {
@@ -1137,12 +1113,14 @@ function AppContent() {
 
     const rows = await run('prepare_template_setup', () => prepareTemplateSetup(candidates));
     if (!rows) return;
-    const staticRows = rows.filter((row) => row.is_static_copy);
-    if (staticRows.length) {
-      setStatus(`Кнопки будут созданы. Шаблоны без полей будут копироваться без изменений: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
-    }
     const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);
-    const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
+    const staticRows = confirmedRows.filter((row) => row.is_static_copy);
+    if (staticRows.length) {
+      setStatus(autoInferStaticTemplates
+        ? `Безопасная авторазметка включена для ${staticRows.length} статического шаблона(ов): изменяться будут только производные копии с однозначными пустыми зонами.`
+        : `Кнопки будут созданы сразу. Неразмеченные шаблоны останутся точными статическими копиями: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
+    }
+    const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows, autoInferStaticTemplates));
     if (!pack) return;
     setDocuments(pack.documents);
     setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
@@ -1151,6 +1129,7 @@ function AppContent() {
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setDraftDomainOverride(null);
+    setAutoInferStaticTemplates(false);
     setSetupOpen(false);
     setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
   }
@@ -1462,14 +1441,17 @@ function AppContent() {
           pendingTemplates={pendingTemplates}
           draftPopupFields={draftPopupFields}
           draftDomainOverride={draftDomainOverride}
+          autoInferStaticTemplates={autoInferStaticTemplates}
           onTemplateTextChange={setTemplateText}
           onButtonLabelChange={setButtonLabel}
           onDraftPopupFieldsChange={setDraftPopupFields}
           onDraftDomainOverrideChange={setDraftDomainOverride}
+          onAutoInferStaticTemplatesChange={setAutoInferStaticTemplates}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
           onPendingTemplateDomainChange={(documentId, value) => setPendingTemplates((previous) => withPendingTemplateDomain(previous, documentId, value))}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
+          onLearnPendingTemplate={learnPendingTemplateFromExamples}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}
           onAnalyze={analyzeInDialog}
           onPickFile={pickTemplateFile}

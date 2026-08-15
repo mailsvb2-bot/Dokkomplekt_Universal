@@ -51,6 +51,7 @@ struct AnalyzeTemplateResponse {
     document: DocumentTemplateSpec,
     analysis_json: serde_json::Value,
     core_pipeline_json: serde_json::Value,
+    extracted_text: String,
 }
 
 #[tauri::command]
@@ -116,6 +117,7 @@ fn analyze_template_from_text(
         document: spec,
         analysis_json: serde_json::to_value(analysis).map_err(|e| e.to_string())?,
         core_pipeline_json: serde_json::to_value(core_pipeline).map_err(|e| e.to_string())?,
+        extracted_text: template_text.to_string(),
     })
 }
 
@@ -499,6 +501,8 @@ fn register_learned_template(
 #[derive(Debug, Deserialize)]
 struct ConfirmTemplatesRequest {
     rows: Vec<TemplateConfirmationRow>,
+    #[serde(default)]
+    auto_infer_static_templates: bool,
 }
 
 #[tauri::command]
@@ -517,9 +521,19 @@ fn confirm_template_setup(
     {
         return Err("У каждого шаблона должно быть название кнопки.".into());
     }
-    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &req.rows).pack;
-    let template_snapshots = req
-        .rows
+
+    let requested_rows = req.rows;
+    let (rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
+        infer_static_template_rows(&app, &requested_rows)?
+    } else {
+        (
+            requested_rows,
+            None,
+            LegacyTemplateInferenceSummary::default(),
+        )
+    };
+    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
+    let template_snapshots = rows
         .iter()
         .map(|row| {
             template_snapshot::TemplateSnapshot::capture(
@@ -530,8 +544,8 @@ fn confirm_template_setup(
             .map(|snapshot| (row.document_id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let mut drafts = Vec::with_capacity(req.rows.len());
-    for row in &req.rows {
+    let mut drafts = Vec::with_capacity(rows.len());
+    for row in &rows {
         let snapshot = template_snapshots
             .get(&row.document_id)
             .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
@@ -549,7 +563,12 @@ fn confirm_template_setup(
             .documents
             .iter_mut()
             .find(|document| document.id == draft.document_id)
-            .ok_or_else(|| format!("Не найден документ {} для привязки опубликованной версии.", draft.document_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "Не найден документ {} для привязки опубликованной версии.",
+                    draft.document_id
+                )
+            })?;
         document.template_path = draft.template_path.clone();
     }
     let (result, _) = publish_pack_with_template_versions(&app, &state, &drafts, |pack| {

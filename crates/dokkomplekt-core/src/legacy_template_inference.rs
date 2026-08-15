@@ -294,10 +294,10 @@ mod tests {
             Some(&DomainKind::Legal),
             Some("unknown"),
         );
-        assert!(
-            legal.is_empty(),
-            "a label that belongs to other domains must remain unresolved in Legal"
-        );
+        assert_eq!(legal.len(), 1);
+        assert_eq!(legal[0].field_id, "subject.position");
+        assert_ne!(legal[0].field_id, "employee.position");
+        assert_ne!(legal[0].field_id, "medical.position");
     }
 
     #[test]

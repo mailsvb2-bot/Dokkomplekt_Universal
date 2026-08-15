@@ -11,7 +11,7 @@ jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
@@ -45,7 +45,6 @@ jobs:
               if n != 1: raise SystemExit(f'{path}: regex matches={n}: {pattern[:90]!r}')
               p.write_text(out,encoding='utf-8')
 
-          # Domain boundary: only a Medical document receives medical legacy compatibility.
           path='crates/dokkomplekt-core/src/domains/mod.rs'
           marker='pub mod medical_semantics;\n'
           addition=dedent('''
@@ -87,7 +86,6 @@ jobs:
           replace_once(path,marker,marker+addition)
 
           path='src-tauri/src/subsystems/document_commands.rs'
-          # Manual single-document publication: stable saved button role/category is source of truth.
           pattern=r'''(?m)^(?P<i>\s*)let render_result = render_docx_with_assets\(\n(?P=i)    &app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &reservation\.path,\n(?P=i)    &hydrated\.case,\n(?P=i)    req\.strict,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\);'''
           def single(m):
               i=m.group('i')
@@ -99,7 +97,6 @@ jobs:
           if n != 1: raise SystemExit(f'{path}: single seam matches={n}')
           p.write_text(out,encoding='utf-8')
 
-          # Batch: each selected document gets an independent role-scoped render view.
           pattern=r'''(?m)^(?P<i>\s*)if let Err\(error\) = render_docx_with_assets\(\n(?P=i)    &app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &reservation\.path,\n(?P=i)    &hydrated\.case,\n(?P=i)    req\.strict,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\) \{'''
           def batch(m):
               i=m.group('i')
@@ -112,7 +109,6 @@ jobs:
           p.write_text(out,encoding='utf-8')
           sub_once(path,r'(?m)^fn ensure_rendered_document_complete\(','pub(super) fn ensure_rendered_document_complete(')
 
-          # Zero-touch: same role projection + same post-render validation of the actual DOCX.
           path='src-tauri/src/subsystems/automation_runtime.rs'
           pattern=r'''(?m)^(?P<i>\s*)render_docx_with_assets\(\n(?P=i)    app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &out_path,\n(?P=i)    &hydrated\.case,\n(?P=i)    true,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\)\n(?P=i)\.map_err\(\|e\| format!\("Не создан «\{\}»: \{e\}", doc\.button_label\)\)\?;\n(?P=i)rerendered_documents = rerendered_documents\.saturating_add\(1\);'''
           def zero(m):
@@ -129,7 +125,6 @@ jobs:
           if n != 1: raise SystemExit(f'{path}: zero-touch seam matches={n}')
           p.write_text(out,encoding='utf-8')
 
-          # Generic output root is a remembered user preference, not a medical setting.
           path='src/lib/appSupport.ts'
           replace_once(path,"export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\n",
               "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\nexport const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';\n")
@@ -189,6 +184,10 @@ jobs:
         run: |
           npm ci
           npx vitest run --config vitest.config.ts src/lib/appSupport.selection.test.ts
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Compile Tauri runtime paths
         run: cargo check -p dokkomplekt-tauri
       - name: Commit audited fixes

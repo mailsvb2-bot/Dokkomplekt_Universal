@@ -7,15 +7,15 @@
 //! character boundaries of the source text.
 
 /// Returns the byte offset in `raw_line` immediately after a case-insensitive
-/// label match.
+/// label match. The match must start and end on non-alphanumeric boundaries.
 ///
-/// A label must start either at the beginning of a logical line/cell (ignoring
-/// whitespace) or immediately after a structural separator. Merely finding a
-/// word boundary inside narrative prose is not enough: e.g. `За время лечения`
-/// must not be interpreted as the explicit field label `Лечение`. This rule is
-/// profession-neutral and protects every domain from substring-like provenance
-/// mistakes while still allowing compact forms such as
-/// `Исполнитель: ООО Ромашка. Заказчик: ООО Север`.
+/// Most dictionary labels intentionally support inline/contextual forms such as
+/// `Счёт № 148 от 21.02.2026`, `05.03.1980 г.р.` or
+/// `работает в должности врача`. Tightening every label to line/cell starts
+/// breaks those contracts. A very small policy table below is therefore used
+/// only for bare labels that are known to be ambiguous in narrative prose.
+/// Such labels additionally require structural provenance: line/cell start or
+/// a separator before the label.
 ///
 /// The returned offset is always a valid UTF-8 character boundary in
 /// `raw_line`, even when Unicode lowercasing expands a character.
@@ -53,7 +53,8 @@ pub(crate) fn find_label_end(raw_line: &str, label: &str) -> Option<usize> {
             let start_original = original_boundary(start, &char_ends);
             let end_original = original_boundary(end, &char_ends);
             if let (Some(start_original), Some(end_original)) = (start_original, end_original) {
-                if has_structural_label_prefix(raw_line, start_original) {
+                let structural_required = requires_structural_provenance(&label_lower);
+                if !structural_required || has_structural_label_prefix(raw_line, start_original) {
                     return Some(end_original);
                 }
             }
@@ -79,9 +80,22 @@ fn original_boundary(lowered_boundary: usize, char_ends: &[(usize, usize)]) -> O
         .map(|index| char_ends[index].1)
 }
 
+/// Bare labels in this list are semantically useful as section headings but
+/// common enough in prose that a word-boundary match alone is unsafe evidence.
+/// Keep this list deliberately small: contextual aliases must retain their
+/// historical inline matching semantics.
+fn requires_structural_provenance(label_lower: &str) -> bool {
+    matches!(label_lower.trim(), "лечение")
+}
+
 fn has_structural_label_prefix(raw_line: &str, label_start: usize) -> bool {
-    let prefix = raw_line.get(..label_start).unwrap_or_default().trim_end();
-    let Some(last) = prefix.chars().next_back() else {
+    let prefix = raw_line.get(..label_start).unwrap_or_default();
+    if prefix.trim().is_empty() || prefix.ends_with('\t') {
+        return true;
+    }
+
+    let trimmed = prefix.trim_end_matches([' ', '\u{00A0}']);
+    let Some(last) = trimmed.chars().next_back() else {
         return true;
     };
     matches!(
@@ -110,7 +124,7 @@ mod tests {
 
     #[test]
     fn maps_lowercase_expansion_back_to_original_utf8_boundary() {
-        let line = "İ — Дата: 12.05.2026";
+        let line = "İİİ дата: 12.05.2026";
         let end = find_label_end(line, "дата").expect("label");
         assert_eq!(&line[end..], ": 12.05.2026");
         assert!(line.is_char_boundary(end));
@@ -123,19 +137,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_narrative_word_boundary_as_field_provenance() {
+    fn rejects_bare_treatment_inside_narrative_prose() {
         assert_eq!(
-            find_label_end("За время лечения состояние улучшилось", "лечение"),
+            find_label_end("Пациент продолжает лечение амбулаторно", "лечение"),
             None
         );
         assert_eq!(
-            find_label_end("Пациент находится на лечении амбулаторно", "лечение"),
+            find_label_end(
+                "Во время госпитализации лечение проводилось по схеме",
+                "лечение"
+            ),
             None
         );
     }
 
     #[test]
-    fn accepts_explicit_label_at_line_or_cell_start() {
+    fn accepts_explicit_treatment_label_at_line_or_cell_start() {
         let line = "  Лечение терапия, режим";
         let end = find_label_end(line, "лечение").expect("label");
         assert_eq!(&line[end..], " терапия, режим");
@@ -143,6 +160,17 @@ mod tests {
         let line = "Сведения — Лечение: терапия";
         let end = find_label_end(line, "лечение").expect("label after separator");
         assert_eq!(&line[end..], ": терапия");
+
+        let line = "Сведения\tЛечение: терапия";
+        let end = find_label_end(line, "лечение").expect("label after cell separator");
+        assert_eq!(&line[end..], ": терапия");
+    }
+
+    #[test]
+    fn preserves_contextual_inline_labels() {
+        assert!(find_label_end("Счёт № 148 от 21.02.2026", "от").is_some());
+        assert!(find_label_end("05.03.1980 г.р.", "г.р").is_some());
+        assert!(find_label_end("работает в должности врача-терапевта", "в должности").is_some());
     }
 
     #[test]

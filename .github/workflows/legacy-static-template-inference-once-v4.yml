@@ -1,4 +1,4 @@
-name: Legacy static template integration v4 (one-shot)
+name: Legacy static template integration v5 (one-shot)
 
 on:
   push:
@@ -74,6 +74,141 @@ jobs:
               subprocess.run(['bash', str(script)], check=True)
           PY
 
+      - name: Make static inference explicit and non-blocking
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app_path = Path('src/App.tsx')
+          text = app_path.read_text(encoding='utf-8')
+
+          state_anchor = "  const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);\n"
+          if 'const [autoInferStaticTemplates, setAutoInferStaticTemplates]' not in text:
+              if state_anchor not in text:
+                  raise SystemExit('template inference state anchor not found')
+              text = text.replace(
+                  state_anchor,
+                  state_anchor + "  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(false);\n",
+                  1,
+              )
+
+          for marker in (
+              "  async function openTemplateSetup() {\n",
+              "  function openTextTemplateSetup() {\n",
+          ):
+              pos = text.find(marker)
+              if pos < 0:
+                  raise SystemExit(f'missing setup marker: {marker.strip()}')
+              insert = pos + len(marker)
+              if not text[insert:insert + 120].lstrip().startswith('setAutoInferStaticTemplates(false);'):
+                  text = text[:insert] + "    setAutoInferStaticTemplates(false);\n" + text[insert:]
+
+          old_start = "    const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);\n    const staticRows = confirmedRows.filter((row) => row.is_static_copy);\n    let autoInferStaticTemplates = false;\n"
+          start = text.find(old_start)
+          if start < 0:
+              raise SystemExit('generated static inference block start not found')
+          end_marker = "    const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows, autoInferStaticTemplates));"
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit('generated static inference block end not found')
+          end += len(end_marker)
+          replacement = """    const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);
+    const staticRows = confirmedRows.filter((row) => row.is_static_copy);
+    if (staticRows.length) {
+      setStatus(autoInferStaticTemplates
+        ? `Безопасная авторазметка включена для ${staticRows.length} статического шаблона(ов): изменяться будут только производные копии с однозначными пустыми зонами.`
+        : `Кнопки будут созданы сразу. Неразмеченные шаблоны останутся точными статическими копиями: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
+    }
+    const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows, autoInferStaticTemplates));"""
+          text = text[:start] + replacement + text[end:]
+
+          success_anchor = "    setDraftDomainOverride(null);\n    setSetupOpen(false);\n    setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);\n"
+          if success_anchor in text and 'setAutoInferStaticTemplates(false);\n    setSetupOpen(false);\n    setStatus(`Кнопки созданы:' not in text:
+              text = text.replace(
+                  success_anchor,
+                  "    setDraftDomainOverride(null);\n    setAutoInferStaticTemplates(false);\n    setSetupOpen(false);\n    setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);\n",
+                  1,
+              )
+
+          prop_anchor = "          draftDomainOverride={draftDomainOverride}\n"
+          if 'autoInferStaticTemplates={autoInferStaticTemplates}' not in text:
+              if prop_anchor not in text:
+                  raise SystemExit('TemplateSetupModal inference prop anchor not found')
+              text = text.replace(
+                  prop_anchor,
+                  prop_anchor + "          autoInferStaticTemplates={autoInferStaticTemplates}\n",
+                  1,
+              )
+          callback_anchor = "          onDraftDomainOverrideChange={setDraftDomainOverride}\n"
+          if 'onAutoInferStaticTemplatesChange={setAutoInferStaticTemplates}' not in text:
+              if callback_anchor not in text:
+                  raise SystemExit('TemplateSetupModal inference callback anchor not found')
+              text = text.replace(
+                  callback_anchor,
+                  callback_anchor + "          onAutoInferStaticTemplatesChange={setAutoInferStaticTemplates}\n",
+                  1,
+              )
+          app_path.write_text(text, encoding='utf-8')
+
+          modal_path = Path('src/components/TemplateSetupModal.tsx')
+          text = modal_path.read_text(encoding='utf-8')
+          prop_anchor = "  draftDomainOverride?: DomainKind | null;\n"
+          if 'autoInferStaticTemplates?: boolean;' not in text:
+              if prop_anchor not in text:
+                  raise SystemExit('modal inference value prop anchor not found')
+              text = text.replace(prop_anchor, prop_anchor + "  autoInferStaticTemplates?: boolean;\n", 1)
+          callback_anchor = "  onDraftDomainOverrideChange?(value: DomainKind | null): void;\n"
+          if 'onAutoInferStaticTemplatesChange?(value: boolean): void;' not in text:
+              if callback_anchor not in text:
+                  raise SystemExit('modal inference callback prop anchor not found')
+              text = text.replace(
+                  callback_anchor,
+                  callback_anchor + "  onAutoInferStaticTemplatesChange?(value: boolean): void;\n",
+                  1,
+              )
+
+          ui_anchor = "        <p className=\"hint\">Сначала создайте кнопки и начните работать. Автоматические поля, вопросы и разметку можно добавить позже для каждой кнопки.</p>\n"
+          if 'Безопасно попробовать авторазметку старых шаблонов' not in text:
+              if ui_anchor not in text:
+                  raise SystemExit('modal inference UI anchor not found')
+              addition = """
+        <label className="templateInferenceOption">
+          <input
+            type="checkbox"
+            checked={Boolean(props.autoInferStaticTemplates)}
+            onChange={(event) => props.onAutoInferStaticTemplatesChange?.(event.target.checked)}
+          />
+          <span>
+            <strong>Безопасно попробовать авторазметку старых шаблонов</strong>
+            <small>Необязательно. Только однозначные подписи и уникальные пустые зоны; исходные Word-файлы не изменяются.</small>
+          </span>
+        </label>
+"""
+              text = text.replace(ui_anchor, ui_anchor + addition, 1)
+          modal_path.write_text(text, encoding='utf-8')
+
+          test_path = Path('src/components/TemplateSetupModal.test.tsx')
+          text = test_path.read_text(encoding='utf-8')
+          if "it('offers safe legacy inference as an explicit optional choice'" not in text:
+              insert = """
+
+  it('offers safe legacy inference as an explicit optional choice', () => {
+    const onAutoInferStaticTemplatesChange = vi.fn();
+    render(<TemplateSetupModal {...base} onAutoInferStaticTemplatesChange={onAutoInferStaticTemplatesChange} />);
+    const checkbox = screen.getByRole('checkbox', { name: /Безопасно попробовать авторазметку старых шаблонов/ });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(onAutoInferStaticTemplatesChange).toHaveBeenCalledWith(true);
+  });
+"""
+              close = text.rfind('\n});')
+              if close < 0:
+                  raise SystemExit('TemplateSetupModal test suite end not found')
+              text = text[:close] + insert + text[close:]
+          test_path.write_text(text, encoding='utf-8')
+          PY
+
       - name: Format Rust then verify format
         run: |
           cargo fmt --all
@@ -114,6 +249,7 @@ jobs:
                   src/lib/api.ts \
                   src/App.tsx \
                   src/components/TemplateSetupModal.tsx \
+                  src/components/TemplateSetupModal.test.tsx \
                   tests/test_icd10_f_donor_parity.py
           git diff --cached --check
           git commit -m "Implement legacy static template intelligence"

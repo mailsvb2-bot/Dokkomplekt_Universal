@@ -994,15 +994,26 @@ fn perform_created_documents_intake(
                             report_case.values.insert(field_id.clone(), value.clone());
                         }
                         counter_reservations.extend(hydrated.counter_reservations);
+                        let render_case = dokkomplekt_core::domains::case_for_document_render(
+                            &hydrated.case,
+                            &doc.category,
+                            &doc.role_id,
+                        );
                         render_docx_with_assets(
                             app,
                             template_snapshot.path(),
                             &out_path,
-                            &hydrated.case,
+                            &render_case,
                             true,
                             permit.watermark.as_deref(),
                         )
                         .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
+                        ensure_rendered_document_complete(
+                            doc,
+                            &template_text,
+                            &render_case,
+                            &out_path,
+                        )?;
                         rerendered_documents = rerendered_documents.saturating_add(1);
                         None
                     };

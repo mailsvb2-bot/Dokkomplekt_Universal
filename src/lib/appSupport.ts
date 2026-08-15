@@ -5,6 +5,7 @@ import type { ScannerFieldSuggestion } from './scannerSuggestions';
 export const DEFAULT_YEAR = new Date().getFullYear();
 export const STATE_DB = 'dokkomplekt-user-state.sqlite';
 export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
+export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
 
@@ -19,6 +20,11 @@ export function shouldSelectDocumentByDefault(document: DocumentTemplateSpec): b
     || role.endsWith('.diary')
     || role.endsWith('.diaries')
   );
+}
+
+
+export function defaultSelectedDocumentIds(documents: DocumentTemplateSpec[]): string[] {
+  return documents.filter(shouldSelectDocumentByDefault).map((document) => document.id);
 }
 
 export type PendingTemplate = {
@@ -98,6 +104,21 @@ export function promptToPopupField(prompt: PromptSpec): PopupFieldConfig {
     linked_to: prompt.linked_to ?? null,
     order: prompt.order ?? 500,
   };
+}
+
+
+export function loadOutputRoot(): string {
+  try {
+    const value = localStorage.getItem(OUTPUT_ROOT_KEY)?.trim();
+    if (value) return value;
+  } catch { /* use generic local default */ }
+  return 'output/Готовые документы';
+}
+
+export function saveOutputRoot(value: string): void {
+  const normalized = value.trim();
+  if (!normalized) return;
+  try { localStorage.setItem(OUTPUT_ROOT_KEY, normalized); } catch { /* storage may be unavailable */ }
 }
 
 export function loadOutputFolderParts(): FolderNamePartDto[] {

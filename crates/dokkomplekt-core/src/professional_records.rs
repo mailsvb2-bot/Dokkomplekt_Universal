@@ -424,9 +424,133 @@ fn unambiguous_compatible_rows<'a>(
 fn diagnosis_compatible(candidate: &str, target: &str) -> bool {
     let candidate = source_key(candidate);
     let target = source_key(target);
-    candidate.len() >= 3
-        && target.len() >= 3
-        && (candidate.contains(&target) || target.contains(&candidate))
+    if candidate.len() < 3 || target.len() < 3 {
+        return false;
+    }
+    candidate.contains(&target)
+        || target.contains(&candidate)
+        || medical_diary_semantic_compatible(&candidate, &target)
+}
+
+/// Medical-profile-only compatibility bridge for donor diary source names.
+///
+/// Legacy doctors' folders often contain files such as
+/// `дневники ВЭ легкая депрессия с датами.docx`, while the primary document
+/// contains a formal diagnosis such as `F32.0 Депрессивный эпизод легкой
+/// степени`. The UI intentionally stores a deterministic, punctuation-free
+/// source key. At this seam we recover only the small, proven semantic bridges
+/// from the donor project. This does not change the universal matcher and does
+/// not invent diary text. Ambiguity remains fail-closed in `persistent_source`.
+fn medical_diary_semantic_compatible(candidate: &str, target: &str) -> bool {
+    let candidate = source_key(candidate);
+    let target = source_key(target);
+
+    let candidate_markers = medical_diary_semantic_markers(&candidate);
+    let target_markers = medical_diary_semantic_markers(&target);
+    if candidate_markers.is_empty() || target_markers.is_empty() {
+        return false;
+    }
+    if !candidate_markers
+        .iter()
+        .any(|marker| target_markers.contains(marker))
+    {
+        return false;
+    }
+
+    // A file carrying a more specific donor meaning must not leak into an
+    // unrelated diagnosis merely because both names share a broad word.
+    for marker in [
+        "asthenia",
+        "psychopathy",
+        "observation",
+        "organic",
+        "healthy",
+        "oligophrenia",
+    ] {
+        if candidate_markers.contains(&marker) && !target_markers.contains(&marker) {
+            return false;
+        }
+    }
+
+    // Severity is clinically meaningful. If both sides state it explicitly,
+    // contradictory severities are never treated as compatible.
+    match (
+        medical_diary_severity(&candidate),
+        medical_diary_severity(&target),
+    ) {
+        (Some(left), Some(right)) if left != right => false,
+        _ => true,
+    }
+}
+
+fn medical_diary_semantic_markers(value: &str) -> Vec<&'static str> {
+    let normalized = source_key(value);
+    let mut result = Vec::new();
+    let mut push = |marker| {
+        if !result.contains(&marker) {
+            result.push(marker);
+        }
+    };
+
+    if normalized.contains("депресс") {
+        push("depression");
+    }
+    if normalized.contains("астен") {
+        push("asthenia");
+    }
+    if normalized.contains("психопат")
+        || (normalized.contains("нарушен") && normalized.contains("поведен"))
+    {
+        push("psychopathy");
+    }
+    if normalized.contains("органик")
+        || normalized.contains("органичес")
+        || normalized.contains("резидуаль")
+    {
+        push("organic");
+    }
+    if normalized.contains("здоров") || normalized.contains("норма") {
+        push("healthy");
+    }
+    if normalized.contains("обследован") {
+        push("observation");
+    }
+    if normalized.contains("олигофрен")
+        || normalized.contains("умствен")
+        || icd_family_present(&normalized, 'f', '7')
+    {
+        push("oligophrenia");
+    }
+    result
+}
+
+fn icd_family_present(value: &str, letter: char, family_digit: char) -> bool {
+    let mut chars = value.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != letter {
+            continue;
+        }
+        while chars.peek().is_some_and(|next| next.is_whitespace()) {
+            chars.next();
+        }
+        if chars.peek().is_some_and(|next| *next == family_digit) {
+            return true;
+        }
+    }
+    false
+}
+
+fn medical_diary_severity(value: &str) -> Option<&'static str> {
+    let value = source_key(value);
+    if value.contains("легк") {
+        Some("mild")
+    } else if value.contains("умерен") || value.contains("средн") {
+        Some("moderate")
+    } else if value.contains("тяжел") || value.contains("выражен") {
+        Some("severe")
+    } else {
+        None
+    }
 }
 
 fn persistent_source<'a>(case: &'a SemanticCase, prefix: &str, key: &str) -> Option<&'a str> {
@@ -844,8 +968,7 @@ mod tests {
             ],
         );
         let prepared = prepare_professional_collections(
-            "{{#each diaries}}{{diary.datetime}}|{{diary.text}}
-{{/each}}",
+            "{{#each diaries}}{{diary.datetime}}|{{diary.text}}\n{{/each}}",
             &case,
         );
         let rows = prepared.collection("diaries").expect("diary rows");
@@ -1032,6 +1155,62 @@ mod tests {
         assert!(rendered
             .output_text
             .contains("Подтверждённый специалистом итоговый дневник"));
+    }
+
+    #[test]
+    fn donor_wrapped_free_form_diary_filename_matches_formal_diagnosis() {
+        let mut case = medical_case();
+        case.values.get_mut("medical.diagnosis").unwrap().value =
+            "F32.0 Депрессивный эпизод легкой степени".into();
+        case.blocks.insert(
+            "professional.medical.diary.regular.дневникивелегкаядепрессиясдатами".into(),
+            "Профессиональный текст дневника для легкой депрессии, подтвержденный лечащим врачом."
+                .into(),
+        );
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.date}}|{{diary.text}}\n{{/each}}",
+            &case,
+            true,
+        );
+        assert!(rendered.missing_fields.is_empty(), "{rendered:?}");
+        assert!(rendered
+            .output_text
+            .contains("Профессиональный текст дневника для легкой депрессии"));
+    }
+
+    #[test]
+    fn semantic_diary_source_matching_does_not_guess_between_two_compatible_files() {
+        let mut case = medical_case();
+        case.values.get_mut("medical.diagnosis").unwrap().value =
+            "F32.0 Депрессивный эпизод легкой степени".into();
+        case.blocks.insert(
+            "professional.medical.diary.regular.дневникилегкаядепрессия".into(),
+            "Первый конкурирующий профессиональный текст дневника достаточной длины.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.депрессиялегкойстепени".into(),
+            "Второй конкурирующий профессиональный текст дневника достаточной длины.".into(),
+        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}{{/each}}", &case, true);
+        assert!(!rendered.missing_fields.is_empty() || !rendered.unknown_fields.is_empty());
+        assert!(!rendered.output_text.contains("Первый конкурирующий"));
+        assert!(!rendered.output_text.contains("Второй конкурирующий"));
+    }
+
+    #[test]
+    fn semantic_diary_source_matching_rejects_conflicting_severity() {
+        let mut case = medical_case();
+        case.values.get_mut("medical.diagnosis").unwrap().value =
+            "F32.0 Депрессивный эпизод легкой степени".into();
+        case.blocks.insert(
+            "professional.medical.diary.regular.дневникиумереннаядепрессия".into(),
+            "Профессиональный текст для иной степени тяжести, который нельзя подставлять.".into(),
+        );
+        let rendered =
+            render_text_template("{{#each diaries}}{{diary.text}}{{/each}}", &case, true);
+        assert!(!rendered.missing_fields.is_empty() || !rendered.unknown_fields.is_empty());
+        assert!(!rendered.output_text.contains("иной степени тяжести"));
     }
 
     #[test]

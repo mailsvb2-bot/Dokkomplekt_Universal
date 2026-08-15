@@ -362,8 +362,7 @@ fn plausible_signer_name(value: &str) -> bool {
             || matches!(character, ':' | '-' | '–' | '—' | '.' | '/' | '\\' | '|')
     });
     let signer = signer.trim_end_matches(|character: char| {
-        character.is_whitespace()
-            || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
+        character.is_whitespace() || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
     });
     if signer.is_empty() {
         return false;
@@ -625,8 +624,7 @@ mod tests {
             "заведующий отделением".to_string(),
             "зав. отделением".to_string(),
         ];
-        let narrative =
-            "Зам. главного врача и заведующий отделением осмотрели пациента совместно.";
+        let narrative = "Зам. главного врача и заведующий отделением осмотрели пациента совместно.";
         assert!(!contains_signature_line(narrative, &deputy));
         assert!(!contains_signature_line(narrative, &head));
     }

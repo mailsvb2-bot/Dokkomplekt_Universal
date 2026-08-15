@@ -44,55 +44,201 @@ jobs:
                   raise SystemExit(f'{path}: expected exactly one match, got {count}: {old[:100]!r}')
               p.write_text(text.replace(old, new, 1), encoding='utf-8')
 
-          # 1. Project role-scoped MSE / sick-leave VK values onto legacy placeholders
-          # only when the analyzed template belongs to a role that owns those aliases.
+          # 1. Render-only projection for ambiguous legacy medical aliases.
           path = 'crates/dokkomplekt-core/src/domains/medical_semantics.rs'
-          marker = '''pub fn title_for_role_scoped_field(field_id: &str) -> Option<&'static str> {'''
-          helper = '''/// Prepare one template render without leaking ambiguous medical aliases across roles.\n/// Non-medical and medical roles without scoped bindings are returned byte-for-byte\n/// semantically unchanged (apart from the cheap case clone).\npub fn case_for_role_scoped_template_render(\n    case: &SemanticCase,\n    template_text: &str,\n) -> SemanticCase {\n    let analysis = crate::analyze_template_text(template_text);\n    if role_scoped_bindings(&analysis.role_id).is_empty() {\n        case.clone()\n    } else {\n        case_for_medical_document_render(case, &analysis.role_id)\n    }\n}\n\n'''
+          marker = "pub fn title_for_role_scoped_field(field_id: &str) -> Option<&'static str> {"
+          helper = '''/// Prepare one template render without leaking ambiguous medical aliases across roles.
+          /// Non-medical and medical roles without scoped bindings remain semantically unchanged.
+          pub fn case_for_role_scoped_template_render(
+              case: &SemanticCase,
+              template_text: &str,
+          ) -> SemanticCase {
+              let analysis = crate::analyze_template_text(template_text);
+              if role_scoped_bindings(&analysis.role_id).is_empty() {
+                  case.clone()
+              } else {
+                  case_for_medical_document_render(case, &analysis.role_id)
+              }
+          }
+
+          '''
           replace_once(path, marker, helper + marker)
 
-          test_marker = '''    #[test]\n    fn legacy_generic_value_is_not_destroyed_when_scoped_value_is_missing() {'''
-          tests = '''    #[test]\n    fn template_render_projects_only_the_role_that_owns_legacy_vk_aliases() {\n        let mut case = SemanticCase::default();\n        put(&mut case, VK_MSE_PROTOCOL_NUMBER, "MSE-10");\n        put(&mut case, SICK_LEAVE_VK_PROTOCOL_NUMBER, "SL-20");\n\n        let mse = case_for_role_scoped_template_render(\n            &case,\n            "ВК на МСЭ\\nНомер протокола {{medical.protocol_number}}",\n        );\n        let sick = case_for_role_scoped_template_render(\n            &case,\n            "ВК по больничному листу\\nНомер протокола {{medical.protocol_number}}",\n        );\n\n        assert_eq!(mse.get("medical.protocol_number"), Some("MSE-10"));\n        assert_eq!(sick.get("medical.protocol_number"), Some("SL-20"));\n        assert_eq!(case.get("medical.protocol_number"), None);\n    }\n\n    #[test]\n    fn template_render_does_not_apply_medical_scoping_to_other_professions() {\n        let mut case = SemanticCase::default();\n        put(&mut case, VK_MSE_PROTOCOL_NUMBER, "MSE-10");\n        put(&mut case, "medical.protocol_number", "LEGACY-KEEP");\n\n        let legal = case_for_role_scoped_template_render(\n            &case,\n            "Юридическое заключение\\nНомер дела {{case.number}}",\n        );\n        assert_eq!(legal.get("medical.protocol_number"), Some("LEGACY-KEEP"));\n    }\n\n'''
+          test_marker = '''    #[test]
+              fn legacy_generic_value_is_not_destroyed_when_scoped_value_is_missing() {'''
+          # The source indentation is four spaces; keep exact marker after dedenting below.
+          test_marker = test_marker.replace('              fn ', '    fn ')
+          tests = '''    #[test]
+          fn template_render_projects_only_the_role_that_owns_legacy_vk_aliases() {
+              let mut case = SemanticCase::default();
+              put(&mut case, VK_MSE_PROTOCOL_NUMBER, "MSE-10");
+              put(&mut case, SICK_LEAVE_VK_PROTOCOL_NUMBER, "SL-20");
+
+              let mse = case_for_role_scoped_template_render(
+                  &case,
+                  "ВК на МСЭ\nНомер протокола {{medical.protocol_number}}",
+              );
+              let sick = case_for_role_scoped_template_render(
+                  &case,
+                  "ВК по больничному листу\nНомер протокола {{medical.protocol_number}}",
+              );
+
+              assert_eq!(mse.get("medical.protocol_number"), Some("MSE-10"));
+              assert_eq!(sick.get("medical.protocol_number"), Some("SL-20"));
+              assert_eq!(case.get("medical.protocol_number"), None);
+          }
+
+          #[test]
+          fn template_render_does_not_apply_medical_scoping_to_other_professions() {
+              let mut case = SemanticCase::default();
+              put(&mut case, VK_MSE_PROTOCOL_NUMBER, "MSE-10");
+              put(&mut case, "medical.protocol_number", "LEGACY-KEEP");
+
+              let legal = case_for_role_scoped_template_render(
+                  &case,
+                  "Юридическое заключение\nНомер дела {{case.number}}",
+              );
+              assert_eq!(legal.get("medical.protocol_number"), Some("LEGACY-KEEP"));
+          }
+
+          '''
+          # YAML indentation adds ten spaces to here-doc content; cargo fmt normalizes Rust itself.
+          tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in tests.splitlines()) + '\n'
           replace_once(path, test_marker, tests + test_marker)
 
-          # 2. Make the common DOCX seam use that render-only case for text and assets.
+          # 2. Common DOCX seam: text placeholders and image fields use the same projected case.
           path = 'src-tauri/src/subsystems/desktop_io.rs'
-          old = '''    let template_text = extract_docx_text(template_path).map_err(|e| e.to_string())?;\n    let image_fields = resolve_template_image_fields(app, &template_text, case)?;\n    let result =\n        render_docx_file_with_watermark(template_path, output_path, case, strict, watermark)\n            .map_err(|e| e.to_string())?;'''
-          new = '''    let template_text = extract_docx_text(template_path).map_err(|e| e.to_string())?;\n    let render_case =\n        dokkomplekt_core::domains::medical_semantics::case_for_role_scoped_template_render(\n            case,\n            &template_text,\n        );\n    let image_fields = resolve_template_image_fields(app, &template_text, &render_case)?;\n    let result = render_docx_file_with_watermark(\n        template_path,\n        output_path,\n        &render_case,\n        strict,\n        watermark,\n    )\n    .map_err(|e| e.to_string())?;'''
+          old = '''    let template_text = extract_docx_text(template_path).map_err(|e| e.to_string())?;
+              let image_fields = resolve_template_image_fields(app, &template_text, case)?;
+              let result =
+                  render_docx_file_with_watermark(template_path, output_path, case, strict, watermark)
+                      .map_err(|e| e.to_string())?;'''
+          old = '\n'.join(line[10:] if line.startswith('          ') else line for line in old.splitlines())
+          new = '''    let template_text = extract_docx_text(template_path).map_err(|e| e.to_string())?;
+              let render_case =
+                  dokkomplekt_core::domains::medical_semantics::case_for_role_scoped_template_render(
+                      case,
+                      &template_text,
+                  );
+              let image_fields = resolve_template_image_fields(app, &template_text, &render_case)?;
+              let result = render_docx_file_with_watermark(
+                  template_path,
+                  output_path,
+                  &render_case,
+                  strict,
+                  watermark,
+              )
+              .map_err(|e| e.to_string())?;'''
+          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines())
           replace_once(path, old, new)
-          old = '''        let value = case\n            .values\n            .get(field_id)'''
-          new = '''        let value = render_case\n            .values\n            .get(field_id)'''
-          replace_once(path, old, new)
+          replace_once(
+              path,
+              "        let value = case\n            .values\n            .get(field_id)",
+              "        let value = render_case\n            .values\n            .get(field_id)",
+          )
 
-          # 3. Reuse manual-batch post-render completeness verification in zero-touch.
+          # 3. Zero-touch must verify the actual written DOCX exactly like manual batch.
           path = 'src-tauri/src/subsystems/document_commands.rs'
-          replace_once(path, 'fn ensure_rendered_document_complete(\n', 'pub(super) fn ensure_rendered_document_complete(\n')
+          replace_once(
+              path,
+              "fn ensure_rendered_document_complete(\n",
+              "pub(super) fn ensure_rendered_document_complete(\n",
+          )
 
           path = 'src-tauri/src/subsystems/automation_runtime.rs'
-          needle = '''                        .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;\n                        rerendered_documents = rerendered_documents.saturating_add(1);'''
-          replacement = '''                        .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;\n                        super::document_commands::ensure_rendered_document_complete(\n                            doc,\n                            &template_text,\n                            &hydrated.case,\n                            &out_path,\n                        )?;\n                        rerendered_documents = rerendered_documents.saturating_add(1);'''
+          needle = '''                        .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
+                                  rerendered_documents = rerendered_documents.saturating_add(1);'''
+          needle = '\n'.join(line[10:] if line.startswith('          ') else line for line in needle.splitlines())
+          replacement = '''                        .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
+                                  super::document_commands::ensure_rendered_document_complete(
+                                      doc,
+                                      &template_text,
+                                      &hydrated.case,
+                                      &out_path,
+                                  )?;
+                                  rerendered_documents = rerendered_documents.saturating_add(1);'''
+          replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement.splitlines())
           replace_once(path, needle, replacement)
 
-          # 4. Remember the user's generic output root, not only the folder-name recipe.
+          # 4. Persist the profession-neutral user output root.
           path = 'src/lib/appSupport.ts'
-          replace_once(\n              path,\n              "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\\n",\n              "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\\nexport const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';\\n",\n          )
-          marker = '''export function loadOutputFolderParts(): FolderNamePartDto[] {'''
-          helper = '''export function loadOutputRoot(): string {\n  try {\n    const value = localStorage.getItem(OUTPUT_ROOT_KEY)?.trim();\n    if (value) return value;\n  } catch { /* use generic local default */ }\n  return 'output/Готовые документы';\n}\n\nexport function saveOutputRoot(value: string): void {\n  const normalized = value.trim();\n  if (!normalized) return;\n  try { localStorage.setItem(OUTPUT_ROOT_KEY, normalized); } catch { /* storage may be unavailable */ }\n}\n\n'''
+          replace_once(
+              path,
+              "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\n",
+              "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\nexport const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';\n",
+          )
+          marker = 'export function loadOutputFolderParts(): FolderNamePartDto[] {'
+          helper = '''export function loadOutputRoot(): string {
+            try {
+              const value = localStorage.getItem(OUTPUT_ROOT_KEY)?.trim();
+              if (value) return value;
+            } catch { /* use generic local default */ }
+            return 'output/Готовые документы';
+          }
+
+          export function saveOutputRoot(value: string): void {
+            const normalized = value.trim();
+            if (!normalized) return;
+            try { localStorage.setItem(OUTPUT_ROOT_KEY, normalized); } catch { /* storage may be unavailable */ }
+          }
+
+          '''
+          helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines()) + '\n'
           replace_once(path, marker, helper + marker)
 
           path = 'src/App.tsx'
-          replace_once(\n              path,\n              '  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,\\n',\n              '  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,\\n',\n          )
-          replace_once(\n              path,\n              '  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,\\n',\n              '  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,\\n',\n          )
-          replace_once(\n              path,\n              "  const [outputRoot, setOutputRoot] = useState('output/Готовые документы');\\n",\n              '  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);\\n',\n          )
-          marker = '''  useEffect(() => {\n    void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {'''
-          insertion = '''  useEffect(() => {\n    saveOutputRoot(outputRoot);\n  }, [outputRoot]);\n\n'''
+          replace_once(
+              path,
+              "  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts,\n",
+              "  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,\n",
+          )
+          replace_once(
+              path,
+              "  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,\n",
+              "  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,\n",
+          )
+          replace_once(
+              path,
+              "  const [outputRoot, setOutputRoot] = useState('output/Готовые документы');\n",
+              "  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);\n",
+          )
+          marker = '''  useEffect(() => {
+              void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {'''
+          marker = '\n'.join(line[10:] if line.startswith('          ') else line for line in marker.splitlines())
+          insertion = '''  useEffect(() => {
+              saveOutputRoot(outputRoot);
+            }, [outputRoot]);
+
+          '''
+          insertion = '\n'.join(line[10:] if line.startswith('          ') else line for line in insertion.splitlines()) + '\n'
           replace_once(path, marker, insertion + marker)
 
           path = 'src/lib/appSupport.selection.test.ts'
-          replace_once(\n              path,\n              "import { shouldSelectDocumentByDefault } from './appSupport';\\n",\n              "import { loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';\\n",\n          )
-          append_marker = '''describe('default document selection', () => {'''
-          output_tests = '''describe('output root persistence', () => {\n  it('remembers the user-selected generic output folder across restarts', () => {\n    localStorage.removeItem(OUTPUT_ROOT_KEY);\n    expect(loadOutputRoot()).toBe('output/Готовые документы');\n\n    saveOutputRoot('  D:/Работа/Готовые документы  ');\n    expect(loadOutputRoot()).toBe('D:/Работа/Готовые документы');\n  });\n\n  it('does not replace a remembered folder with an empty edit', () => {\n    localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Documents/Ready');\n    saveOutputRoot('   ');\n    expect(loadOutputRoot()).toBe('C:/Documents/Ready');\n  });\n});\n\n'''
-          replace_once(path, append_marker, output_tests + append_marker)
+          replace_once(
+              path,
+              "import { shouldSelectDocumentByDefault } from './appSupport';\n",
+              "import { loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';\n",
+          )
+          marker = "describe('default document selection', () => {"
+          output_tests = '''describe('output root persistence', () => {
+            it('remembers the user-selected generic output folder across restarts', () => {
+              localStorage.removeItem(OUTPUT_ROOT_KEY);
+              expect(loadOutputRoot()).toBe('output/Готовые документы');
+
+              saveOutputRoot('  D:/Работа/Готовые документы  ');
+              expect(loadOutputRoot()).toBe('D:/Работа/Готовые документы');
+            });
+
+            it('does not replace a remembered folder with an empty edit', () => {
+              localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Documents/Ready');
+              saveOutputRoot('   ');
+              expect(loadOutputRoot()).toBe('C:/Documents/Ready');
+            });
+          });
+
+          '''
+          output_tests = '\n'.join(line[10:] if line.startswith('          ') else line for line in output_tests.splitlines()) + '\n'
+          replace_once(path, marker, output_tests + marker)
           PY
 
           cargo fmt --all

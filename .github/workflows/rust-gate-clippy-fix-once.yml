@@ -32,28 +32,24 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('crates/dokkomplekt-core/src/professional_records.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''    match (
-              medical_diary_severity(&candidate),
-              medical_diary_severity(&target),
-          ) {
-              (Some(left), Some(right)) if left != right => false,
-              _ => true,
-          }
-          '''
-          new = '''    !matches!(
-              (
-                  medical_diary_severity(&candidate),
-                  medical_diary_severity(&target),
-              ),
-              (Some(left), Some(right)) if left != right
+          pattern = re.compile(
+              r"    match \(\n"
+              r"\s*medical_diary_severity\(&candidate\),\n"
+              r"\s*medical_diary_severity\(&target\),\n"
+              r"\s*\) \{\n"
+              r"\s*\(Some\(left\), Some\(right\)\) if left != right => false,\n"
+              r"\s*_ => true,\n"
+              r"\s*\}"
           )
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one clippy target, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          replacement = "    !matches!(\n        (\n            medical_diary_severity(&candidate),\n            medical_diary_severity(&target),\n        ),\n        (Some(left), Some(right)) if left != right\n    )"
+          updated, count = pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f'expected exactly one clippy target, found {count}')
+          path.write_text(updated, encoding='utf-8')
           PY
           cargo fmt --all
           rm .github/workflows/rust-gate-clippy-fix-once.yml

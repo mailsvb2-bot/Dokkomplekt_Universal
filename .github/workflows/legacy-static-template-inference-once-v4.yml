@@ -1,0 +1,120 @@
+name: Legacy static template integration v4 (one-shot)
+
+on:
+  push:
+    branches: [fix/legacy-static-template-intelligence-20260815]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integrate:
+    if: ${{ !startsWith(github.event.head_commit.message, 'Implement legacy static template intelligence') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: fix/legacy-static-template-intelligence-20260815
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply audited v3 source patch and donor parity generator
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          source = subprocess.check_output([
+              'git', 'show',
+              '22dc8172cd7e1f8264c1ce941f68ae8c7b8da55f:.github/workflows/legacy-static-template-inference-once-v3.yml'
+          ], text=True)
+
+          def extract_run(step_name: str) -> str:
+              marker = f'      - name: {step_name}\n'
+              start = source.find(marker)
+              if start < 0:
+                  raise SystemExit(f'missing historical step: {step_name}')
+              run_marker = '        run: |\n'
+              run_start = source.find(run_marker, start)
+              if run_start < 0:
+                  raise SystemExit(f'missing run block: {step_name}')
+              run_start += len(run_marker)
+              next_step = source.find('\n      - name: ', run_start)
+              if next_step < 0:
+                  raise SystemExit(f'missing next step boundary: {step_name}')
+              block = source[run_start:next_step]
+              lines = []
+              for raw in block.splitlines():
+                  if raw.startswith('          '):
+                      lines.append(raw[10:])
+                  elif not raw.strip():
+                      lines.append('')
+                  else:
+                      raise SystemExit(f'unexpected indentation in {step_name}: {raw!r}')
+              return '\n'.join(lines) + '\n'
+
+          for index, name in enumerate((
+              'Patch audited runtime and UI seams',
+              'Prove exact donor F-code parity and create offline lock',
+          )):
+              script = Path(f'/tmp/legacy-step-{index}.sh')
+              script.write_text('set -Eeuo pipefail\n' + extract_run(name), encoding='utf-8')
+              subprocess.run(['bash', str(script)], check=True)
+          PY
+
+      - name: Format Rust then verify format
+        run: |
+          cargo fmt --all
+          cargo fmt --all --check
+
+      - name: Install Linux Tauri compile dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Core regression wall
+        run: cargo test -p dokkomplekt-core
+
+      - name: Tauri compile seam
+        run: cargo check -p dokkomplekt-tauri
+
+      - name: Frontend tests and typecheck
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test
+
+      - name: Offline donor parity regression
+        run: python -m pytest -q tests/test_icd10_f_donor_parity.py
+
+      - name: Remove one-shot workflow and commit verified sources
+        shell: bash
+        run: |
+          git rm .github/workflows/legacy-static-template-inference-once-v4.yml
+          git status --short
+          git config user.name "mailsvb2-bot"
+          git config user.email "mailsvb2@gmail.com"
+          git add crates/dokkomplekt-core/src/legacy_template_inference.rs \
+                  crates/dokkomplekt-core/src/lib.rs \
+                  src-tauri/src/subsystems/legacy_template_runtime.rs \
+                  src-tauri/src/subsystems/document_commands.rs \
+                  src-tauri/src/main.rs \
+                  src/lib/api.ts \
+                  src/App.tsx \
+                  src/components/TemplateSetupModal.tsx \
+                  tests/test_icd10_f_donor_parity.py
+          git diff --cached --check
+          git commit -m "Implement legacy static template intelligence"
+          git push origin HEAD:fix/legacy-static-template-intelligence-20260815

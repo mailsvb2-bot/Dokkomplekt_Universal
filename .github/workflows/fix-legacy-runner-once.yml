@@ -1,0 +1,36 @@
+name: Fix legacy integration runner once
+
+on:
+  push:
+    branches: [fix/legacy-static-template-intelligence-20260815]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: fix/legacy-static-template-intelligence-20260815
+          fetch-depth: 0
+      - name: Correct learned field line mapping
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/legacy-static-template-inference-once-v2.yml')
+          text = path.read_text(encoding='utf-8')
+          old = 'line_index: field.blank_line_index,'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one learned line mapping, found {text.count(old)}')
+          path.write_text(text.replace(old, 'line_index: field.line_index,', 1), encoding='utf-8')
+          PY
+          git rm .github/workflows/fix-legacy-runner-once.yml
+          git config user.name "mailsvb2-bot"
+          git config user.email "mailsvb2@gmail.com"
+          git add .github/workflows/legacy-static-template-inference-once-v2.yml
+          git diff --cached --check
+          git commit -m "Fix legacy integration runner mapping"
+          git push origin HEAD:fix/legacy-static-template-intelligence-20260815

@@ -35,21 +35,20 @@ jobs:
           from textwrap import dedent
 
           def replace_once(path, old, new):
-              p = Path(path); text = p.read_text(encoding='utf-8')
-              n = text.count(old)
-              if n != 1: raise SystemExit(f'{path}: expected 1 literal match, got {n}: {old[:100]!r}')
-              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+              p=Path(path); text=p.read_text(encoding='utf-8'); n=text.count(old)
+              if n != 1: raise SystemExit(f'{path}: literal matches={n}: {old[:90]!r}')
+              p.write_text(text.replace(old,new,1),encoding='utf-8')
 
           def sub_once(path, pattern, repl):
-              p = Path(path); text = p.read_text(encoding='utf-8')
-              out, n = re.subn(pattern, repl, text, count=1, flags=re.MULTILINE)
-              if n != 1: raise SystemExit(f'{path}: expected 1 regex match, got {n}: {pattern[:100]!r}')
-              p.write_text(out, encoding='utf-8')
+              p=Path(path); text=p.read_text(encoding='utf-8')
+              out,n=re.subn(pattern,repl,text,count=1,flags=re.MULTILINE)
+              if n != 1: raise SystemExit(f'{path}: regex matches={n}: {pattern[:90]!r}')
+              p.write_text(out,encoding='utf-8')
 
-          # Domain boundary: medical compatibility is available only to Medical documents.
-          path = 'crates/dokkomplekt-core/src/domains/mod.rs'
-          marker = 'pub mod medical_semantics;\n'
-          addition = dedent('''
+          # Domain boundary: only a Medical document receives medical legacy compatibility.
+          path='crates/dokkomplekt-core/src/domains/mod.rs'
+          marker='pub mod medical_semantics;\n'
+          addition=dedent('''
 
           /// Build an ephemeral case for one document render. Profession-specific legacy
           /// compatibility remains behind the domain boundary and never rewrites stored data.
@@ -69,71 +68,54 @@ jobs:
           mod render_case_tests {
               use super::*;
               use crate::{SemanticCase, SemanticValue, ValueSource};
-
               fn put(case: &mut SemanticCase, field_id: &str, value: &str) {
-                  case.values.insert(
-                      field_id.to_string(),
-                      SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
-                  );
+                  case.values.insert(field_id.to_string(),
+                      SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0));
               }
-
               #[test]
               fn document_render_scopes_medical_role_without_medicalizing_other_domains() {
-                  let mut case = SemanticCase::default();
+                  let mut case=SemanticCase::default();
                   put(&mut case, medical_semantics::VK_MSE_PROTOCOL_NUMBER, "MSE-10");
-                  let medical = case_for_document_render(&case, &crate::DomainKind::Medical, "vk_mse");
-                  let legal = case_for_document_render(&case, &crate::DomainKind::Legal, "vk_mse");
-                  assert_eq!(medical.get("medical.protocol_number"), Some("MSE-10"));
-                  assert_eq!(legal.get("medical.protocol_number"), None);
-                  assert_eq!(case.get("medical.protocol_number"), None);
+                  let medical=case_for_document_render(&case,&crate::DomainKind::Medical,"vk_mse");
+                  let legal=case_for_document_render(&case,&crate::DomainKind::Legal,"vk_mse");
+                  assert_eq!(medical.get("medical.protocol_number"),Some("MSE-10"));
+                  assert_eq!(legal.get("medical.protocol_number"),None);
+                  assert_eq!(case.get("medical.protocol_number"),None);
               }
           }
           ''').lstrip('\n')
-          replace_once(path, marker, marker + addition)
+          replace_once(path,marker,marker+addition)
 
-          # Real manual single-document publication seam: stable button role/category is source of truth.
-          path = 'src-tauri/src/subsystems/document_commands.rs'
-          old = '''    let render_result = render_docx_with_assets(
-              &app,
-              template_snapshot.path(),
-              &reservation.path,
-              &hydrated.case,
-              req.strict,
-              permit.watermark.as_deref(),
-          );'''.replace('\n          ', '\n    ')
-          # Above yields the exact four/eight-space formatted call.
-          new = '''    let render_case = dokkomplekt_core::domains::case_for_document_render(
-              &hydrated.case,
-              &doc.category,
-              &doc.role_id,
-          );
-          let render_result = render_docx_with_assets(
-              &app,
-              template_snapshot.path(),
-              &reservation.path,
-              &render_case,
-              req.strict,
-              permit.watermark.as_deref(),
-          );'''.replace('\n          ', '\n    ')
-          replace_once(path, old, new)
+          path='src-tauri/src/subsystems/document_commands.rs'
+          # Manual single-document publication: stable saved button role/category is source of truth.
+          pattern=r'''(?m)^(?P<i>\s*)let render_result = render_docx_with_assets\(\n(?P=i)    &app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &reservation\.path,\n(?P=i)    &hydrated\.case,\n(?P=i)    req\.strict,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\);'''
+          def single(m):
+              i=m.group('i')
+              return (f'{i}let render_case = dokkomplekt_core::domains::case_for_document_render(\n'
+                      f'{i}    &hydrated.case,\n{i}    &doc.category,\n{i}    &doc.role_id,\n{i});\n'
+                      f'{i}let render_result = render_docx_with_assets(\n{i}    &app,\n{i}    template_snapshot.path(),\n'
+                      f'{i}    &reservation.path,\n{i}    &render_case,\n{i}    req.strict,\n{i}    permit.watermark.as_deref(),\n{i});')
+          p=Path(path); text=p.read_text(encoding='utf-8'); out,n=re.subn(pattern,single,text,count=1)
+          if n != 1: raise SystemExit(f'{path}: single seam matches={n}')
+          p.write_text(out,encoding='utf-8')
 
-          # Batch seam: one role-scoped ephemeral view for each selected document.
-          pattern = r'''(?m)^(?P<indent>\s*)if let Err\(error\) = render_docx_with_assets\(\n(?P=indent)    &app,\n(?P=indent)    template_snapshot\.path\(\),\n(?P=indent)    &reservation\.path,\n(?P=indent)    &hydrated\.case,\n(?P=indent)    req\.strict,\n(?P=indent)    permit\.watermark\.as_deref\(\),\n(?P=indent)\) \{'''
-          def batch_repl(m):
-              i=m.group('indent')
+          # Batch: each selected document gets an independent role-scoped render view.
+          pattern=r'''(?m)^(?P<i>\s*)if let Err\(error\) = render_docx_with_assets\(\n(?P=i)    &app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &reservation\.path,\n(?P=i)    &hydrated\.case,\n(?P=i)    req\.strict,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\) \{'''
+          def batch(m):
+              i=m.group('i')
               return (f'{i}let render_case = dokkomplekt_core::domains::case_for_document_render(\n'
                       f'{i}    &hydrated.case,\n{i}    &document.category,\n{i}    &document.role_id,\n{i});\n'
                       f'{i}if let Err(error) = render_docx_with_assets(\n{i}    &app,\n{i}    template_snapshot.path(),\n'
                       f'{i}    &reservation.path,\n{i}    &render_case,\n{i}    req.strict,\n{i}    permit.watermark.as_deref(),\n{i}) {{')
-          p=Path(path); text=p.read_text(encoding='utf-8'); out,n=re.subn(pattern,batch_repl,text,count=1)
-          if n != 1: raise SystemExit(f'{path}: batch render seam matches={n}')
+          p=Path(path); text=p.read_text(encoding='utf-8'); out,n=re.subn(pattern,batch,text,count=1)
+          if n != 1: raise SystemExit(f'{path}: batch seam matches={n}')
           p.write_text(out,encoding='utf-8')
-          sub_once(path, r'(?m)^fn ensure_rendered_document_complete\(', 'pub(super) fn ensure_rendered_document_complete(')
+          sub_once(path,r'(?m)^fn ensure_rendered_document_complete\(','pub(super) fn ensure_rendered_document_complete(')
 
-          # Zero-touch uses identical role projection and validates the actual DOCX afterwards.
-          path = 'src-tauri/src/subsystems/automation_runtime.rs'
-          pattern = r'''(?m)^(?P<i>\s*)render_docx_with_assets\(\n(?P=i)    app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &out_path,\n(?P=i)    &hydrated\.case,\n(?P=i)    true,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\)\n(?P=i)\.map_err\(\|e\| format!\("Не создан «\{\}»: \{e\}", doc\.button_label\)\)\?;\n(?P=i)rerendered_documents = rerendered_documents\.saturating_add\(1\);'''
-          def zero_repl(m):
+          # Zero-touch: same role projection + same post-render validation of the actual DOCX.
+          path='src-tauri/src/subsystems/automation_runtime.rs'
+          pattern=r'''(?m)^(?P<i>\s*)render_docx_with_assets\(\n(?P=i)    app,\n(?P=i)    template_snapshot\.path\(\),\n(?P=i)    &out_path,\n(?P=i)    &hydrated\.case,\n(?P=i)    true,\n(?P=i)    permit\.watermark\.as_deref\(\),\n(?P=i)\)\n(?P=i)\.map_err\(\|e\| format!\("Не создан «\{\}»: \{e\}", doc\.button_label\)\)\?;\n(?P=i)rerendered_documents = rerendered_documents\.saturating_add\(1\);'''
+          def zero(m):
               i=m.group('i')
               return (f'{i}let render_case = dokkomplekt_core::domains::case_for_document_render(\n'
                       f'{i}    &hydrated.case,\n{i}    &doc.category,\n{i}    &doc.role_id,\n{i});\n'
@@ -143,14 +125,13 @@ jobs:
                       f'{i}super::document_commands::ensure_rendered_document_complete(\n'
                       f'{i}    doc,\n{i}    &template_text,\n{i}    &hydrated.case,\n{i}    &out_path,\n{i})?;\n'
                       f'{i}rerendered_documents = rerendered_documents.saturating_add(1);')
-          p=Path(path); text=p.read_text(encoding='utf-8'); out,n=re.subn(pattern,zero_repl,text,count=1)
-          if n != 1: raise SystemExit(f'{path}: zero-touch render seam matches={n}')
+          p=Path(path); text=p.read_text(encoding='utf-8'); out,n=re.subn(pattern,zero,text,count=1)
+          if n != 1: raise SystemExit(f'{path}: zero-touch seam matches={n}')
           p.write_text(out,encoding='utf-8')
 
-          # Remember generic output root across restarts; folder-name recipe was already persisted.
-          path = 'src/lib/appSupport.ts'
-          replace_once(path,
-              "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\n",
+          # Generic output root is a remembered user preference, not a medical setting.
+          path='src/lib/appSupport.ts'
+          replace_once(path,"export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\n",
               "export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';\nexport const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';\n")
           marker='export function loadOutputFolderParts(): FolderNamePartDto[] {'
           helper=dedent('''
@@ -161,7 +142,6 @@ jobs:
             } catch { /* use generic local default */ }
             return 'output/Готовые документы';
           }
-
           export function saveOutputRoot(value: string): void {
             const normalized = value.trim();
             if (!normalized) return;
@@ -172,15 +152,16 @@ jobs:
           replace_once(path,marker,helper+marker)
 
           path='src/App.tsx'
-          sub_once(path, r'loadOutputFolderParts,\n', 'loadOutputFolderParts, loadOutputRoot,\n')
-          sub_once(path, r'readFileBytes,\n', 'readFileBytes, saveOutputRoot,\n')
-          replace_once(path,"  const [outputRoot, setOutputRoot] = useState('output/Готовые документы');\n","  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);\n")
-          sub_once(path, r'(?m)^  useEffect\(\(\) => \{\n    void updateBackgroundWatcherPreferences\(autoPrint, printCopies\)\.catch',
-                   '  useEffect(() => {\n    saveOutputRoot(outputRoot);\n  }, [outputRoot]);\n\n  useEffect(() => {\n    void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch')
+          sub_once(path,r'loadOutputFolderParts,\n','loadOutputFolderParts, loadOutputRoot,\n')
+          sub_once(path,r'readFileBytes,\n','readFileBytes, saveOutputRoot,\n')
+          replace_once(path,"  const [outputRoot, setOutputRoot] = useState('output/Готовые документы');\n",
+                            "  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);\n")
+          sub_once(path,r'(?m)^  useEffect\(\(\) => \{\n    void updateBackgroundWatcherPreferences\(autoPrint, printCopies\)\.catch',
+              '  useEffect(() => {\n    saveOutputRoot(outputRoot);\n  }, [outputRoot]);\n\n  useEffect(() => {\n    void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch')
 
           path='src/lib/appSupport.selection.test.ts'
           replace_once(path,"import { shouldSelectDocumentByDefault } from './appSupport';\n",
-                       "import { loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';\n")
+              "import { loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';\n")
           marker="describe('default document selection', () => {"
           tests=dedent('''
           describe('output root persistence', () => {
@@ -211,7 +192,6 @@ jobs:
       - name: Compile Tauri runtime paths
         run: cargo check -p dokkomplekt-tauri
       - name: Commit audited fixes
-        shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]

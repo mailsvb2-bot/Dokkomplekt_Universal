@@ -7,7 +7,15 @@
 //! character boundaries of the source text.
 
 /// Returns the byte offset in `raw_line` immediately after a case-insensitive
-/// label match. The match must start and end on non-alphanumeric boundaries.
+/// label match.
+///
+/// A label must start either at the beginning of a logical line/cell (ignoring
+/// whitespace) or immediately after a structural separator. Merely finding a
+/// word boundary inside narrative prose is not enough: e.g. `За время лечения`
+/// must not be interpreted as the explicit field label `Лечение`. This rule is
+/// profession-neutral and protects every domain from substring-like provenance
+/// mistakes while still allowing compact forms such as
+/// `Исполнитель: ООО Ромашка. Заказчик: ООО Север`.
 ///
 /// The returned offset is always a valid UTF-8 character boundary in
 /// `raw_line`, even when Unicode lowercasing expands a character.
@@ -42,11 +50,12 @@ pub(crate) fn find_label_end(raw_line: &str, label: &str) -> Option<usize> {
             .is_some_and(char::is_alphanumeric);
 
         if !prev_is_word && !next_is_word {
-            // A match ending inside an expanded lowercase character is not a
-            // valid mapping. `binary_search` only succeeds at a source-char
-            // boundary.
-            if let Ok(index) = char_ends.binary_search_by_key(&end, |entry| entry.0) {
-                return Some(char_ends[index].1);
+            let start_original = original_boundary(start, &char_ends);
+            let end_original = original_boundary(end, &char_ends);
+            if let (Some(start_original), Some(end_original)) = (start_original, end_original) {
+                if has_structural_label_prefix(raw_line, start_original) {
+                    return Some(end_original);
+                }
             }
         }
 
@@ -60,13 +69,48 @@ pub(crate) fn find_label_end(raw_line: &str, label: &str) -> Option<usize> {
     None
 }
 
+fn original_boundary(lowered_boundary: usize, char_ends: &[(usize, usize)]) -> Option<usize> {
+    if lowered_boundary == 0 {
+        return Some(0);
+    }
+    char_ends
+        .binary_search_by_key(&lowered_boundary, |entry| entry.0)
+        .ok()
+        .map(|index| char_ends[index].1)
+}
+
+fn has_structural_label_prefix(raw_line: &str, label_start: usize) -> bool {
+    let prefix = raw_line.get(..label_start).unwrap_or_default().trim_end();
+    let Some(last) = prefix.chars().next_back() else {
+        return true;
+    };
+    matches!(
+        last,
+        ':' | ';'
+            | ','
+            | '.'
+            | '|'
+            | '/'
+            | '\\'
+            | '-'
+            | '—'
+            | '–'
+            | '('
+            | '['
+            | '"'
+            | '\''
+            | '«'
+            | '•'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn maps_lowercase_expansion_back_to_original_utf8_boundary() {
-        let line = "İ Дата: 12.05.2026";
+        let line = "İ — Дата: 12.05.2026";
         let end = find_label_end(line, "дата").expect("label");
         assert_eq!(&line[end..], ": 12.05.2026");
         assert!(line.is_char_boundary(end));
@@ -76,6 +120,36 @@ mod tests {
     fn rejects_mid_word_matches() {
         assert_eq!(find_label_end("Отчество Иванович", "от"), None);
         assert_eq!(find_label_end("работодатель ООО", "тел"), None);
+    }
+
+    #[test]
+    fn rejects_narrative_word_boundary_as_field_provenance() {
+        assert_eq!(
+            find_label_end("За время лечения состояние улучшилось", "лечение"),
+            None
+        );
+        assert_eq!(
+            find_label_end("Пациент находится на лечении амбулаторно", "лечение"),
+            None
+        );
+    }
+
+    #[test]
+    fn accepts_explicit_label_at_line_or_cell_start() {
+        let line = "  Лечение терапия, режим";
+        let end = find_label_end(line, "лечение").expect("label");
+        assert_eq!(&line[end..], " терапия, режим");
+
+        let line = "Сведения — Лечение: терапия";
+        let end = find_label_end(line, "лечение").expect("label after separator");
+        assert_eq!(&line[end..], ": терапия");
+    }
+
+    #[test]
+    fn accepts_compact_multiple_structured_fields_on_one_line() {
+        let line = "Исполнитель: ООО Ромашка. Заказчик: ООО Север";
+        let end = find_label_end(line, "Заказчик").expect("second structured field");
+        assert_eq!(&line[end..], ": ООО Север");
     }
 
     #[test]

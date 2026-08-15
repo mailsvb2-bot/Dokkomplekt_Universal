@@ -78,4 +78,13 @@ describe('TemplateSetupModal', () => {
     fireEvent.click(confirm);
     expect(onConfirm).toHaveBeenCalledOnce();
   });
+  it('offers safe legacy inference as an explicit optional choice', () => {
+    const onAutoInferStaticTemplatesChange = vi.fn();
+    render(<TemplateSetupModal {...base} onAutoInferStaticTemplatesChange={onAutoInferStaticTemplatesChange} />);
+    const checkbox = screen.getByRole('checkbox', { name: /Безопасно попробовать авторазметку старых шаблонов/ });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(onAutoInferStaticTemplatesChange).toHaveBeenCalledWith(true);
+  });
+
 });

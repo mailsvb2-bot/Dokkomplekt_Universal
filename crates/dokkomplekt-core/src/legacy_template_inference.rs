@@ -30,16 +30,15 @@ pub fn infer_legacy_template_fields(
     role_id: Option<&str>,
 ) -> Vec<LegacyTemplateFieldCandidate> {
     let lines = text.lines().map(str::trim_end).collect::<Vec<_>>();
-    let target_counts =
-        lines
-            .iter()
-            .fold(BTreeMap::<String, usize>::new(), |mut counts, line| {
-                let normalized = line.trim().to_string();
-                if !normalized.is_empty() {
-                    *counts.entry(normalized).or_default() += 1;
-                }
-                counts
-            });
+    let target_counts = lines
+        .iter()
+        .fold(BTreeMap::<String, usize>::new(), |mut counts, line| {
+            let normalized = line.trim().to_string();
+            if !normalized.is_empty() {
+                *counts.entry(normalized).or_default() += 1;
+            }
+            counts
+        });
 
     let mut candidates = Vec::new();
     for (line_index, raw_line) in lines.iter().enumerate() {
@@ -110,7 +109,8 @@ pub fn infer_legacy_template_fields(
                             common_prefix: prefix.to_string(),
                             common_suffix: suffix.to_string(),
                             confidence: 1.0,
-                            reason: "однозначная подпись и явное пустое место в одной строке".into(),
+                            reason: "однозначная подпись и явное пустое место в одной строке"
+                                .into(),
                         },
                     );
                 }
@@ -159,10 +159,12 @@ fn resolve_label(
         return None;
     }
     if matches!(preferred_domain, Some(DomainKind::Medical)) {
-        Some(crate::domains::medical_semantics::scope_legacy_field_for_role(
-            role_id.unwrap_or_default(),
-            &field_id,
-        ))
+        Some(
+            crate::domains::medical_semantics::scope_legacy_field_for_role(
+                role_id.unwrap_or_default(),
+                &field_id,
+            ),
+        )
     } else {
         Some(field_id)
     }
@@ -189,7 +191,9 @@ fn field_is_allowed_in_domain(field_id: &str, preferred_domain: Option<&DomainKi
 }
 
 fn previous_nonempty_line(lines: &[&str], before: usize) -> Option<usize> {
-    (0..before).rev().find(|index| !lines[*index].trim().is_empty())
+    (0..before)
+        .rev()
+        .find(|index| !lines[*index].trim().is_empty())
 }
 
 fn clean_label(value: &str) -> String {

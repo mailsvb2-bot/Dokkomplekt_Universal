@@ -19,14 +19,17 @@ interface TemplateSetupModalProps {
   pendingTemplates: PendingTemplateView[];
   draftPopupFields: PopupFieldConfig[];
   draftDomainOverride?: DomainKind | null;
+  autoInferStaticTemplates?: boolean;
   onTemplateTextChange(value: string): void;
   onButtonLabelChange(value: string): void;
   onDraftPopupFieldsChange(fields: PopupFieldConfig[]): void;
   onDraftDomainOverrideChange?(value: DomainKind | null): void;
+  onAutoInferStaticTemplatesChange?(value: boolean): void;
   onPendingTemplateLabelChange(documentId: string, value: string): void;
   onPendingTemplateDomainChange?(documentId: string, value: DomainKind | null): void;
   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
+  onLearnPendingTemplate(documentId: string, files: File[]): Promise<void>;
   onStartGuidedPendingScanner(documentId: string): void;
   onAnalyze(): void;
   onPickFile(event: ChangeEvent<HTMLInputElement>): void;
@@ -116,6 +119,18 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <p className="hint">Выберите рабочие шаблоны Word. Каждый DOCX или DOCM сразу станет отдельной кнопкой.</p>
         <p className="hint">Сначала создайте кнопки и начните работать. Автоматические поля, вопросы и разметку можно добавить позже для каждой кнопки.</p>
 
+        <label className="templateInferenceOption">
+          <input
+            type="checkbox"
+            checked={Boolean(props.autoInferStaticTemplates)}
+            onChange={(event) => props.onAutoInferStaticTemplatesChange?.(event.target.checked)}
+          />
+          <span>
+            <strong>Безопасно попробовать авторазметку старых шаблонов</strong>
+            <small>Необязательно. Только однозначные подписи и уникальные пустые зоны; исходные Word-файлы не изменяются.</small>
+          </span>
+        </label>
+
         {!hasBatch ? (
           <div className="emptyPackage templateFirstStep">
             <div><i className="ti ti-file-upload" /></div>
@@ -190,6 +205,21 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                   <div className="guidedTemplateLaunch">
                     <div><strong>Показать место для автоматического заполнения</strong><small>Этот шаг не нужен для создания кнопки. Его можно выполнить позже.</small></div>
                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}><i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место</button>
+
+                    <label className="softBtn fileBtn">
+                      <i className="ti ti-school" aria-hidden="true" /> Обучить по 3–10 примерам
+                      <input
+                        type="file"
+                        multiple
+                        accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                        onChange={(event) => {
+                          const files = Array.from(event.currentTarget.files ?? []);
+                          event.currentTarget.value = '';
+                          if (files.length) void props.onLearnPendingTemplate(activePending.document_id, files);
+                        }}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
                   </div>
                   <details className="manualScannerDetails">
                     <summary>Ручная разметка</summary>

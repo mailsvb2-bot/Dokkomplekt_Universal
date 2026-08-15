@@ -2180,6 +2180,7 @@ fn current_year_utc() -> i32 {
     (if m <= 2 { y + 1 } else { y }) as i32
 }
 
+include!("subsystems/legacy_template_runtime.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");

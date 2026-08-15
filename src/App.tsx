@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
-  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
+  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
-  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
+  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
@@ -78,6 +78,7 @@ function AppContent() {
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
+  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(false);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
   const [icdQuery, setIcdQuery] = useState('');
@@ -737,6 +738,7 @@ function AppContent() {
   }
 
   async function openTemplateSetup() {
+    setAutoInferStaticTemplates(false);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -784,6 +786,7 @@ function AppContent() {
   }
 
   function openTextTemplateSetup() {
+    setAutoInferStaticTemplates(false);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -883,6 +886,80 @@ function AppContent() {
       setTemplateText(replaceAllLiteral(templateText, value, visibleReplacement));
     }
     setStatus(`Шаблон размечен. Обновлено мест: ${report.replaced_occurrences}. Исходный файл сохранён.`);
+  }
+
+async function learnPendingTemplateFromExamples(documentId: string, files: File[]) {
+    const current = pendingTemplates.find((item) => item.document_id === documentId);
+    if (!current) return;
+    if (files.length < 3 || files.length > 10) {
+      setStatus('Для обучения выберите от 3 до 10 заполненных примеров одного и того же шаблона.');
+      return;
+    }
+
+    const completedExamplePaths: string[] = [];
+    for (const file of files) {
+      const buffer = await readFileBytes(file);
+      const imported = await run('import_learning_example_file', () =>
+        importLearningExampleFile(file.name, arrayBufferToBase64(buffer)));
+      if (!imported) return;
+      completedExamplePaths.push(imported.source_path);
+    }
+    const learned = await run('learn_template_from_examples_command', () => learnTemplateFromExamples({
+      blankTemplatePath: current.template_path,
+      completedExamplePaths,
+      defaultYear: DEFAULT_YEAR,
+    }));
+    if (!learned) return;
+    const confidentFields = learned.fields.filter((field) => field.confidence >= 0.9);
+    if (!confidentFields.length) {
+      setStatus('Примеры изучены, но однозначных полей не найдено. Шаблон не изменён — используйте ручную разметку или покажите место в Word.');
+      return;
+    }
+    const previewFields = confidentFields
+      .slice(0, 8)
+      .map((field) => `${field.field_id} (${Math.round(field.confidence * 100)}%)`)
+      .join(', ');
+    const accepted = await dialogs.confirm({
+      title: 'Применить найденную карту шаблона?',
+      message: `Найдено надёжных полей: ${confidentFields.length}. ${previewFields}${confidentFields.length > 8 ? '…' : ''}. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
+      confirmLabel: 'Применить карту',
+    });
+    if (!accepted) {
+      setStatus('Обучение отменено на этапе подтверждения. Исходный шаблон не изменён.');
+      return;
+    }
+
+    const outputPath = cursorMarkedTemplatePath(current.template_path, `${documentId}-learned`);
+    const applied = await run('apply_template_learning_map', () => applyTemplateLearningMap(
+      current.template_path,
+      outputPath,
+      confidentFields.map((field) => ({
+        field_id: field.field_id,
+        line_index: field.line_index,
+        blank_line: field.blank_line,
+        common_prefix: field.common_prefix,
+        common_suffix: field.common_suffix,
+      })),
+    ));
+    if (!applied) return;
+    if (!applied.applied_field_ids.length) {
+      setStatus('Карта не смогла однозначно примениться к шаблону. Исходный файл не изменён.');
+      return;
+    }
+    const analyzed = await run('analyze_template_file', () =>
+      analyzeTemplateFile(applied.output_path, current.document_id, current.button_label));
+    if (!analyzed) return;
+    setPendingTemplates((previous) => previous.map((item) => item.document_id === documentId
+      ? {
+          ...item,
+          template_path: applied.output_path,
+          extracted_text: analyzed.extracted_text,
+          popup_fields: analyzed.document.popup_fields ?? item.popup_fields,
+        }
+      : item));
+    if (importedTemplatePath === current.template_path) setImportedTemplatePath(applied.output_path);
+    if (templateText === current.extracted_text) setTemplateText(analyzed.extracted_text);
+    setStatus(`Шаблон обучен: подтверждено и размечено полей — ${applied.applied_field_ids.length}. Исходный Word сохранён без изменений.`);
   }
 
   async function startGuidedSourceScanner(preselectedFieldId = '') {
@@ -1137,12 +1214,14 @@ function AppContent() {
 
     const rows = await run('prepare_template_setup', () => prepareTemplateSetup(candidates));
     if (!rows) return;
-    const staticRows = rows.filter((row) => row.is_static_copy);
-    if (staticRows.length) {
-      setStatus(`Кнопки будут созданы. Шаблоны без полей будут копироваться без изменений: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
-    }
     const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);
-    const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows));
+    const staticRows = confirmedRows.filter((row) => row.is_static_copy);
+    if (staticRows.length) {
+      setStatus(autoInferStaticTemplates
+        ? `Безопасная авторазметка включена для ${staticRows.length} статического шаблона(ов): изменяться будут только производные копии с однозначными пустыми зонами.`
+        : `Кнопки будут созданы сразу. Неразмеченные шаблоны останутся точными статическими копиями: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
+    }
+    const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows, autoInferStaticTemplates));
     if (!pack) return;
     setDocuments(pack.documents);
     setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
@@ -1151,6 +1230,7 @@ function AppContent() {
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setDraftDomainOverride(null);
+    setAutoInferStaticTemplates(false);
     setSetupOpen(false);
     setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
   }
@@ -1462,14 +1542,17 @@ function AppContent() {
           pendingTemplates={pendingTemplates}
           draftPopupFields={draftPopupFields}
           draftDomainOverride={draftDomainOverride}
+          autoInferStaticTemplates={autoInferStaticTemplates}
           onTemplateTextChange={setTemplateText}
           onButtonLabelChange={setButtonLabel}
           onDraftPopupFieldsChange={setDraftPopupFields}
           onDraftDomainOverrideChange={setDraftDomainOverride}
+          onAutoInferStaticTemplatesChange={setAutoInferStaticTemplates}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
           onPendingTemplateDomainChange={(documentId, value) => setPendingTemplates((previous) => withPendingTemplateDomain(previous, documentId, value))}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
+          onLearnPendingTemplate={learnPendingTemplateFromExamples}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}
           onAnalyze={analyzeInDialog}
           onPickFile={pickTemplateFile}

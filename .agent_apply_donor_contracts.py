@@ -1,0 +1,486 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected exactly one match, found {count}")
+    target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+# 1. Restore proven compact-date compatibility without sacrificing the current
+# unambiguous DDMM interpretation.
+replace_once(
+    "crates/dokkomplekt-core/src/date_parser.rs",
+    """/// Parses common user-entered date forms into `DD.MM.YYYY`.
+/// Supports ISO `YYYY-MM-DD`, compact numeric values plus Russian, English and
+/// Polish month names. Four-digit compact input is interpreted only as `DDMM`
+/// in the supplied default year; ambiguous historical shorthand is rejected.""",
+    """/// Parses common user-entered date forms into `DD.MM.YYYY`.
+/// Supports ISO `YYYY-MM-DD`, compact numeric values plus Russian, English and
+/// Polish month names. Four-digit compact input prefers unambiguous `DDMM` in
+/// the supplied default year and only falls back to the legacy `DMYY` form when
+/// `DDMM` is impossible. Five- and seven-digit legacy values support a missing
+/// leading zero in day or month without changing already-valid modern input.""",
+)
+replace_once(
+    "crates/dokkomplekt-core/src/date_parser.rs",
+    """        4 => {
+            // Four compact digits have exactly one interpretation: DDMM in the
+            // default year. We intentionally do not guess the old DMY compact
+            // form (`1126` -> 01.01.2026), because that silently turns many
+            // invalid dates into a different valid date.
+            let day = digits[0..2].parse::<u32>().ok()?;
+            let month = digits[2..4].parse::<u32>().ok()?;
+            format_date(day, month, default_year).map(|value| {
+                parsed(
+                    value,
+                    Some("четыре цифры интерпретированы как ДДММ с годом по умолчанию"),
+                )
+            })
+        }
+        6 => format_date(""",
+    """        4 => {
+            // Keep the safer modern DDMM meaning whenever it forms a valid date.
+            let day = digits[0..2].parse::<u32>().ok()?;
+            let month = digits[2..4].parse::<u32>().ok()?;
+            if let Some(value) = format_date(day, month, default_year) {
+                Some(parsed(
+                    value,
+                    Some("четыре цифры интерпретированы как ДДММ с годом по умолчанию"),
+                ))
+            } else {
+                // Donor compatibility: 1126 -> 01.01.2026. This fallback is
+                // reached only when DDMM itself is impossible (month 26 here).
+                let day = digits[0..1].parse::<u32>().ok()?;
+                let month = digits[1..2].parse::<u32>().ok()?;
+                let year = normalize_year(digits[2..4].parse::<i32>().ok()?, default_year);
+                format_date(day, month, year).map(|value| {
+                    parsed(
+                        value,
+                        Some("четыре цифры распознаны как legacy ДМГГ после отклонения ДДММ"),
+                    )
+                })
+            }
+        }
+        5 => {
+            // Legacy input with one omitted leading zero: 10526 -> 01.05.2026,
+            // 31126 -> 31.01.2026. Try the donor's deterministic preference,
+            // then the alternate split; impossible dates remain rejected.
+            let first_two = digits[0..2].parse::<u32>().ok()?;
+            let patterns = if first_two > 12 {
+                [(2_usize, 1_usize), (1_usize, 2_usize)]
+            } else {
+                [(1_usize, 2_usize), (2_usize, 1_usize)]
+            };
+            for (day_len, month_len) in patterns {
+                let day = digits[0..day_len].parse::<u32>().ok()?;
+                let month = digits[day_len..day_len + month_len].parse::<u32>().ok()?;
+                let year = normalize_year(
+                    digits[day_len + month_len..].parse::<i32>().ok()?,
+                    default_year,
+                );
+                if let Some(value) = format_date(day, month, year) {
+                    return Some(parsed(
+                        value,
+                        Some("пять цифр распознаны как дата с пропущенным ведущим нулём"),
+                    ));
+                }
+            }
+            None
+        }
+        6 => format_date(""",
+)
+replace_once(
+    "crates/dokkomplekt-core/src/date_parser.rs",
+    """        8 => format_date(
+            digits[0..2].parse().ok()?,
+            digits[2..4].parse().ok()?,
+            normalize_year(digits[4..8].parse().ok()?, default_year),
+        )
+        .map(|value| parsed(value, None)),
+        _ => None,""",
+    """        7 => {
+            // Same compatibility as the 5-digit form, but with a four-digit year.
+            let first_two = digits[0..2].parse::<u32>().ok()?;
+            let patterns = if first_two > 12 {
+                [(2_usize, 1_usize), (1_usize, 2_usize)]
+            } else {
+                [(1_usize, 2_usize), (2_usize, 1_usize)]
+            };
+            for (day_len, month_len) in patterns {
+                let day = digits[0..day_len].parse::<u32>().ok()?;
+                let month = digits[day_len..day_len + month_len].parse::<u32>().ok()?;
+                let year = digits[day_len + month_len..].parse::<i32>().ok()?;
+                if let Some(value) = format_date(day, month, year) {
+                    return Some(parsed(
+                        value,
+                        Some("семь цифр распознаны как дата с пропущенным ведущим нулём"),
+                    ));
+                }
+            }
+            None
+        }
+        8 => format_date(
+            digits[0..2].parse().ok()?,
+            digits[2..4].parse().ok()?,
+            normalize_year(digits[4..8].parse().ok()?, default_year),
+        )
+        .map(|value| parsed(value, None)),
+        _ => None,""",
+)
+replace_once(
+    "crates/dokkomplekt-core/src/date_parser.rs",
+    """        assert_eq!(parse_flexible_date("1126", 2026), None);
+        assert_eq!(
+            parse_flexible_date("100526", 2026).as_deref(),
+            Some("10.05.2026")
+        );""",
+    """        assert_eq!(
+            parse_flexible_date("1126", 2026).as_deref(),
+            Some("01.01.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("1205", 2026).as_deref(),
+            Some("12.05.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("10526", 2026).as_deref(),
+            Some("01.05.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("31126", 2026).as_deref(),
+            Some("31.01.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("1052026", 2026).as_deref(),
+            Some("01.05.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("3112026", 2026).as_deref(),
+            Some("31.01.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("100526", 2026).as_deref(),
+            Some("10.05.2026")
+        );""",
+)
+
+# 2. Background and manual intake must admit the same legacy Office formats;
+# decoding/dependency checks remain fail-closed in the universal intake layer.
+replace_once(
+    "crates/dokkomplekt-core/src/intake_agent.rs",
+    """        "docx"
+            | "docm"
+            | "pdf"""",
+    """        "docx"
+            | "docm"
+            | "doc"
+            | "ppt"
+            | "pptx"
+            | "pdf"""",
+)
+replace_once(
+    "crates/dokkomplekt-core/src/intake_agent.rs",
+    """            "source.pdf",
+            "scan.jpg",
+            "table.xlsx",
+            "letter.eml",
+            "bundle.zip",""",
+    """            "legacy.doc",
+            "slides.ppt",
+            "slides.pptx",
+            "source.pdf",
+            "scan.jpg",
+            "table.xlsx",
+            "letter.eml",
+            "bundle.zip",""",
+)
+
+# 3. Preserve donor UX: renaming to an occupied label keeps the button identity
+# and template, and picks a deterministic visible suffix.
+replace_once(
+    "crates/dokkomplekt-core/src/button_registry.rs",
+    """    let normalized = normalize_label(requested_label);
+    if pack.documents.iter().any(|document| {
+        document.id != document_id && document.button_label.eq_ignore_ascii_case(&normalized)
+    }) {
+        return Err(ButtonRegistryError::DuplicateLabel(normalized));
+    }
+    let document = pack
+        .documents
+        .iter_mut()
+        .find(|document| document.id == document_id)
+        .ok_or_else(|| ButtonRegistryError::DocumentNotFound(document_id.to_string()))?;
+    document.button_label = normalized.clone();
+    Ok(normalized)""",
+    """    let normalized = normalize_label(requested_label);
+    let mut resolved = normalized.clone();
+    if pack.documents.iter().any(|document| {
+        document.id != document_id && document.button_label.eq_ignore_ascii_case(&resolved)
+    }) {
+        for index in 2..500 {
+            let candidate = format!("{normalized} ({index})");
+            if !pack.documents.iter().any(|document| {
+                document.id != document_id
+                    && document.button_label.eq_ignore_ascii_case(&candidate)
+            }) {
+                resolved = candidate;
+                break;
+            }
+        }
+        if resolved == normalized {
+            resolved = format!("{normalized} ({})", pack.documents.len() + 1);
+        }
+    }
+    let document = pack
+        .documents
+        .iter_mut()
+        .find(|document| document.id == document_id)
+        .ok_or_else(|| ButtonRegistryError::DocumentNotFound(document_id.to_string()))?;
+    document.button_label = resolved.clone();
+    Ok(resolved)""",
+)
+replace_once(
+    "crates/dokkomplekt-core/src/button_registry.rs",
+    """        assert_eq!(removed.template_path, "templates/original.docm");
+        assert!(pack.documents.is_empty());
+    }
+}""",
+    """        assert_eq!(removed.template_path, "templates/original.docm");
+        assert!(pack.documents.is_empty());
+    }
+
+    #[test]
+    fn rename_collision_uses_donor_suffix_without_changing_document_identity() {
+        let make = |id: &str, label: &str, template: &str| DocumentTemplateSpec {
+            id: id.into(),
+            button_label: label.into(),
+            template_path: template.into(),
+            category: crate::DomainKind::Generic,
+            role_id: "generic".into(),
+            required_fields: vec!["document.number".into()],
+            placeholders: vec!["document.number".into()],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        let mut pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "Pack".into(),
+            documents: vec![
+                make("d1", "Акт", "templates/act.docx"),
+                make("d2", "Эпикриз", "templates/epicrisis.docx"),
+            ],
+        };
+
+        let label = rename_document_button(&mut pack, "d1", "Эпикриз").expect("rename");
+        assert_eq!(label, "Эпикриз (2)");
+        let renamed = pack.documents.iter().find(|document| document.id == "d1").unwrap();
+        assert_eq!(renamed.id, "d1");
+        assert_eq!(renamed.template_path, "templates/act.docx");
+        assert_eq!(renamed.required_fields, vec!["document.number"]);
+    }
+}""",
+)
+
+# 4. Make the donor folder-naming confirmation profession-neutral. Existing
+# persisted preferences count as already confirmed, so upgrades do not nag.
+replace_once(
+    "src/lib/appSupport.ts",
+    """export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
+export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';""",
+    """export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
+export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-confirmed.v1';
+export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';""",
+)
+replace_once(
+    "src/lib/appSupport.ts",
+    """export function loadOutputFolderParts(): FolderNamePartDto[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null');
+    if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) {
+      return parsed as FolderNamePartDto[];
+    }
+  } catch { /* use privacy-safe default */ }
+  return ['DocumentNumber', 'DocumentDate'];
+}
+
+export function loadAutoPrintPreference(): boolean {""",
+    """export function loadOutputFolderParts(): FolderNamePartDto[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null');
+    if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) {
+      return parsed as FolderNamePartDto[];
+    }
+  } catch { /* use privacy-safe default */ }
+  return ['DocumentNumber', 'DocumentDate'];
+}
+
+export function loadOutputNamingConfirmed(): boolean {
+  try {
+    if (localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true') return true;
+    const saved = localStorage.getItem(OUTPUT_PREFS_KEY);
+    if (!saved) return false;
+    const parsed = JSON.parse(saved);
+    // Migration contract: a user who already chose and persisted naming parts
+    // has already expressed the naming principle and must not be re-prompted.
+    return Array.isArray(parsed) && parsed.length > 0 && parsed.every((value) => typeof value === 'string');
+  } catch { return false; }
+}
+
+export function saveOutputFolderParts(parts: FolderNamePartDto[]): FolderNamePartDto[] {
+  const normalized: FolderNamePartDto[] = parts.length
+    ? [...new Set(parts)]
+    : ['DocumentNumber', 'DocumentDate'];
+  try {
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(normalized));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+  } catch { /* storage may be unavailable */ }
+  return normalized;
+}
+
+export function loadAutoPrintPreference(): boolean {""",
+)
+
+replace_once(
+    "src/App.tsx",
+    """  AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
+  arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,
+  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,""",
+    """  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
+  arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
+  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,""",
+)
+replace_once(
+    "src/App.tsx",
+    """  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
+  const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
+  const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);""",
+    """  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
+  const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
+  const [outputNamingConfirmed, setOutputNamingConfirmed] = useState(loadOutputNamingConfirmed);
+  const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);""",
+)
+replace_once(
+    "src/App.tsx",
+    """  function updateFolderParts(parts: FolderNamePartDto[]) {
+    const next: FolderNamePartDto[] = parts.length ? parts : ['DocumentNumber', 'DocumentDate'];
+    setFolderParts(next);
+    try { localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+  }""",
+    """  function updateFolderParts(parts: FolderNamePartDto[]) {
+    const next = saveOutputFolderParts(parts);
+    setFolderParts(next);
+    setOutputNamingConfirmed(true);
+  }""",
+)
+replace_once(
+    "src/App.tsx",
+    """  async function performGenerateSelectedDocuments(documentIds: string[]) {
+    const res = await run('render_docx_batch', () => renderDocxBatch(""",
+    """  async function ensureOutputNamingConfirmed(): Promise<boolean> {
+    if (outputNamingConfirmed) return true;
+    const accepted = await dialogs.confirm({
+      title: 'Подтвердите имя папки результата',
+      message: 'Перед первым созданием подтвердите принцип формирования подпапки результата. Сейчас используются выбранные в настройках части имени (по умолчанию — номер и дата документа). Сохранить этот принцип?',
+      confirmLabel: 'Использовать этот принцип',
+    });
+    if (accepted) {
+      const next = saveOutputFolderParts(folderParts);
+      setFolderParts(next);
+      setOutputNamingConfirmed(true);
+      return true;
+    }
+    setUtilityOpen(true);
+    setStatus('В настройках выберите состав имени папки результата. После выбора повторите создание.');
+    return false;
+  }
+
+  async function performGenerateSelectedDocuments(documentIds: string[]) {
+    if (!(await ensureOutputNamingConfirmed())) return;
+    const res = await run('render_docx_batch', () => renderDocxBatch(""",
+)
+replace_once(
+    "src/App.tsx",
+    """  async function installWatcher() {
+    const res = await run('install_background_watcher', () => installBackgroundWatcher(""",
+    """  async function installWatcher() {
+    if (!(await ensureOutputNamingConfirmed())) return;
+    const res = await run('install_background_watcher', () => installBackgroundWatcher(""",
+)
+replace_once(
+    "src/App.tsx",
+    """  async function runZeroTouch() {
+    if (!intakeSource.trim()) {
+      setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
+      return;
+    }
+    const res = await run('run_created_documents_intake', () =>""",
+    """  async function runZeroTouch() {
+    if (!intakeSource.trim()) {
+      setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
+      return;
+    }
+    if (!(await ensureOutputNamingConfirmed())) return;
+    const res = await run('run_created_documents_intake', () =>""",
+)
+
+replace_once(
+    "src/lib/appSupport.selection.test.ts",
+    """import { defaultSelectedDocumentIds, loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';""",
+    """import {
+  defaultSelectedDocumentIds,
+  loadOutputFolderParts,
+  loadOutputNamingConfirmed,
+  loadOutputRoot,
+  OUTPUT_NAMING_CONFIRMED_KEY,
+  OUTPUT_PREFS_KEY,
+  OUTPUT_ROOT_KEY,
+  saveOutputFolderParts,
+  saveOutputRoot,
+  shouldSelectDocumentByDefault,
+} from './appSupport';""",
+)
+replace_once(
+    "src/lib/appSupport.selection.test.ts",
+    """});
+
+describe('default document selection', () => {""",
+    """});
+
+describe('output folder naming confirmation', () => {
+  it('requires a one-time confirmation when no naming preference was ever saved', () => {
+    localStorage.removeItem(OUTPUT_PREFS_KEY);
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(loadOutputNamingConfirmed()).toBe(false);
+    expect(loadOutputFolderParts()).toEqual(['DocumentNumber', 'DocumentDate']);
+  });
+
+  it('persists an explicit profession-neutral naming principle', () => {
+    localStorage.removeItem(OUTPUT_PREFS_KEY);
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(saveOutputFolderParts(['OrganizationName', 'DocumentDate'])).toEqual(['OrganizationName', 'DocumentDate']);
+    expect(loadOutputFolderParts()).toEqual(['OrganizationName', 'DocumentDate']);
+    expect(loadOutputNamingConfirmed()).toBe(true);
+  });
+
+  it('treats existing saved naming preferences as already confirmed during upgrade', () => {
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['ShortInitials', 'ShortPeriodRange']));
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(loadOutputNamingConfirmed()).toBe(true);
+  });
+});
+
+describe('default document selection', () => {""",
+)
+
+# These files are one-shot delivery machinery, not product infrastructure.
+Path(".agent_apply_donor_contracts.py").unlink()
+Path(".github/workflows/one-time-donor-contract-apply.yml").unlink()

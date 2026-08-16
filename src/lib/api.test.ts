@@ -69,6 +69,10 @@ describe('thin Tauri API', () => {
     expect(rustCommandNames).toContain('confirm_template_setup');
     expect(rustCommandNames).toContain('get_diary_plan');
     expect(rustCommandNames).toContain('get_output_plan');
+    expect(rustCommandNames).toContain('list_supplementary_sources');
+    expect(rustCommandNames).toContain('attach_supplementary_file');
+    expect(rustCommandNames).toContain('attach_supplementary_folder');
+    expect(rustCommandNames).toContain('remove_supplementary_source');
     expect(rustCommandNames).toContain('apply_scanner');
     expect(rustCommandNames).toContain('route_intake');
     expect(rustCommandNames).toContain('get_calibrated_threshold_status');

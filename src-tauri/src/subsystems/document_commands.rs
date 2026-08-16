@@ -745,6 +745,7 @@ fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<Seman
         .lock()
         .map_err(|_| "source provenance state lock failed")?
         .take();
+    cleanup_owned_supplementary_files(&app);
     Ok(result)
 }
 
@@ -785,6 +786,7 @@ fn parse_source(
         .source_provenance
         .lock()
         .map_err(|_| "source provenance state lock failed")? = Some(provenance);
+    cleanup_owned_supplementary_files(&app);
     Ok(response)
 }
 
@@ -865,6 +867,7 @@ fn parse_source_file(
         .source_provenance
         .lock()
         .map_err(|_| "source provenance state lock failed")? = Some(provenance);
+    cleanup_owned_supplementary_files(&app);
     Ok(response)
 }
 
@@ -966,6 +969,7 @@ fn parse_web_source(
         .source_provenance
         .lock()
         .map_err(|_| "source provenance state lock failed")? = Some(provenance);
+    cleanup_owned_supplementary_files(&app);
     Ok(response)
 }
 
@@ -1261,9 +1265,11 @@ fn render_docx(
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
+    let effective_template_path = supplementary_template_path_for_document(&doc, &base_case)?
+        .unwrap_or_else(|| doc.template_path.clone());
     let template_snapshot = template_snapshot::TemplateSnapshot::capture(
         &app,
-        &doc.template_path,
+        &effective_template_path,
         &doc.button_label,
     )?;
     let template_text = extract_docx_text(template_snapshot.path()).map_err(|e| e.to_string())?;
@@ -1378,12 +1384,22 @@ fn render_docx(
     Ok(value)
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OutputConflictPolicy {
+    #[default]
+    CreateNewVersion,
+    ReplaceWithBackup,
+}
+
 #[derive(Debug, Deserialize)]
 struct RenderDocxBatchRequest {
     document_ids: Vec<String>,
     output_root: String,
     folder_parts: Vec<FolderNamePart>,
     strict: bool,
+    #[serde(default)]
+    conflict_policy: OutputConflictPolicy,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1399,6 +1415,54 @@ struct RenderDocxBatchResponse {
     created_files: Vec<String>,
     created_documents: Vec<CreatedDocumentOutputDto>,
     warnings: Vec<String>,
+    backup_folder: Option<String>,
+}
+
+fn publish_stage_with_conflict_policy(
+    stage: &Path,
+    desired: &Path,
+    policy: OutputConflictPolicy,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    if matches!(policy, OutputConflictPolicy::CreateNewVersion) {
+        return publish_stage_to_unique_directory(stage, desired).map(|path| (path, None));
+    }
+    let parent = desired.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    if desired.exists() && !desired.is_dir() {
+        return Err("Нельзя заменить комплект: целевой путь занят файлом.".into());
+    }
+    if !desired.exists() {
+        std::fs::rename(stage, desired)
+            .map_err(|error| format!("Не удалось опубликовать новый комплект: {error}"))?;
+        return Ok((desired.to_path_buf(), None));
+    }
+
+    let base_name = desired
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Комплект");
+    let backup_base = parent.join(format!("{base_name} резервная копия"));
+    let backup = (1..=10_000)
+        .map(|index| numbered_candidate(&backup_base, index))
+        .find(|candidate| !candidate.exists())
+        .ok_or_else(|| "Не удалось подобрать имя резервной копии комплекта.".to_string())?;
+    std::fs::rename(desired, &backup)
+        .map_err(|error| format!("Не удалось создать резервную копию существующего комплекта: {error}"))?;
+    match std::fs::rename(stage, desired) {
+        Ok(()) => Ok((desired.to_path_buf(), Some(backup))),
+        Err(publish_error) => {
+            let restore = std::fs::rename(&backup, desired);
+            match restore {
+                Ok(()) => Err(format!(
+                    "Новый комплект не опубликован; исходный комплект восстановлен из резервной копии: {publish_error}"
+                )),
+                Err(restore_error) => Err(format!(
+                    "Новый комплект не опубликован ({publish_error}); резервная копия сохранена в «{}», но автоматическое восстановление исходного имени не удалось: {restore_error}",
+                    backup.display()
+                )),
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -1418,6 +1482,9 @@ fn render_docx_batch(
     if requested_ids.is_empty() {
         return Err("Не выбран ни один документ для комплекта.".into());
     }
+    if req.folder_parts.is_empty() {
+        return Err("Перед созданием подтвердите, как называть папку комплекта.".into());
+    }
 
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let documents = requested_ids
@@ -1430,22 +1497,24 @@ fn render_docx_batch(
                 .ok_or_else(|| format!("Документ не найден: {document_id}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let template_snapshots = documents
-        .iter()
-        .map(|document| {
-            template_snapshot::TemplateSnapshot::capture(
-                &app,
-                &document.template_path,
-                &document.button_label,
-            )
-            .map(|snapshot| (document.id.clone(), snapshot))
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let base_case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
+    let template_snapshots = documents
+        .iter()
+        .map(|document| {
+            let effective_template_path = supplementary_template_path_for_document(document, &base_case)?
+                .unwrap_or_else(|| document.template_path.clone());
+            template_snapshot::TemplateSnapshot::capture(
+                &app,
+                &effective_template_path,
+                &document.button_label,
+            )
+            .map(|snapshot| (document.id.clone(), snapshot))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     let output_root = resolve_user_path(&app, &req.output_root)?;
     std::fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
     cleanup_stale_stage_directories(&output_root, Duration::from_secs(24 * 60 * 60))?;
@@ -1582,8 +1651,12 @@ fn render_docx_batch(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
-    let output_folder = match publish_stage_to_unique_directory(&stage, &desired_output_folder) {
-        Ok(path) => path,
+    let (output_folder, backup_folder) = match publish_stage_with_conflict_policy(
+        &stage,
+        &desired_output_folder,
+        req.conflict_policy,
+    ) {
+        Ok(result) => result,
         Err(error) => {
             let journal_cleanup =
                 generation_publication::abort_prepared_publication(&app, &permit);
@@ -1635,11 +1708,18 @@ fn render_docx_batch(
             path: path.clone(),
         })
         .collect();
+    if let Some(backup) = &backup_folder {
+        warnings.push(format!(
+            "Предыдущая версия комплекта сохранена: {}",
+            backup.display()
+        ));
+    }
     Ok(RenderDocxBatchResponse {
         output_folder: output_folder.display().to_string(),
         created_files,
         created_documents,
         warnings,
+        backup_folder: backup_folder.map(|path| path.display().to_string()),
     })
 }
 
@@ -2650,22 +2730,42 @@ struct OutputPlanRequest {
     button_labels: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct OutputPlanResponse {
+    root_folder: String,
+    patient_folder: String,
+    files: Vec<String>,
+    warnings: Vec<String>,
+    target_exists: bool,
+}
+
 #[tauri::command]
 fn get_output_plan(
     req: OutputPlanRequest,
     state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+    app: tauri::AppHandle,
+) -> Result<OutputPlanResponse, String> {
+    if req.folder_parts.is_empty() {
+        return Err("Сначала выберите принцип имени папки комплекта.".into());
+    }
+    let root = resolve_user_path(&app, &req.root_folder)?;
     let case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
     let plan = plan_output_paths(
-        Path::new(&req.root_folder),
+        &root,
         &case,
         &req.folder_parts,
         &req.button_labels,
     );
-    serde_json::to_value(plan).map_err(|e| e.to_string())
+    Ok(OutputPlanResponse {
+        root_folder: plan.root_folder.display().to_string(),
+        patient_folder: plan.patient_folder.display().to_string(),
+        files: plan.files.iter().map(|path| path.display().to_string()).collect(),
+        warnings: plan.warnings,
+        target_exists: plan.patient_folder.exists(),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -2909,6 +3009,9 @@ fn run_created_documents_intake(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
+    if req.folder_parts.is_empty() {
+        return Err("Перед автоматическим созданием подтвердите, как называть папку комплекта.".into());
+    }
     let source_path = req.source_path.clone();
     match perform_created_documents_intake(&state, &app, req) {
         Ok(response) => serde_json::to_value(response).map_err(|e| e.to_string()),
@@ -2925,5 +3028,57 @@ fn run_created_documents_intake(
             let _ = append_audit_event(&app, "intake_failed", "", &details);
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod output_conflict_policy_tests {
+    use super::*;
+
+    #[test]
+    fn replace_with_backup_keeps_old_bundle_and_publishes_new_one() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-output-conflict-{}", Uuid::new_v4()));
+        let desired = root.join("Комплект 42");
+        let stage = root.join(".stage");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(desired.join("old.txt"), b"old").unwrap();
+        std::fs::write(stage.join("new.txt"), b"new").unwrap();
+
+        let (published, backup) = publish_stage_with_conflict_policy(
+            &stage,
+            &desired,
+            OutputConflictPolicy::ReplaceWithBackup,
+        )
+        .unwrap();
+        let backup = backup.expect("backup must exist");
+        assert_eq!(published, desired);
+        assert_eq!(std::fs::read(published.join("new.txt")).unwrap(), b"new");
+        assert_eq!(std::fs::read(backup.join("old.txt")).unwrap(), b"old");
+        assert!(!stage.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn create_new_version_never_mutates_existing_bundle() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-output-version-{}", Uuid::new_v4()));
+        let desired = root.join("Комплект");
+        let stage = root.join(".stage");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(desired.join("old.txt"), b"old").unwrap();
+        std::fs::write(stage.join("new.txt"), b"new").unwrap();
+
+        let (published, backup) = publish_stage_with_conflict_policy(
+            &stage,
+            &desired,
+            OutputConflictPolicy::CreateNewVersion,
+        )
+        .unwrap();
+        assert_ne!(published, desired);
+        assert!(backup.is_none());
+        assert_eq!(std::fs::read(desired.join("old.txt")).unwrap(), b"old");
+        assert_eq!(std::fs::read(published.join("new.txt")).unwrap(), b"new");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

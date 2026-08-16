@@ -98,6 +98,9 @@ function validateBatch(command: string, value: unknown): void {
   stringArray(command, root.created_files, 'created_files');
   if (root.created_documents !== undefined) objectArray(command, root.created_documents, 'created_documents');
   optionalStringArray(command, root.warnings, 'warnings');
+  if (root.backup_folder !== undefined && root.backup_folder !== null) {
+    string(command, root.backup_folder, 'backup_folder');
+  }
 }
 
 function validateSemantic(command: string, value: unknown): void {
@@ -189,12 +192,29 @@ function validateProcessBlueprints(command: string, value: unknown): void {
   string(command, root.notice, 'notice');
 }
 
+function validateSupplementarySources(command: string, value: unknown): void {
+  const root = record(command, value);
+  const sources = array(command, root.sources, 'sources');
+  sources.forEach((item, index) => {
+    const source = record(command, item, `sources[${index}]`);
+    string(command, source.source_id, `sources[${index}].source_id`);
+    string(command, source.role, `sources[${index}].role`);
+    string(command, source.name, `sources[${index}].name`);
+    string(command, source.source_kind, `sources[${index}].source_kind`);
+    string(command, source.path, `sources[${index}].path`);
+  });
+  const semanticCase = record(command, root.semantic_case, 'semantic_case');
+  record(command, semanticCase.values, 'semantic_case.values');
+  stringArray(command, root.warnings, 'warnings');
+}
+
 function validateOutputPlan(command: string, value: unknown): void {
   const root = record(command, value);
   string(command, root.root_folder, 'root_folder');
   string(command, root.patient_folder, 'patient_folder');
   stringArray(command, root.files, 'files');
   stringArray(command, root.warnings, 'warnings');
+  boolean(command, root.target_exists, 'target_exists');
 }
 
 function validateIntakeRoute(command: string, value: unknown): void {
@@ -362,6 +382,10 @@ export const COMMAND_RESPONSE_KIND = {
   'list_automation_exceptions': 'array',
   'list_case_runs': 'array',
   'list_clause_blocks': 'array',
+  'list_supplementary_sources': 'object',
+  'attach_supplementary_file': 'object',
+  'attach_supplementary_folder': 'object',
+  'remove_supplementary_source': 'object',
   'list_learned_scanner_rules': 'array',
   'list_organization_knowledge': 'array',
   'list_template_approvals': 'array',
@@ -488,6 +512,12 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
       break;
     case 'render_docx_batch':
       validateBatch(command, value);
+      break;
+    case 'list_supplementary_sources':
+    case 'attach_supplementary_file':
+    case 'attach_supplementary_folder':
+    case 'remove_supplementary_source':
+      validateSupplementarySources(command, value);
       break;
     case 'apply_scanner':
       validateScanner(command, value);

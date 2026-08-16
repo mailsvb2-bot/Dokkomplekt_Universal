@@ -12,7 +12,7 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing' } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; packOverride?: { pack_id: string; name: string; documents: Array<Record<string, unknown>> }; outputTargetExists?: boolean } = {}) {
   let componentState = options.componentState ?? ((options.componentInstalled ?? true) ? 'downloaded' : 'missing');
   const componentInstalled = () => componentState === 'downloaded';
   const componentAvailable = () => componentState !== 'missing';
@@ -22,7 +22,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
     switch (command) {
       case 'first_run_state':
       case 'load_state':
-        return { pack, has_user_buttons: true, message: 'ok' } as never;
+        return { pack: options.packOverride ?? pack, has_user_buttons: true, message: 'ok' } as never;
       case 'parse_source':
         return { semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] } } as never;
       case 'parse_source_file':
@@ -125,7 +125,19 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'list_template_versions': return [] as never;
       case 'rollback_template_version': return pack as never;
       case 'get_output_plan':
-        return { root_folder: 'output', patient_folder: 'output/Готовые', files: ['output/Готовые/Счёт.docx'], warnings: [] } as never;
+        return { root_folder: 'output', patient_folder: 'output/Готовые', files: ['output/Готовые/Счёт.docx'], warnings: [], target_exists: options.outputTargetExists ?? false } as never;
+      case 'list_supplementary_sources':
+        return { sources: [], semantic_case: caseDto, warnings: [] } as never;
+      case 'attach_supplementary_file': {
+        const req = (payload as { req?: { role?: string; file_name?: string } })?.req;
+        return { sources: [{ source_id: 'supp-file', role: req?.role ?? 'reference', name: req?.file_name ?? 'source', source_kind: 'text', path: '/app-data/source' }], semantic_case: caseDto, warnings: [] } as never;
+      }
+      case 'attach_supplementary_folder': {
+        const req = (payload as { req?: { role?: string } })?.req;
+        return { sources: [{ source_id: 'supp-folder', role: req?.role ?? 'reference', name: 'folder/item.docx', source_kind: 'word', path: 'C:/Выбранная папка/item.docx' }], semantic_case: caseDto, warnings: [] } as never;
+      }
+      case 'remove_supplementary_source':
+        return { sources: [], semantic_case: caseDto, warnings: [] } as never;
       case 'route_intake':
         return { should_start_ui: false, should_raise_existing_window: true, reason: 'raise existing window' } as never;
       case 'save_state':
@@ -195,8 +207,6 @@ async function click(name: RegExp | string) {
 describe('Полный прогон пользовательских сценариев и тем', () => {
   beforeEach(() => {
     localStorage.clear();
-    // These broad scenarios model an established user. A persisted naming
-    // preference is itself a donor-compatible confirmation during upgrade.
     localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
   });
 
@@ -206,30 +216,73 @@ describe('Полный прогон пользовательских сцена�
     vi.restoreAllMocks();
   });
 
-  it('первое создание явно подтверждает нейтральный принцип имени папки результата', async () => {
+  it('первое создание требует реального выбора принципа имени папки, а не подтверждения скрытого default', async () => {
     localStorage.clear();
     const calls: Call[] = [];
     installMock(calls);
     render(<App />);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
-
     fireEvent.click(screen.getByText('Другой способ добавить источник'));
     fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Счёт № 148' } });
     await click(/Использовать текст/);
-    await screen.findByDisplayValue('7701234567');
-
     await click(/Проверить и создать \(2\)/);
     const preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
     fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
 
-    const namingDialog = await screen.findByRole('dialog', { name: 'Подтвердите имя папки результата' });
-    expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(false);
+    const naming = await screen.findByRole('dialog', { name: 'Как называть папку комплекта?' });
     expect(localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY)).toBeNull();
-    fireEvent.click(within(namingDialog).getByRole('button', { name: 'Использовать этот принцип' }));
+    expect(calls.some(call => call.command === 'render_docx_batch')).toBe(false);
+    fireEvent.click(within(naming).getByRole('button', { name: 'Организация + номер документа' }));
 
-    await waitFor(() => expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(true));
+    await waitFor(() => expect(calls.some(call => call.command === 'render_docx_batch')).toBe(true));
+    expect(JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null')).toEqual(['OrganizationName', 'DocumentNumber']);
     expect(localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY)).toBe('true');
-    expect(JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null')).toEqual(['DocumentNumber', 'DocumentDate']);
+  });
+
+  it('при существующем комплекте пользователь выбирает действие, а замена передаётся как backup-policy', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { outputTargetExists: true });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Счёт № 148' } });
+    await click(/Использовать текст/);
+    await click(/Проверить и создать \(2\)/);
+    const preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
+
+    const conflict = await screen.findByRole('dialog', { name: 'Комплект уже существует. Что сделать?' });
+    expect(within(conflict).getByRole('button', { name: 'Открыть существующий' })).toBeTruthy();
+    expect(within(conflict).getByRole('button', { name: 'Создать новую версию' })).toBeTruthy();
+    fireEvent.click(within(conflict).getByRole('button', { name: 'Заменить с резервной копией' }));
+    await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({ req: { conflict_policy: 'replace_with_backup' } }));
+  });
+
+  it('универсальные дополнительные материалы доступны всем, а Даты и Тексты появляются только у Medical diaries', async () => {
+    const calls: Call[] = [];
+    const medicalDiary = { id: 'med_diary', button_label: 'Дневники наблюдения', template_path: 'diary.docx', category: 'Medical', role_id: 'diaries', required_fields: [], placeholders: [], is_static_copy: false, popup_fields: [], popup_configured: false };
+    const generic = { id: 'generic_1', button_label: 'Сопроводительный документ', template_path: 'generic.docx', category: 'Generic', role_id: 'generic', required_fields: [], placeholders: [], is_static_copy: false, popup_fields: [], popup_configured: false };
+    installMock(calls, { packOverride: { pack_id: 'default', name: 'Набор', documents: [medicalDiary, generic] } });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Дневники наблюдения' });
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Основной источник' } });
+    await click(/Использовать текст/);
+
+    const stage = screen.getByText('Дополнительные источники / материалы').closest('section') as HTMLElement;
+    expect(stage).toBeTruthy();
+    expect(within(stage).queryByText(/^Даты$/)).toBeNull();
+    const addFiles = within(stage).getByText('Добавить файлы').closest('label')?.querySelector('input');
+    expect(addFiles).toBeTruthy();
+    fireEvent.change(addFiles as HTMLInputElement, { target: { files: [new File(['reference'], 'Приложение.txt', { type: 'text/plain' })] } });
+    await screen.findByText('Приложение.txt');
+    fireEvent.click(within(stage).getByRole('button', { name: 'Убрать' }));
+    await waitFor(() => expect(calls.some(call => call.command === 'remove_supplementary_source')).toBe(true));
+
+    fireEvent.click(screen.getByLabelText('Добавить Дневники наблюдения в комплект'));
+    expect(await within(stage).findByText(/^Даты$/)).toBeTruthy();
+    expect(within(stage).getByText(/^Тексты$/)).toBeTruthy();
+    expect(screen.queryByText('Районный военный комиссариат')).toBeNull();
   });
 
   it('каждый пользовательский сценарий вызывает соответствующую Rust-команду', async () => {
@@ -537,7 +590,7 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
+    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx', 'list_supplementary_sources', 'attach_supplementary_file', 'attach_supplementary_folder', 'remove_supplementary_source']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);

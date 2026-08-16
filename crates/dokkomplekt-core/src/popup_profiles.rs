@@ -347,12 +347,11 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
             config.section = Some("Медицинские данные".into());
             if id == "medical.rvk_commissariat" {
                 config.input_kind = PromptInputKind::Select;
-                config.options = vec![
-                    "Районный военный комиссариат".into(),
-                    "Городской военный комиссариат".into(),
-                    "Областной военный комиссариат".into(),
-                ];
+                config.options = crate::domains::medical::rvk_commissariat_quick_options();
                 config.allow_custom_option = true;
+                config.help_text = Some(
+                    "Быстрые варианты задаёт медицинский профиль. Список можно изменить в настройке popup конкретного документа или ввести своё значение.".into(),
+                );
             }
             if id == "medical.icd10" || id == "medical.diagnosis_code" {
                 config.input_kind = PromptInputKind::Icd10;

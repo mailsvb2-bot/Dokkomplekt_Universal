@@ -9,6 +9,7 @@ function Harness() {
   return <>
     <button onClick={async () => setResult(await dialogs.confirm({ title: 'Удалить?', message: 'Последствие', confirmLabel: 'Удалить', danger: true }) ? 'yes' : 'no')}>confirm</button>
     <button onClick={async () => setResult(await dialogs.prompt({ title: 'Переименовать', label: 'Название', required: true, confirmLabel: 'Сохранить' }) ?? 'cancel')}>prompt</button>
+    <button onClick={async () => setResult(await dialogs.choose({ title: 'Выберите действие', options: [{ value: 'new', label: 'Новая версия', description: 'Сохранить старое' }, { value: 'replace', label: 'Заменить', danger: true }] }) ?? 'cancel')}>choose</button>
     <output>{result}</output>
   </>;
 }
@@ -20,6 +21,15 @@ describe('AppDialogProvider', () => {
     const dialog = screen.getByRole('dialog', { name: 'Удалить?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Удалить' }));
     expect(await screen.findByText('yes')).toBeTruthy();
+  });
+
+  it('returns the exact value from a multi-choice product decision', async () => {
+    render(<AppDialogProvider><Harness /></AppDialogProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'choose' }));
+    const dialog = screen.getByRole('dialog', { name: 'Выберите действие' });
+    expect(within(dialog).getByText('Сохранить старое')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Новая версия' }));
+    expect(await screen.findByText('new')).toBeTruthy();
   });
 
   it('blocks a required prompt until text is entered', async () => {

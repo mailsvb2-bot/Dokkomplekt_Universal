@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan, SupplementarySourceDto, OutputConflictPolicy } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText, attachSupplementaryFile, attachSupplementaryFolder, listSupplementarySources, removeSupplementarySource,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -25,10 +25,10 @@ import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import {
-  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
+  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB, OUTPUT_NAMING_PRESETS,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
-  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
+  errorMessage, fileLabel, inferGuidedMarkupAction, isMedicalDiaryDocument, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, outputNamingPreset, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
@@ -101,6 +101,7 @@ function AppContent() {
   const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
   const [outputNamingConfirmed, setOutputNamingConfirmed] = useState(loadOutputNamingConfirmed);
+  const [supplementarySources, setSupplementarySources] = useState<SupplementarySourceDto[]>([]);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
@@ -145,6 +146,14 @@ function AppContent() {
       .catch(() => { /* browser/tests */ });
     void getSidecarStatus()
       .then((items) => { if (alive) setSidecarStatuses(items); })
+      .catch(() => { /* browser/tests */ });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void listSupplementarySources()
+      .then((response) => { if (alive) setSupplementarySources(response.sources); })
       .catch(() => { /* browser/tests */ });
     return () => { alive = false; };
   }, []);
@@ -199,6 +208,10 @@ function AppContent() {
   const activeDocumentLabel = activeDoc
     ? documents.find((document) => document.id === activeDoc)?.button_label ?? null
     : null;
+  const showMedicalDiarySources = selectedDocIds.some((documentId) =>
+    isMedicalDiaryDocument(documents.find((document) => document.id === documentId)),
+  );
+
   const showSickLeaveOption = selectedDocIds.some((documentId) => {
     const document = documents.find((item) => item.id === documentId);
     const role = document?.role_id.toLowerCase() ?? '';
@@ -336,6 +349,7 @@ function AppContent() {
     setPreview(null);
     setScannerField('');
     setScannerText('');
+    setSupplementarySources([]);
     setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
   }
 
@@ -360,6 +374,7 @@ function AppContent() {
     const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR, modelOutput.trim() || undefined));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
+    setSupplementarySources([]);
     setParsed({
       title: res.report?.recognized_title ?? 'Документ распознан',
       count,
@@ -388,6 +403,7 @@ function AppContent() {
     const res = await run('parse_source_file', () =>
       parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
     if (!res) return;
+    setSupplementarySources([]);
     setSourceFileName(file.name);
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
@@ -420,6 +436,7 @@ function AppContent() {
     }
     const res = await run('parse_web_source', () => parseWebSource(url, DEFAULT_YEAR));
     if (!res) return;
+    setSupplementarySources([]);
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
     setSourceText(res.source_text);
@@ -473,7 +490,7 @@ function AppContent() {
   function updateFolderParts(parts: FolderNamePartDto[]) {
     const next = saveOutputFolderParts(parts);
     setFolderParts(next);
-    setOutputNamingConfirmed(true);
+    setOutputNamingConfirmed(next.length > 0);
   }
 
   function updateAutoPrint(value: boolean) {
@@ -572,31 +589,105 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function ensureOutputNamingConfirmed(): Promise<boolean> {
-    if (outputNamingConfirmed) return true;
-    const accepted = await dialogs.confirm({
-      title: 'Подтвердите имя папки результата',
-      message: 'Перед первым созданием подтвердите принцип формирования подпапки результата. Сейчас используются выбранные в настройках части имени (по умолчанию — номер и дата документа). Сохранить этот принцип?',
-      confirmLabel: 'Использовать этот принцип',
+  async function ensureOutputNamingConfirmed(): Promise<FolderNamePartDto[] | null> {
+    if (outputNamingConfirmed && folderParts.length) return folderParts;
+    const choice = await dialogs.choose({
+      title: 'Как называть папку комплекта?',
+      message: 'Выберите принцип один раз. Он подходит для любой профессии и будет сохранён; позже его можно изменить в настройках.',
+      options: [
+        ...OUTPUT_NAMING_PRESETS.map((preset) => ({ value: preset.value, label: preset.label, description: preset.description })),
+        { value: 'manual', label: 'Настроить вручную', description: 'Открыть полный список частей имени: организация, имя, даты, период, месяцы и другие.' },
+      ],
+      cancelLabel: 'Отмена',
     });
-    if (accepted) {
-      const next = saveOutputFolderParts(folderParts);
-      setFolderParts(next);
-      setOutputNamingConfirmed(true);
-      return true;
+    if (!choice) return null;
+    if (choice === 'manual') {
+      setUtilityOpen(true);
+      setStatus('В настройках выберите состав имени папки комплекта и повторите создание.');
+      return null;
     }
-    setUtilityOpen(true);
-    setStatus('В настройках выберите состав имени папки результата. После выбора повторите создание.');
-    return false;
+    const preset = outputNamingPreset(choice);
+    if (!preset) return null;
+    const next = saveOutputFolderParts(preset.parts);
+    setFolderParts(next);
+    setOutputNamingConfirmed(true);
+    return next;
+  }
+
+  async function attachSupplementaryFiles(files: File[], role: string) {
+    for (const file of files.slice(0, 200)) {
+      if (!(await ensureComponentForSource(file.name))) continue;
+      const bytes = await readFileBytes(file);
+      const result = await run('attach_supplementary_file', () => attachSupplementaryFile(
+        role,
+        file.name,
+        arrayBufferToBase64(bytes),
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+      ));
+      if (result) {
+        setSupplementarySources(result.sources);
+        if (result.warnings.length) setStatus(result.warnings.join(' '));
+      }
+    }
+  }
+
+  async function attachSupplementaryFolderByRole(role: string) {
+    const folder = await run('pick_folder', () => pickFolder(null));
+    if (!folder) return;
+    const result = await run('attach_supplementary_folder', () => attachSupplementaryFolder(role, folder));
+    if (!result) return;
+    setSupplementarySources(result.sources);
+    setStatus(result.warnings.length
+      ? `Дополнительные материалы добавлены; замечания: ${result.warnings.join(' ')}`
+      : `Дополнительные материалы добавлены из папки: ${folder}`);
+  }
+
+  async function removeSupplementary(sourceId: string) {
+    const result = await run('remove_supplementary_source', () => removeSupplementarySource(sourceId));
+    if (result) setSupplementarySources(result.sources);
+  }
+
+  async function outputConflictPolicy(documentIds: string[], namingParts: FolderNamePartDto[]): Promise<OutputConflictPolicy | 'open_existing' | null> {
+    const labels = documents
+      .filter((document) => documentIds.includes(document.id))
+      .map((document) => document.button_label);
+    const target = await run('get_output_plan', () => getOutputPlan(
+      outputRoot.trim() || 'output/Готовые документы',
+      namingParts,
+      labels,
+    ));
+    if (!target || !target.target_exists) return 'create_new_version';
+    const choice = await dialogs.choose({
+      title: 'Комплект уже существует. Что сделать?',
+      message: target.patient_folder,
+      options: [
+        { value: 'open_existing', label: 'Открыть существующий', description: 'Ничего не создавать и открыть уже готовую папку.' },
+        { value: 'create_new_version', label: 'Создать новую версию', description: 'Сохранить существующий комплект и создать отдельную папку (2), (3) и т. д.' },
+        { value: 'replace_with_backup', label: 'Заменить с резервной копией', description: 'Старый комплект сначала будет сохранён в отдельную резервную папку.', danger: true },
+      ],
+      cancelLabel: 'Отмена',
+    });
+    if (choice === 'open_existing') {
+      await run('open_in_file_manager', () => openInFileManager(target.patient_folder));
+      setStatus('Открыт существующий комплект; новые документы не создавались.');
+      return 'open_existing';
+    }
+    if (choice === 'replace_with_backup') return 'replace_with_backup';
+    if (choice === 'create_new_version') return 'create_new_version';
+    return null;
   }
 
   async function performGenerateSelectedDocuments(documentIds: string[]) {
-    if (!(await ensureOutputNamingConfirmed())) return;
+    const namingParts = await ensureOutputNamingConfirmed();
+    if (!namingParts) return;
+    const conflictPolicy = await outputConflictPolicy(documentIds, namingParts);
+    if (!conflictPolicy || conflictPolicy === 'open_existing') return;
     const res = await run('render_docx_batch', () => renderDocxBatch(
       documentIds,
       outputRoot.trim() || 'output/Готовые документы',
-      folderParts,
+      namingParts,
       true,
+      conflictPolicy,
     ));
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);
@@ -1260,8 +1351,9 @@ function AppContent() {
   }
 
   async function installWatcher() {
-    if (!(await ensureOutputNamingConfirmed())) return;
-    const res = await run('install_background_watcher', () => installBackgroundWatcher(watchFolder.trim() || 'Созданные документы', DEFAULT_YEAR, sickLeave, folderParts, autoPrint, printCopies));
+    const namingParts = await ensureOutputNamingConfirmed();
+    if (!namingParts) return;
+    const res = await run('install_background_watcher', () => installBackgroundWatcher(watchFolder.trim() || 'Созданные документы', DEFAULT_YEAR, sickLeave, namingParts, autoPrint, printCopies));
     if (res) setStatus(`Автоматическая обработка включена для папки «${res.watch_folder ?? ''}»${res.warnings?.length ? `; замечания: ${res.warnings.join('; ')}` : ''}.`);
   }
   async function uninstallWatcher() {
@@ -1274,9 +1366,10 @@ function AppContent() {
       setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
       return;
     }
-    if (!(await ensureOutputNamingConfirmed())) return;
+    const namingParts = await ensureOutputNamingConfirmed();
+    if (!namingParts) return;
     const res = await run('run_created_documents_intake', () =>
-      runCreatedDocumentsIntake(intakeSource.trim(), watchFolder.trim() || 'Созданные документы', folderParts, DEFAULT_YEAR, sickLeave));
+      runCreatedDocumentsIntake(intakeSource.trim(), watchFolder.trim() || 'Созданные документы', namingParts, DEFAULT_YEAR, sickLeave));
     if (!res) return;
     setIntakeResult(res);
     setStatus(res.message);
@@ -1330,6 +1423,8 @@ function AppContent() {
             sourceFilePath={sourceFilePath}
             webSourceUrl={webSourceUrl}
             intakeCapabilities={intakeCapabilities}
+            supplementarySources={supplementarySources}
+            showMedicalDiarySources={showMedicalDiarySources}
             scannerField={scannerField}
             scannerText={scannerText}
             parsed={parsed}
@@ -1365,6 +1460,9 @@ function AppContent() {
             onExportLastOutputKedo={() => void exportLastOutputKedo()}
             onPickSourceFile={pickSourceFile}
             onDropSourceFile={processSourceFile}
+            onAddSupplementaryFiles={(files, role) => { void attachSupplementaryFiles(files, role); }}
+            onAddSupplementaryFolder={(role) => { void attachSupplementaryFolderByRole(role); }}
+            onRemoveSupplementarySource={(sourceId) => { void removeSupplementary(sourceId); }}
             onLoadWebSource={loadWebSource}
             onResetCase={resetCurrentCase}
             onParseSource={parseSourceNow}

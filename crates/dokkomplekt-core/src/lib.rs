@@ -47,6 +47,7 @@ pub mod semantic_engine;
 pub mod semantic_llm;
 pub mod source_classification;
 pub mod source_parser;
+pub mod supplementary_sources;
 pub mod template_engine;
 pub mod template_intelligence;
 pub mod template_intelligence_engine;
@@ -112,6 +113,7 @@ pub use rewrite_audit::*;
 pub use scanner_engine::*;
 pub use source_classification::*;
 pub use source_parser::*;
+pub use supplementary_sources::*;
 pub use template_engine::*;
 pub use template_intelligence::*;
 pub use template_intelligence_engine::{

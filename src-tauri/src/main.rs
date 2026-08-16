@@ -2182,6 +2182,7 @@ fn current_year_utc() -> i32 {
 
 include!("subsystems/legacy_template_runtime.rs");
 include!("subsystems/document_commands.rs");
+include!("subsystems/supplementary_sources.rs");
 include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");
 include!("subsystems/quality_telemetry.rs");
@@ -2490,7 +2491,11 @@ fn main() {
             get_quality_telemetry,
             get_process_blueprints,
             select_process_blueprint,
-            import_template_file
+            import_template_file,
+            list_supplementary_sources,
+            attach_supplementary_file,
+            attach_supplementary_folder,
+            remove_supplementary_source
         ])
         .run(tauri::generate_context!());
     if let Err(error) = run_result {

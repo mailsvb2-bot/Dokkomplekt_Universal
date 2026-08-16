@@ -28,6 +28,12 @@ export function defaultSelectedDocumentIds(documents: DocumentTemplateSpec[]): s
   return documents.filter(shouldSelectDocumentByDefault).map((document) => document.id);
 }
 
+export function isMedicalDiaryDocument(document: DocumentTemplateSpec | undefined | null): boolean {
+  if (!document || document.category !== 'Medical') return false;
+  const role = document.role_id.trim().toLowerCase();
+  return role === 'diary' || role === 'diaries' || role.endsWith('.diary') || role.endsWith('.diaries');
+}
+
 export type PendingTemplate = {
   document_id: string;
   template_path: string;
@@ -128,8 +134,45 @@ export function loadOutputFolderParts(): FolderNamePartDto[] {
     if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) {
       return parsed as FolderNamePartDto[];
     }
-  } catch { /* use privacy-safe default */ }
-  return ['DocumentNumber', 'DocumentDate'];
+  } catch { /* no saved user choice */ }
+  return [];
+}
+
+export type OutputNamingPreset = { value: string; label: string; description: string; parts: FolderNamePartDto[] };
+
+export const OUTPUT_NAMING_PRESETS: OutputNamingPreset[] = [
+  { value: 'subject_period', label: 'Имя / субъект + период', description: 'Например: Иванов И.И. июнь 2026 или Петров П.П. 01.06.26-12.06.26', parts: ['ShortInitials', 'PeriodStartMonthName'] },
+  { value: 'organization_document', label: 'Организация + номер документа', description: 'Например: ООО Ромашка 42', parts: ['OrganizationName', 'DocumentNumber'] },
+  { value: 'subject_document', label: 'Имя / субъект + номер документа', description: 'Например: Петров П.П. Приказ 18', parts: ['ShortInitials', 'DocumentNumber'] },
+  { value: 'document_date', label: 'Номер + дата документа', description: 'Нейтральный вариант без персональных данных', parts: ['DocumentNumber', 'DocumentDate'] },
+];
+
+export function loadOutputNamingConfirmed(): boolean {
+  try {
+    if (localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true') return true;
+    const saved = localStorage.getItem(OUTPUT_PREFS_KEY);
+    if (!saved) return false;
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) && parsed.length > 0 && parsed.every((value) => typeof value === 'string');
+  } catch { return false; }
+}
+
+export function saveOutputFolderParts(parts: FolderNamePartDto[]): FolderNamePartDto[] {
+  const normalized: FolderNamePartDto[] = [...new Set(parts)];
+  try {
+    if (normalized.length) {
+      localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(normalized));
+      localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+    } else {
+      localStorage.removeItem(OUTPUT_PREFS_KEY);
+      localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    }
+  } catch { /* storage may be unavailable */ }
+  return normalized;
+}
+
+export function outputNamingPreset(value: string): OutputNamingPreset | null {
+  return OUTPUT_NAMING_PRESETS.find((preset) => preset.value === value) ?? null;
 }
 
 export function loadOutputNamingConfirmed(): boolean {

@@ -97,7 +97,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
               </label>
             ))}
           </fieldset>
-          <small>По умолчанию используются номер и дата документа. Персональные данные добавляются только явно.</small>
+          <small>Перед первым созданием выберите хотя бы одну часть имени. Никакой принцип не считается вашим выбором, пока вы его явно не подтвердили.</small>
           <button className="utilBtn" onClick={props.onOutputPlan}>
             <i className="ti ti-folder" aria-hidden="true" /> Проверить папку
           </button>

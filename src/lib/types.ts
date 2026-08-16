@@ -254,11 +254,14 @@ export interface CreatedDocumentOutput {
   path: string;
 }
 
+export type OutputConflictPolicy = 'create_new_version' | 'replace_with_backup';
+
 export interface RenderDocxBatchResult {
   output_folder: string;
   created_files: string[];
   created_documents?: CreatedDocumentOutput[];
   warnings?: string[];
+  backup_folder?: string | null;
 }
 
 export interface RenderResult {
@@ -537,6 +540,21 @@ export interface OutputPlanDto {
   root_folder: string;
   patient_folder: string;
   files: string[];
+  warnings: string[];
+  target_exists: boolean;
+}
+
+export interface SupplementarySourceDto {
+  source_id: string;
+  role: string;
+  name: string;
+  source_kind: string;
+  path: string;
+}
+
+export interface SupplementarySourcesResponse {
+  sources: SupplementarySourceDto[];
+  semantic_case: SemanticCase;
   warnings: string[];
 }
 

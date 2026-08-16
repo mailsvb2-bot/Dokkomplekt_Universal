@@ -1075,11 +1075,10 @@ fn install_background_watcher(
     std::fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
     let watch_folder = resolve_user_path(&app, &req.watch_folder)?;
     let default_year = req.default_year.unwrap_or_else(current_year_utc);
-    let folder_parts = if req.folder_parts.is_empty() {
-        vec![FolderNamePart::DocumentNumber, FolderNamePart::DocumentDate]
-    } else {
-        req.folder_parts.clone()
-    };
+    if req.folder_parts.is_empty() {
+        return Err("Перед включением фоновой обработки подтвердите, как называть папку комплекта.".into());
+    }
+    let folder_parts = req.folder_parts.clone();
     if let Some((document_id, copies)) = req
         .print_copies_by_document
         .iter()

@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { validateRustResponse } from './runtimeValidation';
-import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, DomainKind, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
+import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, DomainKind, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, OutputConflictPolicy, SupplementarySourcesResponse, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
 
 export type InvokeFn = <T>(command: string, payload?: Record<string, unknown>) => Promise<T>;
 let invokeFn: InvokeFn = (command, payload) => tauriInvoke(command, payload);
@@ -164,9 +164,10 @@ export async function renderDocxBatch(
   outputRoot: string,
   folderParts: FolderNamePartDto[],
   strict = true,
+  conflictPolicy: OutputConflictPolicy = 'create_new_version',
 ): Promise<RenderDocxBatchResult> {
   return callRust('render_docx_batch', {
-    req: { document_ids: documentIds, output_root: outputRoot, folder_parts: folderParts, strict },
+    req: { document_ids: documentIds, output_root: outputRoot, folder_parts: folderParts, strict, conflict_policy: conflictPolicy },
   });
 }
 
@@ -283,6 +284,29 @@ export async function getRecordSeriesPlan(req: SeriesPlanRequestDto): Promise<Se
 
 export async function getOutputPlan(rootFolder: string, folderParts: FolderNamePartDto[], buttonLabels: string[]): Promise<OutputPlanDto> {
   return callRust('get_output_plan', { req: { root_folder: rootFolder, folder_parts: folderParts, button_labels: buttonLabels } });
+}
+
+export async function listSupplementarySources(): Promise<SupplementarySourcesResponse> {
+  return callRust('list_supplementary_sources');
+}
+
+export async function attachSupplementaryFile(
+  role: string,
+  fileName: string,
+  bytesBase64: string,
+  relativePath?: string | null,
+): Promise<SupplementarySourcesResponse> {
+  return callRust('attach_supplementary_file', {
+    req: { role, file_name: fileName, bytes_base64: bytesBase64, relative_path: relativePath ?? null },
+  });
+}
+
+export async function attachSupplementaryFolder(role: string, folderPath: string): Promise<SupplementarySourcesResponse> {
+  return callRust('attach_supplementary_folder', { req: { role, folder_path: folderPath } });
+}
+
+export async function removeSupplementarySource(sourceId: string): Promise<SupplementarySourcesResponse> {
+  return callRust('remove_supplementary_source', { req: { source_id: sourceId } });
 }
 
 export async function routeIntake(appAlreadyRunning: boolean, userRequestedUi: boolean): Promise<IntakeRouteResponse> {
@@ -707,7 +731,11 @@ export const rustCommandNames = [
   'get_quality_telemetry',
   'get_process_blueprints',
   'select_process_blueprint',
-  'import_template_file'
+  'import_template_file',
+  'list_supplementary_sources',
+  'attach_supplementary_file',
+  'attach_supplementary_folder',
+  'remove_supplementary_source'
 ] as const;
 
 

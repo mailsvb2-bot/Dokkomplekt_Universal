@@ -70,6 +70,17 @@ fn normalize_role_slug(value: &str) -> String {
         .join("_")
 }
 
+/// Quick options belong to the concrete Medical profile, never to the universal
+/// popup engine. They are intentionally editable because another organization
+/// may use a completely different commissariat list.
+pub fn rvk_commissariat_quick_options() -> Vec<String> {
+    vec![
+        "Ленинский".into(),
+        "Канавинский".into(),
+        "Сормовский и Московский".into(),
+    ]
+}
+
 pub fn medical_profile() -> MedicalProfile {
     MedicalProfile {
         id: "medical".into(),
@@ -131,6 +142,10 @@ mod donor_parity_tests {
             "reception"
         );
         assert_eq!(canonical_medical_role("Акт для РВК"), "rvk_act");
+        assert_eq!(
+            rvk_commissariat_quick_options(),
+            vec!["Ленинский", "Канавинский", "Сормовский и Московский"]
+        );
         for (legacy, canonical) in [
             ("primaryInspection", "primary"),
             ("dischargeEpicrisis", "discharge"),

@@ -563,3 +563,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .softBtn.danger { color: var(--danger, #b42318); border-color: color-mix(in srgb, var(--danger, #b42318) 45%, var(--btn-line)); }
 .folderPicker input { flex: 1; }
 .folderPicker button { flex: none; white-space: nowrap; }
+
+.appDialogChoices { display: grid; gap: 10px; margin: 16px 0; }
+.appDialogChoice { text-align: left; display: grid; gap: 4px; width: 100%; padding: 12px 14px; border-radius: 12px; }
+.appDialogChoice span { opacity: .75; font-size: .9em; font-weight: 400; }
+
+.supplementaryStage { margin-top: 16px; padding: 18px; border: 1px dashed var(--border, #b7bdc7); border-radius: 16px; }
+.supplementaryActions, .profileSourceCard > div:last-child { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.medicalDiarySources { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 14px; }
+.profileSourceCard { display: flex; justify-content: space-between; gap: 14px; padding: 14px; border: 1px solid var(--border, #d5d9df); border-radius: 12px; }
+.profileSourceCard > div:first-child { display: grid; gap: 4px; }
+.profileSourceCard span, .supplementaryItem small { opacity: .75; font-size: .88em; }
+.supplementaryList { display: grid; gap: 8px; margin-top: 14px; }
+.supplementaryItem { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--panel-soft, rgba(127,127,127,.08)); }
+.supplementaryItem > span { display: grid; gap: 2px; min-width: 0; }

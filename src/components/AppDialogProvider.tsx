@@ -8,6 +8,21 @@ export interface AppConfirmOptions {
   danger?: boolean;
 }
 
+
+export interface AppChoiceOption {
+  value: string;
+  label: string;
+  description?: string;
+  danger?: boolean;
+}
+
+export interface AppChooseOptions {
+  title: string;
+  message?: string;
+  options: AppChoiceOption[];
+  cancelLabel?: string;
+}
+
 export interface AppPromptOptions {
   title: string;
   message?: string;
@@ -41,17 +56,20 @@ export interface AppFormOptions {
 
 interface AppDialogApi {
   confirm(options: AppConfirmOptions): Promise<boolean>;
+  choose(options: AppChooseOptions): Promise<string | null>;
   prompt(options: AppPromptOptions): Promise<string | null>;
   form(options: AppFormOptions): Promise<Record<string, string> | null>;
 }
 
 type Request =
   | { kind: 'confirm'; options: AppConfirmOptions; resolve(value: boolean): void }
+  | { kind: 'choose'; options: AppChooseOptions; resolve(value: string | null): void }
   | { kind: 'prompt'; options: AppPromptOptions; resolve(value: string | null): void }
   | { kind: 'form'; options: AppFormOptions; resolve(value: Record<string, string> | null): void };
 
 const unavailableApi: AppDialogApi = {
   confirm: async () => false,
+  choose: async () => null,
   prompt: async () => null,
   form: async () => null,
 };
@@ -91,13 +109,14 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
     const current = active.current;
     if (!current) return;
     if (current.kind === 'confirm') current.resolve(Boolean(value));
-    else if (current.kind === 'prompt') current.resolve(typeof value === 'string' ? value : null);
+    else if (current.kind === 'choose' || current.kind === 'prompt') current.resolve(typeof value === 'string' ? value : null);
     else current.resolve(value && typeof value === 'object' ? value as Record<string, string> : null);
     activate(queue.current.shift() ?? null);
   }, [activate]);
 
   const api = useMemo<AppDialogApi>(() => ({
     confirm: options => new Promise(resolve => enqueue({ kind: 'confirm', options, resolve })),
+    choose: options => new Promise(resolve => enqueue({ kind: 'choose', options, resolve })),
     prompt: options => new Promise(resolve => enqueue({ kind: 'prompt', options, resolve })),
     form: options => new Promise(resolve => enqueue({ kind: 'form', options, resolve })),
   }), [enqueue]);
@@ -135,6 +154,22 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
             <h2 id="app-dialog-title">{request.options.title}</h2>
             {'message' in request.options && request.options.message ? <p className="hint appDialogMessage">{request.options.message}</p> : null}
 
+            {request.kind === 'choose' && (
+              <div className="appDialogChoices" role="group" aria-label={request.options.title}>
+                {request.options.options.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={option.danger ? 'appDialogChoice danger' : 'appDialogChoice'}
+                    onClick={() => finish(option.value)}
+                  >
+                    <strong>{option.label}</strong>
+                    {option.description ? <span>{option.description}</span> : null}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {request.kind === 'prompt' && (
               <label className="appDialogField">
                 <span>{request.options.label}{request.options.required ? ' *' : ''}</span>
@@ -170,9 +205,11 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
             <div className="modalActions">
               <span className="spacer" />
               <button className="softBtn" type="button" onClick={cancel}>{request.options.cancelLabel ?? 'Отмена'}</button>
-              <button className={'danger' in request.options && request.options.danger ? 'softBtn danger' : 'primaryBtn'} type="button" onClick={submit} disabled={!canSubmit}>
-                {request.options.confirmLabel ?? 'Продолжить'}
-              </button>
+              {request.kind !== 'choose' && (
+                <button className={'danger' in request.options && request.options.danger ? 'softBtn danger' : 'primaryBtn'} type="button" onClick={submit} disabled={!canSubmit}>
+                  {request.options.confirmLabel ?? 'Продолжить'}
+                </button>
+              )}
             </div>
           </div>
         </div>

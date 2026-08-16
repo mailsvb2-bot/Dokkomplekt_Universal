@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { DocumentTemplateSpec, DomainKind } from './types';
 import {
   defaultSelectedDocumentIds,
+  isMedicalDiaryDocument,
   loadOutputFolderParts,
   loadOutputNamingConfirmed,
   loadOutputRoot,
   OUTPUT_NAMING_CONFIRMED_KEY,
   OUTPUT_PREFS_KEY,
   OUTPUT_ROOT_KEY,
+  outputNamingPreset,
   saveOutputFolderParts,
   saveOutputRoot,
   shouldSelectDocumentByDefault,
@@ -44,26 +46,44 @@ describe('output root persistence', () => {
   });
 });
 
-describe('output folder naming confirmation', () => {
-  it('requires a one-time confirmation when no naming preference was ever saved', () => {
+describe('output folder naming onboarding', () => {
+  it('starts unconfirmed instead of pretending number + date was the user choice', () => {
     localStorage.removeItem(OUTPUT_PREFS_KEY);
     localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(loadOutputFolderParts()).toEqual([]);
     expect(loadOutputNamingConfirmed()).toBe(false);
-    expect(loadOutputFolderParts()).toEqual(['DocumentNumber', 'DocumentDate']);
   });
 
-  it('persists an explicit profession-neutral naming principle', () => {
+  it('persists an explicit profession-neutral preset and remembers it', () => {
     localStorage.removeItem(OUTPUT_PREFS_KEY);
     localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
-    expect(saveOutputFolderParts(['OrganizationName', 'DocumentDate'])).toEqual(['OrganizationName', 'DocumentDate']);
-    expect(loadOutputFolderParts()).toEqual(['OrganizationName', 'DocumentDate']);
+    const preset = outputNamingPreset('organization_document');
+    expect(preset?.parts).toEqual(['OrganizationName', 'DocumentNumber']);
+    expect(saveOutputFolderParts(preset?.parts ?? [])).toEqual(['OrganizationName', 'DocumentNumber']);
+    expect(loadOutputFolderParts()).toEqual(['OrganizationName', 'DocumentNumber']);
     expect(loadOutputNamingConfirmed()).toBe(true);
   });
 
-  it('treats existing saved naming preferences as already confirmed during upgrade', () => {
+  it('treats a pre-existing saved preference as already confirmed during upgrade', () => {
     localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['ShortInitials', 'ShortPeriodRange']));
     localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
     expect(loadOutputNamingConfirmed()).toBe(true);
+  });
+
+  it('clearing every part removes confirmation instead of restoring a silent default', () => {
+    saveOutputFolderParts(['DocumentNumber']);
+    expect(saveOutputFolderParts([])).toEqual([]);
+    expect(loadOutputFolderParts()).toEqual([]);
+    expect(loadOutputNamingConfirmed()).toBe(false);
+  });
+});
+
+describe('medical diary role visibility', () => {
+  it('recognizes only Medical diary roles', () => {
+    expect(isMedicalDiaryDocument(document('diaries', 'Medical'))).toBe(true);
+    expect(isMedicalDiaryDocument(document('medical.diary', 'Medical'))).toBe(true);
+    expect(isMedicalDiaryDocument(document('diaries', 'Legal'))).toBe(false);
+    expect(isMedicalDiaryDocument(document('primary', 'Medical'))).toBe(false);
   });
 });
 

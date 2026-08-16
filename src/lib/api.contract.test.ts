@@ -52,6 +52,10 @@ import {
   importTemplateFile,
   installBackgroundWatcher,
   loadState,
+  listSupplementarySources,
+  attachSupplementaryFile,
+  attachSupplementaryFolder,
+  removeSupplementarySource,
   openInFileManager,
   pickFolder,
   pickTemplateFiles,
@@ -211,6 +215,10 @@ export const registeredBackendCommands = [
   'get_process_blueprints',
   'select_process_blueprint',
   'import_template_file',
+  'list_supplementary_sources',
+  'attach_supplementary_file',
+  'attach_supplementary_folder',
+  'remove_supplementary_source',
 ] as const;
 
 const document = {
@@ -342,7 +350,7 @@ function installContractMock(calls: Call[]) {
       case 'icd10_suggest':
         return [{ code: 'F20.0', title: 'Example' }] as never;
       case 'get_output_plan':
-        return { root_folder: 'C:/Desktop', patient_folder: 'C:/Desktop/Иванов', files: ['C:/Desktop/Иванов/Документ.docx'], warnings: [] } as never;
+        return { root_folder: 'C:/Desktop', patient_folder: 'C:/Desktop/Иванов', files: ['C:/Desktop/Иванов/Документ.docx'], warnings: [], target_exists: false } as never;
       case 'route_intake':
         return { should_start_ui: false, should_raise_existing_window: true, reason: 'raise existing window' } as never;
       case 'save_state':
@@ -385,6 +393,11 @@ function installContractMock(calls: Call[]) {
         return { template_path: '/app-data/user-templates/doc_1.docx', extracted_text: 'Title {{field}}' } as never;
       case 'semantic_extract':
         return { fields: [{ field_id: 'org.inn', value: '7736050003', confidence: 0.9, method: 'typed:inn' }], warnings: [], model_applied: false, prompt: 'PROMPT' } as never;
+      case 'list_supplementary_sources':
+      case 'attach_supplementary_file':
+      case 'attach_supplementary_folder':
+      case 'remove_supplementary_source':
+        return { sources: [], semantic_case: { values: {} }, warnings: [] } as never;
       default:
         throw new Error(`unexpected command ${command}`);
     }
@@ -535,6 +548,21 @@ describe('Tauri command DTO contracts', () => {
     ]);
   });
 
+  it('uses Rust DTO envelopes for universal supplementary sources', async () => {
+    const calls: Call[] = [];
+    installContractMock(calls);
+    await listSupplementarySources();
+    await attachSupplementaryFile('reference', 'appendix.pdf', 'JVBERi0=', 'deal/appendix.pdf');
+    await attachSupplementaryFolder('medical.diary_dates', 'C:/Даты');
+    await removeSupplementarySource('source-1');
+    expect(calls).toMatchObject([
+      { command: 'list_supplementary_sources', payload: undefined },
+      { command: 'attach_supplementary_file', payload: { req: { role: 'reference', file_name: 'appendix.pdf', bytes_base64: 'JVBERi0=', relative_path: 'deal/appendix.pdf' } } },
+      { command: 'attach_supplementary_folder', payload: { req: { role: 'medical.diary_dates', folder_path: 'C:/Даты' } } },
+      { command: 'remove_supplementary_source', payload: { req: { source_id: 'source-1' } } },
+    ]);
+  });
+
   it('uses Rust DTO envelopes for diary, output, intake, and storage commands', async () => {
     const calls: Call[] = [];
     installContractMock(calls);
@@ -601,7 +629,7 @@ describe('Tauri command DTO contracts', () => {
     expect(calls).toMatchObject([
       { command: 'render_preview', payload: { req: { template_text: 'Text {{field}}', strict: false } } },
       { command: 'render_docx', payload: { req: { document_id: 'doc_1', output_path: 'out.docx', strict: true } } },
-      { command: 'render_docx_batch', payload: { req: { document_ids: ['doc_1'], output_root: 'C:/Desktop', folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true } } },
+      { command: 'render_docx_batch', payload: { req: { document_ids: ['doc_1'], output_root: 'C:/Desktop', folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true, conflict_policy: 'create_new_version' } } },
       { command: 'icd10_suggest', payload: { query: 'F20' } },
       { command: 'validate_product_access', payload: { req: { code: '000000' } } },
       { command: 'verify_rust_license_text', payload: { req: { license_text: 'license' } } },

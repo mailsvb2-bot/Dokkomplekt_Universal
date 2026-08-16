@@ -343,17 +343,32 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
     } else {
         Vec::new()
     };
-    let selected = if !exact.is_empty() {
+    let mut selected = if !exact.is_empty() {
         exact
     } else if !compatible.is_empty() {
         compatible
     } else {
         // Unscoped rows are reusable within the active medical profile. Rows
         // explicitly assigned to a different diagnosis must never leak across.
-        all.into_iter()
+        all.iter()
+            .copied()
             .filter(|row| atom_text(row, "diagnosis").is_none_or(|value| value.trim().is_empty()))
             .collect::<Vec<_>>()
     };
+    // A separate specialist-owned final-status file is commonly unscoped. It is
+    // safe to append only when it carries no diagnosis of its own; a final row
+    // explicitly assigned to another diagnosis remains excluded.
+    for row in all.iter().copied().filter(|row| {
+        record_is_final(row)
+            && atom_text(row, "diagnosis").is_none_or(|value| value.trim().is_empty())
+    }) {
+        if !selected
+            .iter()
+            .any(|candidate| std::ptr::eq(*candidate, row))
+        {
+            selected.push(row);
+        }
+    }
 
     let mut result = DiaryTextSources::default();
     let mut seen_regular = Vec::<String>::new();
@@ -427,9 +442,34 @@ fn diagnosis_compatible(candidate: &str, target: &str) -> bool {
     if candidate.len() < 3 || target.len() < 3 {
         return false;
     }
+    if medical_diary_semantic_conflict(&candidate, &target) {
+        return false;
+    }
     candidate.contains(&target)
         || target.contains(&candidate)
+        || crate::reference_name_match_score(&candidate, &target) >= 70
         || medical_diary_semantic_compatible(&candidate, &target)
+}
+
+fn medical_diary_semantic_conflict(candidate: &str, target: &str) -> bool {
+    if matches!(
+        (medical_diary_severity(candidate), medical_diary_severity(target)),
+        (Some(left), Some(right)) if left != right
+    ) {
+        return true;
+    }
+    let candidate_markers = medical_diary_semantic_markers(candidate);
+    let target_markers = medical_diary_semantic_markers(target);
+    [
+        "asthenia",
+        "psychopathy",
+        "observation",
+        "organic",
+        "healthy",
+        "oligophrenia",
+    ]
+    .iter()
+    .any(|marker| candidate_markers.contains(marker) && !target_markers.contains(marker))
 }
 
 /// Medical-profile-only compatibility bridge for donor diary source names.
@@ -1269,5 +1309,143 @@ mod tests {
         let prepared =
             prepare_professional_collections("{{#each diaries}}{{diary.date}}{{/each}}", &case);
         assert!(prepared.collection("diaries").is_none());
+    }
+}
+
+/// Adds one specialist-owned diary text file to the Medical profile collection.
+/// File-name cleanup is deliberately profile-local: the universal supplementary
+/// source registry never learns medical words or diagnosis aliases.
+pub fn upsert_medical_diary_text_source(
+    case: &mut SemanticCase,
+    source_id: &str,
+    file_name: &str,
+    text: &str,
+) {
+    let mut rows = case
+        .collection("medical_diary_texts")
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    rows.retain(|row| atom_text(row, "source_id").as_deref() != Some(source_id));
+
+    let label = medical_diary_source_label(file_name);
+    let is_final = medical_diary_source_is_final(file_name);
+    let fragments = if is_final {
+        let cleaned = clean_diary_source_text(text);
+        (!cleaned.is_empty() && !is_source_noise(&cleaned))
+            .then_some(vec![cleaned])
+            .unwrap_or_default()
+    } else {
+        split_status_source(text)
+    };
+    for fragment in fragments {
+        let mut row = SemanticRecord::new();
+        row.insert("source_id".into(), SemanticAtom::Text(source_id.into()));
+        if !label.is_empty() {
+            row.insert("diagnosis".into(), SemanticAtom::Text(label.clone()));
+        }
+        row.insert("text".into(), SemanticAtom::Text(fragment));
+        if is_final {
+            row.insert("is_final".into(), SemanticAtom::Boolean(true));
+        }
+        rows.push(row);
+    }
+    case.set_collection("medical_diary_texts", rows);
+}
+
+pub fn remove_medical_diary_text_source(case: &mut SemanticCase, source_id: &str) {
+    let Some(existing) = case.collection("medical_diary_texts") else {
+        return;
+    };
+    let mut rows = existing.to_vec();
+    rows.retain(|row| atom_text(row, "source_id").as_deref() != Some(source_id));
+    case.set_collection("medical_diary_texts", rows);
+}
+
+fn medical_diary_source_label(file_name: &str) -> String {
+    let normalized = crate::normalize_reference_name(file_name);
+    normalized
+        .split_whitespace()
+        .filter(|word| {
+            !matches!(
+                *word,
+                "дневник"
+                    | "дневники"
+                    | "дневниковые"
+                    | "наблюдение"
+                    | "наблюдения"
+                    | "текст"
+                    | "тексты"
+                    | "даты"
+                    | "датами"
+                    | "шаблон"
+                    | "шаблоны"
+                    | "итог"
+                    | "итоговый"
+                    | "выписка"
+                    | "выписной"
+                    | "final"
+                    | "с"
+                    | "со"
+                    | "на"
+                    | "по"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn medical_diary_source_is_final(file_name: &str) -> bool {
+    let value = crate::normalize_reference_name(file_name);
+    value.contains("выпис") || value.contains("итог") || value.contains("final")
+}
+
+#[cfg(test)]
+mod supplementary_source_tests {
+    use super::*;
+
+    #[test]
+    fn unscoped_final_file_is_kept_next_to_diagnosis_specific_regular_texts() {
+        let mut case = medical_case();
+        upsert_medical_diary_text_source(
+            &mut case,
+            "regular",
+            "дневники F20.0.docx",
+            "Состояние стабильное, контакт продуктивный, назначения выполняет регулярно.",
+        );
+        upsert_medical_diary_text_source(
+            &mut case,
+            "final",
+            "итоговый дневник.docx",
+            "Состояние при выписке устойчивое, рекомендации разъяснены в полном объёме.",
+        );
+        let sources = diary_text_sources(&case, "F20.0");
+        assert_eq!(sources.regular.len(), 1);
+        assert!(sources
+            .final_text
+            .as_deref()
+            .is_some_and(|text| text.contains("выписке")));
+    }
+
+    #[test]
+    fn medical_file_name_cleanup_stays_in_medical_adapter() {
+        let mut case = SemanticCase::default();
+        upsert_medical_diary_text_source(
+            &mut case,
+            "s1",
+            "дневники легкая депрессия с датами.docx",
+            "Состояние спокойное, контакт продуктивный, назначения выполняет.\n\nСон достаточный, поведение упорядоченное, терапию принимает регулярно.",
+        );
+        let rows = case.collection("medical_diary_texts").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            atom_text(&rows[0], "diagnosis").as_deref(),
+            Some("легкая депрессия")
+        );
+        assert!(atom_text(&rows[0], "text").unwrap().contains("Состояние"));
+        assert!(atom_text(&rows[1], "text")
+            .unwrap()
+            .contains("Сон достаточный"));
+        remove_medical_diary_text_source(&mut case, "s1");
+        assert!(case.collection("medical_diary_texts").unwrap().is_empty());
     }
 }

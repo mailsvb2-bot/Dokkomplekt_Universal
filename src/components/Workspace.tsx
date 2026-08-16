@@ -7,6 +7,7 @@ import type {
   PromptSpec,
   SemanticExtractResult,
   WorkflowPlan,
+  SupplementarySourceDto,
 } from '../lib/types';
 
 interface ParsedSourceSummary {
@@ -37,6 +38,8 @@ interface WorkspaceProps {
   sourceFilePath: string | null;
   webSourceUrl: string;
   intakeCapabilities: IntakeCapability[];
+  supplementarySources: SupplementarySourceDto[];
+  showMedicalDiarySources: boolean;
   scannerField: string;
   scannerText: string;
   parsed: ParsedSourceSummary | null;
@@ -72,6 +75,9 @@ interface WorkspaceProps {
   onExportLastOutputKedo(): void;
   onPickSourceFile(event: ChangeEvent<HTMLInputElement>): void;
   onDropSourceFile(file: File): void;
+  onAddSupplementaryFiles(files: File[], role: string): void;
+  onAddSupplementaryFolder(role: string): void;
+  onRemoveSupplementarySource(sourceId: string): void;
   onLoadWebSource(): void;
   onResetCase(): void;
   onParseSource(): void;
@@ -114,6 +120,46 @@ function highlightedSource(text: string, evidence: string | undefined): ReactNod
     <mark>{text.slice(index, index + needle.length)}</mark>
     {text.slice(index + needle.length)}
   </>;
+}
+
+
+type DroppedEntry = {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  file?(callback: (file: File) => void, error?: (error: unknown) => void): void;
+  createReader?(): { readEntries(callback: (entries: DroppedEntry[]) => void, error?: (error: unknown) => void): void };
+};
+
+async function readDroppedEntry(entry: DroppedEntry, out: File[], depth = 0): Promise<void> {
+  if (out.length >= 200 || depth > 5) return;
+  if (entry.isFile && entry.file) {
+    await new Promise<void>((resolve) => entry.file?.((file) => { out.push(file); resolve(); }, () => resolve()));
+    return;
+  }
+  if (!entry.isDirectory || !entry.createReader) return;
+  const reader = entry.createReader();
+  for (;;) {
+    const entries = await new Promise<DroppedEntry[]>((resolve) => reader.readEntries(resolve, () => resolve([])));
+    if (!entries.length) break;
+    for (const child of entries) {
+      await readDroppedEntry(child, out, depth + 1);
+      if (out.length >= 200) return;
+    }
+  }
+}
+
+async function supplementaryFilesFromDrop(dataTransfer: DataTransfer): Promise<File[]> {
+  const entries = Array.from(dataTransfer.items ?? [])
+    .map((item) => (item as DataTransferItem & { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.())
+    .filter((entry): entry is DroppedEntry => Boolean(entry));
+  if (!entries.length) return Array.from(dataTransfer.files ?? []).slice(0, 200);
+  const files: File[] = [];
+  for (const entry of entries) {
+    await readDroppedEntry(entry, files);
+    if (files.length >= 200) break;
+  }
+  return files;
 }
 
 export function Workspace(props: WorkspaceProps) {
@@ -264,6 +310,70 @@ export function Workspace(props: WorkspaceProps) {
           </div>
         </details>
       </section>
+
+      {sourceReady && (
+        <section
+          className="supplementaryStage"
+          aria-label="Дополнительные источники и материалы"
+          onDragOver={(event: DragEvent<HTMLElement>) => event.preventDefault()}
+          onDrop={(event: DragEvent<HTMLElement>) => {
+            event.preventDefault();
+            void supplementaryFilesFromDrop(event.dataTransfer).then((files) => {
+              if (files.length) props.onAddSupplementaryFiles(files, 'reference');
+            });
+          }}
+        >
+          <div className="stageHeading compactHeading">
+            <span className="stageNumber secondary">+</span>
+            <div>
+              <h2>Дополнительные источники / материалы</h2>
+              <p>Не заменяют основной источник. Добавьте приложения, доверенности, акты, реестры, справки или другие материалы вашей профессии.</p>
+            </div>
+          </div>
+          <div className="supplementaryActions">
+            <label className="softBtn fileBtn">
+              Добавить файлы
+              <input type="file" multiple onChange={(event) => {
+                const files = Array.from(event.currentTarget.files ?? []);
+                event.currentTarget.value = '';
+                if (files.length) props.onAddSupplementaryFiles(files, 'reference');
+              }} style={{ display: 'none' }} />
+            </label>
+            <button className="softBtn" type="button" onClick={() => props.onAddSupplementaryFolder('reference')}>Добавить папку</button>
+            <small>Файлы и папки можно также перетащить сюда. За один раз обрабатывается до 200 файлов.</small>
+          </div>
+
+          {props.showMedicalDiarySources && (
+            <div className="medicalDiarySources" aria-label="Источники медицинских дневников">
+              <div className="profileSourceCard">
+                <div><strong>Даты</strong><span>Шаблоны 01–31. Программа выберет нужный по дате поступления.</span></div>
+                <div>
+                  <label className="softBtn fileBtn">Файл(ы)<input type="file" multiple accept=".docx,.docm" onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; if (files.length) props.onAddSupplementaryFiles(files, 'medical.diary_dates'); }} style={{ display: 'none' }} /></label>
+                  <button className="softBtn" type="button" onClick={() => props.onAddSupplementaryFolder('medical.diary_dates')}>Папка</button>
+                </div>
+              </div>
+              <div className="profileSourceCard">
+                <div><strong>Тексты</strong><span>Библиотека текстов дневников. Подбор выполняется по диагнозу; неоднозначность блокируется.</span></div>
+                <div>
+                  <label className="softBtn fileBtn">Файл(ы)<input type="file" multiple accept=".docx,.docm,.txt,.rtf" onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; if (files.length) props.onAddSupplementaryFiles(files, 'medical.diary_texts'); }} style={{ display: 'none' }} /></label>
+                  <button className="softBtn" type="button" onClick={() => props.onAddSupplementaryFolder('medical.diary_texts')}>Папка</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {props.supplementarySources.length > 0 && (
+            <div className="supplementaryList">
+              {props.supplementarySources.map((source) => (
+                <div className="supplementaryItem" key={source.source_id}>
+                  <span><strong>{source.name}</strong><small>{source.role === 'reference' ? 'дополнительный материал' : source.role === 'medical.diary_dates' ? 'Даты' : source.role === 'medical.diary_texts' ? 'Тексты' : source.role}</small></span>
+                  <button className="textBtn" type="button" onClick={() => props.onRemoveSupplementarySource(source.source_id)}>Убрать</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {sourceReady && (
         <section className="reviewStage">

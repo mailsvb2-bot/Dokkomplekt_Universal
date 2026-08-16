@@ -259,6 +259,7 @@ export interface RenderDocxBatchResult {
   created_files: string[];
   created_documents?: CreatedDocumentOutput[];
   warnings?: string[];
+  backup_folder?: string | null;
 }
 
 export interface RenderResult {
@@ -538,6 +539,7 @@ export interface OutputPlanDto {
   patient_folder: string;
   files: string[];
   warnings: string[];
+  exists: boolean;
 }
 
 export interface IntakeRouteResponse {

@@ -296,7 +296,7 @@ function installContractMock(calls: Call[]) {
       case 'render_docx':
         return { ...renderDto, output_path: 'out.docx' } as never;
       case 'render_docx_batch':
-        return { output_folder: 'C:/Desktop/148_2026-06-01', created_files: ['C:/Desktop/148_2026-06-01/Документ.docx'] } as never;
+        return { output_folder: 'C:/Desktop/148_2026-06-01', created_files: ['C:/Desktop/148_2026-06-01/Документ.docx'], backup_folder: null } as never;
       case 'get_privacy_preferences': return { copy_source_to_output: true, write_trust_report: true, include_values_in_trust_report: false, temp_retention_hours: 24, archive_processed_sources: true, archive_folder_name: '_обработано', service_note_retention_days: 30, processed_marker_retention_days: 7, archived_source_retention_days: 0 } as never;
       case 'update_privacy_preferences': return (payload as { req?: { preferences?: unknown } })?.req?.preferences as never;
       case 'list_automation_exceptions': return [{ exception_id: 'ex-1', category: 'quality_gate', source_path: 'source.pdf', message: 'Проверить поле', details_json: '{}', status: 'open', created_at: 'now', updated_at: 'now' }] as never;
@@ -342,7 +342,7 @@ function installContractMock(calls: Call[]) {
       case 'icd10_suggest':
         return [{ code: 'F20.0', title: 'Example' }] as never;
       case 'get_output_plan':
-        return { root_folder: 'C:/Desktop', patient_folder: 'C:/Desktop/Иванов', files: ['C:/Desktop/Иванов/Документ.docx'], warnings: [] } as never;
+        return { root_folder: 'C:/Desktop', patient_folder: 'C:/Desktop/Иванов', files: ['C:/Desktop/Иванов/Документ.docx'], warnings: [], exists: false } as never;
       case 'route_intake':
         return { should_start_ui: false, should_raise_existing_window: true, reason: 'raise existing window' } as never;
       case 'save_state':
@@ -601,7 +601,7 @@ describe('Tauri command DTO contracts', () => {
     expect(calls).toMatchObject([
       { command: 'render_preview', payload: { req: { template_text: 'Text {{field}}', strict: false } } },
       { command: 'render_docx', payload: { req: { document_id: 'doc_1', output_path: 'out.docx', strict: true } } },
-      { command: 'render_docx_batch', payload: { req: { document_ids: ['doc_1'], output_root: 'C:/Desktop', folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true } } },
+      { command: 'render_docx_batch', payload: { req: { document_ids: ['doc_1'], output_root: 'C:/Desktop', folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true, existing_output_policy: 'version' } } },
       { command: 'icd10_suggest', payload: { query: 'F20' } },
       { command: 'validate_product_access', payload: { req: { code: '000000' } } },
       { command: 'verify_rust_license_text', payload: { req: { license_text: 'license' } } },

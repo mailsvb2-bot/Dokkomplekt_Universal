@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "profile": "medical.ru.legacy-diary-source-matching",
+  "description": "Medical-profile matching aliases migrated from diary-filler. The universal matcher contains no diagnosis-specific vocabulary; these terms are profile data only.",
+  "groups": [
+    {"id":"depression","kind":"semantic","exclusive":false,"terms":["депресс","депрессив"]},
+    {"id":"asthenia","kind":"semantic","exclusive":true,"terms":["астен"]},
+    {"id":"psychopathy","kind":"semantic","exclusive":true,"terms":["психопат","нарушен поведен"]},
+    {"id":"organic","kind":"semantic","exclusive":true,"terms":["органик","органичес","резидуаль"]},
+    {"id":"healthy","kind":"semantic","exclusive":true,"terms":["здоров","норма"]},
+    {"id":"observation","kind":"semantic","exclusive":true,"terms":["обследован"]},
+    {"id":"oligophrenia","kind":"semantic","exclusive":true,"terms":["олигофрен","умствен","f7"]},
+    {"id":"mild","kind":"severity","exclusive":true,"terms":["легк"]},
+    {"id":"moderate","kind":"severity","exclusive":true,"terms":["умерен","средн"]},
+    {"id":"severe","kind":"severity","exclusive":true,"terms":["тяжел","выражен"]}
+  ]
+}

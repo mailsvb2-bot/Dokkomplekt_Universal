@@ -6,6 +6,7 @@ export const DEFAULT_YEAR = new Date().getFullYear();
 export const STATE_DB = 'dokkomplekt-user-state.sqlite';
 export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
 export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';
+export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-confirmed.v1';
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
 
@@ -119,6 +120,18 @@ export function saveOutputRoot(value: string): void {
   const normalized = value.trim();
   if (!normalized) return;
   try { localStorage.setItem(OUTPUT_ROOT_KEY, normalized); } catch { /* storage may be unavailable */ }
+}
+
+export function loadOutputNamingConfirmed(): boolean {
+  try { return localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true'; } catch { return false; }
+}
+
+export function saveOutputFolderParts(parts: FolderNamePartDto[], confirmed = true): void {
+  if (!parts.length) return;
+  try {
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(parts));
+    if (confirmed) localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+  } catch { /* storage may be unavailable */ }
 }
 
 export function loadOutputFolderParts(): FolderNamePartDto[] {

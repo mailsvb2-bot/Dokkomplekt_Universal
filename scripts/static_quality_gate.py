@@ -30,6 +30,9 @@ REQUIRED_FILES = [
     "tests/test_v18_0_5_guided_word_scanner_contracts.py",
     "tests/test_v18_0_6_scanner_watcher_print_contracts.py",
     "docs/TZ_Dokkomplekt_v18.md",
+    "docs/LEGACY_MIGRATION_INVENTORY.json",
+    "scripts/check_legacy_migration_inventory.py",
+    "crates/dokkomplekt-core/data/medical_diary_match_aliases.ru.json",
     "crates/dokkomplekt-core/src/core/parser.rs",
     "crates/dokkomplekt-core/src/core/template_detector.rs",
     "crates/dokkomplekt-core/src/core/field_extractor.rs",
@@ -345,6 +348,24 @@ if "canonical_role_for_domain" not in universal_pipeline_rs or "canonical_medica
     fail("Universal pipeline does not route domain slugs through domain profile canonicalization")
 if "extract_required_fields" in universal_pipeline_rs:
     fail("unused extract_required_fields import found in universal_pipeline.rs")
+
+# Donor migration evidence is release-contract data, not a prose checklist.
+_inventory_check = subprocess.run(
+    [sys.executable, str(ROOT / "scripts/check_legacy_migration_inventory.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+if _inventory_check.returncode != 0:
+    fail(_inventory_check.stdout.strip() or "legacy migration inventory check failed")
+
+# Diagnosis-specific donor aliases are Medical profile data, never universal matching code.
+_professional_records = (ROOT / "crates/dokkomplekt-core/src/professional_records.rs").read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+_professional_records = "\n".join(line for line in _professional_records.splitlines() if not line.lstrip().startswith("//"))
+for _profile_only_token in ["олигофрен", "психопат", "депресс", "резидуаль"]:
+    if _profile_only_token in _professional_records:
+        fail(f"Medical diary alias leaked from profile data into Rust matcher: {_profile_only_token}")
 
 # Universal pipeline results must influence behavior, not be discarded into underscore variables.
 for rel in [

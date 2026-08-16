@@ -23,8 +23,9 @@ use dokkomplekt_core::{
     detect_field_conflict, empty_first_run_pack, evaluate_automation_quality,
     evaluate_print_triage_with_thresholds, extract_understanding, format_counter_value,
     is_valid_field_id, merge_document_pack, normalize_popup_fields, parse_delimited_table,
-    parse_source_text, plan_created_documents_batch, plan_output_paths, plan_workflow,
+    parse_flexible_date, parse_source_text, plan_created_documents_batch, plan_output_paths, plan_workflow,
     plan_workflow_batch, prepare_template_confirmations, recommend_document_bundle,
+    select_diary_template_for_admission,
     remove_document_button as remove_button_from_pack,
     rename_document_button as rename_button_in_pack, render_text_template, route_intake_event,
     run_universal_constructor_pipeline, sanitize_path_component, segment_case_fragments,
@@ -36,7 +37,7 @@ use dokkomplekt_core::{
     IntakeDeduplicator, KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable,
     ParsedSourceReport, PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport,
     ProductPlanId, ScannerMark, SemanticCase, SeriesPlanRequest, TemplateCandidate,
-    TemplateConfirmationRow, TemplateLearningInput, TemplateLearningReport,
+    TemplateConfirmationRow, TemplateLearningInput, TemplateLearningReport, WorkflowPlan,
     TemplateMarkupCandidate, UniversalPipelineFlags, UniversalPipelineInput, ValueSource,
     WorkflowFlags, EXPIRED_DEMO_WATERMARK_TEXT, TRIAL_WATERMARK_TEXT,
 };
@@ -2181,6 +2182,8 @@ fn current_year_utc() -> i32 {
 }
 
 include!("subsystems/legacy_template_runtime.rs");
+include!("subsystems/profile_sources.rs");
+include!("subsystems/publication_collision.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");

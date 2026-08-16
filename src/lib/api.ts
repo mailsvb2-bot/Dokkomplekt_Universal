@@ -159,14 +159,23 @@ export async function renderDocx(documentId: string, outputPath: string, strict 
   return callRust('render_docx', { req: { document_id: documentId, output_path: outputPath, strict } });
 }
 
+export type ExistingOutputPolicy = 'version' | 'replace_with_backup';
+
 export async function renderDocxBatch(
   documentIds: string[],
   outputRoot: string,
   folderParts: FolderNamePartDto[],
   strict = true,
+  existingOutputPolicy: ExistingOutputPolicy = 'version',
 ): Promise<RenderDocxBatchResult> {
   return callRust('render_docx_batch', {
-    req: { document_ids: documentIds, output_root: outputRoot, folder_parts: folderParts, strict },
+    req: {
+      document_ids: documentIds,
+      output_root: outputRoot,
+      folder_parts: folderParts,
+      strict,
+      existing_output_policy: existingOutputPolicy,
+    },
   });
 }
 

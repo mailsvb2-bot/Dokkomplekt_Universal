@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentTemplateSpec, DomainKind } from './types';
-import { defaultSelectedDocumentIds, loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
+import {
+  defaultSelectedDocumentIds,
+  loadOutputFolderParts,
+  loadOutputNamingConfirmed,
+  loadOutputRoot,
+  OUTPUT_NAMING_CONFIRMED_KEY,
+  OUTPUT_PREFS_KEY,
+  OUTPUT_ROOT_KEY,
+  saveOutputFolderParts,
+  saveOutputRoot,
+  shouldSelectDocumentByDefault,
+} from './appSupport';
 
 function document(roleId: string, category: DomainKind, label = 'Переименовано пользователем'): DocumentTemplateSpec {
   return {
@@ -30,6 +41,29 @@ describe('output root persistence', () => {
     localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Documents/Ready');
     saveOutputRoot('   ');
     expect(loadOutputRoot()).toBe('C:/Documents/Ready');
+  });
+});
+
+describe('output folder naming confirmation', () => {
+  it('requires a one-time confirmation when no naming preference was ever saved', () => {
+    localStorage.removeItem(OUTPUT_PREFS_KEY);
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(loadOutputNamingConfirmed()).toBe(false);
+    expect(loadOutputFolderParts()).toEqual(['DocumentNumber', 'DocumentDate']);
+  });
+
+  it('persists an explicit profession-neutral naming principle', () => {
+    localStorage.removeItem(OUTPUT_PREFS_KEY);
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(saveOutputFolderParts(['OrganizationName', 'DocumentDate'])).toEqual(['OrganizationName', 'DocumentDate']);
+    expect(loadOutputFolderParts()).toEqual(['OrganizationName', 'DocumentDate']);
+    expect(loadOutputNamingConfirmed()).toBe(true);
+  });
+
+  it('treats existing saved naming preferences as already confirmed during upgrade', () => {
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['ShortInitials', 'ShortPeriodRange']));
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    expect(loadOutputNamingConfirmed()).toBe(true);
   });
 });
 

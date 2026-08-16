@@ -5,6 +5,7 @@ import type { ScannerFieldSuggestion } from './scannerSuggestions';
 export const DEFAULT_YEAR = new Date().getFullYear();
 export const STATE_DB = 'dokkomplekt-user-state.sqlite';
 export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
+export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-confirmed.v1';
 export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
@@ -129,6 +130,29 @@ export function loadOutputFolderParts(): FolderNamePartDto[] {
     }
   } catch { /* use privacy-safe default */ }
   return ['DocumentNumber', 'DocumentDate'];
+}
+
+export function loadOutputNamingConfirmed(): boolean {
+  try {
+    if (localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true') return true;
+    const saved = localStorage.getItem(OUTPUT_PREFS_KEY);
+    if (!saved) return false;
+    const parsed = JSON.parse(saved);
+    // Migration contract: a user who already chose and persisted naming parts
+    // has already expressed the naming principle and must not be re-prompted.
+    return Array.isArray(parsed) && parsed.length > 0 && parsed.every((value) => typeof value === 'string');
+  } catch { return false; }
+}
+
+export function saveOutputFolderParts(parts: FolderNamePartDto[]): FolderNamePartDto[] {
+  const normalized: FolderNamePartDto[] = parts.length
+    ? [...new Set(parts)]
+    : ['DocumentNumber', 'DocumentDate'];
+  try {
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(normalized));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+  } catch { /* storage may be unavailable */ }
+  return normalized;
 }
 
 export function loadAutoPrintPreference(): boolean {

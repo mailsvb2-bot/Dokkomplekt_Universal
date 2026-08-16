@@ -25,10 +25,10 @@ import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import {
-  AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
+  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
-  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
@@ -100,6 +100,7 @@ function AppContent() {
   const [scannerText, setScannerText] = useState('');
   const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
+  const [outputNamingConfirmed, setOutputNamingConfirmed] = useState(loadOutputNamingConfirmed);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
@@ -470,9 +471,9 @@ function AppContent() {
   }
 
   function updateFolderParts(parts: FolderNamePartDto[]) {
-    const next: FolderNamePartDto[] = parts.length ? parts : ['DocumentNumber', 'DocumentDate'];
+    const next = saveOutputFolderParts(parts);
     setFolderParts(next);
-    try { localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    setOutputNamingConfirmed(true);
   }
 
   function updateAutoPrint(value: boolean) {
@@ -571,7 +572,26 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
+  async function ensureOutputNamingConfirmed(): Promise<boolean> {
+    if (outputNamingConfirmed) return true;
+    const accepted = await dialogs.confirm({
+      title: 'Подтвердите имя папки результата',
+      message: 'Перед первым созданием подтвердите принцип формирования подпапки результата. Сейчас используются выбранные в настройках части имени (по умолчанию — номер и дата документа). Сохранить этот принцип?',
+      confirmLabel: 'Использовать этот принцип',
+    });
+    if (accepted) {
+      const next = saveOutputFolderParts(folderParts);
+      setFolderParts(next);
+      setOutputNamingConfirmed(true);
+      return true;
+    }
+    setUtilityOpen(true);
+    setStatus('В настройках выберите состав имени папки результата. После выбора повторите создание.');
+    return false;
+  }
+
   async function performGenerateSelectedDocuments(documentIds: string[]) {
+    if (!(await ensureOutputNamingConfirmed())) return;
     const res = await run('render_docx_batch', () => renderDocxBatch(
       documentIds,
       outputRoot.trim() || 'output/Готовые документы',
@@ -1240,6 +1260,7 @@ function AppContent() {
   }
 
   async function installWatcher() {
+    if (!(await ensureOutputNamingConfirmed())) return;
     const res = await run('install_background_watcher', () => installBackgroundWatcher(watchFolder.trim() || 'Созданные документы', DEFAULT_YEAR, sickLeave, folderParts, autoPrint, printCopies));
     if (res) setStatus(`Автоматическая обработка включена для папки «${res.watch_folder ?? ''}»${res.warnings?.length ? `; замечания: ${res.warnings.join('; ')}` : ''}.`);
   }
@@ -1253,6 +1274,7 @@ function AppContent() {
       setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
       return;
     }
+    if (!(await ensureOutputNamingConfirmed())) return;
     const res = await run('run_created_documents_intake', () =>
       runCreatedDocumentsIntake(intakeSource.trim(), watchFolder.trim() || 'Созданные документы', folderParts, DEFAULT_YEAR, sickLeave));
     if (!res) return;

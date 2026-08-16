@@ -1,0 +1,549 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "allowed_statuses": [
+      "migrated-core",
+      "migrated-domain-profile",
+      "superseded",
+      "not-needed",
+      "missing"
+    ],
+    "scope": "Significant runtime, UX, parsing, generation, diary, popup, intake, printing and regression-contract files from the two donor applications. Build scripts, release reports, packaging metadata and documentation are excluded unless they encode a runtime behavior contract.",
+    "missing_is_release_blocking": true
+  },
+  "donors": [
+    {
+      "repository": "mailsvb2-bot/Dokkomplekt",
+      "commit": "b4bd25de24e5fd7c5c3374bd9928ce87fa5fdcbd",
+      "entries": [
+        {
+          "path": "actions_creation.py",
+          "status": "migrated-core",
+          "targets": [
+            "src-tauri/src/subsystems/document_commands.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_batch.py",
+          "status": "migrated-core",
+          "targets": [
+            "src-tauri/src/subsystems/document_commands.rs",
+            "crates/dokkomplekt-core/src/output_engine.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_execution.py",
+          "status": "migrated-core",
+          "targets": [
+            "src-tauri/src/generation_publication.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_foldering.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/output_naming.rs",
+            "src/components/FolderNamingOnboarding.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_maintenance.py",
+          "status": "superseded",
+          "targets": [
+            "src-tauri/src/generation_publication.rs",
+            "src-tauri/src/state_transaction.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_orchestrator.py",
+          "status": "migrated-core",
+          "targets": [
+            "src/hooks/useGenerationPreflight.ts"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_preflight.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/workflow_engine.rs",
+            "src/hooks/useGenerationPreflight.ts"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_diary_flow.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/diary_engine.rs",
+            "crates/dokkomplekt-core/src/professional_records.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_medical_flow.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical_document_plan.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_navigation.py",
+          "status": "superseded",
+          "targets": [
+            "src/components/Workspace.tsx",
+            "src/components/DocumentRail.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_required_fields_popup.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/popup_engine.rs",
+            "crates/dokkomplekt-core/src/popup_profiles.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_selection.py",
+          "status": "migrated-core",
+          "targets": [
+            "src/components/DocumentRail.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_template_checks.py",
+          "status": "superseded",
+          "targets": [
+            "crates/dokkomplekt-core/src/template_intelligence.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_ui_state.py",
+          "status": "superseded",
+          "targets": [
+            "crates/dokkomplekt-storage/src/lib.rs",
+            "src-tauri/src/state_transaction.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_universal_flow.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/universal_pipeline.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "app.py",
+          "status": "superseded",
+          "targets": [
+            "src/main.tsx",
+            "src/App.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "desktop_intake_agent.py",
+          "status": "migrated-core",
+          "targets": [
+            "src-tauri/src/subsystems/watcher_commands.rs",
+            "crates/dokkomplekt-core/src/intake_agent.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "universal_scanner.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/scanner_engine.rs",
+            "src/components/GuidedScannerModal.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "universal_template_engine.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/template_intelligence.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "window_document_mapper.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/button_registry.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "embedded_templates.py",
+          "status": "not-needed",
+          "targets": [],
+          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
+        },
+        {
+          "path": "start_windows_no_console.vbs",
+          "status": "not-needed",
+          "targets": [],
+          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
+        }
+      ]
+    },
+    {
+      "repository": "mailsvb2-bot/diary-filler",
+      "commit": "cee7d863e21fdf5c9d9a4d8d88732e9a10819ec7",
+      "entries": [
+        {
+          "path": "actions_creation.py",
+          "status": "migrated-core",
+          "targets": [
+            "src-tauri/src/subsystems/document_commands.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_creation_orchestrator.py",
+          "status": "migrated-core",
+          "targets": [
+            "src/hooks/useGenerationPreflight.ts"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_diary_flow.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/diary_engine.rs",
+            "crates/dokkomplekt-core/src/professional_records.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "actions_medical_flow.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical_document_plan.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diagnosis_widget.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/icd10_catalog.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dialog_dates.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/date_parser.rs",
+            "crates/dokkomplekt-core/src/popup_profiles.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dialog_document_details.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/popup_profiles.rs",
+            "src/data/medicalProfilePresets.ts"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dialog_expert.py",
+          "status": "superseded",
+          "targets": [
+            "src/components/PopupDesignerModal.tsx",
+            "src/components/GenerationPreflightModal.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dialog_fields_core.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/popup_engine.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dialog_fields_linking.py",
+          "status": "migrated-core",
+          "targets": [
+            "crates/dokkomplekt-core/src/popup_profiles.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dialog_fields_popup.py",
+          "status": "migrated-core",
+          "targets": [
+            "src/components/PopupFieldEditor.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_batch.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/professional_records.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_constants.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/diary_engine.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_dates.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/diary_engine.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_paths.py",
+          "status": "superseded",
+          "targets": [
+            "crates/dokkomplekt-core/src/output_engine.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_template_discovery.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "src/components/AdditionalMaterialsPanel.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_template_selection.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/diary_engine.rs",
+            "src-tauri/src/subsystems/document_commands.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_text_parser.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/professional_records.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_text_selection.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/professional_records.rs",
+            "crates/dokkomplekt-core/data/medical_diary_match_aliases.ru.json"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_writer.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/professional_records.rs",
+            "crates/dokkomplekt-docx/src/lib.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_writer_apply.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-docx/src/lib.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "diary_writer_entries.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/professional_records.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "dnd_mixin.py",
+          "status": "migrated-core",
+          "targets": [
+            "src/components/Workspace.tsx",
+            "src/components/AdditionalMaterialsPanel.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "embedded_templates.py",
+          "status": "not-needed",
+          "targets": [],
+          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
+        },
+        {
+          "path": "icd10_f_data.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "resources/icd10_f.tsv"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "icd10_f_search.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/icd10_catalog.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "layout_sources.py",
+          "status": "migrated-core",
+          "targets": [
+            "src/components/Workspace.tsx",
+            "src/components/AdditionalMaterialsPanel.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_parser.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_parser_demographics.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_parser_work.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_renderer_primary.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical_document_plan.rs",
+            "crates/dokkomplekt-docx/src/lib.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_renderer_commission.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical_document_plan.rs",
+            "crates/dokkomplekt-docx/src/lib.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_renderer_special.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical_document_plan.rs",
+            "crates/dokkomplekt-docx/src/lib.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "medical_treatment_detection.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "printer_discovery.py",
+          "status": "superseded",
+          "targets": [
+            "src-tauri/src/main.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "printer_jobs.py",
+          "status": "superseded",
+          "targets": [
+            "src-tauri/src/main.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "settings_mixin.py",
+          "status": "superseded",
+          "targets": [
+            "src/components/UtilityPanel.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "ui_buttons.py",
+          "status": "superseded",
+          "targets": [
+            "src/components/DocumentRail.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "ui_fields.py",
+          "status": "superseded",
+          "targets": [
+            "src/components/GenerationPreflightModal.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "window_mixin.py",
+          "status": "superseded",
+          "targets": [
+            "src/main.tsx"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        },
+        {
+          "path": "smoke_combined_part04_medical_generation.py",
+          "status": "superseded",
+          "targets": [
+            "crates/dokkomplekt-docx/tests/medical_bundle_docx_e2e.rs"
+          ],
+          "note": "Legacy behavior is represented by the listed canonical target(s)."
+        }
+      ]
+    }
+  ]
+}

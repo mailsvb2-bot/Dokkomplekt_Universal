@@ -63,16 +63,28 @@ async function installTauriMock(page: Page) {
   });
 }
 
-test('first run shows one clear create-buttons action', async ({ page }) => {
+async function completeFolderNamingOnboarding(page: Page) {
+  const dialog = page.getByRole('dialog', { name: 'Как называть папку комплекта?' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: /Человек \+ месяц/ }).click();
+  await dialog.getByRole('button', { name: 'Сохранить правило' }).click();
+  await expect(dialog).toBeHidden();
+}
+
+test('first run saves a naming rule before showing the create-buttons action', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
+  await completeFolderNamingOnboarding(page);
   await expect(page.getByRole('button', { name: 'Создать свои кнопки' })).toBeVisible();
   await expect(page.getByText('Встроенный пример')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dokkomplekt.output-folder-naming-confirmed.v1'))).toBe('true');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dokkomplekt.output-folder-parts.v1'))).toBe(JSON.stringify(['ShortInitials', 'PeriodStartMonthName']));
 });
 
 test('marked DOCX becomes a button without copying example facts', async ({ page }) => {
   await installTauriMock(page);
   await page.goto('/');
+  await completeFolderNamingOnboarding(page);
   await page.getByRole('button', { name: 'Создать свои кнопки' }).click();
   await expect(page.getByRole('dialog', { name: 'Добавление шаблонов' })).toBeVisible();
   await expect(page.getByLabel('Название документа для Счёт на оплату.docx')).toHaveValue('Счёт на оплату');

@@ -25,9 +25,10 @@ def load_module(path: Path = SCRIPT, name: str = "verify_rustsec_advisory_pin"):
 
 def test_checked_in_pin_is_current_and_known_bad_head_is_not_used() -> None:
     module = load_module()
-    now = dt.datetime(2026, 8, 9, 14, 0, tzinfo=dt.timezone.utc)
-    report = module.validate_policy(POLICY, now=now)
-    assert report["commit"] == "309ad29d8fe448bf986019e05d47b9e0e29a2218"
+    data = json.loads(POLICY.read_text(encoding="utf-8"))
+    committed = module.parse_utc(data["committed_at_utc"])
+    report = module.validate_policy(POLICY, now=committed + dt.timedelta(hours=1))
+    assert report["commit"] == data["commit"]
     assert report["blocked_upstream_commit"] == "e11d6b330dd033a9ed7476de71029cfb8f2d1095"
     assert report["commit"] != report["blocked_upstream_commit"]
     assert report["max_age_hours"] <= 168

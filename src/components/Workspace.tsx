@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   CreatedDocumentsIntakeResult,
+  DocumentTemplateSpec,
   GeneratedOutput,
   GeneratedPrintItem,
   IntakeCapability,
@@ -8,6 +9,7 @@ import type {
   SemanticExtractResult,
   WorkflowPlan,
 } from '../lib/types';
+import { AdditionalMaterialsPanel } from './AdditionalMaterialsPanel';
 
 interface ParsedSourceSummary {
   title: string;
@@ -26,6 +28,8 @@ interface PreviewState {
 
 interface WorkspaceProps {
   busy: boolean;
+  documents: DocumentTemplateSpec[];
+  selectedDocumentIds: string[];
   watchFolder: string;
   intakeSource: string;
   intakeResult: CreatedDocumentsIntakeResult | null;
@@ -264,6 +268,8 @@ export function Workspace(props: WorkspaceProps) {
           </div>
         </details>
       </section>
+
+      <AdditionalMaterialsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} busy={props.busy} />
 
       {sourceReady && (
         <section className="reviewStage">

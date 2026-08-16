@@ -12,6 +12,7 @@ import { UtilityPanel } from './components/UtilityPanel';
 import { TemplateSetupModal } from './components/TemplateSetupModal';
 import { DocumentRail } from './components/DocumentRail';
 import { Workspace } from './components/Workspace';
+import { FolderNamingOnboarding } from './components/FolderNamingOnboarding';
 import { PopupDesignerModal } from './components/PopupDesignerModal';
 import { GuidedScannerModal } from './components/GuidedScannerModal';
 import { GenerationPreflightModal } from './components/GenerationPreflightModal';
@@ -25,10 +26,10 @@ import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import {
-  AUTO_PRINT_KEY, DEFAULT_YEAR, OUTPUT_PREFS_KEY, PRINT_COPIES_KEY, STATE_DB,
+  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
-  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputRoot,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputRoot,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 
@@ -100,6 +101,7 @@ function AppContent() {
   const [scannerText, setScannerText] = useState('');
   const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
+  const [folderNamingConfirmed, setFolderNamingConfirmed] = useState(loadOutputNamingConfirmed);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
@@ -472,7 +474,8 @@ function AppContent() {
   function updateFolderParts(parts: FolderNamePartDto[]) {
     const next: FolderNamePartDto[] = parts.length ? parts : ['DocumentNumber', 'DocumentDate'];
     setFolderParts(next);
-    try { localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    saveOutputFolderParts(next, true);
+    setFolderNamingConfirmed(true);
   }
 
   function updateAutoPrint(value: boolean) {
@@ -571,19 +574,35 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
+  async function chooseExistingOutputPolicy(documentIds: string[]): Promise<'version' | 'replace_with_backup' | null> {
+    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
+    const planned = await run('get_output_plan', () => getOutputPlan(outputRoot.trim() || 'output/Готовые документы', folderParts, labels));
+    if (!planned) return null;
+    if (!planned.exists) return 'version';
+    if (await dialogs.confirm({ title: 'Комплект уже существует', message: `Папка уже есть: ${planned.patient_folder}. Открыть существующий комплект без создания новых файлов?`, confirmLabel: 'Открыть существующий', cancelLabel: 'Другие варианты' })) {
+      await run('open_in_file_manager', () => openInFileManager(planned.patient_folder));
+      setStatus('Открыт существующий комплект. Новые файлы не создавались.');
+      return null;
+    }
+    if (await dialogs.confirm({ title: 'Создать новую версию?', message: 'Текущий комплект останется без изменений, а новый будет опубликован в уникальной папке с номером версии.', confirmLabel: 'Создать новую версию', cancelLabel: 'Другие варианты' })) return 'version';
+    if (!await dialogs.confirm({ title: 'Заменить комплект с резервной копией?', message: 'Существующая папка сначала будет целиком перенесена в резервную копию. Только после этого новый комплект займёт её место. При ошибке программа попытается восстановить старую папку.', confirmLabel: 'Заменить с резервной копией', cancelLabel: 'Отмена', danger: true })) {
+      setStatus('Создание комплекта отменено. Существующая папка не изменена.');
+      return null;
+    }
+    return 'replace_with_backup';
+  }
+
   async function performGenerateSelectedDocuments(documentIds: string[]) {
-    const res = await run('render_docx_batch', () => renderDocxBatch(
-      documentIds,
-      outputRoot.trim() || 'output/Готовые документы',
-      folderParts,
-      true,
-    ));
+    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);
+    if (!existingOutputPolicy) return;
+    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, outputRoot.trim() || 'output/Готовые документы', folderParts, true, existingOutputPolicy));
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
+    const backupNote = res.backup_folder ? ` Предыдущий комплект сохранён: ${res.backup_folder}.` : '';
     setStatus(res.warnings?.length
-      ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}. Требует внимания: ${res.warnings.join(' ')}`
-      : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.`);
+      ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote} Требует внимания: ${res.warnings.join(' ')}`
+      : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote}`);
     if (autoPrint) await queuePrint(jobsForItems(printItems), true, documentIds, null, res.output_folder);
   }
 
@@ -1297,6 +1316,8 @@ function AppContent() {
         <div className="grid clientGrid">
           <Workspace
             busy={busy}
+            documents={documents}
+            selectedDocumentIds={selectedDocIds}
             watchFolder={watchFolder}
             intakeSource={intakeSource}
             intakeResult={intakeResult}
@@ -1432,6 +1453,10 @@ function AppContent() {
           {status}
         </footer>
       </div>
+
+      {!folderNamingConfirmed && (
+        <FolderNamingOnboarding currentParts={folderParts} onConfirm={(parts) => { updateFolderParts(parts); setStatus('Правило имени папки комплекта сохранено.'); }} />
+      )}
 
       {setupOpen && (
         <TemplateSetupModal

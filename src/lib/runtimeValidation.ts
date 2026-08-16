@@ -98,6 +98,7 @@ function validateBatch(command: string, value: unknown): void {
   stringArray(command, root.created_files, 'created_files');
   if (root.created_documents !== undefined) objectArray(command, root.created_documents, 'created_documents');
   optionalStringArray(command, root.warnings, 'warnings');
+  if (root.backup_folder !== undefined && root.backup_folder !== null) string(command, root.backup_folder, 'backup_folder');
 }
 
 function validateSemantic(command: string, value: unknown): void {
@@ -195,6 +196,7 @@ function validateOutputPlan(command: string, value: unknown): void {
   string(command, root.patient_folder, 'patient_folder');
   stringArray(command, root.files, 'files');
   stringArray(command, root.warnings, 'warnings');
+  boolean(command, root.exists, 'exists');
 }
 
 function validateIntakeRoute(command: string, value: unknown): void {

@@ -563,3 +563,36 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .softBtn.danger { color: var(--danger, #b42318); border-color: color-mix(in srgb, var(--danger, #b42318) 45%, var(--btn-line)); }
 .folderPicker input { flex: 1; }
 .folderPicker button { flex: none; white-space: nowrap; }
+
+/* Universal onboarding and profession-scoped supplemental sources. */
+.folderNamingBackdrop { z-index: 1200; }
+.folderNamingOnboarding { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.folderNamingPresets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 16px 0 10px; }
+.folderNamingPreset { text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel2); color: var(--text); cursor: pointer; }
+.folderNamingPreset strong, .folderNamingPreset small { display: block; }
+.folderNamingPreset small { margin-top: 4px; color: var(--muted); }
+.folderNamingPreset.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.folderNamingAdvancedToggle { margin: 4px 0 10px; }
+.folderNamingParts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.folderNamingParts label { display: flex; gap: 8px; align-items: center; }
+.folderNamingPreview { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--panel2); }
+.folderNamingPreview span, .folderNamingPreview strong { display: block; }
+.folderNamingPreview span { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+
+.additionalMaterialsPanel { border: 1px solid var(--line); border-radius: 16px; padding: 16px; background: var(--panel); display: grid; gap: 12px; }
+.additionalMaterialsHeading strong, .medicalAdditionalSources strong { display: block; }
+.additionalMaterialsHeading small, .medicalAdditionalSources small, .medicalSourceChoice small { display: block; margin-top: 4px; color: var(--muted); }
+.additionalMaterialsDropZone { border: 1px dashed var(--line); border-radius: 12px; padding: 14px; text-align: center; color: var(--muted); background: var(--panel2); }
+.additionalMaterialsDropZone.dragging { border-color: var(--accent); color: var(--text); }
+.additionalMaterialActions, .medicalSourceButtons { display: flex; flex-wrap: wrap; gap: 10px; }
+.medicalAdditionalSources { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 10px; }
+.medicalSourceChoice { flex: 1 1 240px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+.medicalSourceChoice .fileBtn { width: fit-content; }
+.medicalProfileOptions { border-top: 1px solid var(--line); padding-top: 10px; }
+.profileOptionsEditor { display: grid; gap: 6px; margin: 10px 0; }
+.profileOptionsEditor textarea { min-height: 84px; }
+.additionalMaterialsStatus { margin: 0; color: var(--muted); }
+
+@media (max-width: 720px) {
+  .folderNamingPresets, .folderNamingParts { grid-template-columns: 1fr; }
+}

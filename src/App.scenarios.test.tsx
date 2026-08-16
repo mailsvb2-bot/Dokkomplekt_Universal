@@ -124,7 +124,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'list_template_versions': return [] as never;
       case 'rollback_template_version': return pack as never;
       case 'get_output_plan':
-        return { root_folder: 'output', patient_folder: 'output/Готовые', files: ['output/Готовые/Счёт.docx'], warnings: [] } as never;
+        return { root_folder: 'output', patient_folder: 'output/Готовые', files: ['output/Готовые/Счёт.docx'], warnings: [], exists: false } as never;
       case 'route_intake':
         return { should_start_ui: false, should_raise_existing_window: true, reason: 'raise existing window' } as never;
       case 'save_state':

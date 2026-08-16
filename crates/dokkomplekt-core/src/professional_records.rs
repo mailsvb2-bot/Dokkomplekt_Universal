@@ -441,116 +441,77 @@ fn diagnosis_compatible(candidate: &str, target: &str) -> bool {
 /// source key. At this seam we recover only the small, proven semantic bridges
 /// from the donor project. This does not change the universal matcher and does
 /// not invent diary text. Ambiguity remains fail-closed in `persistent_source`.
-fn medical_diary_semantic_compatible(candidate: &str, target: &str) -> bool {
-    let candidate = source_key(candidate);
-    let target = source_key(target);
+#[derive(Debug, serde::Deserialize)]
+struct ProfileMatchPack {
+    groups: Vec<ProfileMatchGroup>,
+}
 
-    let candidate_markers = medical_diary_semantic_markers(&candidate);
-    let target_markers = medical_diary_semantic_markers(&target);
-    if candidate_markers.is_empty() || target_markers.is_empty() {
-        return false;
-    }
-    if !candidate_markers
+#[derive(Debug, serde::Deserialize)]
+struct ProfileMatchGroup {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    exclusive: bool,
+    terms: Vec<String>,
+}
+
+fn medical_diary_match_pack() -> &'static ProfileMatchPack {
+    static PACK: std::sync::OnceLock<ProfileMatchPack> = std::sync::OnceLock::new();
+    PACK.get_or_init(|| {
+        match serde_json::from_str(include_str!("../data/medical_diary_match_aliases.ru.json")) {
+            Ok(pack) => pack,
+            Err(_) => ProfileMatchPack { groups: Vec::new() },
+        }
+    })
+}
+
+fn profile_group_matches(value: &str, group: &ProfileMatchGroup) -> bool {
+    let normalized = source_key(value);
+    group.terms.iter().any(|term| {
+        let term = source_key(term);
+        !term.is_empty() && normalized.contains(&term)
+    })
+}
+
+fn matching_profile_groups(value: &str, kind: &str) -> std::collections::BTreeSet<String> {
+    medical_diary_match_pack()
+        .groups
         .iter()
-        .any(|marker| target_markers.contains(marker))
+        .filter(|group| group.kind == kind && profile_group_matches(value, group))
+        .map(|group| group.id.clone())
+        .collect()
+}
+
+/// Apply profile-owned semantic bridges for old diary-source filenames.
+///
+/// The algorithm is deliberately vocabulary-free: diagnosis families, aliases
+/// and severities live in an embedded Medical profile data pack. Other domains
+/// therefore never inherit psychiatric terminology or matching rules.
+fn medical_diary_semantic_compatible(candidate: &str, target: &str) -> bool {
+    let candidate_semantic = matching_profile_groups(candidate, "semantic");
+    let target_semantic = matching_profile_groups(target, "semantic");
+    if candidate_semantic.is_empty()
+        || target_semantic.is_empty()
+        || candidate_semantic.is_disjoint(&target_semantic)
     {
         return false;
     }
 
-    // A file carrying a more specific donor meaning must not leak into an
-    // unrelated diagnosis merely because both names share a broad word.
-    for marker in [
-        "asthenia",
-        "psychopathy",
-        "observation",
-        "organic",
-        "healthy",
-        "oligophrenia",
-    ] {
-        if candidate_markers.contains(&marker) && !target_markers.contains(&marker) {
+    for group in medical_diary_match_pack()
+        .groups
+        .iter()
+        .filter(|group| group.kind == "semantic" && group.exclusive)
+    {
+        if candidate_semantic.contains(&group.id) && !target_semantic.contains(&group.id) {
             return false;
         }
     }
 
-    // Severity is clinically meaningful. If both sides state it explicitly,
-    // contradictory severities are never treated as compatible.
-    !matches!(
-        (
-            medical_diary_severity(&candidate),
-            medical_diary_severity(&target),
-        ),
-        (Some(left), Some(right)) if left != right
-    )
-}
-
-fn medical_diary_semantic_markers(value: &str) -> Vec<&'static str> {
-    let normalized = source_key(value);
-    let mut result = Vec::new();
-    let mut push = |marker| {
-        if !result.contains(&marker) {
-            result.push(marker);
-        }
-    };
-
-    if normalized.contains("депресс") {
-        push("depression");
-    }
-    if normalized.contains("астен") {
-        push("asthenia");
-    }
-    if normalized.contains("психопат")
-        || (normalized.contains("нарушен") && normalized.contains("поведен"))
-    {
-        push("psychopathy");
-    }
-    if normalized.contains("органик")
-        || normalized.contains("органичес")
-        || normalized.contains("резидуаль")
-    {
-        push("organic");
-    }
-    if normalized.contains("здоров") || normalized.contains("норма") {
-        push("healthy");
-    }
-    if normalized.contains("обследован") {
-        push("observation");
-    }
-    if normalized.contains("олигофрен")
-        || normalized.contains("умствен")
-        || icd_family_present(&normalized, 'f', '7')
-    {
-        push("oligophrenia");
-    }
-    result
-}
-
-fn icd_family_present(value: &str, letter: char, family_digit: char) -> bool {
-    let mut chars = value.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character != letter {
-            continue;
-        }
-        while chars.peek().is_some_and(|next| next.is_whitespace()) {
-            chars.next();
-        }
-        if chars.peek().is_some_and(|next| *next == family_digit) {
-            return true;
-        }
-    }
-    false
-}
-
-fn medical_diary_severity(value: &str) -> Option<&'static str> {
-    let value = source_key(value);
-    if value.contains("легк") {
-        Some("mild")
-    } else if value.contains("умерен") || value.contains("средн") {
-        Some("moderate")
-    } else if value.contains("тяжел") || value.contains("выражен") {
-        Some("severe")
-    } else {
-        None
-    }
+    let candidate_severity = matching_profile_groups(candidate, "severity");
+    let target_severity = matching_profile_groups(target, "severity");
+    candidate_severity.is_empty()
+        || target_severity.is_empty()
+        || !candidate_severity.is_disjoint(&target_severity)
 }
 
 fn persistent_source<'a>(case: &'a SemanticCase, prefix: &str, key: &str) -> Option<&'a str> {

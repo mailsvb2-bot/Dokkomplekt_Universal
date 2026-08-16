@@ -347,12 +347,14 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
             config.section = Some("Медицинские данные".into());
             if id == "medical.rvk_commissariat" {
                 config.input_kind = PromptInputKind::Select;
-                config.options = vec![
-                    "Районный военный комиссариат".into(),
-                    "Городской военный комиссариат".into(),
-                    "Областной военный комиссариат".into(),
-                ];
+                // Region-specific quick options are injected by the medical profile
+                // configuration in the desktop runtime. The universal core only
+                // defines the field contract and always preserves manual entry.
+                config.options.clear();
                 config.allow_custom_option = true;
+                config.help_text = Some(
+                    "Быстрые варианты задаются в медицинском профиле; можно ввести значение вручную.".into(),
+                );
             }
             if id == "medical.icd10" || id == "medical.diagnosis_code" {
                 config.input_kind = PromptInputKind::Icd10;

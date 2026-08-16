@@ -1008,6 +1008,7 @@ struct WorkflowPlanRequest {
 fn get_workflow_plan(
     req: WorkflowPlanRequest,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let doc = {
         let pack = state.pack.lock().map_err(|_| "state lock failed")?;
@@ -1021,13 +1022,14 @@ fn get_workflow_plan(
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
-    let plan = plan_workflow(
+    let mut plan = plan_workflow(
         &doc,
         &case,
         &WorkflowFlags {
             sick_leave_enabled: req.sick_leave_enabled,
         },
     );
+    apply_profile_prompt_overrides(&app, &mut plan)?;
     serde_json::to_value(plan).map_err(|e| e.to_string())
 }
 
@@ -1041,6 +1043,7 @@ struct WorkflowPlanBatchRequest {
 fn get_workflow_plan_batch(
     req: WorkflowPlanBatchRequest,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let documents = {
         let pack = state.pack.lock().map_err(|_| "state lock failed")?;
@@ -1066,13 +1069,14 @@ fn get_workflow_plan_batch(
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
-    let plan = plan_workflow_batch(
+    let mut plan = plan_workflow_batch(
         &documents,
         &case,
         &WorkflowFlags {
             sick_leave_enabled: req.sick_leave_enabled,
         },
     );
+    apply_profile_prompt_overrides(&app, &mut plan)?;
     serde_json::to_value(plan).map_err(|error| error.to_string())
 }
 
@@ -1378,12 +1382,22 @@ fn render_docx(
     Ok(value)
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ExistingOutputPolicy {
+    #[default]
+    Version,
+    ReplaceWithBackup,
+}
+
 #[derive(Debug, Deserialize)]
 struct RenderDocxBatchRequest {
     document_ids: Vec<String>,
     output_root: String,
     folder_parts: Vec<FolderNamePart>,
     strict: bool,
+    #[serde(default)]
+    existing_output_policy: ExistingOutputPolicy,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1399,6 +1413,7 @@ struct RenderDocxBatchResponse {
     created_files: Vec<String>,
     created_documents: Vec<CreatedDocumentOutputDto>,
     warnings: Vec<String>,
+    backup_folder: Option<String>,
 }
 
 #[tauri::command]
@@ -1430,22 +1445,24 @@ fn render_docx_batch(
                 .ok_or_else(|| format!("Документ не найден: {document_id}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let template_snapshots = documents
-        .iter()
-        .map(|document| {
-            template_snapshot::TemplateSnapshot::capture(
-                &app,
-                &document.template_path,
-                &document.button_label,
-            )
-            .map(|snapshot| (document.id.clone(), snapshot))
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let base_case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
+    let template_snapshots = documents
+        .iter()
+        .map(|document| {
+            let template_path = medical_diary_template_override(&app, &base_case, document)?
+                .unwrap_or_else(|| PathBuf::from(&document.template_path));
+            template_snapshot::TemplateSnapshot::capture(
+                &app,
+                &template_path.display().to_string(),
+                &document.button_label,
+            )
+            .map(|snapshot| (document.id.clone(), snapshot))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     let output_root = resolve_user_path(&app, &req.output_root)?;
     std::fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
     cleanup_stale_stage_directories(&output_root, Duration::from_secs(24 * 60 * 60))?;
@@ -1582,8 +1599,15 @@ fn render_docx_batch(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
-    let output_folder = match publish_stage_to_unique_directory(&stage, &desired_output_folder) {
-        Ok(path) => path,
+    let publication = match req.existing_output_policy {
+        ExistingOutputPolicy::Version => publish_stage_to_unique_directory(&stage, &desired_output_folder)
+            .map(|path| (path, None)),
+        ExistingOutputPolicy::ReplaceWithBackup => {
+            publish_stage_replacing_with_backup(&stage, &desired_output_folder)
+        }
+    };
+    let (output_folder, backup_folder) = match publication {
+        Ok(value) => value,
         Err(error) => {
             let journal_cleanup =
                 generation_publication::abort_prepared_publication(&app, &permit);
@@ -1600,6 +1624,12 @@ fn render_docx_batch(
         }
     };
     let mut warnings = Vec::new();
+    if let Some(backup) = backup_folder.as_ref() {
+        warnings.push(format!(
+            "Предыдущая версия комплекта сохранена как резервная копия: {}",
+            backup.display()
+        ));
+    }
     if let Err(error) =
         generation_publication::confirm_publication(&app, &permit, &output_folder)
     {
@@ -1640,6 +1670,7 @@ fn render_docx_batch(
         created_files,
         created_documents,
         warnings,
+        backup_folder: backup_folder.map(|path| path.display().to_string()),
     })
 }
 
@@ -2654,13 +2685,15 @@ struct OutputPlanRequest {
 fn get_output_plan(
     req: OutputPlanRequest,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
+    let root = resolve_user_path(&app, &req.root_folder)?;
     let plan = plan_output_paths(
-        Path::new(&req.root_folder),
+        &root,
         &case,
         &req.folder_parts,
         &req.button_labels,

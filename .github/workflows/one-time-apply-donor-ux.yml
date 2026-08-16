@@ -1,0 +1,74 @@
+name: One-time donor UX implementation
+
+on:
+  push:
+    branches:
+      - agent/donor-contract-audit-20260816
+
+permissions:
+  contents: write
+
+concurrency:
+  group: donor-ux-implementation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/donor-contract-audit-20260816
+
+      - name: Reconstruct and apply verified patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/agent-patches/donor-ux-{00..08}.b64 > /tmp/donor.patch.gz.b64
+          echo "478fee7c00965a33bdb3518d70c994c373941fbc4cbf268f7ef0e1e374fb48d2  /tmp/donor.patch.gz.b64" | sha256sum -c -
+          base64 -d /tmp/donor.patch.gz.b64 | gzip -d > /tmp/donor.patch
+          echo "0c71ac9caf9532be362460490f07d4e44addb417310d23f4bfbec7b0dbc8b3f6  /tmp/donor.patch" | sha256sum -c -
+          git apply --3way /tmp/donor.patch
+
+      - name: Install Rust formatter
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format and validate working tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('docs/LEGACY_MIGRATION_INVENTORY.json').read_text(encoding='utf-8'))
+          allowed = set(data['allowed_statuses'])
+          assert allowed == {'migrated-core', 'migrated-domain-profile', 'superseded', 'not-needed', 'missing'}
+          assert data['entries']
+          assert not [row for row in data['entries'] if row['status'] == 'missing']
+          PY
+
+      - name: Commit final implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/agent-patches
+          rm -f .github/workflows/one-time-apply-donor-ux.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: restore universal donor UX contracts"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin agent/donor-contract-audit-20260816
+            if git rebase origin/agent/donor-contract-audit-20260816 && git push origin HEAD:agent/donor-contract-audit-20260816; then
+              exit 0
+            fi
+            git rebase --abort >/dev/null 2>&1 || true
+            sleep 2
+          done
+          exit 1

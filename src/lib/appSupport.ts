@@ -111,7 +111,14 @@ export function promptToPopupField(prompt: PromptSpec): PopupFieldConfig {
 export function loadOutputRoot(): string {
   try {
     const value = localStorage.getItem(OUTPUT_ROOT_KEY)?.trim();
-    if (value) return value;
+    if (value) {
+      // Migrate installations that previously persisted the repository-relative
+      // fallback. It is not a user-selected Windows folder and its location
+      // depends on the process working directory, so it must never count as a
+      // confirmed destination after upgrade.
+      const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (normalized.toLocaleLowerCase('ru-RU') !== 'output/готовые документы') return value;
+    }
   } catch { /* use generic local default */ }
   // First run must ask for a real user-visible destination. A relative
   // application working-directory path is impossible for an end user to locate.

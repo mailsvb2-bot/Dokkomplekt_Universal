@@ -31,6 +31,13 @@ describe('output root persistence', () => {
     saveOutputRoot('   ');
     expect(loadOutputRoot()).toBe('C:/Documents/Ready');
   });
+
+  it('migrates the old repository-relative fallback back to an unconfigured state', () => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'output/Готовые документы');
+    expect(loadOutputRoot()).toBe('');
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'output\\Готовые документы\\');
+    expect(loadOutputRoot()).toBe('');
+  });
 });
 
 describe('default document selection', () => {

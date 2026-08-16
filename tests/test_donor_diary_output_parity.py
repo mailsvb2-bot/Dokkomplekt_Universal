@@ -17,6 +17,9 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     assert "disabled={!root || !selected.length}" in onboarding
     assert "currentRoot={outputRoot}" in app
     assert "onPickRoot={() => void chooseFolder" in app
+    assert "(!folderNamingConfirmed || !outputRoot.trim())" in app
+    assert "outputRoot.trim() || 'output/Готовые документы'" not in app
+    assert "Сначала выберите папку готовых документов. Ничего не создано." in app
     assert "Создано документов:" in workspace
     assert "<strong>Папка:</strong>" in workspace
     assert "Созданные файлы" in workspace

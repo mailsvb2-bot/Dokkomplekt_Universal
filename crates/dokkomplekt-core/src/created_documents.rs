@@ -367,7 +367,10 @@ mod tests {
                 assert!(missing.iter().any(|item| item.contains("Диагноз")));
                 assert!(missing
                     .iter()
-                    .any(|item| item.contains("Подпись лечащего врача")));
+                    .any(|item| item.contains("Подпись врача-психиатра")));
+                assert!(missing
+                    .iter()
+                    .any(|item| item.contains("Подпись заведующего отделением")));
             }
             other => panic!("expected Attention, got {other:?}"),
         }
@@ -395,7 +398,8 @@ mod tests {
                 "Лечение {{medical.treatment}}\n",
                 "Дата поступления {{medical.admission_date}}\n",
                 "Дата выписки {{medical.discharge_date}}\n",
-                "Лечащий врач ______"
+                "Зав. отд. Петров П.П.\n",
+                "Врач-психиатр Иванов И.И."
             ),
             plan.required_fields,
         )];
@@ -435,14 +439,15 @@ mod tests {
             "{{subject.name}} | {{medical.case_number}} | {{medical.admission_date}} | ",
             "{{medical.diagnosis}} | {{medical.treatment}} | "
         );
+        let signatures = "\nЗав. отд. Петров П.П.\nЛечащий врач Иванов И.И.";
         let mse_template = format!(
             "{common}{{{{medical.commission_date}}}} | {{{{medical.protocol_number}}}} | \
-             {{{{medical.protocol_date}}}} | {{{{medical.workplace}}}} | {{{{medical.position}}}}"
+             {{{{medical.protocol_date}}}} | {{{{medical.workplace}}}} | {{{{medical.position}}}}{signatures}"
         );
         let sick_template = format!(
             "{common}{{{{medical.commission_date}}}} | {{{{medical.protocol_number}}}} | \
              {{{{medical.protocol_date}}}} | {{{{medical.workplace}}}} | {{{{medical.position}}}} | \
-             {{{{medical.sick_leave_commission_date}}}} | {{{{medical.sick_leave_number}}}}"
+             {{{{medical.sick_leave_commission_date}}}} | {{{{medical.sick_leave_number}}}}{signatures}"
         );
         let docs = vec![
             medical_doc(

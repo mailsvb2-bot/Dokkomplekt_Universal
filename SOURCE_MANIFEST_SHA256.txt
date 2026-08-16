@@ -5,7 +5,7 @@ a02df7ba6232c25d9a44c5125d5a1c8ea24f2795a42c657dfb18719637a51001  .env.example
 275334986f8e67449148cf796525e5c7630f099fae2d32fea7bcaa353b90913d  .github/workflows/delete-merged-branch.yml
 db2920c7152645ce981633a078d2fb8066be5bb258c90449266550f5b45fea0f  .github/workflows/full-product-autopilot.yml
 3b9095be4e5fec0882f883f47438ceafe9ed9c60f66747faf8274b1f285f510c  .github/workflows/macos-smoke.yml
-c7a9b650ac8a6404908f5e9fc26bd1a08b1ecd9d75407b95418489e585a72cfd  .github/workflows/one-time-fix-donor-frontend.yml
+b232f1593969218adebaf50213ac4e4dd6f7cb622f6a22f4a31c90a5ac9840e8  .github/workflows/one-time-fix-donor-frontend.yml
 732d7f3430aeab8329e62c4fe707e9faa85f29c1035d3af0ca785eff466a8191  .github/workflows/quality-gate.yml
 4417d490250b155d35b0de4c1effc06ea58334488e014c913ed2eed87f74178a  .github/workflows/source-provenance.yml
 6ede1e8e4e322af8bbf674667cb9dbe7ea19077f97fb1ac1b9c8e081cb880135  .github/workflows/unsigned-preview.yml

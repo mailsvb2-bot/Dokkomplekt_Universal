@@ -10,8 +10,10 @@ pub struct ParsedFlexibleDate {
 
 /// Parses common user-entered date forms into `DD.MM.YYYY`.
 /// Supports ISO `YYYY-MM-DD`, compact numeric values plus Russian, English and
-/// Polish month names. Four-digit compact input is interpreted only as `DDMM`
-/// in the supplied default year; ambiguous historical shorthand is rejected.
+/// Polish month names. Four-digit compact input prefers unambiguous `DDMM` in
+/// the supplied default year and only falls back to the legacy `DMYY` form when
+/// `DDMM` is impossible. Five- and seven-digit legacy values support a missing
+/// leading zero in day or month without changing already-valid modern input.
 pub fn parse_flexible_date(input: &str, default_year: i32) -> Option<String> {
     parse_flexible_date_detailed(input, default_year).map(|value| value.normalized)
 }
@@ -55,18 +57,53 @@ pub fn parse_flexible_date_detailed(input: &str, default_year: i32) -> Option<Pa
             )
         }),
         4 => {
-            // Four compact digits have exactly one interpretation: DDMM in the
-            // default year. We intentionally do not guess the old DMY compact
-            // form (`1126` -> 01.01.2026), because that silently turns many
-            // invalid dates into a different valid date.
+            // Keep the safer modern DDMM meaning whenever it forms a valid date.
             let day = digits[0..2].parse::<u32>().ok()?;
             let month = digits[2..4].parse::<u32>().ok()?;
-            format_date(day, month, default_year).map(|value| {
-                parsed(
+            if let Some(value) = format_date(day, month, default_year) {
+                Some(parsed(
                     value,
                     Some("четыре цифры интерпретированы как ДДММ с годом по умолчанию"),
-                )
-            })
+                ))
+            } else {
+                // Donor compatibility: 1126 -> 01.01.2026. This fallback is
+                // reached only when DDMM itself is impossible (month 26 here).
+                let day = digits[0..1].parse::<u32>().ok()?;
+                let month = digits[1..2].parse::<u32>().ok()?;
+                let year = normalize_year(digits[2..4].parse::<i32>().ok()?, default_year);
+                format_date(day, month, year).map(|value| {
+                    parsed(
+                        value,
+                        Some("четыре цифры распознаны как legacy ДМГГ после отклонения ДДММ"),
+                    )
+                })
+            }
+        }
+        5 => {
+            // Legacy input with one omitted leading zero: 10526 -> 01.05.2026,
+            // 31126 -> 31.01.2026. Try the donor's deterministic preference,
+            // then the alternate split; impossible dates remain rejected.
+            let first_two = digits[0..2].parse::<u32>().ok()?;
+            let patterns = if first_two > 12 {
+                [(2_usize, 1_usize), (1_usize, 2_usize)]
+            } else {
+                [(1_usize, 2_usize), (2_usize, 1_usize)]
+            };
+            for &(day_len, month_len) in &patterns {
+                let day = digits[0..day_len].parse::<u32>().ok()?;
+                let month = digits[day_len..day_len + month_len].parse::<u32>().ok()?;
+                let year = normalize_year(
+                    digits[day_len + month_len..].parse::<i32>().ok()?,
+                    default_year,
+                );
+                if let Some(value) = format_date(day, month, year) {
+                    return Some(parsed(
+                        value,
+                        Some("пять цифр распознаны как дата с пропущенным ведущим нулём"),
+                    ));
+                }
+            }
+            None
         }
         6 => format_date(
             digits[0..2].parse().ok()?,
@@ -74,6 +111,27 @@ pub fn parse_flexible_date_detailed(input: &str, default_year: i32) -> Option<Pa
             normalize_year(digits[4..6].parse().ok()?, default_year),
         )
         .map(|value| parsed(value, None)),
+        7 => {
+            // Same compatibility as the 5-digit form, but with a four-digit year.
+            let first_two = digits[0..2].parse::<u32>().ok()?;
+            let patterns = if first_two > 12 {
+                [(2_usize, 1_usize), (1_usize, 2_usize)]
+            } else {
+                [(1_usize, 2_usize), (2_usize, 1_usize)]
+            };
+            for &(day_len, month_len) in &patterns {
+                let day = digits[0..day_len].parse::<u32>().ok()?;
+                let month = digits[day_len..day_len + month_len].parse::<u32>().ok()?;
+                let year = digits[day_len + month_len..].parse::<i32>().ok()?;
+                if let Some(value) = format_date(day, month, year) {
+                    return Some(parsed(
+                        value,
+                        Some("семь цифр распознаны как дата с пропущенным ведущим нулём"),
+                    ));
+                }
+            }
+            None
+        }
         8 => format_date(
             digits[0..2].parse().ok()?,
             digits[2..4].parse().ok()?,
@@ -186,7 +244,30 @@ mod tests {
             parse_flexible_date("1", 2026).as_deref(),
             Some("01.01.2026")
         );
-        assert_eq!(parse_flexible_date("1126", 2026), None);
+        assert_eq!(
+            parse_flexible_date("1126", 2026).as_deref(),
+            Some("01.01.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("1205", 2026).as_deref(),
+            Some("12.05.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("10526", 2026).as_deref(),
+            Some("01.05.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("31126", 2026).as_deref(),
+            Some("31.01.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("1052026", 2026).as_deref(),
+            Some("01.05.2026")
+        );
+        assert_eq!(
+            parse_flexible_date("3112026", 2026).as_deref(),
+            Some("31.01.2026")
+        );
         assert_eq!(
             parse_flexible_date("100526", 2026).as_deref(),
             Some("10.05.2026")

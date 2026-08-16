@@ -52,18 +52,30 @@ pub fn rename_document_button(
     requested_label: &str,
 ) -> Result<String, ButtonRegistryError> {
     let normalized = normalize_label(requested_label);
+    let mut resolved = normalized.clone();
     if pack.documents.iter().any(|document| {
-        document.id != document_id && document.button_label.eq_ignore_ascii_case(&normalized)
+        document.id != document_id && document.button_label.eq_ignore_ascii_case(&resolved)
     }) {
-        return Err(ButtonRegistryError::DuplicateLabel(normalized));
+        for index in 2..500 {
+            let candidate = format!("{normalized} ({index})");
+            if !pack.documents.iter().any(|document| {
+                document.id != document_id && document.button_label.eq_ignore_ascii_case(&candidate)
+            }) {
+                resolved = candidate;
+                break;
+            }
+        }
+        if resolved == normalized {
+            resolved = format!("{normalized} ({})", pack.documents.len() + 1);
+        }
     }
     let document = pack
         .documents
         .iter_mut()
         .find(|document| document.id == document_id)
         .ok_or_else(|| ButtonRegistryError::DocumentNotFound(document_id.to_string()))?;
-    document.button_label = normalized.clone();
-    Ok(normalized)
+    document.button_label = resolved.clone();
+    Ok(resolved)
 }
 
 /// Removes only the button configuration. The underlying user template remains
@@ -461,5 +473,40 @@ mod tests {
         let removed = remove_document_button(&mut pack, "doc").expect("remove");
         assert_eq!(removed.template_path, "templates/original.docm");
         assert!(pack.documents.is_empty());
+    }
+
+    #[test]
+    fn rename_collision_uses_donor_suffix_without_changing_document_identity() {
+        let make = |id: &str, label: &str, template: &str| DocumentTemplateSpec {
+            id: id.into(),
+            button_label: label.into(),
+            template_path: template.into(),
+            category: crate::DomainKind::Generic,
+            role_id: "generic".into(),
+            required_fields: vec!["document.number".into()],
+            placeholders: vec!["document.number".into()],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        let mut pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "Pack".into(),
+            documents: vec![
+                make("d1", "Акт", "templates/act.docx"),
+                make("d2", "Эпикриз", "templates/epicrisis.docx"),
+            ],
+        };
+
+        let label = rename_document_button(&mut pack, "d1", "Эпикриз").expect("rename");
+        assert_eq!(label, "Эпикриз (2)");
+        let renamed = pack
+            .documents
+            .iter()
+            .find(|document| document.id == "d1")
+            .unwrap();
+        assert_eq!(renamed.id, "d1");
+        assert_eq!(renamed.template_path, "templates/act.docx");
+        assert_eq!(renamed.required_fields, vec!["document.number"]);
     }
 }

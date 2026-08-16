@@ -106,6 +106,9 @@ pub fn is_supported_intake_extension(extension: &str) -> bool {
         extension.to_ascii_lowercase().as_str(),
         "docx"
             | "docm"
+            | "doc"
+            | "ppt"
+            | "pptx"
             | "pdf"
             | "jpg"
             | "jpeg"
@@ -184,6 +187,9 @@ mod tests {
     fn universal_source_formats_reach_the_intake_router() {
         let mut dedup = IntakeDeduplicator::new(Duration::from_secs(3));
         for name in [
+            "legacy.doc",
+            "slides.ppt",
+            "slides.pptx",
             "source.pdf",
             "scan.jpg",
             "table.xlsx",

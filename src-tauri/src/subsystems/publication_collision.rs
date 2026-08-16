@@ -1,4 +1,4 @@
-//! Explicit output-collision publication policies.
+// Explicit output-collision publication policies.
 
 fn publish_stage_replacing_with_backup(
     stage: &Path,

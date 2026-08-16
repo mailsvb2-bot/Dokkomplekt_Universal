@@ -1,4 +1,4 @@
-//! Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
+// Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
 
 const MEDICAL_RVK_OPTIONS_BLOCK_ID: &str = "professional.medical.rvk.quick_options";
 const MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID: &str = "professional.medical.diary.date_templates";

@@ -465,7 +465,7 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
     await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
     await screen.findByRole('heading', { name: /Создано документов:/ });
-    await click(/Открыть комплект/);
+    await click(/Открыть папку с документами/);
     fireEvent.click(screen.getByLabelText('Дополнительные форматы'));
     await click(/^Создать PDF$/);
     await waitFor(() => expect(calls.some((c) => c.command === 'export_files_to_pdf')).toBe(true));

@@ -28,62 +28,53 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           app_support = Path('src/lib/appSupport.ts')
           text = app_support.read_text(encoding='utf-8')
-          obsolete = '''export function loadOutputNamingConfirmed(): boolean {
-            try {
-              if (localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true') return true;
-              const saved = localStorage.getItem(OUTPUT_PREFS_KEY);
-              if (!saved) return false;
-              const parsed = JSON.parse(saved);
-              // Migration contract: a user who already chose and persisted naming parts
-              // has already expressed the naming principle and must not be re-prompted.
-              return Array.isArray(parsed) && parsed.length > 0 && parsed.every((value) => typeof value === 'string');
-            } catch { return false; }
-          }
-
-          export function saveOutputFolderParts(parts: FolderNamePartDto[]): FolderNamePartDto[] {
-            const normalized: FolderNamePartDto[] = parts.length
-              ? [...new Set(parts)]
-              : ['DocumentNumber', 'DocumentDate'];
-            try {
-              localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(normalized));
-              localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
-            } catch { /* storage may be unavailable */ }
-            return normalized;
-          }
-
-          '''
-          if text.count(obsolete) != 1:
-              raise SystemExit('expected exactly one obsolete naming block')
-          app_support.write_text(text.replace(obsolete, ''), encoding='utf-8')
+          marker = '// Migration contract: a user who already chose and persisted naming parts'
+          marker_pos = text.find(marker)
+          if marker_pos < 0:
+              raise SystemExit('obsolete naming block marker not found')
+          block_start = text.rfind('export function loadOutputNamingConfirmed()', 0, marker_pos)
+          block_end_anchor = text.find('export function loadAutoPrintPreference()', marker_pos)
+          if block_start < 0 or block_end_anchor < 0:
+              raise SystemExit('obsolete naming block boundaries not found')
+          if text.find('export function loadOutputNamingConfirmed()', block_start + 1, marker_pos) >= 0:
+              raise SystemExit('ambiguous obsolete naming block start')
+          text = text[:block_start] + text[block_end_anchor:]
+          app_support.write_text(text, encoding='utf-8')
 
           workspace = Path('src/components/Workspace.tsx')
           text = workspace.read_text(encoding='utf-8')
-          old = '''  const entries = Array.from(dataTransfer.items ?? [])
-            .map((item) => (item as DataTransferItem & { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.())
-            .filter((entry): entry is DroppedEntry => Boolean(entry));'''
-          new = '''  const entries = Array.from(dataTransfer.items ?? [])
+          pattern = re.compile(
+              r"(?ms)^  const entries = Array\.from\(dataTransfer\.items \?\? \[\]\)\s*"
+              r"\.map\(\(item\) => \(item as DataTransferItem & \{ webkitGetAsEntry\?: \(\) => DroppedEntry \| null \}\)\.webkitGetAsEntry\?\.\(\)\)\s*"
+              r"\.filter\(\(entry\): entry is DroppedEntry => Boolean\(entry\)\);"
+          )
+          replacement = '''  const entries = Array.from(dataTransfer.items ?? [])
             .map((item) => {
               const getter = (item as DataTransferItem & { webkitGetAsEntry?: () => unknown }).webkitGetAsEntry;
               return getter?.call(item) as DroppedEntry | null | undefined;
             })
             .filter((entry): entry is DroppedEntry => entry != null);'''
-          if text.count(old) != 1:
-              raise SystemExit('expected exactly one dropped-entry block')
-          workspace.write_text(text.replace(old, new), encoding='utf-8')
+          text, count = pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f'expected one dropped-entry block, got {count}')
+          workspace.write_text(text, encoding='utf-8')
 
           dialog = Path('src/components/AppDialogProvider.tsx')
           text = dialog.read_text(encoding='utf-8')
-          old = '''                    type="button"
-                    className={option.danger ? 'appDialogChoice danger' : 'appDialogChoice'}'''
-          new = '''                    type="button"
-                    aria-label={option.label}
-                    className={option.danger ? 'appDialogChoice danger' : 'appDialogChoice'}'''
-          if text.count(old) != 1:
-              raise SystemExit('expected exactly one choice-button block')
-          dialog.write_text(text.replace(old, new), encoding='utf-8')
+          pattern = re.compile(
+              r"(?m)^(\s*)type=\"button\"\n(\s*)className=\{option\.danger \? 'appDialogChoice danger' : 'appDialogChoice'\}"
+          )
+          replacement = r'''\1type="button"
+\2aria-label={option.label}
+\2className={option.danger ? 'appDialogChoice danger' : 'appDialogChoice'}'''
+          text, count = pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f'expected one choice-button block, got {count}')
+          dialog.write_text(text, encoding='utf-8')
           PY
           git diff --check
 

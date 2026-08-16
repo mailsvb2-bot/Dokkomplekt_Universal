@@ -1,0 +1,116 @@
+name: One-time donor frontend CI fixes
+
+on:
+  push:
+    branches:
+      - agent/donor-contract-audit-20260816
+
+permissions:
+  contents: write
+
+concurrency:
+  group: donor-frontend-fix-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/donor-contract-audit-20260816
+
+      - name: Apply exact fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          app_support = Path('src/lib/appSupport.ts')
+          text = app_support.read_text(encoding='utf-8')
+          obsolete = '''export function loadOutputNamingConfirmed(): boolean {
+            try {
+              if (localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true') return true;
+              const saved = localStorage.getItem(OUTPUT_PREFS_KEY);
+              if (!saved) return false;
+              const parsed = JSON.parse(saved);
+              // Migration contract: a user who already chose and persisted naming parts
+              // has already expressed the naming principle and must not be re-prompted.
+              return Array.isArray(parsed) && parsed.length > 0 && parsed.every((value) => typeof value === 'string');
+            } catch { return false; }
+          }
+
+          export function saveOutputFolderParts(parts: FolderNamePartDto[]): FolderNamePartDto[] {
+            const normalized: FolderNamePartDto[] = parts.length
+              ? [...new Set(parts)]
+              : ['DocumentNumber', 'DocumentDate'];
+            try {
+              localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(normalized));
+              localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+            } catch { /* storage may be unavailable */ }
+            return normalized;
+          }
+
+          '''
+          if text.count(obsolete) != 1:
+              raise SystemExit('expected exactly one obsolete naming block')
+          app_support.write_text(text.replace(obsolete, ''), encoding='utf-8')
+
+          workspace = Path('src/components/Workspace.tsx')
+          text = workspace.read_text(encoding='utf-8')
+          old = '''  const entries = Array.from(dataTransfer.items ?? [])
+            .map((item) => (item as DataTransferItem & { webkitGetAsEntry?: () => DroppedEntry | null }).webkitGetAsEntry?.())
+            .filter((entry): entry is DroppedEntry => Boolean(entry));'''
+          new = '''  const entries = Array.from(dataTransfer.items ?? [])
+            .map((item) => {
+              const getter = (item as DataTransferItem & { webkitGetAsEntry?: () => unknown }).webkitGetAsEntry;
+              return getter?.call(item) as DroppedEntry | null | undefined;
+            })
+            .filter((entry): entry is DroppedEntry => entry != null);'''
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one dropped-entry block')
+          workspace.write_text(text.replace(old, new), encoding='utf-8')
+
+          dialog = Path('src/components/AppDialogProvider.tsx')
+          text = dialog.read_text(encoding='utf-8')
+          old = '''                    type="button"
+                    className={option.danger ? 'appDialogChoice danger' : 'appDialogChoice'}'''
+          new = '''                    type="button"
+                    aria-label={option.label}
+                    className={option.danger ? 'appDialogChoice danger' : 'appDialogChoice'}'''
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one choice-button block')
+          dialog.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Validate frontend completely
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm run test
+          npm run build
+
+      - name: Commit clean product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/one-time-fix-donor-frontend.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: close donor frontend CI regressions"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin agent/donor-contract-audit-20260816
+            if git rebase origin/agent/donor-contract-audit-20260816 && git push origin HEAD:agent/donor-contract-audit-20260816; then
+              exit 0
+            fi
+            git rebase --abort >/dev/null 2>&1 || true
+            sleep 2
+          done
+          exit 1

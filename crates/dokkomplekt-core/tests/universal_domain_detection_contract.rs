@@ -34,7 +34,10 @@ fn domain_detection_uses_template_semantics_without_a_hint() {
             "Certificate\n{{education.student_name}}",
             UniversalDomain::Education,
         ),
-        ("Project report\n{{custom.project}}", UniversalDomain::Custom),
+        (
+            "Project report\n{{custom.project}}",
+            UniversalDomain::Custom,
+        ),
     ];
 
     for (template, expected) in scenarios {

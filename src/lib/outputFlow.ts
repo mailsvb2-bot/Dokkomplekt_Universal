@@ -19,7 +19,7 @@ export async function chooseExistingOutputPolicyFlow(params: {
   outputRoot: string;
   folderParts: FolderNamePartDto[];
   labels: string[];
-  getPlan: (root: string, parts: FolderNamePartDto[], labels: string[]) => Promise<PlannedOutput | null>;
+  getPlan: (root: string, parts: FolderNamePartDto[], labels: string[]) => Promise<PlannedOutput | null | undefined>;
   confirm: (options: ConfirmOptions) => Promise<boolean>;
   openFolder: (path: string) => Promise<unknown>;
   onStatus: (message: string) => void;

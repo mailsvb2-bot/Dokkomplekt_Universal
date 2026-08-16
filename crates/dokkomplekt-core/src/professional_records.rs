@@ -458,10 +458,12 @@ struct ProfileMatchGroup {
 fn medical_diary_match_pack() -> &'static ProfileMatchPack {
     static PACK: std::sync::OnceLock<ProfileMatchPack> = std::sync::OnceLock::new();
     PACK.get_or_init(|| {
-        serde_json::from_str(include_str!(
+        match serde_json::from_str(include_str!(
             "../data/medical_diary_match_aliases.ru.json"
-        ))
-        .expect("bundled medical diary matching data pack must be valid JSON")
+        )) {
+            Ok(pack) => pack,
+            Err(_) => ProfileMatchPack { groups: Vec::new() },
+        }
     })
 }
 

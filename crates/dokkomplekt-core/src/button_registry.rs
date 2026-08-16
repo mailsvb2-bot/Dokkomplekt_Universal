@@ -59,8 +59,7 @@ pub fn rename_document_button(
         for index in 2..500 {
             let candidate = format!("{normalized} ({index})");
             if !pack.documents.iter().any(|document| {
-                document.id != document_id
-                    && document.button_label.eq_ignore_ascii_case(&candidate)
+                document.id != document_id && document.button_label.eq_ignore_ascii_case(&candidate)
             }) {
                 resolved = candidate;
                 break;
@@ -501,7 +500,11 @@ mod tests {
 
         let label = rename_document_button(&mut pack, "d1", "Эпикриз").expect("rename");
         assert_eq!(label, "Эпикриз (2)");
-        let renamed = pack.documents.iter().find(|document| document.id == "d1").unwrap();
+        let renamed = pack
+            .documents
+            .iter()
+            .find(|document| document.id == "d1")
+            .unwrap();
         assert_eq!(renamed.id, "d1");
         assert_eq!(renamed.template_path, "templates/act.docx");
         assert_eq!(renamed.required_fields, vec!["document.number"]);

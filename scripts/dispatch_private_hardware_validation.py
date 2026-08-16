@@ -213,7 +213,8 @@ def resolve_request_id(args: argparse.Namespace) -> str:
             "verify phase requires --request-id from the successful prepare phase; "
             "a reboot evidence chain must not silently start a new correlation session"
         )
-    return str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+    return request_id
 
 
 def validate_args(args: argparse.Namespace) -> None:

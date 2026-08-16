@@ -69,7 +69,9 @@ export function safeKey(value: string): string {
     .replace(/\.[^.]+$/, '')
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е')
-    .replace(/\b(?:дневник|дневники|дневниковые|текст|тексты|даты|шаблон|шаблоны)\b/gu, ' ')
+    // Strip only a leading generic library label. Diagnosis/domain vocabulary
+    // remains untouched and belongs to profile data, never UI matching code.
+    .replace(/^(?:дневники?|дневниковые|тексты?|даты|шаблоны?)[\s._—–:;,-]*/u, '')
     .replace(/[^\p{L}\p{N}]+/gu, '')
     .slice(0, 96);
 }

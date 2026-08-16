@@ -28,10 +28,18 @@ jobs:
           rm -f .github/workflows/one-time-donor-rustfmt.yml
           git diff --check
           git status --short
-      - name: Commit canonical formatting
+      - name: Commit and publish canonical formatting without force push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "style: apply canonical rustfmt to donor contract port"
-          git push origin HEAD:agent/donor-contract-audit-20260816
+          for attempt in 1 2 3 4 5; do
+            git fetch origin agent/donor-contract-audit-20260816
+            git rebase origin/agent/donor-contract-audit-20260816
+            if git push origin HEAD:agent/donor-contract-audit-20260816; then
+              exit 0
+            fi
+          done
+          echo "Failed to publish formatting without force push" >&2
+          exit 1

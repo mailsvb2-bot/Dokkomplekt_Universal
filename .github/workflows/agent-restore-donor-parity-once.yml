@@ -1,0 +1,40 @@
+name: Restore donor diary and output parity once
+
+on:
+  push:
+    branches:
+      - agent/restore-diary-output-parity
+
+permissions:
+  contents: write
+
+concurrency:
+  group: restore-donor-diary-output-parity-once
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/restore-diary-output-parity
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Apply donor parity patch
+        run: python scripts/agent_restore_donor_parity_once.py
+      - name: Remove one-shot machinery
+        run: |
+          rm scripts/agent_restore_donor_parity_once.py
+          rm .github/workflows/agent-restore-donor-parity-once.yml
+      - name: Commit patched product
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Restore donor diary schedule and visible output flow"
+          git push origin HEAD:agent/restore-diary-output-parity

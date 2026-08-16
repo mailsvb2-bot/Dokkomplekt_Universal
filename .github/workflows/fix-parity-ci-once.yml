@@ -13,6 +13,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install contract test dependencies
+        run: python -m pip install -r requirements-dev.txt
       - name: Apply fail-closed Rust and RustSec pin fixes
         shell: bash
         run: |
@@ -43,6 +48,7 @@ jobs:
           PY
           python -m pytest tests/test_v18_1_2_rust_panic_audit.py tests/test_rustsec_advisory_pin.py -q
           python scripts/static_quality_gate.py --source-only
+          python scripts/verify_rustsec_advisory_pin.py
           rm -f .github/workflows/fix-parity-ci-once.yml
           git diff --check
           git config user.name 'github-actions[bot]'

@@ -154,7 +154,7 @@ export function Workspace(props: WorkspaceProps) {
           <div className="resultIcon"><i className="ti ti-check" aria-hidden="true" /></div>
           <div className="resultBody">
             <span className="resultEyebrow">Готово</span>
-            <h2>Документы созданы: {props.lastOutput.files.length}</h2>
+            <h2>Создано документов: {props.lastOutput.files.length}</h2>
             <p className="resultFolder" title={props.lastOutput.folder || props.lastOutput.files[0]}>
               <strong>Папка:</strong> {props.lastOutput.folder || props.lastOutput.files[0]}
             </p>

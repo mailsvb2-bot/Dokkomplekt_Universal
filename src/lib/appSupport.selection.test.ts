@@ -21,7 +21,7 @@ function document(roleId: string, category: DomainKind, label = 'Переиме�
 describe('output root persistence', () => {
   it('remembers the user-selected generic output folder across restarts', () => {
     localStorage.removeItem(OUTPUT_ROOT_KEY);
-    expect(loadOutputRoot()).toBe('output/Готовые документы');
+    expect(loadOutputRoot()).toBe('');
     saveOutputRoot('  D:/Работа/Готовые документы  ');
     expect(loadOutputRoot()).toBe('D:/Работа/Готовые документы');
   });

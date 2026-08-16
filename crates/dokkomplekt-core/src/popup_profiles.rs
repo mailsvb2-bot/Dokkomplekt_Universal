@@ -99,12 +99,8 @@ pub fn effective_popup_fields(document: &DocumentTemplateSpec) -> Vec<PopupField
             field_id.as_str(),
             DIARY_SCHEDULE_STYLE | DIARY_INTRADAY_RHYTHM
         );
-        let mut config = popup_config_for_field(
-            &field_id,
-            required,
-            &document.category,
-            &document.role_id,
-        );
+        let mut config =
+            popup_config_for_field(&field_id, required, &document.category, &document.role_id);
         apply_profession_defaults(&mut config, &document.category, &document.role_id);
         merged.insert(field_id, config);
     }

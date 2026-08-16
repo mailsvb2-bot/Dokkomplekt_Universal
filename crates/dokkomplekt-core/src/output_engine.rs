@@ -62,10 +62,20 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("Документы")).unwrap();
-        let plan = plan_output_paths(&root, &SemanticCase::default(), &[], &[]);
+
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "subject.name", "Иванов Иван Иванович");
+        let folder_parts = [FolderNamePart::FullSubjectName];
+        let expected_folder = root.join("Иванов Иван Иванович");
+        std::fs::create_dir_all(&expected_folder).unwrap();
+        let sentinel = expected_folder.join("existing.txt");
+        std::fs::write(&sentinel, "keep").unwrap();
+
+        let plan = plan_output_paths(&root, &case, &folder_parts, &[]);
+
         assert!(plan.exists);
-        assert!(root.join("Документы").is_dir());
+        assert_eq!(plan.patient_folder, expected_folder);
+        assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "keep");
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -60,7 +60,7 @@ def test_verify_reuses_exact_canonical_prepare_request_id() -> None:
 def test_noncanonical_request_id_is_rejected() -> None:
     args = dispatch_args(
         reboot_phase="verify",
-        request_id="01234567-89AB-4DEF-8123-456789ABCDEF",
+        request_id="0123456789ab4def8123456789abcdef",
     )
 
     with pytest.raises(RuntimeError, match="canonical lowercase UUID form"):

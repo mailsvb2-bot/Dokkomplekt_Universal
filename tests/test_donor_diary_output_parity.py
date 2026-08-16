@@ -9,6 +9,7 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     support = read("src/lib/appSupport.ts")
     onboarding = read("src/components/FolderNamingOnboarding.tsx")
     app = read("src/App.tsx")
+    output_flow = read("src/lib/outputFlow.ts")
     workspace = read("src/components/Workspace.tsx")
 
     assert "return '';" in support
@@ -19,7 +20,7 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     assert "onPickRoot={() => void chooseFolder" in app
     assert "(!folderNamingConfirmed || !outputRoot.trim())" in app
     assert "outputRoot.trim() || 'output/Готовые документы'" not in app
-    assert "Сначала выберите папку готовых документов. Ничего не создано." in app
+    assert "Сначала выберите папку готовых документов. Ничего не создано." in output_flow
     assert "Создано документов:" in workspace
     assert "<strong>Папка:</strong>" in workspace
     assert "Созданные файлы" in workspace

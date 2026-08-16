@@ -88,6 +88,23 @@ pub fn effective_popup_fields(document: &DocumentTemplateSpec) -> Vec<PopupField
         }
         merged.insert(normalized.field_id.clone(), normalized);
     }
+    // Runtime controls are part of the profession workflow itself, not merely a
+    // template-designer convenience. A previously customized popup must therefore
+    // never be allowed to hide the doctor's diary schedule/rhythm confirmation.
+    for field_id in profession_runtime_control_fields(&document.category, &document.role_id) {
+        if merged.contains_key(&field_id) {
+            continue;
+        }
+        let required = matches!(
+            field_id.as_str(),
+            DIARY_SCHEDULE_STYLE | DIARY_INTRADAY_RHYTHM
+        );
+        let mut config =
+            popup_config_for_field(&field_id, required, &document.category, &document.role_id);
+        apply_profession_defaults(&mut config, &document.category, &document.role_id);
+        merged.insert(field_id, config);
+    }
+
     // Fail closed: even a custom popup cannot hide a field that the selected template
     // or workflow has declared strictly required.
     for field_id in &document.required_fields {
@@ -367,9 +384,13 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
                     "Каждый день по времени".into(),
                 ];
                 config.allow_custom_option = true;
-                config.default_value = Some("Каждый день".into());
+                // Donor contract: the specialist confirms the diary style for every
+                // diary run. Never silently turn an absent answer into daily diaries.
+                config.ask_mode = PromptAskMode::Always;
+                config.required = true;
+                config.default_value = None;
                 config.help_text = Some(
-                    "Можно ввести свои дни, например: 1, 4, 9. График задаёт специалист, а не количество строк в шаблоне".into(),
+                    "Выберите стиль как в рабочем Dokkomplekt: каждый день; 1, 2, 3, 7, затем 2 раза в неделю; каждый день по времени; либо введите свои дни, например 1, 4, 9.".into(),
                 );
             }
             if id == DIARY_INTRADAY_RHYTHM {
@@ -383,9 +404,13 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
                     "Каждые 5 минут".into(),
                 ];
                 config.allow_custom_option = true;
-                config.default_value = Some("Один раз в день".into());
+                // The second donor popup is also a specialist confirmation, even when
+                // the answer is "Один раз в день".
+                config.ask_mode = PromptAskMode::Always;
+                config.required = true;
+                config.default_value = None;
                 config.help_text = Some(
-                    "Можно ввести свой интервал (например, 90 минут) или список времени 08:00, 20:00".into(),
+                    "Подтвердите ритм: один раз в день, каждые 4 часа, каждый час, 30/15/5 минут либо свой интервал/список времени.".into(),
                 );
             }
             if matches!(id, DIARY_DAY_START_TIME | DIARY_DAY_END_TIME) {
@@ -454,8 +479,10 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
                 add("medical.recommendations", false);
             }
             if matches!(plan.role, MedicalDocumentRole::Diary) {
-                add(DIARY_SCHEDULE_STYLE, false);
-                add(DIARY_INTRADAY_RHYTHM, false);
+                // Same fail-closed contract as the donor wizard: style and rhythm
+                // must be confirmed by the doctor before diaries can be generated.
+                add(DIARY_SCHEDULE_STYLE, true);
+                add(DIARY_INTRADAY_RHYTHM, true);
                 add(DIARY_DAY_START_TIME, false);
                 add(DIARY_DAY_END_TIME, false);
             }

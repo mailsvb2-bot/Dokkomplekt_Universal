@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from './App';
 import { __resetInvokeForTests, __setInvokeForTests, rustCommandNames } from './lib/api';
+import { OUTPUT_NAMING_CONFIRMED_KEY, OUTPUT_ROOT_KEY } from './lib/appSupport';
 
 type Call = { command: string; payload?: Record<string, unknown> };
 
@@ -192,7 +193,11 @@ async function click(name: RegExp | string) {
 }
 
 describe('Полный прогон пользовательских сценариев и тем', () => {
-  afterEach(() => { __resetInvokeForTests(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Test/Готовые документы');
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, '1');
+  });
+  afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
 
   it('каждый пользовательский сценарий вызывает соответствующую Rust-команду', async () => {
     const calls: Call[] = [];
@@ -460,7 +465,7 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
     await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
     await screen.findByRole('heading', { name: /Создано документов:/ });
-    await click(/Открыть комплект/);
+    await click(/Открыть папку с документами/);
     fireEvent.click(screen.getByLabelText('Дополнительные форматы'));
     await click(/^Создать PDF$/);
     await waitFor(() => expect(calls.some((c) => c.command === 'export_files_to_pdf')).toBe(true));

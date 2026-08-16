@@ -155,7 +155,17 @@ export function Workspace(props: WorkspaceProps) {
           <div className="resultBody">
             <span className="resultEyebrow">Готово</span>
             <h2>Создано документов: {props.lastOutput.files.length}</h2>
-            <p title={props.lastOutput.folder || props.lastOutput.files[0]}>{props.lastOutput.folder || props.lastOutput.files[0]}</p>
+            <p className="resultFolder" title={props.lastOutput.folder || props.lastOutput.files[0]}>
+              <strong>Папка:</strong> {props.lastOutput.folder || props.lastOutput.files[0]}
+            </p>
+            <details className="resultFiles" open>
+              <summary>Созданные файлы</summary>
+              <ul>
+                {props.lastOutput.files.map((path) => (
+                  <li key={path} title={path}>{path.split(/[\\/]/).filter(Boolean).pop() || path}</li>
+                ))}
+              </ul>
+            </details>
             {props.lastOutput.print_items?.length ? (
               <details className="resultCopies">
                 <summary>Количество экземпляров для печати</summary>
@@ -179,7 +189,7 @@ export function Workspace(props: WorkspaceProps) {
             ) : null}
           </div>
           <div className="resultActions">
-            <button className="primaryBtn" onClick={props.onOpenLastOutput} disabled={props.busy}><i className="ti ti-folder-open" aria-hidden="true" /> Открыть комплект</button>
+            <button className="primaryBtn" onClick={props.onOpenLastOutput} disabled={props.busy}><i className="ti ti-folder-open" aria-hidden="true" /> Открыть папку с документами</button>
             <button className="softBtn" onClick={props.onPrintLastOutput} disabled={props.busy}><i className="ti ti-printer" aria-hidden="true" /> Печать</button>
             <details className="moreActions">
               <summary aria-label="Дополнительные форматы"><i className="ti ti-dots" aria-hidden="true" /></summary>

@@ -25,6 +25,7 @@ import { useGenerationPreflight } from './hooks/useGenerationPreflight';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
+import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
@@ -566,36 +567,31 @@ function AppContent() {
 
   async function exportLastOutputKedo() {
     if (!lastOutput?.files.length) return;
-    const result = await run('create_kedo_package', () => createKedoPackage(
-      lastOutput.files,
-      lastOutput.folder || outputRoot.trim() || 'output/Готовые документы',
-    ));
+    const packageRoot = lastOutput.folder || outputRoot.trim();
+    if (!packageRoot) { setStatus('Папка готовых документов не определена. Пакет обмена не создан.'); return; }
+    const result = await run('create_kedo_package', () => createKedoPackage(lastOutput.files, packageRoot));
     if (!result) return;
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function chooseExistingOutputPolicy(documentIds: string[]): Promise<'version' | 'replace_with_backup' | null> {
+  async function chooseExistingOutputPolicy(documentIds: string[]) {
     const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
-    const planned = await run('get_output_plan', () => getOutputPlan(outputRoot.trim() || 'output/Готовые документы', folderParts, labels));
-    if (!planned) return null;
-    if (!planned.exists) return 'version';
-    if (await dialogs.confirm({ title: 'Комплект уже существует', message: `Папка уже есть: ${planned.patient_folder}. Открыть существующий комплект без создания новых файлов?`, confirmLabel: 'Открыть существующий', cancelLabel: 'Другие варианты' })) {
-      await run('open_in_file_manager', () => openInFileManager(planned.patient_folder));
-      setStatus('Открыт существующий комплект. Новые файлы не создавались.');
-      return null;
-    }
-    if (await dialogs.confirm({ title: 'Создать новую версию?', message: 'Текущий комплект останется без изменений, а новый будет опубликован в уникальной папке с номером версии.', confirmLabel: 'Создать новую версию', cancelLabel: 'Другие варианты' })) return 'version';
-    if (!await dialogs.confirm({ title: 'Заменить комплект с резервной копией?', message: 'Существующая папка сначала будет целиком перенесена в резервную копию. Только после этого новый комплект займёт её место. При ошибке программа попытается восстановить старую папку.', confirmLabel: 'Заменить с резервной копией', cancelLabel: 'Отмена', danger: true })) {
-      setStatus('Создание комплекта отменено. Существующая папка не изменена.');
-      return null;
-    }
-    return 'replace_with_backup';
+    return chooseExistingOutputPolicyFlow({
+      outputRoot, folderParts, labels,
+      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
+      confirm: (options) => dialogs.confirm(options),
+      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
+      onStatus: setStatus,
+      onMissingRoot: () => setFolderNamingConfirmed(false),
+    });
   }
 
   async function performGenerateSelectedDocuments(documentIds: string[]) {
     const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);
     if (!existingOutputPolicy) return;
-    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, outputRoot.trim() || 'output/Готовые документы', folderParts, true, existingOutputPolicy));
+    const explicitOutputRoot = outputRoot.trim();
+    if (!explicitOutputRoot) return;
+    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
@@ -1454,8 +1450,16 @@ function AppContent() {
         </footer>
       </div>
 
-      {!folderNamingConfirmed && (
-        <FolderNamingOnboarding currentParts={folderParts} onConfirm={(parts) => { updateFolderParts(parts); setStatus('Правило имени папки комплекта сохранено.'); }} />
+      {(!folderNamingConfirmed || !outputRoot.trim()) && (
+        <FolderNamingOnboarding
+          currentRoot={outputRoot}
+          currentParts={folderParts}
+          onPickRoot={() => void chooseFolder(outputRoot, setOutputRoot, 'Папка готовых документов')}
+          onConfirm={(parts) => {
+            updateFolderParts(parts);
+            setStatus(`Папка готовых документов сохранена: ${outputRoot}. Правило подпапки тоже сохранено.`);
+          }}
+        />
       )}
 
       {setupOpen && (

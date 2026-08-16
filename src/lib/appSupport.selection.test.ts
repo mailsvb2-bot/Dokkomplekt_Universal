@@ -21,7 +21,7 @@ function document(roleId: string, category: DomainKind, label = 'Переиме�
 describe('output root persistence', () => {
   it('remembers the user-selected generic output folder across restarts', () => {
     localStorage.removeItem(OUTPUT_ROOT_KEY);
-    expect(loadOutputRoot()).toBe('output/Готовые документы');
+    expect(loadOutputRoot()).toBe('');
     saveOutputRoot('  D:/Работа/Готовые документы  ');
     expect(loadOutputRoot()).toBe('D:/Работа/Готовые документы');
   });
@@ -30,6 +30,13 @@ describe('output root persistence', () => {
     localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Documents/Ready');
     saveOutputRoot('   ');
     expect(loadOutputRoot()).toBe('C:/Documents/Ready');
+  });
+
+  it('migrates the old repository-relative fallback back to an unconfigured state', () => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'output/Готовые документы');
+    expect(loadOutputRoot()).toBe('');
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'output\\Готовые документы\\');
+    expect(loadOutputRoot()).toBe('');
   });
 });
 

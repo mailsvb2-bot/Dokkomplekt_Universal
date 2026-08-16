@@ -23,7 +23,9 @@ const PRESETS: Array<{ id: string; title: string; hint: string; parts: FolderNam
 ];
 
 export function FolderNamingOnboarding(props: {
+  currentRoot: string;
   currentParts: FolderNamePartDto[];
+  onPickRoot(): void;
   onConfirm(parts: FolderNamePartDto[]): void;
 }) {
   const [selected, setSelected] = useState<FolderNamePartDto[]>(props.currentParts.length ? props.currentParts : ['DocumentNumber', 'DocumentDate']);
@@ -33,6 +35,7 @@ export function FolderNamingOnboarding(props: {
     const chunks = selected.map(part => byId.get(part)).filter((value): value is string => Boolean(value));
     return chunks.join(' ') || 'Созданные документы';
   }, [selected]);
+  const root = props.currentRoot.trim();
 
   function toggle(part: FolderNamePartDto) {
     setSelected(current => current.includes(part) ? current.filter(value => value !== part) : [...current, part]);
@@ -43,7 +46,14 @@ export function FolderNamingOnboarding(props: {
       <section className="modal folderNamingOnboarding" role="dialog" aria-modal="true" aria-labelledby="folder-naming-title">
         <span className="workflowEyebrow">Первичная настройка результата</span>
         <h2 id="folder-naming-title">Как называть папку комплекта?</h2>
-        <p className="hint">Выберите правило один раз. Оно относится к любому профессиональному профилю и будет сохранено. Его всегда можно изменить в настройках.</p>
+        <p className="hint">Сначала выберите реальную папку на компьютере, куда программа будет складывать готовые документы. Затем задайте правило имени подпапки. Оба значения сохраняются.</p>
+
+        <div className="folderNamingPreview" data-testid="output-root-choice">
+          <span>Куда сохранять готовые документы</span>
+          <strong title={root}>{root || 'Папка ещё не выбрана'}</strong>
+          <button type="button" className="softBtn" onClick={props.onPickRoot}>Выбрать папку на компьютере</button>
+          <small>После создания программа отдельно покажет точный путь и список созданных файлов.</small>
+        </div>
 
         <div className="folderNamingPresets" role="group" aria-label="Готовые правила имени папки">
           {PRESETS.map(preset => {
@@ -78,9 +88,9 @@ export function FolderNamingOnboarding(props: {
         </div>
 
         <div className="modalActions">
-          <small>Нужно выбрать хотя бы один элемент.</small>
+          <small>{root ? 'Папка и правило будут сохранены.' : 'Сначала выберите папку на компьютере.'}</small>
           <span className="spacer" />
-          <button type="button" className="primaryBtn" disabled={!selected.length} onClick={() => props.onConfirm(selected)}>Сохранить правило</button>
+          <button type="button" className="primaryBtn" disabled={!root || !selected.length} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
         </div>
       </section>
     </div>

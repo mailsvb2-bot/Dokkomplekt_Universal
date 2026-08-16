@@ -1,0 +1,47 @@
+name: One-time stale branch cleanup
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-audited-stale-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - name: Delete only the audited stale branches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          branches=(
+            'agent/cmd-hardware-runner-setup'
+            'agent/custom-learning-domain-keying'
+            'agent/custom-learning-governance-v2'
+            'agent/deep-audit-108-applicator'
+            'agent/deep-audit-108-applicator2'
+            'agent/deep-audit-108-apply'
+            'agent/deep-audit-runtime-integration-108-stage'
+            'agent/learning-privacy-retention'
+            'agent/medical-bundle-docx-e2e'
+            'agent/print-fail-closed'
+            'agent/production-env-preflight'
+            'agent/router-domain-learning-keying-v2'
+            'agent/split-runtime-hardware-boundary-v2-check'
+            'agent/split-runtime-hardware-boundary-v2'
+            'agent/transactional-state-persistence'
+            'agent/universal-domain-detection-contract'
+          )
+          for branch in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+              echo "Deleting audited stale branch: $branch"
+              git push origin ":refs/heads/$branch"
+            else
+              echo "Already absent: $branch"
+            fi
+          done

@@ -1,0 +1,49 @@
+name: One-time folder confirmation test fix
+
+on:
+  push:
+    branches:
+      - agent/donor-contract-audit-20260816
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/donor-contract-audit-20260816
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply focused scenario update
+        run: python3 .agent_fix_folder_confirmation_tests.py
+      - name: Remove one-time delivery files
+        run: |
+          rm -f .agent_fix_folder_confirmation_tests.py
+          rm -f .github/workflows/one-time-folder-confirmation-test-fix.yml
+      - name: Validate frontend tests before publishing
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test -- --run src/App.scenarios.test.tsx src/lib/appSupport.selection.test.ts
+          git diff --check
+      - name: Commit without force push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: cover first-use result folder naming confirmation"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin agent/donor-contract-audit-20260816
+            git rebase origin/agent/donor-contract-audit-20260816
+            if git push origin HEAD:agent/donor-contract-audit-20260816; then
+              exit 0
+            fi
+          done
+          exit 1

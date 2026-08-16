@@ -30,7 +30,28 @@ jobs:
           echo "478fee7c00965a33bdb3518d70c994c373941fbc4cbf268f7ef0e1e374fb48d2  /tmp/donor.patch.gz.b64" | sha256sum -c -
           base64 -d /tmp/donor.patch.gz.b64 | gzip -d > /tmp/donor.patch
           echo "0c71ac9caf9532be362460490f07d4e44addb417310d23f4bfbec7b0dbc8b3f6  /tmp/donor.patch" | sha256sum -c -
-          git apply --3way /tmp/donor.patch
+          if ! git apply --3way /tmp/donor.patch; then
+            expected_conflicts=(
+              src/App.scenarios.test.tsx
+              src/App.tsx
+              src/lib/appSupport.selection.test.ts
+            )
+            mapfile -t actual_conflicts < <(git diff --name-only --diff-filter=U | sort)
+            mapfile -t expected_sorted < <(printf '%s\n' "${expected_conflicts[@]}" | sort)
+            if [[ "${actual_conflicts[*]}" != "${expected_sorted[*]}" ]]; then
+              printf 'Unexpected merge conflicts:\n%s\n' "${actual_conflicts[*]}"
+              exit 1
+            fi
+            for path in "${expected_conflicts[@]}"; do
+              git checkout --theirs -- "$path"
+              git add "$path"
+            done
+          fi
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo 'Unresolved conflicts remain.' >&2
+            git diff --name-only --diff-filter=U >&2
+            exit 1
+          fi
 
       - name: Install Rust formatter
         uses: dtolnay/rust-toolchain@stable

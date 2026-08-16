@@ -1455,7 +1455,15 @@ function AppContent() {
       </div>
 
       {!folderNamingConfirmed && (
-        <FolderNamingOnboarding currentParts={folderParts} onConfirm={(parts) => { updateFolderParts(parts); setStatus('Правило имени папки комплекта сохранено.'); }} />
+        <FolderNamingOnboarding
+          currentRoot={outputRoot}
+          currentParts={folderParts}
+          onPickRoot={() => void chooseFolder(outputRoot, setOutputRoot, 'Папка готовых документов')}
+          onConfirm={(parts) => {
+            updateFolderParts(parts);
+            setStatus(`Папка готовых документов сохранена: ${outputRoot}. Правило подпапки тоже сохранено.`);
+          }}
+        />
       )}
 
       {setupOpen && (

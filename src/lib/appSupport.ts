@@ -113,7 +113,9 @@ export function loadOutputRoot(): string {
     const value = localStorage.getItem(OUTPUT_ROOT_KEY)?.trim();
     if (value) return value;
   } catch { /* use generic local default */ }
-  return 'output/Готовые документы';
+  // First run must ask for a real user-visible destination. A relative
+  // application working-directory path is impossible for an end user to locate.
+  return '';
 }
 
 export function saveOutputRoot(value: string): void {

@@ -20,8 +20,14 @@ fn medical_document(
         template_path: format!("templates/{id}.docx"),
         category: DomainKind::Medical,
         role_id: role_id.to_string(),
-        required_fields: placeholders.iter().map(|value| (*value).to_string()).collect(),
-        placeholders: placeholders.iter().map(|value| (*value).to_string()).collect(),
+        required_fields: placeholders
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        placeholders: placeholders
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
         is_static_copy: false,
         popup_fields: Vec::new(),
         popup_configured: false,
@@ -34,7 +40,10 @@ fn answer_values() -> BTreeMap<&'static str, &'static str> {
         ("medical.case_number", "ИБ-4242"),
         ("medical.admission_date", "10.05.2026"),
         ("medical.discharge_date", "13.05.2026"),
-        ("medical.diagnosis", "F32.1 Депрессивный эпизод средней степени"),
+        (
+            "medical.diagnosis",
+            "F32.1 Депрессивный эпизод средней степени",
+        ),
         ("medical.treatment", "Сертралин 50 мг утром"),
         ("medical.sick_leave_number", "123456789012"),
     ])
@@ -72,12 +81,7 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
         "medical.diagnosis",
         "medical.treatment",
     ];
-    let primary = medical_document(
-        "primary",
-        "Первичный осмотр",
-        "primary",
-        &shared_fields,
-    );
+    let primary = medical_document("primary", "Первичный осмотр", "primary", &shared_fields);
     let discharge = medical_document(
         "discharge",
         "Выписной эпикриз",
@@ -96,7 +100,11 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
         sick_leave_enabled: false,
     };
     let plan = plan_workflow_batch(&[primary.clone(), discharge.clone()], &source_case, &flags);
-    assert!(!plan.blocked, "merged popup plan is blocked: {:?}", plan.block_reasons);
+    assert!(
+        !plan.blocked,
+        "merged popup plan is blocked: {:?}",
+        plan.block_reasons
+    );
     assert_eq!(
         plan.prompts
             .iter()
@@ -153,12 +161,10 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
             sick_leave_enabled: false,
         },
     );
-    assert!(
-        no_sick_plan
-            .prompts
-            .iter()
-            .all(|prompt| prompt.field_id != "medical.sick_leave_number")
-    );
+    assert!(no_sick_plan
+        .prompts
+        .iter()
+        .all(|prompt| prompt.field_id != "medical.sick_leave_number"));
     let with_sick_plan = dokkomplekt_core::plan_workflow(
         &discharge_with_sick_leave,
         &applied.semantic_case,
@@ -212,14 +218,21 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
     assert!(discharge_render.template_errors.is_empty());
 
     for output in [&primary_output, &discharge_output] {
-        assert!(output.is_file(), "expected real DOCX at {}", output.display());
+        assert!(
+            output.is_file(),
+            "expected real DOCX at {}",
+            output.display()
+        );
         let text = extract_docx_text(output).expect("read rendered DOCX back");
         assert!(text.contains("ИБ-4242"));
         assert!(text.contains("Иванов Иван Иванович"));
         assert!(text.contains("F32.1 Депрессивный эпизод средней степени"));
         assert!(text.contains("Сертралин 50 мг утром"));
         assert!(!text.contains("НАПРАВЛЕНИЕ_НЕ_ИСТОЧНИК_ЛЕЧЕНИЯ"));
-        assert!(!text.contains("{{"), "unfilled placeholder leaked into output");
+        assert!(
+            !text.contains("{{"),
+            "unfilled placeholder leaked into output"
+        );
     }
     let discharge_text = extract_docx_text(&discharge_output).expect("read discharge DOCX");
     assert!(discharge_text.contains("Поступил: 10.05.2026"));
@@ -245,7 +258,9 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
             .collect::<Vec<_>>(),
         vec!["11.05.2026", "12.05.2026", "13.05.2026"]
     );
-    assert!(diary_plan.last().is_some_and(|entry| entry.is_final_discharge_entry));
+    assert!(diary_plan
+        .last()
+        .is_some_and(|entry| entry.is_final_discharge_entry));
 
     for entry in &diary_plan {
         let body = format!(

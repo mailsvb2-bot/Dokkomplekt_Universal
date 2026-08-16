@@ -9,13 +9,16 @@ def text(path: str) -> str:
 
 def test_generation_is_one_visible_flow_and_uses_output_plan_for_single_document() -> None:
     app = text("src/App.tsx")
+    output_flow = text("src/lib/outputFlow.ts")
     workspace = text("src/components/Workspace.tsx")
     assert "Проверить и создать" in workspace
     assert "Сохранить ответы" not in workspace
     assert "Создать только этот документ" not in workspace
     assert "renderDocx(documentId, `output/${documentId}.docx`" not in app
     assert "renderDocxBatch(" in app
-    assert "outputRoot.trim() || 'output/Готовые документы'" in app
+    assert "outputRoot.trim() || 'output/Готовые документы'" not in app
+    assert "const explicitOutputRoot = params.outputRoot.trim();" in output_flow
+    assert "Сначала выберите папку готовых документов. Ничего не создано." in output_flow
 
 
 def test_document_selection_is_not_silently_reset_by_the_rail() -> None:

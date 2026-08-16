@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Fix Unicode-safe generic source prefix normalization
+      - name: Fix deterministic generic source prefix normalization
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -26,7 +26,7 @@ jobs:
           path = Path('src/components/AdditionalMaterialsPanel.tsx')
           text = path.read_text(encoding='utf-8')
           old = """  return value\n    .replace(/\\.[^.]+$/, '')\n    .toLocaleLowerCase('ru-RU')\n    .replace(/ё/g, 'е')\n    .replace(/\\b(?:дневник|дневники|дневниковые|текст|тексты|даты|шаблон|шаблоны)\\b/gu, ' ')\n    .replace(/[^\\p{L}\\p{N}]+/gu, '')\n    .slice(0, 96);\n"""
-          new = """  return value\n    .replace(/\\.[^.]+$/, '')\n    .toLocaleLowerCase('ru-RU')\n    .replace(/ё/g, 'е')\n    // Strip only leading generic library labels. Unicode word boundaries based on\\n    // `\\b` are ASCII-centric in JavaScript and do not reliably match Cyrillic.\\n    // Diagnosis/domain vocabulary remains untouched and belongs to profile data.\\n    .replace(/^(?:(?:дневник(?:и|овые)?|текст(?:ы)?|даты|шаблон(?:ы)?)[^\\p{L}\\p{N}]*)+/u, '')\n    .replace(/[^\\p{L}\\p{N}]+/gu, '')\n    .slice(0, 96);\n"""
+          new = """  return value\n    .replace(/\\.[^.]+$/, '')\n    .toLocaleLowerCase('ru-RU')\n    .replace(/ё/g, 'е')\n    // Strip only a leading generic library label. Diagnosis/domain vocabulary\n    // remains untouched and belongs to profile data, never UI matching code.\n    .replace(/^(?:дневники?|дневниковые|тексты?|даты|шаблоны?)[\\s._—–:;,-]*/u, '')\n    .replace(/[^\\p{L}\\p{N}]+/gu, '')\n    .slice(0, 96);\n"""
           if old not in text:
               raise SystemExit('expected safeKey block not found')
           path.write_text(text.replace(old, new), encoding='utf-8')

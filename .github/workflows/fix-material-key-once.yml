@@ -1,0 +1,44 @@
+name: Fix material key once
+on:
+  push:
+    branches:
+      - agent/universal-legacy-ux-parity-20260816
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Fix Unicode-safe generic source prefix normalization
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/components/AdditionalMaterialsPanel.tsx')
+          text = path.read_text(encoding='utf-8')
+          old = """  return value\n    .replace(/\\.[^.]+$/, '')\n    .toLocaleLowerCase('ru-RU')\n    .replace(/ё/g, 'е')\n    .replace(/\\b(?:дневник|дневники|дневниковые|текст|тексты|даты|шаблон|шаблоны)\\b/gu, ' ')\n    .replace(/[^\\p{L}\\p{N}]+/gu, '')\n    .slice(0, 96);\n"""
+          new = """  return value\n    .replace(/\\.[^.]+$/, '')\n    .toLocaleLowerCase('ru-RU')\n    .replace(/ё/g, 'е')\n    // Strip only leading generic library labels. Unicode word boundaries based on\\n    // `\\b` are ASCII-centric in JavaScript and do not reliably match Cyrillic.\\n    // Diagnosis/domain vocabulary remains untouched and belongs to profile data.\\n    .replace(/^(?:(?:дневник(?:и|овые)?|текст(?:ы)?|даты|шаблон(?:ы)?)[^\\p{L}\\p{N}]*)+/u, '')\n    .replace(/[^\\p{L}\\p{N}]+/gu, '')\n    .slice(0, 96);\n"""
+          if old not in text:
+              raise SystemExit('expected safeKey block not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          npm ci
+          npx vitest run --config vitest.config.ts src/components/AdditionalMaterialsPanel.test.tsx
+          npm run typecheck
+          rm -f .github/workflows/fix-material-key-once.yml
+          git diff --check
+          python scripts/static_quality_gate.py --source-only
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix Unicode-safe material source key normalization'
+          git push origin HEAD:agent/universal-legacy-ux-parity-20260816

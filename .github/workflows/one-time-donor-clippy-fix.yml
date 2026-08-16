@@ -1,0 +1,57 @@
+name: One-time donor date clippy fix
+
+on:
+  push:
+    branches:
+      - agent/donor-contract-audit-20260816
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/donor-contract-audit-20260816
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Fix the two explicit-into-iter loops
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/dokkomplekt-core/src/date_parser.rs')
+          text = path.read_text(encoding='utf-8')
+          old = 'for (day_len, month_len) in patterns {'
+          new = 'for &(day_len, month_len) in &patterns {'
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 loops, found {count}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo clippy -p dokkomplekt-core --all-targets --locked -- -D warnings
+          cargo test -p dokkomplekt-core --locked date_parser
+          rm -f .github/workflows/one-time-donor-clippy-fix.yml
+          git diff --check
+      - name: Commit without force push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style: satisfy clippy in donor compact date parser"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin agent/donor-contract-audit-20260816
+            git rebase origin/agent/donor-contract-audit-20260816
+            if git push origin HEAD:agent/donor-contract-audit-20260816; then
+              exit 0
+            fi
+          done
+          exit 1

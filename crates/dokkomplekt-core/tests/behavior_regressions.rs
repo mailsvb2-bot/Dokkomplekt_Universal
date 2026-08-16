@@ -261,9 +261,12 @@ fn date_parser_accepts_user_formats() {
         parse_flexible_date("01", 2026).as_deref(),
         Some("01.01.2026")
     );
-    // Ambiguous historical shorthand is intentionally rejected instead of
-    // silently turning 1126 into 01.01.2026.
-    assert_eq!(parse_flexible_date("1126", 2026), None);
+    // Donor compatibility is restored only after modern DDMM interpretation
+    // fails: 1126 cannot be DDMM (month 26), so it is read as D/M/YY.
+    assert_eq!(
+        parse_flexible_date("1126", 2026).as_deref(),
+        Some("01.01.2026")
+    );
 }
 
 #[test]

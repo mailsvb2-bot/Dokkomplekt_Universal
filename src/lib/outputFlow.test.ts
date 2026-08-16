@@ -39,4 +39,20 @@ describe('chooseExistingOutputPolicyFlow', () => {
     expect(result).toBe('version');
     expect(getPlan).toHaveBeenCalledWith('D:/Ready', ['DocumentNumber'], ['Дневники']);
   });
+
+  it('treats a handled runner cancellation as no output action', async () => {
+    const confirm = vi.fn();
+    const result = await chooseExistingOutputPolicyFlow({
+      outputRoot: 'C:/Ready',
+      folderParts: [...parts],
+      labels: ['Дневники'],
+      getPlan: vi.fn().mockResolvedValue(undefined),
+      confirm,
+      openFolder: vi.fn(),
+      onStatus: vi.fn(),
+      onMissingRoot: vi.fn(),
+    });
+    expect(result).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+  });
 });

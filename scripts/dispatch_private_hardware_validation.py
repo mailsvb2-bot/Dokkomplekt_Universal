@@ -193,6 +193,30 @@ def write_failure_with_cancellation(
         print(f"private hardware cancellation failed: {cancel_failure}", file=sys.stderr)
 
 
+def canonical_request_id(value: str) -> str:
+    normalized = value.strip().lower()
+    try:
+        parsed = uuid.UUID(normalized)
+    except ValueError as exc:
+        raise RuntimeError(f"request_id must be a canonical UUID: {exc}") from exc
+    if str(parsed) != normalized:
+        raise RuntimeError("request_id must use canonical lowercase UUID form")
+    return normalized
+
+
+def resolve_request_id(args: argparse.Namespace) -> str:
+    provided = str(args.request_id or "").strip()
+    if provided:
+        return canonical_request_id(provided)
+    if args.reboot_phase == "verify":
+        raise RuntimeError(
+            "verify phase requires --request-id from the successful prepare phase; "
+            "a reboot evidence chain must not silently start a new correlation session"
+        )
+    request_id = str(uuid.uuid4())
+    return request_id
+
+
 def validate_args(args: argparse.Namespace) -> None:
     if args.source_repository == args.target_repository:
         raise RuntimeError("hardware validation target must be a separate private repository")
@@ -210,6 +234,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise RuntimeError("timeout_seconds must be positive")
     if args.queue_timeout_seconds < 0:
         raise RuntimeError("queue_timeout_seconds must be zero or positive")
+    if str(args.request_id or "").strip():
+        canonical_request_id(str(args.request_id))
+    elif args.reboot_phase == "verify":
+        raise RuntimeError("verify phase requires request_id from the prepare phase")
 
 
 def main() -> int:
@@ -220,6 +248,10 @@ def main() -> int:
     parser.add_argument("--target-ref", default="main")
     parser.add_argument("--release-sha", required=True)
     parser.add_argument("--reboot-phase", choices=["prepare", "verify"], required=True)
+    parser.add_argument(
+        "--request-id",
+        help="Correlation UUID. Omit for prepare to generate one; verify must reuse the prepare UUID.",
+    )
     parser.add_argument("--token-env", default="DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN")
     parser.add_argument("--poll-seconds", type=int, default=20)
     parser.add_argument("--queue-timeout-seconds", type=int, default=900)
@@ -228,6 +260,7 @@ def main() -> int:
     args = parser.parse_args()
 
     validate_args(args)
+    request_id = resolve_request_id(args)
     token = os.environ.get(args.token_env, "").strip()
     if not token:
         raise RuntimeError(f"{args.token_env} is required")
@@ -242,7 +275,6 @@ def main() -> int:
     if bool(target.get("archived")):
         raise RuntimeError("hardware validation repository is archived")
 
-    request_id = str(uuid.uuid4())
     started = now_utc()
     inputs = {
         "source_repository": args.source_repository,

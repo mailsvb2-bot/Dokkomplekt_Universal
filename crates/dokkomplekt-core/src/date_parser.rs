@@ -89,7 +89,7 @@ pub fn parse_flexible_date_detailed(input: &str, default_year: i32) -> Option<Pa
             } else {
                 [(1_usize, 2_usize), (2_usize, 1_usize)]
             };
-            for (day_len, month_len) in patterns {
+            for &(day_len, month_len) in &patterns {
                 let day = digits[0..day_len].parse::<u32>().ok()?;
                 let month = digits[day_len..day_len + month_len].parse::<u32>().ok()?;
                 let year = normalize_year(
@@ -119,7 +119,7 @@ pub fn parse_flexible_date_detailed(input: &str, default_year: i32) -> Option<Pa
             } else {
                 [(1_usize, 2_usize), (2_usize, 1_usize)]
             };
-            for (day_len, month_len) in patterns {
+            for &(day_len, month_len) in &patterns {
                 let day = digits[0..day_len].parse::<u32>().ok()?;
                 let month = digits[day_len..day_len + month_len].parse::<u32>().ok()?;
                 let year = digits[day_len + month_len..].parse::<i32>().ok()?;

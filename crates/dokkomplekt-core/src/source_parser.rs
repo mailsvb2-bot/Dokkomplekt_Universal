@@ -1305,7 +1305,7 @@ fn sanitize_subject_name(value: &str) -> Option<String> {
     }
     let name = cleaned[..end]
         .trim()
-        .trim_end_matches(|ch: char| matches!(ch, ',' | ';' | ':'))
+        .trim_end_matches([',', ';', ':'])
         .trim();
     if name.is_empty() {
         return None;
@@ -1418,7 +1418,7 @@ fn sanitize_medical_diagnosis(value: &str) -> Option<String> {
     }
 
     cleaned = cleaned
-        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';'))
+        .trim_end_matches(['.', ',', ';'])
         .trim()
         .to_string();
     if cleaned.is_empty() || looks_like_known_label(&cleaned) {

@@ -132,6 +132,14 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
         }
     }
 
+    // A higher-confidence generic extractor must never be able to restore a
+    // donor template instruction that the medical parser already rejected.
+    // Apply the narrow donor sanitizer once more to the final canonical medical
+    // values after all deterministic extractors have merged.
+    if medical {
+        sanitize_final_medical_values(&mut case, &mut report);
+    }
+
     // Multiple deterministic extractors may identify the same person name with
     // different confidence. Normalize the canonical value only after all source
     // extractors have merged so a high-confidence generic match cannot preserve
@@ -1253,7 +1261,15 @@ fn looks_like_known_label(line: &str) -> bool {
 
 fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<String> {
     if field == "medical.diagnosis" {
-        return sanitize_medical_diagnosis(value);
+        let cleaned = sanitize_medical_source_value(value)?;
+        return sanitize_medical_diagnosis(&cleaned);
+    }
+    if field.starts_with("medical.")
+        && field != "medical.case_number"
+        && !field.ends_with(".date")
+        && !field.ends_with("_date")
+    {
+        return sanitize_medical_source_value(value);
     }
     if field == "subject.name" {
         return sanitize_subject_name(value);
@@ -1351,6 +1367,101 @@ fn extract_explicit_icd10_from_diagnosis(value: &str) -> Option<String> {
         .into_iter()
         .find(|row| row.code.eq_ignore_ascii_case(&token))
         .map(|row| row.code)
+}
+
+fn sanitize_medical_source_value(value: &str) -> Option<String> {
+    let mut lines = Vec::new();
+    for raw_line in value.lines() {
+        let mut line = clean_value(raw_line);
+        if line.is_empty() || is_medical_template_choice_placeholder(&line) {
+            continue;
+        }
+        if let Some(start) = medical_service_marker_start(&line) {
+            line = line[..start]
+                .trim()
+                .trim_end_matches(['-', '—', '–', ':', ';', ',', '.'])
+                .trim()
+                .to_string();
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    let cleaned = lines.join("\n");
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn is_medical_template_choice_placeholder(value: &str) -> bool {
+    let normalized = value
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    matches!(
+        normalized.as_str(),
+        "нужно / не нужно" | "нужен / не нужен" | "состоит / не состоит" | "да / нет"
+    )
+}
+
+fn medical_service_marker_start(value: &str) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for marker in ["сюда подставлять", "сюда подставляется", "выбирается в ui"] {
+        let Some(marker_end) = find_label_end(value, marker) else {
+            continue;
+        };
+        let Some(marker_start) = label_start_from_end(value, marker, marker_end) else {
+            continue;
+        };
+        best = Some(best.map_or(marker_start, |current| current.min(marker_start)));
+    }
+    best
+}
+
+fn sanitize_final_medical_values(case: &mut SemanticCase, report: &mut ParsedSourceReport) {
+    let fields = case
+        .values
+        .keys()
+        .filter(|field| {
+            (field.starts_with("medical.")
+                && field.as_str() != "medical.case_number"
+                && !field.ends_with(".date")
+                && !field.ends_with("_date"))
+                || matches!(field.as_str(), "classification.primary" | "action.plan")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for field in fields {
+        let Some(current) = case.get(&field).map(str::to_owned) else {
+            continue;
+        };
+        let sanitized = sanitize_medical_source_value(&current).and_then(|value| {
+            if matches!(field.as_str(), "medical.diagnosis" | "classification.primary") {
+                sanitize_medical_diagnosis(&value)
+            } else {
+                Some(value)
+            }
+        });
+        match sanitized {
+            Some(cleaned) => {
+                if cleaned != current {
+                    if let Some(value) = case.values.get_mut(&field) {
+                        value.value = cleaned;
+                    }
+                }
+            }
+            None => {
+                case.values.remove(&field);
+                report.filled_fields.retain(|item| item != &field);
+                let warning = format!(
+                    "Поле «{field}» не принято: обнаружена служебная инструкция шаблона"
+                );
+                if !report.warnings.contains(&warning) {
+                    report.warnings.push(warning);
+                }
+            }
+        }
+    }
 }
 
 fn sanitize_medical_diagnosis(value: &str) -> Option<String> {

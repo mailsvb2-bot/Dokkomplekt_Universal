@@ -21,7 +21,10 @@ fn unique_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    std::env::temp_dir().join(format!("dokkomplekt-diary-docx-{}-{nonce}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "dokkomplekt-diary-docx-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn diary_row(datetime: &str, text: Option<&str>, is_final: bool) -> SemanticRecord {
@@ -55,19 +58,37 @@ fn program_calendar_template_becomes_a_real_text_diary_docx() {
     case.set_collection(
         "diaries",
         vec![
-            diary_row("11.05.2026", Some("Профессиональный текст дневника."), false),
+            diary_row(
+                "11.05.2026",
+                Some("Профессиональный текст дневника."),
+                false,
+            ),
             diary_row("12.05.2026", None, true),
         ],
     );
 
     let result = render_docx_file(&template, &output, &case, true).expect("strict render");
-    assert!(result.missing_fields.is_empty(), "{:?}", result.missing_fields);
-    assert!(result.unknown_fields.is_empty(), "{:?}", result.unknown_fields);
+    assert!(
+        result.missing_fields.is_empty(),
+        "{:?}",
+        result.missing_fields
+    );
+    assert!(
+        result.unknown_fields.is_empty(),
+        "{:?}",
+        result.unknown_fields
+    );
 
     let text = extract_docx_text(&output).expect("rendered text");
-    assert!(text.contains("11.05.2026 Профессиональный текст дневника."), "{text}");
+    assert!(
+        text.contains("11.05.2026 Профессиональный текст дневника."),
+        "{text}"
+    );
     assert!(text.contains("12.05.2026 Состояние улучшилось."), "{text}");
-    assert!(text.contains("На текущую дату оформлена выписка из стационара."), "{text}");
+    assert!(
+        text.contains("На текущую дату оформлена выписка из стационара."),
+        "{text}"
+    );
     assert_eq!(text.matches("Лечащий врач").count(), 2, "{text}");
     assert_eq!(text.matches("Заведующий отделением").count(), 2, "{text}");
     assert!(!text.contains("{{"), "{text}");

@@ -25,7 +25,6 @@ jobs:
       - name: Apply donor sanitizer and targeted regressions
         shell: bash
         run: |
-          python3 -c 'from pathlib import Path; p=Path("scripts/agent_apply_pr143.py"); s=p.read_text(encoding="utf-8"); bad=")ntest = test.replace("; assert bad in s; p.write_text(s.replace(bad, ")\ntest = test.replace(", 1), encoding="utf-8")'
           python3 scripts/agent_apply_pr143.py
           cargo fmt --all
           cargo fmt --all --check

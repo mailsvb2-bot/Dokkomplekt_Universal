@@ -7,7 +7,7 @@ fn inline_template_instruction_is_not_kept_inside_real_diagnosis() {
 
     assert_eq!(
         case.get("medical.diagnosis"),
-        Some("F20.0 Параноидная шизофрения —")
+        Some("F20.0 Параноидная шизофрения")
     );
     assert_eq!(case.get("medical.icd10"), Some("F20.0"));
 }

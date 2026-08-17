@@ -1,0 +1,42 @@
+name: Agent apply PR143 donor migration
+
+on:
+  push:
+    branches:
+      - agent/donor-medical-template-noise-20260817
+    paths:
+      - .github/workflows/agent-apply-pr143.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/donor-medical-template-noise-20260817
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply donor sanitizer and targeted regressions
+        shell: bash
+        run: |
+          python3 -c 'from pathlib import Path; p=Path("scripts/agent_apply_pr143.py"); s=p.read_text(encoding="utf-8"); bad=")ntest = test.replace("; assert bad in s; p.write_text(s.replace(bad, ")\ntest = test.replace(", 1), encoding="utf-8")'
+          python3 scripts/agent_apply_pr143.py
+          cargo fmt --all
+          cargo fmt --all --check
+          python3 scripts/check_legacy_migration_inventory.py
+          cargo test -p dokkomplekt-core --test donor_medical_template_noise
+          cargo test -p dokkomplekt-core --test donor_medical_source_parity
+          rm scripts/agent_apply_pr143.py
+          rm .github/workflows/agent-apply-pr143.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/dokkomplekt-core/src/source_parser.rs crates/dokkomplekt-core/tests/donor_medical_template_noise.rs docs/LEGACY_MIGRATION_INVENTORY.json scripts/agent_apply_pr143.py .github/workflows/agent-apply-pr143.yml
+          git diff --cached --check
+          git commit -m "Reject medical template instructions as patient data"
+          git push origin HEAD:agent/donor-medical-template-noise-20260817

@@ -25,7 +25,10 @@ pub fn dynamic_epicrisis_base_date(
     admission: NaiveDate,
     sick_leave_from: Option<NaiveDate>,
 ) -> NaiveDate {
-    sick_leave_from.map_or(admission, |date| admission.max(date))
+    match sick_leave_from {
+        Some(date) => admission.max(date),
+        None => admission,
+    }
 }
 
 /// The working donor treats weekends plus 1-9 January and 1-9 May as non-working days.

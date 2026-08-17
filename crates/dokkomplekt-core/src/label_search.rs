@@ -54,7 +54,10 @@ pub(crate) fn find_label_end(raw_line: &str, label: &str) -> Option<usize> {
             let end_original = original_boundary(end, &char_ends);
             if let (Some(start_original), Some(end_original)) = (start_original, end_original) {
                 let structural_required = requires_structural_provenance(&label_lower);
-                if !structural_required || has_structural_label_prefix(raw_line, start_original) {
+                if !structural_required
+                    || has_structural_label_prefix(raw_line, start_original)
+                    || has_explicit_label_suffix(raw_line, end_original)
+                {
                     return Some(end_original);
                 }
             }
@@ -86,6 +89,16 @@ fn original_boundary(lowered_boundary: usize, char_ends: &[(usize, usize)]) -> O
 /// historical inline matching semantics.
 fn requires_structural_provenance(label_lower: &str) -> bool {
     matches!(label_lower.trim(), "лечение")
+}
+
+fn has_explicit_label_suffix(raw_line: &str, label_end: usize) -> bool {
+    raw_line
+        .get(label_end..)
+        .unwrap_or_default()
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|ch| matches!(ch, ':' | '№' | '#'))
 }
 
 fn has_structural_label_prefix(raw_line: &str, label_start: usize) -> bool {
@@ -147,6 +160,17 @@ mod tests {
                 "Во время госпитализации лечение проводилось по схеме",
                 "лечение"
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn accepts_compact_treatment_label_when_the_suffix_is_explicit() {
+        let line = "План обследования: ОАК Лечение: терапия";
+        let end = find_label_end(line, "Лечение").expect("compact explicit treatment label");
+        assert_eq!(&line[end..], ": терапия");
+        assert_eq!(
+            find_label_end("Пациент продолжает лечение амбулаторно", "лечение"),
             None
         );
     }

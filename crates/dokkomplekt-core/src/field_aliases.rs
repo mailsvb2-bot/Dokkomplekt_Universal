@@ -11,7 +11,8 @@
 pub fn canonical_storage_field_id(raw: &str) -> String {
     let field = raw.trim();
     match field {
-        "medical.diagnosis_code" => "medical.icd10".into(),
+        "diagnosis.main" => "medical.diagnosis".into(),
+        "diagnosis.icd10" | "icd10" | "medical.diagnosis_code" => "medical.icd10".into(),
         "organization.name" => "org.name".into(),
         "organization.inn" | "accounting.inn" | "company.inn" => "org.inn".into(),
         "organization.kpp" | "accounting.kpp" | "company.kpp" => "org.kpp".into(),
@@ -20,6 +21,21 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
         }
         "person.birth_date" | "patient.birth_date" => "subject.birth_date".into(),
         "person.address" | "patient.address" => "subject.address".into(),
+        "person.age" | "patient.age" => "subject.age".into(),
+        "complaints" | "medical.complaints_text" => "medical.complaints".into(),
+        "anamnesis.disease" | "disease_anamnesis" => "medical.anamnesis_disease".into(),
+        "anamnesis.life" | "life_anamnesis" => "medical.anamnesis_life".into(),
+        "status.objective" | "status.somatic" | "somatic_status" => "medical.somatic_status".into(),
+        "status.profile" | "status.mental" | "mental_status" => "medical.profile_status".into(),
+        "examination.plan" | "examination_plan" => "medical.examination_plan".into(),
+        "treatment.result" => "medical.treatment_result".into(),
+        "condition.discharge" => "medical.discharge_condition".into(),
+        "labs.results" | "labs.block" | "analysis.results" | "analyses.results" => {
+            "medical.labs".into()
+        }
+        "labs.date" => "medical.labs_date".into(),
+        "labs.source" => "medical.labs_source".into(),
+        "labs.date_policy" => "medical.labs_date_policy".into(),
         "hr.employee_name" => "employee.name".into(),
         "hr.position" => "employee.position".into(),
         "hr.department" => "employee.department".into(),
@@ -40,7 +56,13 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
 /// Every historical storage id that is equivalent to the requested field.
 pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
     match canonical_storage_field_id(raw).as_str() {
-        "medical.icd10" => &["medical.icd10", "medical.diagnosis_code"],
+        "medical.diagnosis" => &["medical.diagnosis", "diagnosis.main"],
+        "medical.icd10" => &[
+            "medical.icd10",
+            "medical.diagnosis_code",
+            "diagnosis.icd10",
+            "icd10",
+        ],
         "org.name" => &["org.name", "organization.name"],
         "org.inn" => &[
             "org.inn",
@@ -67,6 +89,47 @@ pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
             "patient.birth_date",
         ],
         "subject.address" => &["subject.address", "person.address", "patient.address"],
+        "subject.age" => &["subject.age", "person.age", "patient.age"],
+        "medical.complaints" => &[
+            "medical.complaints",
+            "complaints",
+            "medical.complaints_text",
+        ],
+        "medical.anamnesis_disease" => &[
+            "medical.anamnesis_disease",
+            "anamnesis.disease",
+            "disease_anamnesis",
+        ],
+        "medical.anamnesis_life" => &["medical.anamnesis_life", "anamnesis.life", "life_anamnesis"],
+        "medical.somatic_status" => &[
+            "medical.somatic_status",
+            "status.objective",
+            "status.somatic",
+            "somatic_status",
+        ],
+        "medical.profile_status" => &[
+            "medical.profile_status",
+            "status.profile",
+            "status.mental",
+            "mental_status",
+        ],
+        "medical.examination_plan" => &[
+            "medical.examination_plan",
+            "examination.plan",
+            "examination_plan",
+        ],
+        "medical.treatment_result" => &["medical.treatment_result", "treatment.result"],
+        "medical.discharge_condition" => &["medical.discharge_condition", "condition.discharge"],
+        "medical.labs" => &[
+            "medical.labs",
+            "labs.results",
+            "labs.block",
+            "analysis.results",
+            "analyses.results",
+        ],
+        "medical.labs_date" => &["medical.labs_date", "labs.date"],
+        "medical.labs_source" => &["medical.labs_source", "labs.source"],
+        "medical.labs_date_policy" => &["medical.labs_date_policy", "labs.date_policy"],
         "employee.name" => &["employee.name", "hr.employee_name"],
         "employee.position" => &["employee.position", "hr.position"],
         "employee.department" => &["employee.department", "hr.department"],

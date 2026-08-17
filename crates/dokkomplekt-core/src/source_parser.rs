@@ -69,6 +69,11 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
         "госпитализац",
         "лечащий врач",
         "дата поступления",
+        "жалобы",
+        "анамнез",
+        "соматический статус",
+        "профильный статус",
+        "лаборатор",
     ]
     .iter()
     .any(|marker| lower.contains(marker));
@@ -95,6 +100,13 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
                 );
             }
         }
+        if case.get("medical.icd10").is_none() {
+            if let Some(diagnosis) = case.get("medical.diagnosis").map(str::to_owned) {
+                if let Some(code) = extract_explicit_icd10_from_diagnosis(&diagnosis) {
+                    put(&mut case, &mut report, "medical.icd10", &code, 0.90);
+                }
+            }
+        }
         mirror_medical_to_generic(&mut case, &mut report);
     }
 
@@ -117,6 +129,20 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
     for warning in engine_report.warnings {
         if !report.warnings.contains(&warning) {
             report.warnings.push(warning);
+        }
+    }
+
+    // Multiple deterministic extractors may identify the same person name with
+    // different confidence. Normalize the canonical value only after all source
+    // extractors have merged so a high-confidence generic match cannot preserve
+    // a demographic tail such as `, 1975 г.р.` in document headers/folder names.
+    if let Some(current_name) = case.get("subject.name").map(str::to_owned) {
+        if let Some(cleaned_name) = sanitize_subject_name(&current_name) {
+            if cleaned_name != current_name {
+                if let Some(value) = case.values.get_mut("subject.name") {
+                    value.value = cleaned_name;
+                }
+            }
         }
     }
 
@@ -636,40 +662,249 @@ fn medical_rules() -> Vec<LabelRule> {
             field: "medical.case_number",
             labels: &[
                 "История болезни №",
+                "История болезни N",
                 "Номер истории болезни",
                 "ИБ №",
                 "и/б №",
+                "Nr historii choroby",
+                "Numer historii choroby",
+                "Historia choroby nr",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.name",
+            labels: &[
+                "Ф.И.О.",
+                "Ф.И.О",
+                "ФИО пациента",
+                "Ф.И.О. пациента",
+                "Фамилия Имя Отчество",
+                "Пациент",
+                "Пациентка",
+                "Pacjent",
+                "Pacjentka",
+                "Imię i nazwisko",
+                "Imie i nazwisko",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.age",
+            labels: &["Возраст", "Wiek"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.birth_date",
+            labels: &["Дата рождения", "Data urodzenia"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.address",
+            labels: &[
+                "Зарегистрирован по адресу",
+                "Адрес регистрации",
+                "Адрес проживания",
+                "Место жительства",
+                "Adres zamieszkania",
+                "Miejsce zamieszkania",
             ],
             multiline: false,
         },
         LabelRule {
             field: "medical.admission_date",
-            labels: &["Дата поступления", "Поступил", "Поступила"],
+            labels: &[
+                "Дата поступления",
+                "Дата госпитализации",
+                "Поступил",
+                "Поступила",
+                "Data przyjęcia",
+                "Data przyjecia",
+                "Data hospitalizacji",
+            ],
             multiline: false,
         },
         LabelRule {
             field: "medical.discharge_date",
-            labels: &["Дата выписки", "Выписан", "Выписана"],
+            labels: &["Дата выписки", "Выписан", "Выписана", "Data wypisu"],
             multiline: false,
         },
         LabelRule {
-            field: "medical.diagnosis",
-            labels: &["Основной диагноз", "Диагноз"],
+            field: "medical.complaints",
+            labels: &[
+                "Жалобы на момент осмотра",
+                "Жалобы при поступлении",
+                "Жалобы",
+                "Skargi przy przyjęciu",
+                "Skargi przy przyjeciu",
+                "Dolegliwości",
+                "Dolegliwosci",
+                "Skargi",
+            ],
             multiline: true,
+        },
+        LabelRule {
+            field: "medical.anamnesis_life",
+            labels: &[
+                "Анамнез жизни",
+                "Wywiad życiowy",
+                "Wywiad zyciowy",
+                "Wywiad osobniczy",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.anamnesis_disease",
+            labels: &[
+                "Анамнез заболевания",
+                "Wywiad chorobowy",
+                "Wywiad obecnej choroby",
+                "Historia choroby",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.profile_status",
+            labels: &[
+                "Профильный статус при поступлении",
+                "Профильный статус",
+                "Психический статус при поступлении",
+                "Психический статус",
+                "Stan psychiczny",
+                "Badanie psychiatryczne",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.somatic_status",
+            labels: &[
+                "Сомато-неврологический статус",
+                "Соматический статус",
+                "Объективный статус",
+                "Объективно",
+                "Status praesens",
+                "Stan przedmiotowy",
+                "Badanie przedmiotowe",
+                "Stan somatyczny",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.examination_plan",
+            labels: &["План обследования", "Plan badań", "Plan badan"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.diagnosis",
+            labels: &[
+                "Клинический диагноз",
+                "Предварительный диагноз",
+                "Основной диагноз",
+                "Заключительный диагноз",
+                "Диагноз",
+                "Rozpoznanie kliniczne",
+                "Rozpoznanie główne",
+                "Rozpoznanie glowne",
+                "Rozpoznanie",
+                "Diagnoza",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.icd10",
+            labels: &["Код МКБ-10", "Код МКБ", "МКБ-10", "ICD-10"],
+            multiline: false,
         },
         LabelRule {
             field: "medical.treatment",
-            labels: &["Назначенное лечение", "Лечение"],
+            labels: &[
+                "План лечения",
+                "Назначенное лечение",
+                "Лечение",
+                "Plan leczenia",
+                "Zalecone leczenie",
+                "Zastosowane leczenie",
+                "Leczenie",
+                "Terapia",
+            ],
             multiline: true,
         },
         LabelRule {
+            field: "medical.treatment_result",
+            labels: &["Результат лечения", "Исход лечения", "Эффект лечения"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.discharge_condition",
+            labels: &["Состояние при выписке", "Состояние на момент выписки"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.recommendations",
+            labels: &["Рекомендации", "Рекомендовано", "Zalecenia"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.labs",
+            labels: &[
+                "Лабораторные исследования",
+                "Лабораторные данные",
+                "Результаты анализов",
+                "Результаты обследований",
+                "Результаты исследований",
+                "Анализы",
+                "Wyniki badań",
+                "Wyniki badan",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.labs_date",
+            labels: &["Дата анализов", "Дата лабораторных исследований"],
+            multiline: false,
+        },
+        LabelRule {
             field: "medical.workplace",
-            labels: &["Место работы", "Работает"],
+            labels: &[
+                "Работает в организации",
+                "Место работы",
+                "Работа",
+                "Работает",
+                "Miejsce pracy",
+                "Zakład pracy",
+                "Zaklad pracy",
+            ],
             multiline: false,
         },
         LabelRule {
             field: "medical.position",
-            labels: &["Должность", "в должности"],
+            labels: &["Должность", "в должности", "Stanowisko", "Zawód", "Zawod"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.sick_leave_number",
+            labels: &[
+                "Номер больничного",
+                "Больничный лист №",
+                "Лист нетрудоспособности №",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.attending_doctor",
+            labels: &["Лечащий врач", "Lekarz prowadzący", "Lekarz prowadzacy"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.department_head",
+            labels: &[
+                "Заведующий отделением",
+                "Зав. отделением",
+                "Зав. отд.",
+                "Ordynator",
+                "Kierownik oddziału",
+                "Kierownik oddzialu",
+            ],
             multiline: false,
         },
     ]
@@ -1017,6 +1252,12 @@ fn looks_like_known_label(line: &str) -> bool {
 }
 
 fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<String> {
+    if field == "medical.diagnosis" {
+        return sanitize_medical_diagnosis(value);
+    }
+    if field == "subject.name" {
+        return sanitize_subject_name(value);
+    }
     if field.ends_with(".date") || field.ends_with("_date") {
         return parse_flexible_date(value, default_year);
     }
@@ -1048,6 +1289,152 @@ fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<
             .filter(|number| !number.is_empty());
     }
     None
+}
+
+fn sanitize_subject_name(value: &str) -> Option<String> {
+    let cleaned = clean_value(value);
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut end = cleaned.len();
+    if let Some(index) = cleaned.find(',') {
+        end = end.min(index);
+    }
+    if let Some((index, _)) = cleaned.char_indices().find(|(_, ch)| ch.is_ascii_digit()) {
+        end = end.min(index);
+    }
+    let name = cleaned[..end]
+        .trim()
+        .trim_end_matches([',', ';', ':'])
+        .trim();
+    if name.is_empty() {
+        return None;
+    }
+    let mut normalized = name.to_string();
+    if russian_initial_pair_missing_terminal_dot(&normalized) {
+        normalized.push('.');
+    }
+    Some(normalized)
+}
+
+fn russian_initial_pair_missing_terminal_dot(value: &str) -> bool {
+    let Some(last) = value.split_whitespace().last() else {
+        return false;
+    };
+    let chars = last.chars().collect::<Vec<_>>();
+    chars.len() == 3
+        && chars[0].is_alphabetic()
+        && chars[0].is_uppercase()
+        && chars[1] == '.'
+        && chars[2].is_alphabetic()
+        && chars[2].is_uppercase()
+}
+
+fn extract_explicit_icd10_from_diagnosis(value: &str) -> Option<String> {
+    let token = value
+        .split_whitespace()
+        .next()?
+        .trim_matches(|ch: char| matches!(ch, '(' | ')' | '[' | ']' | ',' | ';' | ':' | '-'))
+        .to_ascii_uppercase();
+    let bytes = token.as_bytes();
+    let shape_ok = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || *byte == b'.');
+    if !shape_ok {
+        return None;
+    }
+    crate::search_icd10(&token, 1)
+        .into_iter()
+        .find(|row| row.code.eq_ignore_ascii_case(&token))
+        .map(|row| row.code)
+}
+
+fn sanitize_medical_diagnosis(value: &str) -> Option<String> {
+    let mut cleaned = clean_value(value);
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let lower = cleaned.to_lowercase();
+    if ["лечение", "назначенное лечение", "план лечения"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return None;
+    }
+
+    let has_icd_code = contains_icd_like_code(&cleaned);
+    if !has_icd_code {
+        let admin_words = [
+            "подпись",
+            "подпис",
+            "кнопк",
+            "шаблон",
+            "документ",
+            "попап",
+            "вк на мсэ",
+            "мсэ",
+            "рвк",
+            "комисс",
+            "эпикриз",
+            "галочк",
+            "выбира",
+            "созда",
+            "встав",
+            "подстав",
+            "поле",
+            "файл",
+            "блок 03",
+        ];
+        let hits = admin_words
+            .iter()
+            .filter(|word| lower.contains(**word))
+            .count();
+        let instruction_words = [
+            "где",
+            "куда",
+            "котор",
+            "нужно",
+            "надо",
+            "для",
+            "чтобы",
+            "или",
+        ];
+        let looks_like_instruction = instruction_words.iter().any(|word| {
+            lower
+                .split(|ch: char| !ch.is_alphanumeric())
+                .any(|token| token == *word)
+        });
+        if hits >= 2
+            || (hits >= 1 && looks_like_instruction)
+            || (hits >= 1 && cleaned.chars().count() > 90)
+        {
+            return None;
+        }
+    }
+
+    cleaned = cleaned.trim_end_matches(['.', ',', ';']).trim().to_string();
+    if cleaned.is_empty() || looks_like_known_label(&cleaned) {
+        return None;
+    }
+    Some(cleaned)
+}
+
+fn contains_icd_like_code(value: &str) -> bool {
+    value
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.'))
+        .any(|token| {
+            let bytes = token.as_bytes();
+            bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1].is_ascii_digit()
+                && bytes[2].is_ascii_digit()
+                && (bytes.len() == 3 || bytes[3] == b'.' || bytes[3].is_ascii_alphanumeric())
+        })
 }
 
 fn apply_role_aware_source_facts(
@@ -1291,7 +1678,47 @@ fn clean_inline_value(value: &str) -> String {
             break;
         }
     }
+    if let Some(next_label) = next_explicit_inline_label_start(value) {
+        end = end.min(next_label);
+    }
     clean_value(&value[..end])
+}
+
+fn next_explicit_inline_label_start(value: &str) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for rule in generic_rules().into_iter().chain(medical_rules()) {
+        for label in rule.labels {
+            let Some(label_end) = find_label_end(value, label) else {
+                continue;
+            };
+            let Some(label_start) = label_start_from_end(value, label, label_end) else {
+                continue;
+            };
+            if label_start == 0 {
+                continue;
+            }
+            let tail = value[label_end..].trim_start();
+            let explicit_separator = tail
+                .chars()
+                .next()
+                .is_some_and(|ch| matches!(ch, ':' | '№' | '#' | '-' | '—' | '–'));
+            if !explicit_separator {
+                continue;
+            }
+            best = Some(best.map_or(label_start, |current| current.min(label_start)));
+        }
+    }
+    best
+}
+
+fn label_start_from_end(value: &str, label: &str, mut end: usize) -> Option<usize> {
+    if !value.is_char_boundary(end) {
+        return None;
+    }
+    for _ in label.chars() {
+        end = value[..end].char_indices().next_back()?.0;
+    }
+    Some(end)
 }
 
 fn first_date_candidate(line: &str) -> Option<String> {
@@ -1423,6 +1850,35 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("контрольный ключ")));
+    }
+
+    #[test]
+    fn donor_diagnosis_safety_rejects_template_and_admin_noise() {
+        assert_eq!(
+            sanitize_medical_diagnosis("лечение и подпись документа, выбрать шаблон"),
+            None
+        );
+        assert_eq!(
+            sanitize_medical_diagnosis("Шаблон документа для МСЭ: выбрать поле"),
+            None
+        );
+        assert_eq!(sanitize_medical_diagnosis("Лечение: режим"), None);
+    }
+
+    #[test]
+    fn donor_diagnosis_safety_preserves_real_formulation_and_icd_code() {
+        assert_eq!(
+            sanitize_medical_diagnosis("F20.0 Параноидная шизофрения."),
+            Some("F20.0 Параноидная шизофрения".into())
+        );
+        assert_eq!(
+            sanitize_medical_diagnosis("J20 Острый бронхит"),
+            Some("J20 Острый бронхит".into())
+        );
+        assert_eq!(
+            sanitize_medical_diagnosis("Острый бронхит"),
+            Some("Острый бронхит".into())
+        );
     }
 
     #[test]

@@ -76,17 +76,77 @@ pub fn medical_profile() -> MedicalProfile {
         field_rules: vec![
             FieldExtractionRule {
                 field_id: "medical.case_number".into(),
-                aliases: vec!["Номер истории болезни".into()],
+                aliases: vec!["Номер истории болезни".into(), "История болезни №".into()],
                 required: true,
             },
             FieldExtractionRule {
+                field_id: "subject.name".into(),
+                aliases: vec!["ФИО пациента".into(), "Ф.И.О.".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "subject.age".into(),
+                aliases: vec!["Возраст".into()],
+                required: false,
+            },
+            FieldExtractionRule {
                 field_id: "medical.diagnosis".into(),
-                aliases: vec!["Диагноз".into()],
+                aliases: vec!["Диагноз".into(), "Клинический диагноз".into()],
                 required: true,
             },
             FieldExtractionRule {
                 field_id: "medical.treatment".into(),
-                aliases: vec!["Лечение".into()],
+                aliases: vec!["Лечение".into(), "Назначенное лечение".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.complaints".into(),
+                aliases: vec!["Жалобы".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.anamnesis_disease".into(),
+                aliases: vec!["Анамнез заболевания".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.anamnesis_life".into(),
+                aliases: vec!["Анамнез жизни".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.somatic_status".into(),
+                aliases: vec!["Соматический статус".into(), "Объективный статус".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.profile_status".into(),
+                aliases: vec!["Профильный статус".into(), "Психический статус".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.examination_plan".into(),
+                aliases: vec!["План обследования".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.labs".into(),
+                aliases: vec!["Лабораторные исследования".into(), "Анализы".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.recommendations".into(),
+                aliases: vec!["Рекомендации".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.attending_doctor".into(),
+                aliases: vec!["Лечащий врач".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.department_head".into(),
+                aliases: vec!["Заведующий отделением".into(), "Зав. отделением".into()],
                 required: false,
             },
         ],

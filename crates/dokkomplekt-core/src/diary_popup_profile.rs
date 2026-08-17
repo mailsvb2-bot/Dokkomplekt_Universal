@@ -4,7 +4,7 @@
 //! donor-compatible diary decisions that are mandatory for the medical diary role.
 
 use crate::{
-    popup_profiles, DomainKind, DocumentTemplateSpec, MedicalDocumentRole, PopupFieldConfig,
+    popup_profiles, DocumentTemplateSpec, DomainKind, MedicalDocumentRole, PopupFieldConfig,
     PromptAskMode, PromptInputKind, DEFAULT_TREATMENT_CORRECTION,
 };
 use std::collections::BTreeSet;
@@ -21,18 +21,15 @@ fn is_medical_diary(category: &DomainKind, role_id: &str) -> bool {
 }
 
 fn donor_sick_leave_config() -> PopupFieldConfig {
-    let mut config = PopupFieldConfig::new(
-        DIARY_SICK_LEAVE_EPICRISIS,
-        "Лечится по больничному листу?",
-    );
+    let mut config =
+        PopupFieldConfig::new(DIARY_SICK_LEAVE_EPICRISIS, "Лечится по больничному листу?");
     config.required = true;
     config.input_kind = PromptInputKind::YesNo;
     config.ask_mode = PromptAskMode::Always;
     config.options = vec!["Нет".into(), "Да".into()];
     config.section = Some("Медицинские данные".into());
-    config.help_text = Some(
-        "Если да — программа будет писать динамический эпикриз 1 раз в 10 дней.".into(),
-    );
+    config.help_text =
+        Some("Если да — программа будет писать динамический эпикриз 1 раз в 10 дней.".into());
     config.order = 230;
     config
 }
@@ -60,7 +57,10 @@ fn extend_diary_fields(
     if !is_medical_diary(category, role_id) {
         return fields;
     }
-    for required in [donor_sick_leave_config(), donor_treatment_correction_config()] {
+    for required in [
+        donor_sick_leave_config(),
+        donor_treatment_correction_config(),
+    ] {
         if let Some(existing) = fields
             .iter_mut()
             .find(|field| field.field_id == required.field_id)
@@ -157,11 +157,15 @@ mod tests {
         let medical = profession_runtime_control_fields(&DomainKind::Medical, "diaries");
         assert!(medical.contains(DIARY_SICK_LEAVE_EPICRISIS));
         assert!(medical.contains(DIARY_TREATMENT_CORRECTION));
-        assert!(profession_runtime_control_fields(&DomainKind::Hr, "diaries")
-            .intersection(&medical)
-            .next()
-            .is_none());
-        assert!(!profession_runtime_control_fields(&DomainKind::Medical, "discharge")
-            .contains(DIARY_SICK_LEAVE_EPICRISIS));
+        assert!(
+            profession_runtime_control_fields(&DomainKind::Hr, "diaries")
+                .intersection(&medical)
+                .next()
+                .is_none()
+        );
+        assert!(
+            !profession_runtime_control_fields(&DomainKind::Medical, "discharge")
+                .contains(DIARY_SICK_LEAVE_EPICRISIS)
+        );
     }
 }

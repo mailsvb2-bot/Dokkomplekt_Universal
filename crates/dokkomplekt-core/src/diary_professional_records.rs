@@ -7,8 +7,7 @@
 use crate::{
     build_dynamic_epicrisis_text, dynamic_epicrisis_base_date, dynamic_epicrisis_dates,
     parse_flexible_date, professional_records, DynamicEpicrisisInput, SemanticAtom, SemanticCase,
-    SemanticRecord, DIARY_SICK_LEAVE_EPICRISIS, DIARY_TREATMENT_CORRECTION,
-    MAX_DYNAMIC_EPICRISES,
+    SemanticRecord, DIARY_SICK_LEAVE_EPICRISIS, DIARY_TREATMENT_CORRECTION, MAX_DYNAMIC_EPICRISES,
 };
 use chrono::{Datelike, NaiveDate};
 
@@ -86,9 +85,10 @@ fn merge_dynamic_epicrises(rows: &mut Vec<SemanticRecord>, case: &SemanticCase) 
         rows.push(dynamic_row(date, admission, &text));
     }
     rows.sort_by(|left, right| {
-        row_sort_date(left)
-            .cmp(&row_sort_date(right))
-            .then(record_bool(left, "is_dynamic_epicrisis").cmp(&record_bool(right, "is_dynamic_epicrisis")))
+        row_sort_date(left).cmp(&row_sort_date(right)).then(
+            record_bool(left, "is_dynamic_epicrisis")
+                .cmp(&record_bool(right, "is_dynamic_epicrisis")),
+        )
     });
     for (index, row) in rows.iter_mut().enumerate() {
         row.insert(
@@ -101,7 +101,10 @@ fn merge_dynamic_epicrises(rows: &mut Vec<SemanticRecord>, case: &SemanticCase) 
 fn dynamic_row(date: NaiveDate, admission: NaiveDate, text: &str) -> SemanticRecord {
     let date_text = date.format("%d.%m.%Y").to_string();
     let mut row = SemanticRecord::new();
-    row.insert("kind".into(), SemanticAtom::Text("dynamic_epicrisis".into()));
+    row.insert(
+        "kind".into(),
+        SemanticAtom::Text("dynamic_epicrisis".into()),
+    );
     row.insert("date".into(), SemanticAtom::Date(date_text.clone()));
     row.insert("datetime".into(), SemanticAtom::Text(date_text));
     row.insert(
@@ -113,7 +116,10 @@ fn dynamic_row(date: NaiveDate, admission: NaiveDate, text: &str) -> SemanticRec
         "day_number".into(),
         SemanticAtom::Text(format!("{:02}", date.day())),
     );
-    row.insert("month".into(), SemanticAtom::Integer(i64::from(date.month())));
+    row.insert(
+        "month".into(),
+        SemanticAtom::Integer(i64::from(date.month())),
+    );
     row.insert("year".into(), SemanticAtom::Integer(i64::from(date.year())));
     row.insert("is_final".into(), SemanticAtom::Boolean(false));
     row.insert("is_dynamic_epicrisis".into(), SemanticAtom::Boolean(true));
@@ -134,14 +140,8 @@ fn dynamic_row(date: NaiveDate, admission: NaiveDate, text: &str) -> SemanticRec
 fn semantic_date(case: &SemanticCase, field_id: &str) -> Option<NaiveDate> {
     let raw = case.get(field_id)?.trim();
     let year = explicit_year(raw)
-        .or_else(|| {
-            case.get("medical.admission_date")
-                .and_then(explicit_year)
-        })
-        .or_else(|| {
-            case.get("medical.discharge_date")
-                .and_then(explicit_year)
-        })
+        .or_else(|| case.get("medical.admission_date").and_then(explicit_year))
+        .or_else(|| case.get("medical.discharge_date").and_then(explicit_year))
         .unwrap_or_else(|| chrono::Local::now().year());
     let parsed = parse_flexible_date(raw, year)?;
     NaiveDate::parse_from_str(&parsed, "%d.%m.%Y").ok()
@@ -161,7 +161,11 @@ fn value(case: &SemanticCase, field_id: &str) -> String {
 fn first_value(case: &SemanticCase, field_ids: &[&str]) -> String {
     field_ids
         .iter()
-        .find_map(|field_id| case.get(field_id).map(str::trim).filter(|value| !value.is_empty()))
+        .find_map(|field_id| {
+            case.get(field_id)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
         .unwrap_or_default()
         .to_string()
 }
@@ -169,13 +173,18 @@ fn first_value(case: &SemanticCase, field_ids: &[&str]) -> String {
 fn record_bool(row: &SemanticRecord, field_id: &str) -> bool {
     match row.get(field_id) {
         Some(SemanticAtom::Boolean(value)) => *value,
-        Some(value) => matches!(value.as_text().trim().to_lowercase().as_str(), "true" | "1" | "да"),
+        Some(value) => matches!(
+            value.as_text().trim().to_lowercase().as_str(),
+            "true" | "1" | "да"
+        ),
         None => false,
     }
 }
 
 fn row_date(row: &SemanticRecord) -> String {
-    row.get("date").map(SemanticAtom::as_text).unwrap_or_default()
+    row.get("date")
+        .map(SemanticAtom::as_text)
+        .unwrap_or_default()
 }
 
 fn row_sort_date(row: &SemanticRecord) -> Option<NaiveDate> {
@@ -200,10 +209,18 @@ mod tests {
         insert(&mut case, "medical.admission_date", "10.05.2026");
         insert(&mut case, "medical.discharge_date", "10.06.2026");
         insert(&mut case, "medical.diary_schedule_style", "Каждый день");
-        insert(&mut case, "medical.diary_intraday_rhythm", "Один раз в день");
+        insert(
+            &mut case,
+            "medical.diary_intraday_rhythm",
+            "Один раз в день",
+        );
         insert(&mut case, DIARY_SICK_LEAVE_EPICRISIS, enabled);
         insert(&mut case, "subject.name", "Иванов Иван Иванович");
-        insert(&mut case, "medical.treatment", "Терапия по листу назначений");
+        insert(
+            &mut case,
+            "medical.treatment",
+            "Терапия по листу назначений",
+        );
         case.set_collection(
             "medical_diary_texts",
             vec![SemanticRecord::from([(

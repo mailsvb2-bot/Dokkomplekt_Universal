@@ -84,10 +84,7 @@ pub fn build_dynamic_epicrisis_text(data: &DynamicEpicrisisInput) -> String {
     };
     [
         "Динамический эпикриз.".to_string(),
-        format!(
-            "ФИО: {}.",
-            non_empty_or(&data.patient_name, "не указано")
-        ),
+        format!("ФИО: {}.", non_empty_or(&data.patient_name, "не указано")),
         format!(
             "Дата рождения: {}.",
             non_empty_or(&data.birth_date, "не указана")
@@ -118,7 +115,11 @@ pub fn build_dynamic_epicrisis_text(data: &DynamicEpicrisisInput) -> String {
 
 fn non_empty_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     let value = value.trim();
-    if value.is_empty() { fallback } else { value }
+    if value.is_empty() {
+        fallback
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]
@@ -131,7 +132,10 @@ mod tests {
 
     #[test]
     fn base_date_never_precedes_admission_or_sick_leave_start() {
-        assert_eq!(dynamic_epicrisis_base_date(d("10.05.2026"), None), d("10.05.2026"));
+        assert_eq!(
+            dynamic_epicrisis_base_date(d("10.05.2026"), None),
+            d("10.05.2026")
+        );
         assert_eq!(
             dynamic_epicrisis_base_date(d("10.05.2026"), Some(d("15.05.2026"))),
             d("15.05.2026")
@@ -151,8 +155,14 @@ mod tests {
 
     #[test]
     fn fixed_january_and_may_holidays_are_shifted_forward() {
-        assert_eq!(next_donor_working_day(d("01.05.2026"), &[]), Some(d("11.05.2026")));
-        assert_eq!(next_donor_working_day(d("01.01.2027"), &[]), Some(d("11.01.2027")));
+        assert_eq!(
+            next_donor_working_day(d("01.05.2026"), &[]),
+            Some(d("11.05.2026"))
+        );
+        assert_eq!(
+            next_donor_working_day(d("01.01.2027"), &[]),
+            Some(d("11.01.2027"))
+        );
     }
 
     #[test]
@@ -172,6 +182,8 @@ mod tests {
         assert!(text.contains("Жалобы: без существенной динамики."));
         assert!(text.contains("Принимает: согласно листу назначений."));
         assert!(text.contains(DEFAULT_TREATMENT_CORRECTION));
-        assert!(text.ends_with("Заведующий отделением ____________________\nЛечащий врач ____________________"));
+        assert!(text.ends_with(
+            "Заведующий отделением ____________________\nЛечащий врач ____________________"
+        ));
     }
 }

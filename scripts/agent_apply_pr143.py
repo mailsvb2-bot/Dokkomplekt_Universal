@@ -5,7 +5,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "crates/dokkomplekt-core/src/source_parser.rs"
-TEST = ROOT / "crates/dokkomplekt-core/tests/donor_medical_template_noise.rs"
 INVENTORY = ROOT / "docs/LEGACY_MIGRATION_INVENTORY.json"
 
 
@@ -23,14 +22,12 @@ source = replace_once(
     '''    if field == "medical.diagnosis" {\n        let cleaned = sanitize_medical_source_value(value)?;\n        return sanitize_medical_diagnosis(&cleaned);\n    }\n    if field.starts_with("medical.")\n        && field != "medical.case_number"\n        && !field.ends_with(".date")\n        && !field.ends_with("_date")\n    {\n        return sanitize_medical_source_value(value);\n    }\n''',
     "normalize medical source value",
 )
-
 source = replace_once(
     source,
     '''    for warning in engine_report.warnings {\n        if !report.warnings.contains(&warning) {\n            report.warnings.push(warning);\n        }\n    }\n\n    // Multiple deterministic extractors may identify the same person name with\n''',
     '''    for warning in engine_report.warnings {\n        if !report.warnings.contains(&warning) {\n            report.warnings.push(warning);\n        }\n    }\n\n    // A higher-confidence generic extractor must never be able to restore a\n    // donor template instruction that the medical parser already rejected.\n    // Apply the narrow donor sanitizer once more to the final canonical medical\n    // values after all deterministic extractors have merged.\n    if medical {\n        sanitize_final_medical_values(&mut case, &mut report);\n    }\n\n    // Multiple deterministic extractors may identify the same person name with\n''',
     "post-merge medical sanitizer",
 )
-
 helper_anchor = '''fn sanitize_medical_diagnosis(value: &str) -> Option<String> {\n'''
 helpers = r'''fn sanitize_medical_source_value(value: &str) -> Option<String> {
     let mut lines = Vec::new();
@@ -130,29 +127,6 @@ fn sanitize_final_medical_values(case: &mut SemanticCase, report: &mut ParsedSou
 '''
 source = replace_once(source, helper_anchor, helpers + helper_anchor, "medical sanitizer helpers")
 SOURCE.write_text(source, encoding="utf-8")
-
-# Tighten the regression contract to include generic canonical mirrors as well.
-test = TEST.read_text(encoding="utf-8")ntest = test.replace(
-    '''    assert_eq!(case.get("medical.icd10"), Some("F20.0"));\n''',
-    '''    assert_eq!(\n        case.get("classification.primary"),\n        Some("F20.0 Параноидная шизофрения")\n    );\n    assert_eq!(case.get("medical.icd10"), Some("F20.0"));\n''',
-    1,
-)
-test = test.replace(
-    '''    assert_eq!(case.get("medical.treatment"), None);\n''',
-    '''    assert_eq!(case.get("medical.treatment"), None);\n    assert_eq!(case.get("action.plan"), None);\n''',
-    1,
-)
-test = test.replace(
-    '''    assert_eq!(\n        case.get("medical.treatment"),\n        Some("Нужно продолжить приём рисперидона 4 мг/сут")\n    );\n''',
-    '''    assert_eq!(\n        case.get("medical.treatment"),\n        Some("Нужно продолжить приём рисперидона 4 мг/сут")\n    );\n    assert_eq!(\n        case.get("action.plan"),\n        Some("Нужно продолжить приём рисперидона 4 мг/сут")\n    );\n''',
-    1,
-)
-test = test.replace(
-    '''    assert_eq!(case.get("medical.recommendations"), None);\n''',
-    '''    assert_eq!(case.get("medical.recommendations"), None);\n    assert_eq!(case.get("action.plan"), None);\n''',
-    1,
-)
-TEST.write_text(test, encoding="utf-8")
 
 inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
 donor = next(

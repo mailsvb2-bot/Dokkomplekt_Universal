@@ -3,7 +3,6 @@ import type { DocumentTemplateSpec, DomainKind } from '../lib/types';
 import {
   deleteClauseBlock,
   importLearningExampleFile,
-  importTemplateFile,
   listClauseBlocks,
   saveClauseBlock,
 } from '../lib/api';
@@ -11,7 +10,6 @@ import { arrayBufferToBase64, readFileBytes } from '../lib/appSupport';
 import { MEDICAL_PROFILE_QUICK_OPTION_PRESETS } from '../data/medicalProfilePresets';
 
 const MATERIAL_INDEX_BLOCK = 'professional.materials.index';
-const MEDICAL_DATE_TEMPLATES_BLOCK = 'professional.medical.diary.date_templates';
 const MEDICAL_RVK_OPTIONS_BLOCK = 'professional.medical.rvk.quick_options';
 const MEDICAL_DIARY_REGULAR_PREFIX = 'professional.medical.diary.regular.';
 const MEDICAL_DIARY_FINAL_PREFIX = 'professional.medical.diary.final.';
@@ -21,11 +19,6 @@ interface MaterialIndexEntry {
   file_name: string;
   domain: string;
   imported_at: string;
-}
-
-interface DiaryTemplateEntry {
-  file_name: string;
-  source_path: string;
 }
 
 interface DroppedFileEntry {
@@ -69,8 +62,6 @@ export function safeKey(value: string): string {
     .replace(/\.[^.]+$/, '')
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е')
-    // Strip only a leading generic library label. Diagnosis/domain vocabulary
-    // remains untouched and belongs to profile data, never UI matching code.
     .replace(/^(?:дневники?|дневниковые|тексты?|даты|шаблоны?)[\s._—–:;,-]*/u, '')
     .replace(/[^\p{L}\p{N}]+/gu, '')
     .slice(0, 96);
@@ -180,7 +171,7 @@ export function AdditionalMaterialsPanel(props: {
         }
       }
       await saveMaterialIndex(indexEntries);
-      setStatus(`Дополнительные материалы сохранены: ${indexEntries.length}. Они доступны выбранным профессиональным профилям как specialist-owned blocks.`);
+      setStatus(`Дополнительные материалы сохранены: ${indexEntries.length}.`);
     });
   }
 
@@ -207,32 +198,7 @@ export function AdditionalMaterialsPanel(props: {
         const merged = uniqueTexts([...(previous ? [previous] : []), ...values]).join('\n\n');
         await saveClauseBlock(blockId, `Медицинские дневники: ${blockId.split('.').pop()}`, merged);
       }
-      setStatus(`Библиотека «Тексты» обновлена: ${grouped.size} диагноз-ориентированных источник(а). Медицинский генератор использует их без выдумывания текста.`);
-    });
-  }
-
-  async function importDiaryDateTemplates(files: File[]) {
-    const wordFiles = files.filter(file => /\.doc[mx]$/i.test(file.name));
-    if (!wordFiles.length) {
-      setStatus('Для «Даты» выберите DOCX/DOCM-файлы с номерами 01–31.');
-      return;
-    }
-    await withWork('Импортируем шаблоны «Даты»…', async () => {
-      const entries: DiaryTemplateEntry[] = [];
-      for (const file of wordFiles) {
-        const bytes = await readFileBytes(file);
-        const imported = await importTemplateFile(
-          `medical_diary_date_${safeKey(file.name) || Date.now()}`,
-          { fileName: file.name, bytesBase64: arrayBufferToBase64(bytes) },
-        );
-        entries.push({ file_name: file.name, source_path: imported.template_path });
-      }
-      await saveClauseBlock(
-        MEDICAL_DATE_TEMPLATES_BLOCK,
-        'Медицинские дневники · шаблоны дат 01–31',
-        JSON.stringify(entries, null, 2),
-      );
-      setStatus(`«Даты» сохранены: ${entries.length}. При создании дневников backend выберет номер по дню поступления (с совместимым D0+1 fallback).`);
+      setStatus(`«Тексты» сохранены: ${grouped.size}. Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
     });
   }
 
@@ -245,7 +211,7 @@ export function AdditionalMaterialsPanel(props: {
         `РВК · ${preset.title}`,
         JSON.stringify(preset.rvkCommissariats, null, 2),
       );
-      setStatus(`Быстрые варианты РВК сохранены для медицинского профиля: ${preset.rvkCommissariats.join(' · ')}. Ручной ввод остаётся доступен.`);
+      setStatus(`Быстрые варианты РВК сохранены: ${preset.rvkCommissariats.join(' · ')}. Ручной ввод остаётся доступен.`);
     });
   }
 
@@ -320,28 +286,9 @@ export function AdditionalMaterialsPanel(props: {
         <section className="medicalAdditionalSources" aria-label="Медицинские дневники">
           <div>
             <strong>Медицинские дневники</strong>
-            <small>Эти источники видит только медицинский профиль при выбранной роли дневников.</small>
+            <small>Как в рабочем Dokkomplekt: даты берутся из даты поступления и выписки. Отдельная папка «Даты 01–31» для обычного создания не нужна.</small>
           </div>
           <div className="medicalSourceButtons">
-            <div className="medicalSourceChoice">
-              <label className="primaryBtn fileBtn">
-                <i className="ti ti-calendar" aria-hidden="true" /> Даты
-                <input
-                  type="file"
-                  multiple
-                  accept=".docx,.docm"
-                  onChange={(event) => { void importDiaryDateTemplates(filesFrom(event)); }}
-                  disabled={working || props.busy}
-                  style={{ display: 'none' }}
-                  {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
-                />
-              </label>
-              <label className="textBtn fileBtn">
-                выбрать отдельные файлы
-                <input type="file" multiple accept=".docx,.docm" onChange={(event) => { void importDiaryDateTemplates(filesFrom(event)); }} disabled={working || props.busy} style={{ display: 'none' }} />
-              </label>
-              <small>Папка 01–31 или отдельные DOCX/DOCM. Backend сам выберет нужный дневниковый шаблон по дате поступления.</small>
-            </div>
             <div className="medicalSourceChoice">
               <label className="primaryBtn fileBtn">
                 <i className="ti ti-notes" aria-hidden="true" /> Тексты
@@ -359,7 +306,7 @@ export function AdditionalMaterialsPanel(props: {
                 выбрать отдельные файлы
                 <input type="file" multiple accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf" onChange={(event) => { void importDiaryTexts(filesFrom(event)); }} disabled={working || props.busy} style={{ display: 'none' }} />
               </label>
-              <small>Библиотека текстов сопоставляется с диагнозом лексическим matcher-ом; профессиональные синонимы находятся только в medical data pack.</small>
+              <small>Выберите папку «Тексты» или отдельные файлы. Программа сопоставит текст с диагнозом, спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
             </div>
           </div>
         </section>

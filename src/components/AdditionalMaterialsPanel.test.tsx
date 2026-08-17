@@ -19,11 +19,13 @@ describe('AdditionalMaterialsPanel', () => {
     expect(screen.queryByText('Медицинские дневники')).toBeNull();
   });
 
-  it('shows Dates and Texts only for the selected medical diary role', () => {
+  it('uses the donor program calendar and asks only for Texts in the normal diary flow', () => {
     render(<AdditionalMaterialsPanel documents={[medicalDiary, legal]} selectedDocumentIds={['diary']} busy={false} />);
     expect(screen.getByText('Медицинские дневники')).toBeTruthy();
-    expect(screen.getByText('Даты')).toBeTruthy();
     expect(screen.getByText('Тексты')).toBeTruthy();
+    expect(screen.queryByText('Даты')).toBeNull();
+    expect(screen.getByText(/Отдельная папка «Даты 01–31» для обычного создания не нужна/)).toBeTruthy();
+    expect(screen.getByText(/сама построит календарь D0\+1 → выписка/)).toBeTruthy();
   });
 
   it('normalizes source names without embedding psychiatric aliases in UI logic', () => {

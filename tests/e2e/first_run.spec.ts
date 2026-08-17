@@ -30,6 +30,8 @@ async function installTauriMock(page: Page) {
             return [];
           case 'update_background_watcher_preferences':
             return true;
+          case 'pick_folder':
+            return { selected_path: '/tmp/dokkomplekt-e2e-output' };
           case 'pick_template_files':
             return { files: [{ file_name: 'Счёт на оплату.docx', template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' }] };
           case 'import_template_file':
@@ -66,8 +68,10 @@ async function installTauriMock(page: Page) {
 async function completeFolderNamingOnboarding(page: Page) {
   const dialog = page.getByRole('dialog', { name: 'Как называть папку комплекта?' });
   await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Выбрать папку на компьютере' }).click();
+  await expect(dialog.getByTestId('output-root-choice')).toContainText('/tmp/dokkomplekt-e2e-output');
   await dialog.getByRole('button', { name: /Человек \+ месяц/ }).click();
-  await dialog.getByRole('button', { name: 'Сохранить правило' }).click();
+  await dialog.getByRole('button', { name: 'Сохранить папку и правило' }).click();
   await expect(dialog).toBeHidden();
 }
 
@@ -77,6 +81,7 @@ test('first run saves a naming rule before showing the create-buttons action', a
   await completeFolderNamingOnboarding(page);
   await expect(page.getByRole('button', { name: 'Создать свои кнопки' })).toBeVisible();
   await expect(page.getByText('Встроенный пример')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('dokkomplekt.output-root.v1'))).toBe('/tmp/dokkomplekt-e2e-output');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('dokkomplekt.output-folder-naming-confirmed.v1'))).toBe('true');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('dokkomplekt.output-folder-parts.v1'))).toBe(JSON.stringify(['ShortInitials', 'PeriodStartMonthName']));
 });
@@ -94,6 +99,7 @@ test('marked DOCX becomes a button without copying example facts', async ({ page
 
   const commands = await page.evaluate(() =>
     ((window as unknown as Record<string, unknown>).__E2E_CALLS__ as Array<{ command: string }>).map((c) => c.command));
+  expect(commands).toContain('pick_folder');
   expect(commands).toContain('pick_template_files');
   expect(commands).toContain('analyze_template_file');
   expect(commands).toContain('confirm_template_setup');

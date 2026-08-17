@@ -38,7 +38,7 @@ jobs:
           cargo test --locked -p dokkomplekt-core source_parser::tests
           cargo test --locked -p dokkomplekt-core --test donor_medical_source_parity
           python scripts/static_quality_gate.py --source-only
-      - name: Commit canonical implementation
+      - name: Commit canonical implementation on latest branch head
         shell: bash
         run: |
           set -euo pipefail
@@ -48,4 +48,6 @@ jobs:
           git config user.email "mailsvb2@gmail.com"
           git add -A
           git commit -m "Harden donor medical diagnosis extraction"
+          git fetch origin agent/donor-medical-source-parity-20260817
+          git rebase origin/agent/donor-medical-source-parity-20260817
           git push origin HEAD:agent/donor-medical-source-parity-20260817

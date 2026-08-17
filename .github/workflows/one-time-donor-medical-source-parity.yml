@@ -29,13 +29,16 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply donor medical source migration
-        run: python .github/agent-fixes/restore_donor_medical_source.py
+        run: |
+          python .github/agent-fixes/restore_donor_medical_source.py
+          python .github/agent-fixes/fix_donor_treatment_boundary.py
       - name: Format and test donor medical source contract
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt --all
           cargo test --locked -p dokkomplekt-core --test donor_medical_source_parity
+          cargo test --locked -p dokkomplekt-core label_search::tests
           cargo test --locked -p dokkomplekt-core source_parser::tests
           python scripts/check_legacy_migration_inventory.py
           python scripts/static_quality_gate.py --source-only
@@ -45,6 +48,7 @@ jobs:
           set -euo pipefail
           rm -f .github/workflows/one-time-donor-medical-source-parity.yml
           rm -f .github/agent-fixes/restore_donor_medical_source.py
+          rm -f .github/agent-fixes/fix_donor_treatment_boundary.py
           git config user.name "BusinesMetro"
           git config user.email "mailsvb2@gmail.com"
           git add -A

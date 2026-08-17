@@ -31,7 +31,7 @@ async function installTauriMock(page: Page) {
           case 'update_background_watcher_preferences':
             return true;
           case 'pick_folder':
-            return '/tmp/dokkomplekt-e2e-output';
+            return { selected_path: '/tmp/dokkomplekt-e2e-output' };
           case 'pick_template_files':
             return { files: [{ file_name: 'Счёт на оплату.docx', template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' }] };
           case 'import_template_file':

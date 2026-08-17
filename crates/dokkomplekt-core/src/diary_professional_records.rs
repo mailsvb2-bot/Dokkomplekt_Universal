@@ -245,10 +245,12 @@ mod tests {
             .iter()
             .filter(|row| record_bool(row, "is_dynamic_epicrisis"))
             .collect::<Vec<_>>();
-        assert_eq!(dynamic.len(), 2);
+        assert_eq!(dynamic.len(), 3);
         assert_eq!(row_date(dynamic[0]), "20.05.2026");
         // 30.05.2026 is Saturday, therefore the donor shifts it to Monday 01.06.2026.
         assert_eq!(row_date(dynamic[1]), "01.06.2026");
+        // The donor cadence remains anchored to +10 days, so +30 is 09.06 before discharge.
+        assert_eq!(row_date(dynamic[2]), "09.06.2026");
         let ordered_dates = rows.iter().filter_map(row_sort_date).collect::<Vec<_>>();
         let mut sorted_dates = ordered_dates.clone();
         sorted_dates.sort();

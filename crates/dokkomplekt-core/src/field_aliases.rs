@@ -30,6 +30,16 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
         }
         "rvk_referral" => "medical.rvk_referral".into(),
         "epidemiology" => "medical.epidemiology".into(),
+        "expert_work_org" | "expert.work_org" => "medical.workplace".into(),
+        "expert_position" | "expert.position" => "medical.position".into(),
+        "expert_sick_leave_number" | "expert.sick_leave_number" => {
+            "medical.sick_leave_number".into()
+        }
+        "expert_sick_leave_from" | "expert.sick_leave_from" => "medical.sick_leave_from".into(),
+        "expert_sick_leave_needed" | "expert.sick_leave_needed" => {
+            "medical.sick_leave_needed".into()
+        }
+        "expert_anamnesis" | "expert.anamnesis" => "medical.expert_anamnesis".into(),
         "status.objective" | "status.somatic" | "somatic_status" => "medical.somatic_status".into(),
         "status.profile" | "status.mental" | "mental_status" => "medical.profile_status".into(),
         "examination.plan" | "examination_plan" => "medical.examination_plan".into(),
@@ -114,6 +124,28 @@ pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
         ],
         "medical.rvk_referral" => &["medical.rvk_referral", "rvk_referral"],
         "medical.epidemiology" => &["medical.epidemiology", "epidemiology"],
+        "medical.workplace" => &["medical.workplace", "expert_work_org", "expert.work_org"],
+        "medical.position" => &["medical.position", "expert_position", "expert.position"],
+        "medical.sick_leave_number" => &[
+            "medical.sick_leave_number",
+            "expert_sick_leave_number",
+            "expert.sick_leave_number",
+        ],
+        "medical.sick_leave_from" => &[
+            "medical.sick_leave_from",
+            "expert_sick_leave_from",
+            "expert.sick_leave_from",
+        ],
+        "medical.sick_leave_needed" => &[
+            "medical.sick_leave_needed",
+            "expert_sick_leave_needed",
+            "expert.sick_leave_needed",
+        ],
+        "medical.expert_anamnesis" => &[
+            "medical.expert_anamnesis",
+            "expert_anamnesis",
+            "expert.anamnesis",
+        ],
         "medical.somatic_status" => &[
             "medical.somatic_status",
             "status.objective",

@@ -503,6 +503,30 @@ pub fn medical_fields() -> Vec<FieldDefinition> {
             &["Должность", "position"],
         ),
         field(
+            "medical.sick_leave_needed",
+            "Нужен больничный лист",
+            DomainKind::Medical,
+            false,
+            &[
+                "expert.sick_leave_needed",
+                "expert_sick_leave_needed",
+                "Нужен больничный",
+                "Больничный лист нужен",
+            ],
+        ),
+        field(
+            "medical.expert_anamnesis",
+            "Экспертный анамнез",
+            DomainKind::Medical,
+            false,
+            &[
+                "expert.anamnesis",
+                "expert_anamnesis",
+                "expertAnamnesis",
+                "Экспертный анамнез",
+            ],
+        ),
+        field(
             "medical.attending_doctor",
             "Лечащий врач",
             DomainKind::Medical,

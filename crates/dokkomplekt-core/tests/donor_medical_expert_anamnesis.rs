@@ -1,6 +1,6 @@
 use dokkomplekt_core::domains::medical_semantics::{
-    case_for_medical_document_render, set_medical_sick_leave_choice,
-    MEDICAL_EXPERT_ANAMNESIS, MEDICAL_SICK_LEAVE_NEEDED,
+    case_for_medical_document_render, set_medical_sick_leave_choice, MEDICAL_EXPERT_ANAMNESIS,
+    MEDICAL_SICK_LEAVE_NEEDED,
 };
 use dokkomplekt_core::{
     build_medical_render_plan, medical_fields, MedicalDocumentRole, SemanticCase, SemanticValue,

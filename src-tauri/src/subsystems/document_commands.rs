@@ -1111,6 +1111,12 @@ fn apply_popup(
         let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
             snapshot.semantic_case = result.semantic_case.clone();
+            if doc.category == dokkomplekt_core::DomainKind::Medical {
+                dokkomplekt_core::domains::medical_semantics::set_medical_sick_leave_choice(
+                    &mut snapshot.semantic_case,
+                    req.sick_leave_enabled,
+                );
+            }
         }
         let changed = result.accepted;
         Ok((result, changed))
@@ -1158,6 +1164,15 @@ fn apply_popup_batch(
         let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
             snapshot.semantic_case = result.semantic_case.clone();
+            if documents
+                .iter()
+                .any(|document| document.category == dokkomplekt_core::DomainKind::Medical)
+            {
+                dokkomplekt_core::domains::medical_semantics::set_medical_sick_leave_choice(
+                    &mut snapshot.semantic_case,
+                    req.sick_leave_enabled,
+                );
+            }
         }
         let changed = result.accepted;
         Ok((result, changed))

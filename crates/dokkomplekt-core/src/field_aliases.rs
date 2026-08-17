@@ -25,6 +25,11 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
         "complaints" | "medical.complaints_text" => "medical.complaints".into(),
         "anamnesis.disease" | "disease_anamnesis" => "medical.anamnesis_disease".into(),
         "anamnesis.life" | "life_anamnesis" => "medical.anamnesis_life".into(),
+        "profile_observation" | "psych_account" | "medical.psych_account" => {
+            "medical.profile_observation".into()
+        }
+        "rvk_referral" => "medical.rvk_referral".into(),
+        "epidemiology" => "medical.epidemiology".into(),
         "status.objective" | "status.somatic" | "somatic_status" => "medical.somatic_status".into(),
         "status.profile" | "status.mental" | "mental_status" => "medical.profile_status".into(),
         "examination.plan" | "examination_plan" => "medical.examination_plan".into(),
@@ -101,6 +106,14 @@ pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
             "disease_anamnesis",
         ],
         "medical.anamnesis_life" => &["medical.anamnesis_life", "anamnesis.life", "life_anamnesis"],
+        "medical.profile_observation" => &[
+            "medical.profile_observation",
+            "profile_observation",
+            "psych_account",
+            "medical.psych_account",
+        ],
+        "medical.rvk_referral" => &["medical.rvk_referral", "rvk_referral"],
+        "medical.epidemiology" => &["medical.epidemiology", "epidemiology"],
         "medical.somatic_status" => &[
             "medical.somatic_status",
             "status.objective",

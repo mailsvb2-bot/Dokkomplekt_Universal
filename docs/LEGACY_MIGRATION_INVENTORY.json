@@ -169,6 +169,26 @@
           "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
         },
         {
+          "path": "medical_models.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/field_registry.rs",
+            "crates/dokkomplekt-core/src/domains/medical.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_profile_facts.rs"
+          ],
+          "note": "Donor PatientData profile facts are scoped to the Medical domain. Generic bare `disability` remains profession-neutral rather than becoming a global medical alias."
+        },
+        {
+          "path": "medical_parser.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/source_parser.rs",
+            "crates/dokkomplekt-core/src/field_aliases.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_profile_facts.rs"
+          ],
+          "note": "Donor profile observation, disability, epidemiology and explicit RVK-referral labels are represented in canonical Rust. Bare `РВК` is intentionally excluded because Universal already uses it for commissariat requisites."
+        },
+        {
           "path": "medical_parser_blocks.py",
           "status": "migrated-domain-profile",
           "targets": [
@@ -187,15 +207,6 @@
           "note": "Template/service instructions are removed from medical source values while legitimate clinician text is preserved."
         },
         {
-          "path": "medical_text_utils.py",
-          "status": "migrated-domain-profile",
-          "targets": [
-            "crates/dokkomplekt-core/src/source_parser.rs",
-            "crates/dokkomplekt-core/tests/donor_medical_template_noise.rs"
-          ],
-          "note": "Donor service markers and exact option placeholders are sanitized in the canonical Rust source parser."
-        },
-        {
           "path": "medical_renderer_labs.py",
           "status": "migrated-domain-profile",
           "targets": [
@@ -204,6 +215,15 @@
             "crates/dokkomplekt-core/src/field_aliases.rs"
           ],
           "note": "Explicit laboratory results/date/source semantics are migrated without synthetic medical-result generation."
+        },
+        {
+          "path": "medical_text_utils.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/source_parser.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_template_noise.rs"
+          ],
+          "note": "Donor service markers and exact option placeholders are sanitized in the canonical Rust source parser."
         },
         {
           "path": "start_windows_no_console.vbs",

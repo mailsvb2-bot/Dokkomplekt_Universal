@@ -9,10 +9,7 @@ fn donor_profile_observation_disability_and_rvk_referral_are_preserved() {
         case.get("medical.profile_observation"),
         Some("состоит с 2021 года")
     );
-    assert_eq!(
-        case.get("medical.disability"),
-        Some("II группа бессрочно")
-    );
+    assert_eq!(case.get("medical.disability"), Some("II группа бессрочно"));
     assert_eq!(
         case.get("medical.rvk_referral"),
         Some("Нижегородского района")

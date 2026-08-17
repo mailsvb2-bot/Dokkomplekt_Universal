@@ -1,16 +1,22 @@
 // Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
 
 const MEDICAL_RVK_OPTIONS_BLOCK_ID: &str = "professional.medical.rvk.quick_options";
-const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v2";
+const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v3";
 const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str = concat!(
     "{{#each diaries}}\n",
-    "{{diary.datetime}} {{#if diary.is_final}}",
-    "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. ",
-    "Общее самочувствие стабильное, режим соблюдает, назначения выполняет. ",
-    "На текущую дату оформлена выписка из стационара. Даны рекомендации",
+    "{{diary.datetime}} ",
+    "{{#if diary.is_dynamic_epicrisis}}",
+    "{{diary.text}}\n",
+    "{{else}}",
+    "{{#if diary.is_final}}",
+    "Состояние удовлетворительное. Жалоб не предъявляет. Настроение ровное. ",
+    "Выраженных психотических расстройств на момент осмотра не выявляет. ",
+    "Сон и аппетит удовлетворительные. Критика к состоянию сохранена. ",
+    "Подготовлен к выписке. Рекомендовано продолжить лечение и наблюдение по месту жительства.",
     "{{else}}{{diary.text}}{{/if}}\n",
     "{{diary.treating_physician_signature}}\n",
     "{{diary.department_head_signature}}\n",
+    "{{/if}}\n",
     "\n",
     "{{/each}}\n",
 );
@@ -56,10 +62,10 @@ fn apply_profile_prompt_overrides(
         }
     }
 
-    // The working donor applications ask the doctor only for the diary style and
-    // intraday rhythm. They do not introduce a third/fourth mandatory wizard step
-    // for a time window. Keep the generic series engine bounded internally while
-    // preserving exactly those two user-facing confirmations. The frontend keeps
+    // The working donor applications ask the doctor for diary decisions (style,
+    // intraday rhythm and the sick-leave/dynamic-epicrisis choice), but they do not
+    // introduce separate mandatory questions for the technical time window. Keep the
+    // generic series engine bounded internally. The frontend keeps
     // these internal prompts hidden but still submits their current values, so the
     // backend remains the single source of truth.
     let is_diary_plan = plan
@@ -134,6 +140,7 @@ fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, St
                 text.contains("{{#each diaries}}")
                     && text.contains("{{diary.datetime}}")
                     && text.contains("{{diary.text}}")
+                    && text.contains("{{diary.is_dynamic_epicrisis}}")
                     && text.contains("{{diary.treating_physician_signature}}")
                     && text.contains("{{diary.department_head_signature}}")
             })

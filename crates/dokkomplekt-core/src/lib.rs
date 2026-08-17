@@ -15,6 +15,9 @@ pub mod created_documents;
 pub mod data_schema_engine;
 pub mod date_parser;
 pub mod diary_engine;
+pub mod diary_epicrisis;
+pub mod diary_popup_profile;
+pub mod diary_professional_records;
 pub mod document_generation;
 pub mod document_routing;
 pub mod domain_plugin_layer;
@@ -72,6 +75,7 @@ pub use data_schema_engine::{
 };
 pub use date_parser::*;
 pub use diary_engine::*;
+pub use diary_epicrisis::*;
 pub use document_generation::*;
 pub use document_routing::*;
 pub use domain_plugin_layer::{
@@ -104,9 +108,14 @@ pub use output_engine::*;
 pub use output_naming::*;
 pub use popup_engine::*;
 pub use popup_profiles::*;
+pub use diary_popup_profile::{
+    default_popup_fields_for_document, effective_popup_fields, profession_runtime_control_fields,
+    DIARY_SICK_LEAVE_EPICRISIS, DIARY_TREATMENT_CORRECTION,
+};
 pub use print_triage::*;
 pub use priority::*;
 pub use professional_records::*;
+pub use diary_professional_records::prepare_professional_collections;
 pub use record_series::*;
 pub use rewrite_audit::*;
 pub use scanner_engine::*;

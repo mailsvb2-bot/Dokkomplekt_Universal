@@ -27,10 +27,19 @@ interface GenerationPreflightModalProps {
 export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
   const selected = props.documents.filter((document) => props.selectedDocumentIds.includes(document.id));
   const prompts = props.plan.prompts;
+  const promptById = new Map(prompts.map((prompt) => [prompt.field_id, prompt]));
+  const affirmative = (value: string) => ['да', 'yes', 'true', '1', '+', 'нужен', 'нужна'].includes(value.trim().toLowerCase().replaceAll('ё', 'е'));
+  const visibleByLink = (prompt: PromptSpec) => {
+    if (!prompt.linked_to) return true;
+    const source = promptById.get(prompt.linked_to);
+    if (source?.input_kind !== 'yes_no') return true;
+    return affirmative(props.answers[source.field_id] ?? source.current_value ?? '');
+  };
   // These values are backend-owned bounds for the generic repeated-record engine.
   // They remain in the WorkflowPlan and are submitted by useGenerationPreflight,
-  // but are not extra user questions. The donor diary wizard asks only style + rhythm.
-  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id));
+  // but are not extra user questions. Donor-facing choices stay in the WorkflowPlan; only these
+  // technical bounds are hidden from the specialist.
+  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id) && visibleByLink(prompt));
   const sections = visiblePrompts.reduce<Array<{ title: string; prompts: PromptSpec[] }>>((groups, prompt) => {
     const title = prompt.section?.trim() || 'Данные документа';
     const existing = groups.find((group) => group.title === title);
@@ -46,6 +55,9 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
       const next = { ...previous, [prompt.field_id]: value };
       for (const linkedPrompt of prompts) {
         if (linkedPrompt.linked_to !== prompt.field_id) continue;
+        // A linked field whose source is Yes/No is a generic visibility dependency. It must not
+        // receive the literal source value ("Да"/"Нет"). Date-to-date links keep copy behavior.
+        if (prompt.input_kind === 'yes_no') continue;
         const linkedCurrent = previous[linkedPrompt.field_id] ?? linkedPrompt.current_value ?? '';
         if (!linkedCurrent || linkedCurrent === previousSourceValue) next[linkedPrompt.field_id] = value;
       }

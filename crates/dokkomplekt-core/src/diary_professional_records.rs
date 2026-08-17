@@ -250,7 +250,9 @@ mod tests {
         // 30.05.2026 is Saturday, therefore the donor shifts it to Monday 01.06.2026.
         assert_eq!(row_date(dynamic[1]), "01.06.2026");
         let ordered_dates = rows.iter().filter_map(row_sort_date).collect::<Vec<_>>();
-        assert!(ordered_dates.windows(2).all(|pair| pair[0] <= pair[1]));
+        let mut sorted_dates = ordered_dates.clone();
+        sorted_dates.sort();
+        assert_eq!(ordered_dates, sorted_dates);
         let same_day = rows
             .iter()
             .filter(|row| row_date(row) == "20.05.2026")

@@ -169,6 +169,33 @@
           "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
         },
         {
+          "path": "medical_parser_blocks.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/source_parser.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_template_noise.rs"
+          ],
+          "note": "Donor medical section-boundary behavior is represented by canonical Rust label boundaries and regression tests; no parallel Python parser is shipped."
+        },
+        {
+          "path": "medical_parser_sanitize.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/source_parser.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_template_noise.rs"
+          ],
+          "note": "Template/service instructions are removed from medical source values while legitimate clinician text is preserved."
+        },
+        {
+          "path": "medical_text_utils.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/source_parser.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_template_noise.rs"
+          ],
+          "note": "Donor service markers and exact option placeholders are sanitized in the canonical Rust source parser."
+        },
+        {
           "path": "medical_renderer_labs.py",
           "status": "migrated-domain-profile",
           "targets": [

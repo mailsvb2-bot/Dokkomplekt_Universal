@@ -772,6 +772,31 @@ fn medical_rules() -> Vec<LabelRule> {
             multiline: true,
         },
         LabelRule {
+            field: "medical.epidemiology",
+            labels: &["Эпидемиологический анамнез", "Wywiad epidemiologiczny"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.profile_observation",
+            labels: &[
+                "Профильное наблюдение",
+                "Диспансерное наблюдение",
+                "На учёте у психиатров",
+                "На учете у психиатров",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.disability",
+            labels: &["Оформление инвалидности", "Инвалидность"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.rvk_referral",
+            labels: &["Направление от РВК", "Направление РВК"],
+            multiline: false,
+        },
+        LabelRule {
             field: "medical.profile_status",
             labels: &[
                 "Профильный статус при поступлении",

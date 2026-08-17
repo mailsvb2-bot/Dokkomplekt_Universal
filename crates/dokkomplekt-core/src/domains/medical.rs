@@ -115,6 +115,34 @@ pub fn medical_profile() -> MedicalProfile {
                 required: false,
             },
             FieldExtractionRule {
+                field_id: "medical.epidemiology".into(),
+                aliases: vec![
+                    "Эпидемиологический анамнез".into(),
+                    "Wywiad epidemiologiczny".into(),
+                ],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.profile_observation".into(),
+                aliases: vec![
+                    "Профильное наблюдение".into(),
+                    "Диспансерное наблюдение".into(),
+                    "На учёте у психиатров".into(),
+                    "На учете у психиатров".into(),
+                ],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.disability".into(),
+                aliases: vec!["Оформление инвалидности".into(), "Инвалидность".into()],
+                required: false,
+            },
+            FieldExtractionRule {
+                field_id: "medical.rvk_referral".into(),
+                aliases: vec!["Направление от РВК".into(), "Направление РВК".into()],
+                required: false,
+            },
+            FieldExtractionRule {
                 field_id: "medical.somatic_status".into(),
                 aliases: vec!["Соматический статус".into(), "Объективный статус".into()],
                 required: false,

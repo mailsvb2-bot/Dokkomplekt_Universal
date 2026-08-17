@@ -1,0 +1,50 @@
+name: Agent apply PR144 donor profile facts
+
+on:
+  push:
+    branches:
+      - agent/donor-medical-profile-facts-20260818
+    paths:
+      - .github/workflows/agent-apply-pr144.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/donor-medical-profile-facts-20260818
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply donor medical profile facts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/agent_apply_pr144.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          python3 scripts/check_legacy_migration_inventory.py
+          cargo test -p dokkomplekt-core --test donor_medical_profile_facts
+          cargo test -p dokkomplekt-core --test donor_medical_template_noise
+          cargo test -p dokkomplekt-core --test donor_medical_source_parity
+          rm scripts/agent_apply_pr144.py
+          rm .github/workflows/agent-apply-pr144.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/dokkomplekt-core/src/source_parser.rs \
+                  crates/dokkomplekt-core/src/field_registry.rs \
+                  crates/dokkomplekt-core/src/field_aliases.rs \
+                  crates/dokkomplekt-core/src/domains/medical.rs \
+                  crates/dokkomplekt-core/tests/donor_medical_profile_facts.rs \
+                  docs/LEGACY_MIGRATION_INVENTORY.json \
+                  scripts/agent_apply_pr144.py \
+                  .github/workflows/agent-apply-pr144.yml
+          git diff --cached --check
+          git commit -m "Restore donor medical profile facts"
+          git push origin HEAD:agent/donor-medical-profile-facts-20260818

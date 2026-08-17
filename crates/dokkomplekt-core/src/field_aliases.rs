@@ -11,7 +11,8 @@
 pub fn canonical_storage_field_id(raw: &str) -> String {
     let field = raw.trim();
     match field {
-        "medical.diagnosis_code" => "medical.icd10".into(),
+        "diagnosis.main" => "medical.diagnosis".into(),
+        "diagnosis.icd10" | "icd10" | "medical.diagnosis_code" => "medical.icd10".into(),
         "organization.name" => "org.name".into(),
         "organization.inn" | "accounting.inn" | "company.inn" => "org.inn".into(),
         "organization.kpp" | "accounting.kpp" | "company.kpp" => "org.kpp".into(),
@@ -55,7 +56,13 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
 /// Every historical storage id that is equivalent to the requested field.
 pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
     match canonical_storage_field_id(raw).as_str() {
-        "medical.icd10" => &["medical.icd10", "medical.diagnosis_code"],
+        "medical.diagnosis" => &["medical.diagnosis", "diagnosis.main"],
+        "medical.icd10" => &[
+            "medical.icd10",
+            "medical.diagnosis_code",
+            "diagnosis.icd10",
+            "icd10",
+        ],
         "org.name" => &["org.name", "organization.name"],
         "org.inn" => &[
             "org.inn",

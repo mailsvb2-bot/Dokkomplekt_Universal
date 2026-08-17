@@ -124,6 +124,7 @@ pub fn medical_fields() -> Vec<FieldDefinition> {
             false,
             &[
                 "diagnosis",
+                "diagnosis.main",
                 "mainDiagnosis",
                 "diagnosisMain",
                 "Диагноз",
@@ -137,6 +138,7 @@ pub fn medical_fields() -> Vec<FieldDefinition> {
             false,
             &[
                 "icd_code",
+                "diagnosis.icd10",
                 "diagnosisCode",
                 "ICD-10",
                 "MKB-10",

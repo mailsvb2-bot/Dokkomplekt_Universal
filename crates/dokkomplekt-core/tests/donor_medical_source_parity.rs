@@ -35,10 +35,68 @@ fn donor_expansion_preserves_preexisting_russian_medical_aliases() {
 }
 
 #[test]
+fn donor_patient_name_drops_demographic_tail_but_preserves_initials() {
+    for (source, expected) in [
+        (
+            "Пациентка: Петрова Анна Сергеевна, 1975 г.р.",
+            "Петрова Анна Сергеевна",
+        ),
+        (
+            "Пациент: Иванов Иван Иванович, 1980 года рождения, пол мужской.",
+            "Иванов Иван Иванович",
+        ),
+        (
+            "Пациент: Кузнецова-Смирнова Ольга Викторовна 1990 г.р.",
+            "Кузнецова-Смирнова Ольга Викторовна",
+        ),
+        ("ФИО: Сидоров П.К.", "Сидоров П.К."),
+    ] {
+        let (case, _) = parse_source_text(source, 2026);
+        assert_eq!(case.get("subject.name"), Some(expected), "source {source}");
+    }
+}
+
+#[test]
+fn donor_diagnosis_exposes_only_explicit_catalogued_icd_code() {
+    let (case, _) = parse_source_text("История болезни № 42\nДиагноз: K35 Острый аппендицит", 2026);
+    assert_eq!(case.get("medical.diagnosis"), Some("K35 Острый аппендицит"));
+    assert_eq!(case.get("medical.icd10"), Some("K35"));
+
+    let (case, _) = parse_source_text(
+        "История болезни № 43\nДиагноз: unmapped local wording",
+        2026,
+    );
+    assert_eq!(
+        case.get("medical.diagnosis"),
+        Some("unmapped local wording")
+    );
+    assert_eq!(case.get("medical.icd10"), None);
+}
+
+#[test]
+fn donor_single_line_dates_bind_to_their_own_markers() {
+    let (case, _) = parse_source_text(
+        "Дата рождения: 05.05.1980. Дата поступления: 10.02.2026. Выписан: 20.02.2026.",
+        2026,
+    );
+    assert_eq!(case.get("medical.admission_date"), Some("10.02.2026"));
+    assert_eq!(case.get("medical.discharge_date"), Some("20.02.2026"));
+
+    let (case, _) = parse_source_text(
+        "История болезни № 44\nПоступил 10.02.2026, выписан 20.02.2026.",
+        2026,
+    );
+    assert_eq!(case.get("medical.admission_date"), Some("10.02.2026"));
+    assert_eq!(case.get("medical.discharge_date"), Some("20.02.2026"));
+}
+
+#[test]
 fn historical_medical_placeholders_resolve_to_current_schema() {
     let medical = Some(&DomainKind::Medical);
     for (legacy, canonical) in [
         ("patient.age", "subject.age"),
+        ("diagnosis.main", "medical.diagnosis"),
+        ("diagnosis.icd10", "medical.icd10"),
         ("complaints", "medical.complaints"),
         ("anamnesis.disease", "medical.anamnesis_disease"),
         ("anamnesis.life", "medical.anamnesis_life"),

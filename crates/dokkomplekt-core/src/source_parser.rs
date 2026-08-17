@@ -100,6 +100,13 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
                 );
             }
         }
+        if case.get("medical.icd10").is_none() {
+            if let Some(diagnosis) = case.get("medical.diagnosis").map(str::to_owned) {
+                if let Some(code) = extract_explicit_icd10_from_diagnosis(&diagnosis) {
+                    put(&mut case, &mut report, "medical.icd10", &code, 0.90);
+                }
+            }
+        }
         mirror_medical_to_generic(&mut case, &mut report);
     }
 
@@ -122,6 +129,20 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
     for warning in engine_report.warnings {
         if !report.warnings.contains(&warning) {
             report.warnings.push(warning);
+        }
+    }
+
+    // Multiple deterministic extractors may identify the same person name with
+    // different confidence. Normalize the canonical value only after all source
+    // extractors have merged so a high-confidence generic match cannot preserve
+    // a demographic tail such as `, 1975 г.р.` in document headers/folder names.
+    if let Some(current_name) = case.get("subject.name").map(str::to_owned) {
+        if let Some(cleaned_name) = sanitize_subject_name(&current_name) {
+            if cleaned_name != current_name {
+                if let Some(value) = case.values.get_mut("subject.name") {
+                    value.value = cleaned_name;
+                }
+            }
         }
     }
 
@@ -1234,6 +1255,9 @@ fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<
     if field == "medical.diagnosis" {
         return sanitize_medical_diagnosis(value);
     }
+    if field == "subject.name" {
+        return sanitize_subject_name(value);
+    }
     if field.ends_with(".date") || field.ends_with("_date") {
         return parse_flexible_date(value, default_year);
     }
@@ -1265,6 +1289,68 @@ fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<
             .filter(|number| !number.is_empty());
     }
     None
+}
+
+fn sanitize_subject_name(value: &str) -> Option<String> {
+    let cleaned = clean_value(value);
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut end = cleaned.len();
+    if let Some(index) = cleaned.find(',') {
+        end = end.min(index);
+    }
+    if let Some((index, _)) = cleaned.char_indices().find(|(_, ch)| ch.is_ascii_digit()) {
+        end = end.min(index);
+    }
+    let name = cleaned[..end]
+        .trim()
+        .trim_end_matches(|ch: char| matches!(ch, ',' | ';' | ':'))
+        .trim();
+    if name.is_empty() {
+        return None;
+    }
+    let mut normalized = name.to_string();
+    if russian_initial_pair_missing_terminal_dot(&normalized) {
+        normalized.push('.');
+    }
+    Some(normalized)
+}
+
+fn russian_initial_pair_missing_terminal_dot(value: &str) -> bool {
+    let Some(last) = value.split_whitespace().last() else {
+        return false;
+    };
+    let chars = last.chars().collect::<Vec<_>>();
+    chars.len() == 3
+        && chars[0].is_alphabetic()
+        && chars[0].is_uppercase()
+        && chars[1] == '.'
+        && chars[2].is_alphabetic()
+        && chars[2].is_uppercase()
+}
+
+fn extract_explicit_icd10_from_diagnosis(value: &str) -> Option<String> {
+    let token = value
+        .split_whitespace()
+        .next()?
+        .trim_matches(|ch: char| matches!(ch, '(' | ')' | '[' | ']' | ',' | ';' | ':' | '-'))
+        .to_ascii_uppercase();
+    let bytes = token.as_bytes();
+    let shape_ok = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || *byte == b'.');
+    if !shape_ok {
+        return None;
+    }
+    crate::search_icd10(&token, 1)
+        .into_iter()
+        .find(|row| row.code.eq_ignore_ascii_case(&token))
+        .map(|row| row.code)
 }
 
 fn sanitize_medical_diagnosis(value: &str) -> Option<String> {

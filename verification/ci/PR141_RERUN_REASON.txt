@@ -1,0 +1,6 @@
+PR #141 CI rerun trigger after canonical source-manifest synchronization.
+
+Reason: Source Provenance auto-committed SOURCE_MANIFEST_SHA256.txt after the folder-picker E2E mock contract fix. GitHub marked workflows created from that bot commit as action_required and created no jobs. This human/app-authored commit changes only excluded mutable verification evidence so the source manifest remains valid while pull_request synchronize starts the required checks on the exact updated tree.
+
+Functional fix commit: 1341ab0aea47b52fe3f85a57dd2e34e6755f0053
+Manifest synchronization commit: ffc1a8d495104cfaa88af50ec3ad2829ec25f577

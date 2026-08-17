@@ -151,9 +151,13 @@ mod tests {
 
     #[test]
     fn every_ten_days_moves_forward_to_donor_working_day_and_stays_before_discharge() {
-        // 20.05.2026 is Wednesday; 30.05.2026 is Saturday and shifts to Monday 01.06.
+        // Donor cadence stays anchored to the original +10-day counter: 20.05, 30.05, 09.06.
+        // 30.05.2026 is Saturday and shifts to Monday 01.06; 09.06 remains before discharge.
         let dates = dynamic_epicrisis_dates(d("10.05.2026"), Some(d("10.06.2026")), 12);
-        assert_eq!(dates, vec![d("20.05.2026"), d("01.06.2026")]);
+        assert_eq!(
+            dates,
+            vec![d("20.05.2026"), d("01.06.2026"), d("09.06.2026")]
+        );
     }
 
     #[test]

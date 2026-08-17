@@ -25,6 +25,7 @@ jobs:
       - name: Apply donor sanitizer and targeted regressions
         shell: bash
         run: |
+          # The regression file is already canonical; this runner mutates only product code + inventory.
           python3 scripts/agent_apply_pr143.py
           cargo fmt --all
           cargo fmt --all --check

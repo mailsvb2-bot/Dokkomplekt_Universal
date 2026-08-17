@@ -25,6 +25,16 @@ fn compact_primary_populates_donor_clinical_fields_without_bleed() {
 }
 
 #[test]
+fn donor_expansion_preserves_preexisting_russian_medical_aliases() {
+    let text = "История болезни № 41\nПоступил: 01.06.2026\nВыписан: 10.06.2026\nРаботает: ООО Ромашка\nв должности: инженер\nДиагноз: J20 Острый бронхит";
+    let (case, _) = parse_source_text(text, 2026);
+    assert_eq!(case.get("medical.admission_date"), Some("01.06.2026"));
+    assert_eq!(case.get("medical.discharge_date"), Some("10.06.2026"));
+    assert_eq!(case.get("medical.workplace"), Some("ООО Ромашка"));
+    assert_eq!(case.get("medical.position"), Some("инженер"));
+}
+
+#[test]
 fn historical_medical_placeholders_resolve_to_current_schema() {
     let medical = Some(&DomainKind::Medical);
     for (legacy, canonical) in [

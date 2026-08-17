@@ -695,6 +695,8 @@ fn medical_rules() -> Vec<LabelRule> {
             labels: &[
                 "Дата поступления",
                 "Дата госпитализации",
+                "Поступил",
+                "Поступила",
                 "Data przyjęcia",
                 "Data przyjecia",
                 "Data hospitalizacji",
@@ -703,7 +705,7 @@ fn medical_rules() -> Vec<LabelRule> {
         },
         LabelRule {
             field: "medical.discharge_date",
-            labels: &["Дата выписки", "Data wypisu"],
+            labels: &["Дата выписки", "Выписан", "Выписана", "Data wypisu"],
             multiline: false,
         },
         LabelRule {
@@ -846,6 +848,7 @@ fn medical_rules() -> Vec<LabelRule> {
                 "Работает в организации",
                 "Место работы",
                 "Работа",
+                "Работает",
                 "Miejsce pracy",
                 "Zakład pracy",
                 "Zaklad pracy",
@@ -854,7 +857,7 @@ fn medical_rules() -> Vec<LabelRule> {
         },
         LabelRule {
             field: "medical.position",
-            labels: &["Должность", "Stanowisko", "Zawód", "Zawod"],
+            labels: &["Должность", "в должности", "Stanowisko", "Zawód", "Zawod"],
             multiline: false,
         },
         LabelRule {

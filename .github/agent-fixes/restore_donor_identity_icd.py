@@ -39,10 +39,26 @@ helper = '''fn sanitize_subject_name(value: &str) -> Option<String> {
         .trim_end_matches(|ch: char| matches!(ch, ',' | ';' | ':'))
         .trim();
     if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
+        return None;
     }
+    let mut normalized = name.to_string();
+    if russian_initial_pair_missing_terminal_dot(&normalized) {
+        normalized.push('.');
+    }
+    Some(normalized)
+}
+
+fn russian_initial_pair_missing_terminal_dot(value: &str) -> bool {
+    let Some(last) = value.split_whitespace().last() else {
+        return false;
+    };
+    let chars = last.chars().collect::<Vec<_>>();
+    chars.len() == 3
+        && chars[0].is_alphabetic()
+        && chars[0].is_uppercase()
+        && chars[1] == '.'
+        && chars[2].is_alphabetic()
+        && chars[2].is_uppercase()
 }
 
 fn extract_explicit_icd10_from_diagnosis(value: &str) -> Option<String> {

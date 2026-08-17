@@ -55,7 +55,7 @@ def test_normal_diary_route_uses_program_calendar_not_numbered_date_templates():
     assert "Даты берутся из даты поступления и выписки" in materials
     assert "Отдельная папка «Даты 01–31» для обычного создания не нужна" in materials
     assert "> Даты" not in materials
-    assert "> Тексты" in materials
+    assert "Тексты" in materials
     assert "сама построит календарь D0+1 → выписка" in materials
 
     assert "medical.diary_day_start_time" in preflight

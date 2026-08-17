@@ -52,7 +52,7 @@ def test_normal_diary_route_uses_program_calendar_not_numbered_date_templates():
     assert "{{diary.department_head_signature}}" in profile_sources
     assert "На текущую дату оформлена выписка из стационара" in profile_sources
 
-    assert "Даты берутся из даты поступления и выписки" in materials
+    assert "даты берутся из даты поступления и выписки" in materials
     assert "Отдельная папка «Даты 01–31» для обычного создания не нужна" in materials
     assert "> Даты" not in materials
     assert "Тексты" in materials

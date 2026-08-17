@@ -34,3 +34,37 @@ def test_diary_popup_is_fail_closed_and_donor_style_is_present():
     assert "config.default_value = None;" in popup
     assert "add(DIARY_SCHEDULE_STYLE, true);" in popup
     assert "add(DIARY_INTRADAY_RHYTHM, true);" in popup
+
+
+def test_normal_diary_route_uses_program_calendar_not_numbered_date_templates():
+    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    materials = read("src/components/AdditionalMaterialsPanel.tsx")
+    preflight = read("src/components/GenerationPreflightModal.tsx")
+
+    assert "MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT" in profile_sources
+    assert "program_calendar_diary_template(app).map(Some)" in profile_sources
+    assert "select_diary_template_for_admission" not in profile_sources
+    assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
+    assert "{{#each diaries}}" in profile_sources
+    assert "{{diary.datetime}}" in profile_sources
+    assert "{{diary.text}}" in profile_sources
+    assert "{{diary.treating_physician_signature}}" in profile_sources
+    assert "{{diary.department_head_signature}}" in profile_sources
+    assert "На текущую дату оформлена выписка из стационара" in profile_sources
+
+    assert "Даты берутся из даты поступления и выписки" in materials
+    assert "Отдельная папка «Даты 01–31» для обычного создания не нужна" in materials
+    assert "> Даты" not in materials
+    assert "> Тексты" in materials
+    assert "сама построит календарь D0+1 → выписка" in materials
+
+    assert "medical.diary_day_start_time" in preflight
+    assert "medical.diary_day_end_time" in preflight
+    assert "visiblePrompts = prompts.filter" in preflight
+
+
+def test_intraday_internal_bounds_are_supplied_without_extra_doctor_questions():
+    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    assert 'prompt.current_value = Some("00:00".into());' in profile_sources
+    assert 'prompt.current_value = Some("23:59".into());' in profile_sources
+    assert "The working donor applications ask the doctor only for the diary style" in profile_sources

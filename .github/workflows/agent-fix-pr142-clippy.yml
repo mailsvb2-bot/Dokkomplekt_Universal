@@ -1,0 +1,31 @@
+name: Agent fix PR142 clippy
+
+on:
+  push:
+    branches:
+      - agent/donor-medical-source-parity-20260817
+    paths:
+      - .github/workflows/agent-fix-pr142-clippy.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/donor-medical-source-parity-20260817
+          fetch-depth: 0
+      - name: Apply clippy-safe char patterns
+        shell: bash
+        run: |
+          python3 -c "from pathlib import Path; p=Path('crates/dokkomplekt-core/src/source_parser.rs'); s=p.read_text(); a=\".trim_end_matches(|ch: char| matches!(ch, ',' | ';' | ':'))\"; b=\".trim_end_matches([',', ';', ':'])\"; c=\".trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';'))\"; d=\".trim_end_matches(['.', ',', ';'])\"; assert s.count(a)==1, s.count(a); assert s.count(c)==1, s.count(c); p.write_text(s.replace(a,b).replace(c,d))"
+          rm .github/workflows/agent-fix-pr142-clippy.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/dokkomplekt-core/src/source_parser.rs .github/workflows/agent-fix-pr142-clippy.yml
+          git diff --cached --check
+          git commit -m "Fix donor medical parser clippy gate"
+          git push origin HEAD:agent/donor-medical-source-parity-20260817

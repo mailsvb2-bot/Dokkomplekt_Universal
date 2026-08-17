@@ -163,6 +163,28 @@
           "note": "Legacy behavior is represented by the listed canonical target(s)."
         },
         {
+          "path": "embedded_templates.py",
+          "status": "not-needed",
+          "targets": [],
+          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
+        },
+        {
+          "path": "medical_renderer_labs.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/source_parser.rs",
+            "crates/dokkomplekt-core/src/field_registry.rs",
+            "crates/dokkomplekt-core/src/field_aliases.rs"
+          ],
+          "note": "Explicit laboratory results/date/source semantics are migrated without synthetic medical-result generation."
+        },
+        {
+          "path": "start_windows_no_console.vbs",
+          "status": "not-needed",
+          "targets": [],
+          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
+        },
+        {
           "path": "universal_scanner.py",
           "status": "migrated-core",
           "targets": [
@@ -186,18 +208,6 @@
             "crates/dokkomplekt-core/src/button_registry.rs"
           ],
           "note": "Legacy behavior is represented by the listed canonical target(s)."
-        },
-        {
-          "path": "embedded_templates.py",
-          "status": "not-needed",
-          "targets": [],
-          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
-        },
-        {
-          "path": "start_windows_no_console.vbs",
-          "status": "not-needed",
-          "targets": [],
-          "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
         }
       ]
     },

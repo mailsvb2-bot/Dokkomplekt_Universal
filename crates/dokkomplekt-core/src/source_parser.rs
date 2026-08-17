@@ -69,6 +69,11 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
         "госпитализац",
         "лечащий врач",
         "дата поступления",
+        "жалобы",
+        "анамнез",
+        "соматический статус",
+        "профильный статус",
+        "лаборатор",
     ]
     .iter()
     .any(|marker| lower.contains(marker));
@@ -636,40 +641,246 @@ fn medical_rules() -> Vec<LabelRule> {
             field: "medical.case_number",
             labels: &[
                 "История болезни №",
+                "История болезни N",
                 "Номер истории болезни",
                 "ИБ №",
                 "и/б №",
+                "Nr historii choroby",
+                "Numer historii choroby",
+                "Historia choroby nr",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.name",
+            labels: &[
+                "Ф.И.О.",
+                "Ф.И.О",
+                "ФИО пациента",
+                "Ф.И.О. пациента",
+                "Фамилия Имя Отчество",
+                "Пациент",
+                "Пациентка",
+                "Pacjent",
+                "Pacjentka",
+                "Imię i nazwisko",
+                "Imie i nazwisko",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.age",
+            labels: &["Возраст", "Wiek"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.birth_date",
+            labels: &["Дата рождения", "Data urodzenia"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "subject.address",
+            labels: &[
+                "Зарегистрирован по адресу",
+                "Адрес регистрации",
+                "Адрес проживания",
+                "Место жительства",
+                "Adres zamieszkania",
+                "Miejsce zamieszkania",
             ],
             multiline: false,
         },
         LabelRule {
             field: "medical.admission_date",
-            labels: &["Дата поступления", "Поступил", "Поступила"],
+            labels: &[
+                "Дата поступления",
+                "Дата госпитализации",
+                "Data przyjęcia",
+                "Data przyjecia",
+                "Data hospitalizacji",
+            ],
             multiline: false,
         },
         LabelRule {
             field: "medical.discharge_date",
-            labels: &["Дата выписки", "Выписан", "Выписана"],
+            labels: &["Дата выписки", "Data wypisu"],
             multiline: false,
         },
         LabelRule {
-            field: "medical.diagnosis",
-            labels: &["Основной диагноз", "Диагноз"],
+            field: "medical.complaints",
+            labels: &[
+                "Жалобы на момент осмотра",
+                "Жалобы при поступлении",
+                "Жалобы",
+                "Skargi przy przyjęciu",
+                "Skargi przy przyjeciu",
+                "Dolegliwości",
+                "Dolegliwosci",
+                "Skargi",
+            ],
             multiline: true,
+        },
+        LabelRule {
+            field: "medical.anamnesis_life",
+            labels: &[
+                "Анамнез жизни",
+                "Wywiad życiowy",
+                "Wywiad zyciowy",
+                "Wywiad osobniczy",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.anamnesis_disease",
+            labels: &[
+                "Анамнез заболевания",
+                "Wywiad chorobowy",
+                "Wywiad obecnej choroby",
+                "Historia choroby",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.profile_status",
+            labels: &[
+                "Профильный статус при поступлении",
+                "Профильный статус",
+                "Психический статус при поступлении",
+                "Психический статус",
+                "Stan psychiczny",
+                "Badanie psychiatryczne",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.somatic_status",
+            labels: &[
+                "Сомато-неврологический статус",
+                "Соматический статус",
+                "Объективный статус",
+                "Объективно",
+                "Status praesens",
+                "Stan przedmiotowy",
+                "Badanie przedmiotowe",
+                "Stan somatyczny",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.examination_plan",
+            labels: &["План обследования", "Plan badań", "Plan badan"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.diagnosis",
+            labels: &[
+                "Клинический диагноз",
+                "Предварительный диагноз",
+                "Основной диагноз",
+                "Заключительный диагноз",
+                "Диагноз",
+                "Rozpoznanie kliniczne",
+                "Rozpoznanie główne",
+                "Rozpoznanie glowne",
+                "Rozpoznanie",
+                "Diagnoza",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.icd10",
+            labels: &["Код МКБ-10", "Код МКБ", "МКБ-10", "ICD-10"],
+            multiline: false,
         },
         LabelRule {
             field: "medical.treatment",
-            labels: &["Назначенное лечение", "Лечение"],
+            labels: &[
+                "План лечения",
+                "Назначенное лечение",
+                "Лечение",
+                "Plan leczenia",
+                "Zalecone leczenie",
+                "Zastosowane leczenie",
+                "Leczenie",
+                "Terapia",
+            ],
             multiline: true,
         },
         LabelRule {
+            field: "medical.treatment_result",
+            labels: &["Результат лечения", "Исход лечения", "Эффект лечения"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.discharge_condition",
+            labels: &["Состояние при выписке", "Состояние на момент выписки"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.recommendations",
+            labels: &["Рекомендации", "Рекомендовано", "Zalecenia"],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.labs",
+            labels: &[
+                "Лабораторные исследования",
+                "Лабораторные данные",
+                "Результаты анализов",
+                "Результаты обследований",
+                "Результаты исследований",
+                "Анализы",
+                "Wyniki badań",
+                "Wyniki badan",
+            ],
+            multiline: true,
+        },
+        LabelRule {
+            field: "medical.labs_date",
+            labels: &["Дата анализов", "Дата лабораторных исследований"],
+            multiline: false,
+        },
+        LabelRule {
             field: "medical.workplace",
-            labels: &["Место работы", "Работает"],
+            labels: &[
+                "Работает в организации",
+                "Место работы",
+                "Работа",
+                "Miejsce pracy",
+                "Zakład pracy",
+                "Zaklad pracy",
+            ],
             multiline: false,
         },
         LabelRule {
             field: "medical.position",
-            labels: &["Должность", "в должности"],
+            labels: &["Должность", "Stanowisko", "Zawód", "Zawod"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.sick_leave_number",
+            labels: &[
+                "Номер больничного",
+                "Больничный лист №",
+                "Лист нетрудоспособности №",
+            ],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.attending_doctor",
+            labels: &["Лечащий врач", "Lekarz prowadzący", "Lekarz prowadzacy"],
+            multiline: false,
+        },
+        LabelRule {
+            field: "medical.department_head",
+            labels: &[
+                "Заведующий отделением",
+                "Зав. отделением",
+                "Зав. отд.",
+                "Ordynator",
+                "Kierownik oddziału",
+                "Kierownik oddzialu",
+            ],
             multiline: false,
         },
     ]
@@ -1291,7 +1502,47 @@ fn clean_inline_value(value: &str) -> String {
             break;
         }
     }
+    if let Some(next_label) = next_explicit_inline_label_start(value) {
+        end = end.min(next_label);
+    }
     clean_value(&value[..end])
+}
+
+fn next_explicit_inline_label_start(value: &str) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for rule in generic_rules().into_iter().chain(medical_rules()) {
+        for label in rule.labels {
+            let Some(label_end) = find_label_end(value, label) else {
+                continue;
+            };
+            let Some(label_start) = label_start_from_end(value, label, label_end) else {
+                continue;
+            };
+            if label_start == 0 {
+                continue;
+            }
+            let tail = value[label_end..].trim_start();
+            let explicit_separator = tail
+                .chars()
+                .next()
+                .is_some_and(|ch| matches!(ch, ':' | '№' | '#' | '-' | '—' | '–'));
+            if !explicit_separator {
+                continue;
+            }
+            best = Some(best.map_or(label_start, |current| current.min(label_start)));
+        }
+    }
+    best
+}
+
+fn label_start_from_end(value: &str, label: &str, mut end: usize) -> Option<usize> {
+    if !value.is_char_boundary(end) {
+        return None;
+    }
+    for _ in label.chars() {
+        end = value[..end].char_indices().next_back()?.0;
+    }
+    Some(end)
 }
 
 fn first_date_candidate(line: &str) -> Option<String> {

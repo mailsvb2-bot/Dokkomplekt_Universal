@@ -2,6 +2,11 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentTemplateSpec, PromptSpec, WorkflowPlan } from '../lib/types';
 import { WorkflowPromptField } from './Workspace';
 
+const INTERNAL_DIARY_RUNTIME_FIELDS = new Set([
+  'medical.diary_day_start_time',
+  'medical.diary_day_end_time',
+]);
+
 interface GenerationPreflightModalProps {
   plan: WorkflowPlan;
   documents: DocumentTemplateSpec[];
@@ -22,7 +27,11 @@ interface GenerationPreflightModalProps {
 export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
   const selected = props.documents.filter((document) => props.selectedDocumentIds.includes(document.id));
   const prompts = props.plan.prompts;
-  const sections = prompts.reduce<Array<{ title: string; prompts: PromptSpec[] }>>((groups, prompt) => {
+  // These values are backend-owned bounds for the generic repeated-record engine.
+  // They remain in the WorkflowPlan and are submitted by useGenerationPreflight,
+  // but are not extra user questions. The donor diary wizard asks only style + rhythm.
+  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id));
+  const sections = visiblePrompts.reduce<Array<{ title: string; prompts: PromptSpec[] }>>((groups, prompt) => {
     const title = prompt.section?.trim() || 'Данные документа';
     const existing = groups.find((group) => group.title === title);
     if (existing) existing.prompts.push(prompt);

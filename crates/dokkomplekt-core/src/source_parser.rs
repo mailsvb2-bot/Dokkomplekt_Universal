@@ -1405,7 +1405,8 @@ fn is_medical_template_choice_placeholder(value: &str) -> bool {
 
 fn medical_service_marker_start(value: &str) -> Option<usize> {
     let mut best: Option<usize> = None;
-    for marker in ["сюда подставлять", "сюда подставляется", "выбирается в ui"] {
+    for marker in ["сюда подставлять", "сюда подставляется", "выбирается в ui"]
+    {
         let Some(marker_end) = find_label_end(value, marker) else {
             continue;
         };
@@ -1436,7 +1437,10 @@ fn sanitize_final_medical_values(case: &mut SemanticCase, report: &mut ParsedSou
             continue;
         };
         let sanitized = sanitize_medical_source_value(&current).and_then(|value| {
-            if matches!(field.as_str(), "medical.diagnosis" | "classification.primary") {
+            if matches!(
+                field.as_str(),
+                "medical.diagnosis" | "classification.primary"
+            ) {
                 sanitize_medical_diagnosis(&value)
             } else {
                 Some(value)
@@ -1453,9 +1457,8 @@ fn sanitize_final_medical_values(case: &mut SemanticCase, report: &mut ParsedSou
             None => {
                 case.values.remove(&field);
                 report.filled_fields.retain(|item| item != &field);
-                let warning = format!(
-                    "Поле «{field}» не принято: обнаружена служебная инструкция шаблона"
-                );
+                let warning =
+                    format!("Поле «{field}» не принято: обнаружена служебная инструкция шаблона");
                 if !report.warnings.contains(&warning) {
                     report.warnings.push(warning);
                 }

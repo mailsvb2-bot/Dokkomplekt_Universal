@@ -212,7 +212,8 @@ fn contains_adjacent_word_signature(rendered_text: &str, labels: &[String]) -> b
         let has_requested_role = labels
             .iter()
             .any(|label| role_line.contains(&label.to_lowercase()));
-        has_requested_role && (has_signature_cue(pair[1]) || looks_like_signer_name_fragment(pair[1]))
+        has_requested_role
+            && (has_signature_cue(pair[1]) || looks_like_signer_name_fragment(pair[1]))
     })
 }
 
@@ -226,8 +227,7 @@ fn has_signature_cue(value: &str) -> bool {
 
 fn looks_like_signer_name_fragment(value: &str) -> bool {
     let trimmed = value.trim_matches(|character: char| {
-        character.is_whitespace()
-            || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
+        character.is_whitespace() || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
     });
     if trimmed.is_empty() {
         return false;
@@ -239,7 +239,10 @@ fn looks_like_signer_name_fragment(value: &str) -> bool {
     }
 
     let has_initials = words.iter().any(|word| {
-        let alphabetic = word.chars().filter(|character| character.is_alphabetic()).count();
+        let alphabetic = word
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .count();
         alphabetic > 0 && word.contains('.')
     });
     let titlecase_words = words

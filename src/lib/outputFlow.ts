@@ -2,6 +2,11 @@ import type { FolderNamePartDto } from './types';
 
 export type ExistingOutputPolicy = 'version' | 'replace_with_backup';
 
+export type PreparedGenerationOutput = {
+  outputRoot: string;
+  existingOutputPolicy: ExistingOutputPolicy;
+};
+
 type PlannedOutput = {
   exists: boolean;
   patient_folder: string;
@@ -15,7 +20,7 @@ type ConfirmOptions = {
   danger?: boolean;
 };
 
-export async function chooseExistingOutputPolicyFlow(params: {
+type ExistingOutputFlowParams = {
   outputRoot: string;
   folderParts: FolderNamePartDto[];
   labels: string[];
@@ -24,7 +29,9 @@ export async function chooseExistingOutputPolicyFlow(params: {
   openFolder: (path: string) => Promise<unknown>;
   onStatus: (message: string) => void;
   onMissingRoot: () => void;
-}): Promise<ExistingOutputPolicy | null> {
+};
+
+export async function chooseExistingOutputPolicyFlow(params: ExistingOutputFlowParams): Promise<ExistingOutputPolicy | null> {
   const explicitOutputRoot = params.outputRoot.trim();
   if (!explicitOutputRoot) {
     params.onStatus('Сначала выберите папку готовых документов. Ничего не создано.');
@@ -65,4 +72,23 @@ export async function chooseExistingOutputPolicyFlow(params: {
     return null;
   }
   return 'replace_with_backup';
+}
+
+export async function prepareGenerationOutputFlow(params: ExistingOutputFlowParams & {
+  getDefaultRoot: () => Promise<string>;
+  onResolvedRoot: (root: string) => void;
+}): Promise<PreparedGenerationOutput | null> {
+  let outputRoot = params.outputRoot.trim();
+  if (!outputRoot) {
+    outputRoot = (await params.getDefaultRoot()).trim();
+    if (!outputRoot) {
+      params.onStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');
+      params.onMissingRoot();
+      return null;
+    }
+    params.onResolvedRoot(outputRoot);
+  }
+
+  const existingOutputPolicy = await chooseExistingOutputPolicyFlow({ ...params, outputRoot });
+  return existingOutputPolicy ? { outputRoot, existingOutputPolicy } : null;
 }

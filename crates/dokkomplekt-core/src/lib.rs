@@ -162,7 +162,7 @@ pub use product_access::{
     AccessDecision, AccessMode, LicenseEntitlement, PlanLimits, ProductPlanId,
     EXPIRED_DEMO_WATERMARK_TEXT, PRODUCT_ACCESS_CONTRACT_VERSION, TRIAL_WATERMARK_TEXT,
 };
-pub use required_blocks::{required_blocks_for, unmet_blocks, BlockRequirement, RequiredBlock};
+pub use required_blocks::{required_blocks_for, BlockRequirement, RequiredBlock};
 pub use semantic_engine::{extract_semantic, ExtractedField, ExtractionReport, FieldType};
 pub use semantic_llm::{
     apply_model_consensus_with_source, apply_model_output, apply_model_output_with_source,
@@ -170,3 +170,107 @@ pub use semantic_llm::{
     build_extraction_prompt_for_domain_and_language, extract_understanding, extract_with_model,
     parse_model_extraction, parse_model_extraction_with_source, SemanticModel,
 };
+
+/// Evaluate post-render completeness while preserving the physical layout semantics
+/// of Word signature blocks. DOCX extraction commonly places the role, signature
+/// rule and signer name into adjacent paragraphs/table cells. The lower-level
+/// validator intentionally reasons line-by-line; before calling it from product
+/// flows we therefore add bounded adjacent-line views without changing the original
+/// text. This prevents a correctly rendered document from being rejected solely
+/// because Word serialized one visual signature row as multiple XML text runs.
+pub fn unmet_blocks(
+    blocks: &[RequiredBlock],
+    case: &SemanticCase,
+    rendered_text: &str,
+) -> Vec<String> {
+    let augmented = augment_adjacent_word_lines(rendered_text);
+    required_blocks::unmet_blocks(blocks, case, &augmented)
+}
+
+fn augment_adjacent_word_lines(rendered_text: &str) -> String {
+    let lines = rendered_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return rendered_text.to_string();
+    }
+
+    let mut augmented = rendered_text.trim_end().to_string();
+    for pair in lines.windows(2) {
+        augmented.push('\n');
+        augmented.push_str(pair[0]);
+        augmented.push(' ');
+        augmented.push_str(pair[1]);
+    }
+    augmented
+}
+
+#[cfg(test)]
+mod word_layout_completeness_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn case_with(pairs: &[(&str, &str)]) -> SemanticCase {
+        let mut values = BTreeMap::new();
+        for (field_id, value) in pairs {
+            values.insert(
+                (*field_id).to_string(),
+                SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        SemanticCase {
+            values,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn signature_role_and_name_in_adjacent_word_cells_are_accepted() {
+        let block = RequiredBlock {
+            id: "head_signature".into(),
+            title: "Подпись заведующего отделением".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["зав. отд.".into()]),
+        };
+        let rendered = "Зав. отд.\nПетров П.П.";
+        assert!(unmet_blocks(&[block], &SemanticCase::default(), rendered).is_empty());
+    }
+
+    #[test]
+    fn signature_role_and_rule_in_adjacent_word_paragraphs_are_accepted() {
+        let block = RequiredBlock {
+            id: "doctor_signature".into(),
+            title: "Подпись врача-психиатра".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["врач-психиатр".into()]),
+        };
+        let rendered = "Врач-психиатр\n__________________ / Иванов И.И. /";
+        assert!(unmet_blocks(&[block], &SemanticCase::default(), rendered).is_empty());
+    }
+
+    #[test]
+    fn adjacent_narrative_still_does_not_become_a_signature() {
+        let block = RequiredBlock {
+            id: "doctor_signature".into(),
+            title: "Подпись врача-психиатра".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["лечащий врач".into()]),
+        };
+        let rendered = "Лечащий врач\nосмотрел пациента и продолжил наблюдение.";
+        assert_eq!(
+            unmet_blocks(&[block], &SemanticCase::default(), rendered),
+            vec!["Подпись врача-психиатра".to_string()]
+        );
+    }
+
+    #[test]
+    fn rendered_semantic_value_contract_is_unchanged() {
+        let block = RequiredBlock {
+            id: "rendered:subject.name".into(),
+            title: "ФИО".into(),
+            requirement: BlockRequirement::AnyRenderedField(vec!["subject.name".into()]),
+        };
+        let case = case_with(&[("subject.name", "Иванов Иван")]);
+        assert!(unmet_blocks(&[block.clone()], &case, "Пациент Иванов Иван").is_empty());
+        assert_eq!(unmet_blocks(&[block], &case, "Пациент"), vec!["ФИО".to_string()]);
+    }
+}

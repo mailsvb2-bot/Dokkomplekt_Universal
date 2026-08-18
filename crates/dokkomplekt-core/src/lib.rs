@@ -271,6 +271,9 @@ mod word_layout_completeness_tests {
         };
         let case = case_with(&[("subject.name", "Иванов Иван")]);
         assert!(unmet_blocks(&[block.clone()], &case, "Пациент Иванов Иван").is_empty());
-        assert_eq!(unmet_blocks(&[block], &case, "Пациент"), vec!["ФИО".to_string()]);
+        assert_eq!(
+            unmet_blocks(&[block], &case, "Пациент"),
+            vec!["ФИО".to_string()]
+        );
     }
 }

@@ -148,18 +148,22 @@ mod tests {
 
     #[test]
     fn legacy_implicit_trust_report_is_migrated_off() {
-        let mut legacy = PrivacyPreferences::default();
-        legacy.write_trust_report = true;
-        legacy.trust_report_explicit = false;
+        let legacy = PrivacyPreferences {
+            write_trust_report: true,
+            trust_report_explicit: false,
+            ..PrivacyPreferences::default()
+        };
         let migrated = normalize_loaded_privacy_preferences(legacy);
         assert!(!migrated.write_trust_report);
     }
 
     #[test]
     fn explicit_trust_report_choice_is_preserved() {
-        let mut explicit = PrivacyPreferences::default();
-        explicit.write_trust_report = true;
-        explicit.trust_report_explicit = true;
+        let explicit = PrivacyPreferences {
+            write_trust_report: true,
+            trust_report_explicit: true,
+            ..PrivacyPreferences::default()
+        };
         let loaded = normalize_loaded_privacy_preferences(explicit);
         assert!(loaded.write_trust_report);
     }

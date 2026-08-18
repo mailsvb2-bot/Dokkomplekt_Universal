@@ -217,7 +217,7 @@ mod word_layout_completeness_tests {
         for (field_id, value) in pairs {
             values.insert(
                 (*field_id).to_string(),
-                SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
+                SemanticValue::new(*field_id, *value, ValueSource::UserConfirmed, 1.0),
             );
         }
         SemanticCase {

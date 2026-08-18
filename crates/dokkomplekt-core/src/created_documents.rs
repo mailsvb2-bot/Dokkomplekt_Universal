@@ -385,6 +385,8 @@ mod tests {
             ("medical.treatment", "Терапия"),
             ("medical.admission_date", "01.06.2026"),
             ("medical.discharge_date", "12.06.2026"),
+            ("medical.workplace", "ООО Ромашка"),
+            ("medical.position", "инженер"),
         ]);
         let plan = build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, false, false);
         let docs = vec![medical_doc(
@@ -398,6 +400,7 @@ mod tests {
                 "Лечение {{medical.treatment}}\n",
                 "Дата поступления {{medical.admission_date}}\n",
                 "Дата выписки {{medical.discharge_date}}\n",
+                "Экспертный анамнез {{medical.expert_anamnesis}}\n",
                 "Зав. отд. Петров П.П.\n",
                 "Врач-психиатр Иванов И.И."
             ),

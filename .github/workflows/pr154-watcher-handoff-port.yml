@@ -1,0 +1,295 @@
+name: PR 154 watcher handoff port
+
+on:
+  push:
+    branches:
+      - agent/exhaustive-donor-parity-20260819
+
+permissions:
+  contents: write
+
+jobs:
+  port:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/exhaustive-donor-parity-20260819
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+
+      - name: Port donor watcher update handoff into canonical Rust lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          watcher = Path('src-tauri/src/subsystems/watcher_commands.rs')
+          text = watcher.read_text(encoding='utf-8')
+
+          old = '''    #[serde(default = "default_parallel_cases")]
+              max_parallel_cases: usize,
+          }
+
+          fn watcher_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {'''.replace('          ', '')
+          new = '''    #[serde(default = "default_parallel_cases")]
+              max_parallel_cases: usize,
+              #[serde(default)]
+              owner_generation: String,
+              #[serde(default)]
+              owner_executable: String,
+              #[serde(default)]
+              owner_ready: bool,
+          }
+
+          fn watcher_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('WatcherRuntimeConfig anchor not found')
+          text = text.replace(old, new, 1)
+
+          anchor = '''fn xml_escape(raw: &str) -> String {'''
+          helper = r'''fn watcher_owner_is_retired(
+              expected_generation: &str,
+              latest: &WatcherRuntimeConfig,
+          ) -> bool {
+              latest.owner_ready
+                  && !latest.owner_generation.trim().is_empty()
+                  && latest.owner_generation.trim() != expected_generation.trim()
+          }
+
+          fn xml_escape(raw: &str) -> String {'''.replace('          ', '')
+          if anchor not in text:
+              raise SystemExit('xml_escape anchor not found')
+          text = text.replace(anchor, helper, 1)
+
+          old = '''        print_copies_by_document,
+                  max_parallel_cases,
+              } = config;'''.replace('          ', '')
+          new = '''        print_copies_by_document,
+                  max_parallel_cases,
+                  owner_generation,
+                  owner_executable: _,
+                  owner_ready: _,
+              } = config;'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('start_watcher_thread destructure anchor not found')
+          text = text.replace(old, new, 1)
+
+          anchor = '''            if control_path
+                          .as_ref()
+                          .map(|path| !path.exists())
+                          .unwrap_or(false)
+                      {'''.replace('          ', '')
+          replacement = '''            if let Some(path) = control_path.as_ref() {
+                          if let Ok(bytes) = std::fs::read(path) {
+                              if let Ok(latest) = serde_json::from_slice::<WatcherRuntimeConfig>(&bytes) {
+                                  if watcher_owner_is_retired(&owner_generation, &latest) {
+                                      let details = serde_json::json!({
+                                          "previous_generation": owner_generation,
+                                          "current_generation": latest.owner_generation,
+                                          "current_executable": latest.owner_executable,
+                                      });
+                                      let _ = append_audit_event(
+                                          &app,
+                                          "watcher_retired_after_update_handoff",
+                                          "",
+                                          &details,
+                                      );
+                                      if terminate_app_when_disabled {
+                                          app.exit(0);
+                                      }
+                                      return;
+                                  }
+                              }
+                          }
+                      }
+                      if control_path
+                          .as_ref()
+                          .map(|path| !path.exists())
+                          .unwrap_or(false)
+                      {'''.replace('          ', '')
+          if anchor not in text:
+              raise SystemExit('watcher loop control anchor not found')
+          text = text.replace(anchor, replacement, 1)
+
+          old = '''    let runtime = WatcherRuntimeConfig {
+                  watch_folder: watch_folder.display().to_string(),
+                  default_year,
+                  sick_leave_enabled: req.sick_leave_enabled,
+                  folder_parts: folder_parts.clone(),
+                  auto_print: req.auto_print,
+                  print_copies_by_document: req.print_copies_by_document.clone(),
+                  max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
+              };'''.replace('          ', '')
+          new = '''    let owner_generation = Uuid::new_v4().to_string();
+              let mut runtime = WatcherRuntimeConfig {
+                  watch_folder: watch_folder.display().to_string(),
+                  default_year,
+                  sick_leave_enabled: req.sick_leave_enabled,
+                  folder_parts: folder_parts.clone(),
+                  auto_print: req.auto_print,
+                  print_copies_by_document: req.print_copies_by_document.clone(),
+                  max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
+                  owner_generation: owner_generation.clone(),
+                  owner_executable: exe.display().to_string(),
+                  owner_ready: false,
+              };'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('runtime construction anchor not found')
+          text = text.replace(old, new, 1)
+
+          anchor = '''    // Start only after persistence is proven. If startup fails on a first install,
+              // remove the just-created autostart entry so no half-installed watcher remains.
+              let max_parallel_cases = runtime.max_parallel_cases;'''.replace('          ', '')
+          replacement = '''    // Publish update ownership only after durable OS autostart exists. A running
+              // watcher from the previous install observes owner_ready=true plus a new
+              // generation and retires, releasing its singleton lock. The preliminary
+              // owner_ready=false config cannot accidentally retire it on a partial install.
+              runtime.owner_ready = true;
+              atomic_write_file(
+                  &config_path,
+                  &serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?,
+              )?;
+
+              // Start only after persistence is proven. If startup fails on a first install,
+              // remove the just-created autostart entry so no half-installed watcher remains.
+              let max_parallel_cases = runtime.max_parallel_cases;'''.replace('          ', '')
+          if anchor not in text:
+              raise SystemExit('start-after-persistence anchor not found')
+          text = text.replace(anchor, replacement, 1)
+
+          old = '''        "autostart_state_file": config_path.display().to_string(),
+                  "max_parallel_cases": max_parallel_cases,
+              }))'''.replace('          ', '')
+          new = '''        "autostart_state_file": config_path.display().to_string(),
+                  "max_parallel_cases": max_parallel_cases,
+                  "owner_generation": owner_generation,
+                  "owner_executable": exe.display().to_string(),
+                  "update_handoff": true,
+              }))'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('install response anchor not found')
+          text = text.replace(old, new, 1)
+
+          tests = r'''
+
+          #[cfg(test)]
+          mod watcher_update_handoff_tests {
+              use super::*;
+
+              fn runtime(generation: &str, ready: bool) -> WatcherRuntimeConfig {
+                  WatcherRuntimeConfig {
+                      watch_folder: "watch".into(),
+                      default_year: 2026,
+                      sick_leave_enabled: false,
+                      folder_parts: Vec::new(),
+                      auto_print: false,
+                      print_copies_by_document: BTreeMap::new(),
+                      max_parallel_cases: 2,
+                      owner_generation: generation.into(),
+                      owner_executable: format!("/install/{generation}/dokkomplekt"),
+                      owner_ready: ready,
+                  }
+              }
+
+              #[test]
+              fn watcher_owner_stays_for_same_generation() {
+                  let latest = runtime("generation-a", true);
+                  assert!(!watcher_owner_is_retired("generation-a", &latest));
+              }
+
+              #[test]
+              fn stale_watcher_retires_after_ready_new_generation() {
+                  let latest = runtime("generation-b", true);
+                  assert!(watcher_owner_is_retired("generation-a", &latest));
+              }
+
+              #[test]
+              fn partial_install_does_not_retire_existing_watcher() {
+                  let latest = runtime("generation-b", false);
+                  assert!(!watcher_owner_is_retired("generation-a", &latest));
+              }
+
+              #[test]
+              fn legacy_config_without_handoff_fields_remains_readable() {
+                  let legacy = r#"{
+                      "watch_folder":"watch",
+                      "default_year":2026,
+                      "sick_leave_enabled":false,
+                      "folder_parts":[],
+                      "auto_print":false,
+                      "print_copies_by_document":{},
+                      "max_parallel_cases":2
+                  }"#;
+                  let parsed: WatcherRuntimeConfig = serde_json::from_str(legacy).expect("legacy config");
+                  assert!(parsed.owner_generation.is_empty());
+                  assert!(parsed.owner_executable.is_empty());
+                  assert!(!parsed.owner_ready);
+              }
+          }
+          '''.replace('          ', '')
+          if 'mod watcher_update_handoff_tests' in text:
+              raise SystemExit('watcher handoff tests already present')
+          text = text.rstrip() + tests
+          watcher.write_text(text, encoding='utf-8')
+
+          main = Path('src-tauri/src/main.rs')
+          text = main.read_text(encoding='utf-8')
+          old = '''            match acquire_instance_lock(&handle, background_watch)
+                          .map_err(std::io::Error::other)?
+                      {'''.replace('          ', '')
+          new = '''            let mut instance_outcome = acquire_instance_lock(&handle, background_watch)
+                          .map_err(std::io::Error::other)?;
+                      if background_watch {
+                          // A newly installed watcher may race the retiring watcher from
+                          // the previous generation. Bound the wait to three seconds;
+                          // ordinary duplicate launches still exit deterministically.
+                          for _ in 0..10 {
+                              if instance_outcome != InstanceLockOutcome::AlreadyRunning {
+                                  break;
+                              }
+                              std::thread::sleep(Duration::from_millis(300));
+                              instance_outcome = acquire_instance_lock(&handle, true)
+                                  .map_err(std::io::Error::other)?;
+                          }
+                      }
+                      match instance_outcome {'''.replace('          ', '')
+          if old not in text:
+              raise SystemExit('main instance lock anchor not found')
+          text = text.replace(old, new, 1)
+          main.write_text(text, encoding='utf-8')
+
+          doc = Path('docs/DONOR_EXHAUSTIVE_PARITY_2026-08-19.md')
+          body = doc.read_text(encoding='utf-8')
+          marker = '## Watcher update handoff — donor parity restored'
+          if marker not in body:
+              body = body.rstrip() + f'''\n\n{marker}\n\nThe late `Dokkomplekt` donor regression `test_intake_agent_update_handoff_v1494x.py` is now owned by the canonical Rust watcher lifecycle. Each successful watcher install publishes a fresh generation and executable identity only after durable OS autostart is written. A watcher from the previous ready generation retires on its normal polling loop; a newly launched background process performs a bounded singleton-lock retry while that retirement completes. A preliminary `owner_ready=false` plan cannot evict the current watcher during a partial install, and legacy runtime JSON without handoff fields remains readable.\n\nThe custom user-created `Дневники` path is also proven end-to-end through the existing canonical chain: template intelligence assigns the diary role, mandatory cadence runtime fields are merged into effective popup fields, and the ordinary `WorkflowPlan`/preflight owns the prompts. No donor-only diary wizard or second scheduling brain is introduced.\n'''
+              doc.write_text(body, encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/pr154-watcher-handoff-port.yml
+          cargo +1.97.1 fmt --all
+          cargo +1.97.1 test --workspace watcher_update_handoff -- --nocapture
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          cargo +1.97.1 fmt --all -- --check
+          git diff --check
+
+      - name: Commit canonical handoff port
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: port donor watcher update handoff'
+          git push origin HEAD:agent/exhaustive-donor-parity-20260819

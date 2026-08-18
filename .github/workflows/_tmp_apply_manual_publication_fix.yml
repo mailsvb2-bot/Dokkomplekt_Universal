@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-manual-generation-publication-proof-20260818
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
 
 permissions:
   contents: write
@@ -15,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          ref: agent/fix-manual-generation-publication-proof-20260818
           fetch-depth: 0
       - name: Apply exact source transformation
         shell: python
@@ -31,7 +35,6 @@ jobs:
                   raise SystemExit(f'expected exactly one match, found {count}: {old[:80]!r}')
               text = text.replace(old, new, 1)
 
-          # Completeness verification now lives with the publication proof helpers.
           start = text.index('fn ensure_rendered_document_complete(')
           end = text.index('#[derive(Debug, Deserialize)]\nstruct RenderDocxRequest', start)
           text = text[:start] + text[end:]

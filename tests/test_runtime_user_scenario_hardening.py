@@ -14,6 +14,7 @@ def test_unicode_button_labels_never_slice_inside_utf8() -> None:
 def test_manual_generation_uses_real_source_provenance() -> None:
     main = text("src-tauri/src/main.rs")
     commands = text("src-tauri/src/subsystems/document_commands.rs")
+    publication = text("src-tauri/src/manual_publication.rs")
     desktop = text("src-tauri/src/subsystems/desktop_io.rs")
     intake = "\n".join((
         text("src-tauri/src/universal_intake.rs"),
@@ -27,9 +28,14 @@ def test_manual_generation_uses_real_source_provenance() -> None:
     assert "Источник не содержит проверяемый SHA-256" in main
     assert "source_sha256: hex::encode(Sha256::digest(&bytes))" in intake
     assert "Отчёт проверяемости требует настоящий SHA-256 исходника" in desktop
-    assert "match state.source_provenance.lock()" in commands
-    assert "DOCX созданы; локальный отчёт проверяемости пропущен" in commands
+    assert "manual_publication::optional_trust_report_warning(" in commands
+    assert "provenance.as_ref()" in commands
+    assert "crate::write_trust_report(" in publication
+    assert "source_name: &provenance.source_name" in publication
+    assert "source_sha256: &provenance.source_sha256" in publication
+    assert "DOCX созданы; локальный отчёт проверяемости пропущен" in publication
     assert "Для проверяемого отчёта сначала загрузите файл" not in commands
+    assert "Для проверяемого отчёта сначала загрузите файл" not in publication
 
 
 def test_second_launch_activates_primary_without_setup_panic() -> None:

@@ -478,6 +478,7 @@ pub fn diary_minute_schedule_from_choice(choice: &str) -> DiaryScheduleSpec {
         _ if matches!(compact.as_str(), "5мин" | "5минут" | "каждые5минут") => Some(vec![5]),
         _ => None,
     };
+    let is_preset = preset.is_some();
     let minute_offsets = if let Some(values) = preset {
         values
     } else {
@@ -503,7 +504,7 @@ pub fn diary_minute_schedule_from_choice(choice: &str) -> DiaryScheduleSpec {
         hour_offsets: vec![],
         minute_offsets,
         confidence: 1,
-        source: if preset.is_some() {
+        source: if is_preset {
             "popup_intraday_minute_rhythm".into()
         } else {
             "popup_custom_minute_rhythm".into()
@@ -526,11 +527,17 @@ fn parse_positive_sequence(text: &str, allow_zero: bool) -> Result<Vec<i32>, Str
     let mut values = Vec::new();
     let mut current = String::new();
     for character in text.chars().chain(std::iter::once(' ')) {
-        if character.is_ascii_digit() {
+        if character.is_ascii_digit()
+            || ((character == '-' || character == '+') && current.is_empty())
+        {
             current.push(character);
             continue;
         }
         if current.is_empty() {
+            continue;
+        }
+        if current == "+" || current == "-" {
+            current.clear();
             continue;
         }
         let value = current
@@ -799,6 +806,10 @@ mod tests {
             diary_hourly_schedule_from_choice("3").unwrap().hour_offsets,
             vec![24]
         );
+    }
+    #[test]
+    fn negative_hour_intervals_are_rejected() {
+        assert!(diary_hourly_schedule_from_choice("-1,2").is_err());
     }
     #[test]
     fn signature_includes_ctime() {

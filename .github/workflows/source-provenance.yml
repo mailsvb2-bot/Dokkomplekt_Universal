@@ -48,79 +48,23 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-
           path = Path('src/App.tsx')
           text = path.read_text(encoding='utf-8')
-
           def replace_once(old: str, new: str) -> None:
               global text
               count = text.count(old)
               if count != 1:
                   raise SystemExit(f'App.tsx: expected one replacement target, found {count}: {old[:80]!r}')
               text = text.replace(old, new, 1)
-
-          replace_once(
-              "import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';",
-              "import { prepareGenerationOutputFlow } from './lib/outputFlow';",
-          )
-          replace_once(
-              "        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) {\n          setOutputRoot((current) => current.trim() || defaultOutputRoot);\n        }",
-              "        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) setOutputRoot((current) => current.trim() || defaultOutputRoot);",
-          )
-          replace_once(
-              """  async function resolveOutputRootForGeneration(): Promise<string> {
-    const configured = outputRoot.trim();
-    if (configured) return configured;
-    const startup = await run('first_run_state', () => firstRunState());
-    const fallback = startup?.default_output_root?.trim() ?? '';
-    if (!fallback) {
-      setFolderNamingConfirmed(false);
-      setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');
-      return '';
-    }
-    setOutputRoot(fallback);
-    return fallback;
-  }
-
-  async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {
-    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
-    return chooseExistingOutputPolicyFlow({
-      outputRoot: resolvedOutputRoot, folderParts, labels,
-      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
-      confirm: (options) => dialogs.confirm(options),
-      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
-      onStatus: setStatus,
-      onMissingRoot: () => setFolderNamingConfirmed(false),
-    });
-  }
-
-""",
-              "",
-          )
-          replace_once(
-              """  async function performGenerateSelectedDocuments(documentIds: string[]) {
-    const explicitOutputRoot = await resolveOutputRootForGeneration();
-    if (!explicitOutputRoot) return;
-    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);
-    if (!existingOutputPolicy) return;
-    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));""",
-              """  async function performGenerateSelectedDocuments(documentIds: string[]) {
-    const prepared = await prepareGenerationOutputFlow({
-      outputRoot, folderParts,
-      labels: documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value)),
-      getDefaultRoot: async () => (await run('first_run_state', () => firstRunState()))?.default_output_root ?? '',
-      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
-      confirm: (options) => dialogs.confirm(options),
-      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
-      onResolvedRoot: setOutputRoot, onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),
-    });
-    if (!prepared) return;
-    const { outputRoot: explicitOutputRoot, existingOutputPolicy } = prepared;
-    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));""",
-          )
+          replace_once("import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';", "import { prepareGenerationOutputFlow } from './lib/outputFlow';")
+          replace_once("        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) {\n          setOutputRoot((current) => current.trim() || defaultOutputRoot);\n        }", "        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) setOutputRoot((current) => current.trim() || defaultOutputRoot);")
+          old_helpers = "  async function resolveOutputRootForGeneration(): Promise<string> {\n    const configured = outputRoot.trim();\n    if (configured) return configured;\n    const startup = await run('first_run_state', () => firstRunState());\n    const fallback = startup?.default_output_root?.trim() ?? '';\n    if (!fallback) {\n      setFolderNamingConfirmed(false);\n      setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');\n      return '';\n    }\n    setOutputRoot(fallback);\n    return fallback;\n  }\n\n  async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {\n    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));\n    return chooseExistingOutputPolicyFlow({\n      outputRoot: resolvedOutputRoot, folderParts, labels,\n      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),\n      confirm: (options) => dialogs.confirm(options),\n      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),\n      onStatus: setStatus,\n      onMissingRoot: () => setFolderNamingConfirmed(false),\n    });\n  }\n\n"
+          replace_once(old_helpers, "")
+          old_generate = "  async function performGenerateSelectedDocuments(documentIds: string[]) {\n    const explicitOutputRoot = await resolveOutputRootForGeneration();\n    if (!explicitOutputRoot) return;\n    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);\n    if (!existingOutputPolicy) return;\n    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));"
+          new_generate = "  async function performGenerateSelectedDocuments(documentIds: string[]) {\n    const prepared = await prepareGenerationOutputFlow({\n      outputRoot, folderParts,\n      labels: documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value)),\n      getDefaultRoot: async () => (await run('first_run_state', () => firstRunState()))?.default_output_root ?? '',\n      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),\n      confirm: (options) => dialogs.confirm(options),\n      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),\n      onResolvedRoot: setOutputRoot, onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),\n    });\n    if (!prepared) return;\n    const { outputRoot: explicitOutputRoot, existingOutputPolicy } = prepared;\n    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));"
+          replace_once(old_generate, new_generate)
           path.write_text(text, encoding='utf-8')
           PY
-
           test "$(wc -l < src/App.tsx)" -lt 1550
           git checkout origin/main -- .github/workflows/source-provenance.yml
           git config user.name github-actions[bot]

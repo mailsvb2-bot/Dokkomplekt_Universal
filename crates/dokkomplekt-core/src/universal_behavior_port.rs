@@ -76,7 +76,7 @@ pub struct LaunchDecision {
     pub reason: String,
 }
 
-pub const UNIVERSAL_BEHAVIOR_PORT_VERSION: &str = "v6.0-rust-port";
+pub const UNIVERSAL_BEHAVIOR_PORT_VERSION: &str = "v6.1-rust-port";
 pub const LAUNCH_COOLDOWN_SECONDS: f32 = 3.0;
 pub const PENDING_RETRY_SECONDS: f32 = 12.0;
 
@@ -424,41 +424,127 @@ pub fn clinical_calendar_diary_schedule(limit: usize) -> DiaryScheduleSpec {
     }
 }
 
+pub fn diary_hourly_schedule_from_choice(choice: &str) -> Result<DiaryScheduleSpec, String> {
+    let text = choice.trim().to_lowercase().replace('ё', "е");
+    if text.is_empty()
+        || matches!(
+            text.as_str(),
+            "3" | "по времени" | "каждый день по времени" | "ежедневно по времени"
+        )
+    {
+        return Ok(DiaryScheduleSpec {
+            mode: "hourly".into(),
+            day_offsets: vec![],
+            hour_offsets: vec![24],
+            minute_offsets: vec![],
+            confidence: 1,
+            source: "popup_every_day_by_time".into(),
+        });
+    }
+    let values = parse_positive_sequence(&text, false)?;
+    if values.is_empty() {
+        return Err("Укажите часы цифрами.".into());
+    }
+    Ok(DiaryScheduleSpec {
+        mode: "hourly".into(),
+        day_offsets: vec![],
+        hour_offsets: values,
+        minute_offsets: vec![],
+        confidence: 1,
+        source: "popup_custom_time_style".into(),
+    })
+}
+
 pub fn diary_minute_schedule_from_choice(choice: &str) -> DiaryScheduleSpec {
     let text = choice.trim().to_lowercase().replace('ё', "е");
     let compact = text.replace(' ', "");
-    let minutes = match text.as_str() {
-        "2" => 240,
-        "3" => 60,
-        "4" => 30,
-        "5" => 15,
-        "6" => 5,
-        _ if compact == "4часа" || compact == "каждые4часа" => 240,
-        _ if compact == "1час" || compact == "каждыйчас" => 60,
-        _ if compact.contains("30") => 30,
-        _ if compact.contains("15") => 15,
-        _ if compact.contains("5мин") => 5,
-        _ => 0,
-    };
-    if minutes == 0 {
-        DiaryScheduleSpec {
-            mode: "daily".into(),
-            day_offsets: vec![],
-            hour_offsets: vec![],
-            minute_offsets: vec![],
-            confidence: 1,
-            source: "popup_one_per_day".into(),
+    if text.is_empty() || matches!(text.as_str(), "0" | "1" | "один раз в день" | "без" | "нет") {
+        return one_per_day_schedule();
+    }
+    let preset = match text.as_str() {
+        "2" => Some(vec![240]),
+        "3" => Some(vec![60]),
+        "4" => Some(vec![30]),
+        "5" => Some(vec![15]),
+        "6" => Some(vec![5]),
+        _ if compact == "4часа" || compact == "каждые4часа" => Some(vec![240]),
+        _ if compact == "1час" || compact == "каждыйчас" => Some(vec![60]),
+        _ if matches!(compact.as_str(), "30" | "30мин" | "30минут" | "каждые30минут") => {
+            Some(vec![30])
         }
+        _ if matches!(compact.as_str(), "15" | "15мин" | "15минут" | "каждые15минут") => {
+            Some(vec![15])
+        }
+        _ if matches!(compact.as_str(), "5мин" | "5минут" | "каждые5минут") => Some(vec![5]),
+        _ => None,
+    };
+    let minute_offsets = if let Some(values) = preset {
+        values
     } else {
-        DiaryScheduleSpec {
-            mode: "hourly".into(),
-            day_offsets: vec![],
-            hour_offsets: vec![],
-            minute_offsets: vec![minutes],
-            confidence: 1,
-            source: "popup_intraday_minute_rhythm".into(),
+        let Ok(mut values) = parse_positive_sequence(&text, false) else {
+            return one_per_day_schedule();
+        };
+        if text.contains("час") && !text.contains("мин") {
+            for value in &mut values {
+                let Some(converted) = value.checked_mul(60) else {
+                    return one_per_day_schedule();
+                };
+                *value = converted;
+            }
+        }
+        if values.is_empty() || values.iter().any(|value| !(1..=1440).contains(value)) {
+            return one_per_day_schedule();
+        }
+        values
+    };
+    DiaryScheduleSpec {
+        mode: "hourly".into(),
+        day_offsets: vec![],
+        hour_offsets: vec![],
+        minute_offsets,
+        confidence: 1,
+        source: if preset.is_some() {
+            "popup_intraday_minute_rhythm".into()
+        } else {
+            "popup_custom_minute_rhythm".into()
+        },
+    }
+}
+
+fn one_per_day_schedule() -> DiaryScheduleSpec {
+    DiaryScheduleSpec {
+        mode: "daily".into(),
+        day_offsets: vec![],
+        hour_offsets: vec![],
+        minute_offsets: vec![],
+        confidence: 1,
+        source: "popup_one_per_day".into(),
+    }
+}
+
+fn parse_positive_sequence(text: &str, allow_zero: bool) -> Result<Vec<i32>, String> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    for character in text.chars().chain(std::iter::once(' ')) {
+        if character.is_ascii_digit() {
+            current.push(character);
+            continue;
+        }
+        if current.is_empty() {
+            continue;
+        }
+        let value = current
+            .parse::<i32>()
+            .map_err(|_| "Не удалось разобрать числовой график.".to_string())?;
+        current.clear();
+        if value < 0 || (!allow_zero && value == 0) {
+            return Err("Интервалы должны быть положительными числами.".into());
+        }
+        if !values.contains(&value) {
+            values.push(value);
         }
     }
+    Ok(values)
 }
 
 pub fn candidate_signature(input: CandidateSignatureInput) -> String {
@@ -687,6 +773,31 @@ mod tests {
         assert_eq!(
             diary_minute_schedule_from_choice("4").minute_offsets,
             vec![30]
+        );
+    }
+    #[test]
+    fn custom_minute_rhythm_is_preserved() {
+        let schedule = diary_minute_schedule_from_choice("45 минут");
+        assert_eq!(schedule.mode, "hourly");
+        assert_eq!(schedule.minute_offsets, vec![45]);
+        assert_eq!(schedule.source, "popup_custom_minute_rhythm");
+    }
+    #[test]
+    fn custom_hour_rhythm_converts_to_minutes() {
+        let schedule = diary_minute_schedule_from_choice("2 часа");
+        assert_eq!(schedule.minute_offsets, vec![120]);
+    }
+    #[test]
+    fn explicit_hour_intervals_survive_donor_port() {
+        assert_eq!(
+            diary_hourly_schedule_from_choice("1,2,4,8")
+                .unwrap()
+                .hour_offsets,
+            vec![1, 2, 4, 8]
+        );
+        assert_eq!(
+            diary_hourly_schedule_from_choice("3").unwrap().hour_offsets,
+            vec![24]
         );
     }
     #[test]

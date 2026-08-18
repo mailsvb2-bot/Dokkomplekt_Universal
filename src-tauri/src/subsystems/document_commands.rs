@@ -1206,54 +1206,6 @@ fn render_preview(
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
-fn ensure_rendered_document_complete(
-    document: &DocumentTemplateSpec,
-    template_text: &str,
-    semantic_case: &SemanticCase,
-    rendered_path: &Path,
-) -> Result<(), String> {
-    let missing_required = document
-        .required_fields
-        .iter()
-        .filter(|field_id| !semantic_case.has(field_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let rendered_text = extract_docx_text(rendered_path).map_err(|error| {
-        format!(
-            "Не удалось проверить полноту созданного документа «{}»: {error}",
-            document.button_label
-        )
-    })?;
-    let requirements = dokkomplekt_core::required_blocks_for(document, template_text);
-    let unmet_blocks = dokkomplekt_core::unmet_blocks(
-        &requirements,
-        semantic_case,
-        &rendered_text,
-    );
-    if missing_required.is_empty() && unmet_blocks.is_empty() {
-        return Ok(());
-    }
-
-    let mut reasons = Vec::new();
-    if !missing_required.is_empty() {
-        reasons.push(format!(
-            "не заполнены обязательные поля: {}",
-            missing_required.join(", ")
-        ));
-    }
-    if !unmet_blocks.is_empty() {
-        reasons.push(format!(
-            "в готовом документе не подтверждены обязательные блоки: {}",
-            unmet_blocks.join(", ")
-        ));
-    }
-    Err(format!(
-        "Документ «{}» не опубликован: {}.",
-        document.button_label,
-        reasons.join("; ")
-    ))
-}
-
 #[derive(Debug, Deserialize)]
 struct RenderDocxRequest {
     document_id: String,
@@ -1479,8 +1431,17 @@ fn render_docx_batch(
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
     let output_root = resolve_user_path(&app, &req.output_root)?;
-    std::fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
-    cleanup_stale_stage_directories(&output_root, Duration::from_secs(24 * 60 * 60))?;
+    // Do not create the user-visible output root before rendering succeeds. A
+    // failure in licensing, hydration, rendering, completeness validation or
+    // publication must not leave an empty “successful-looking” folder behind.
+    // Keep staging next to the output root so the final directory rename stays
+    // on the same filesystem and remains atomic.
+    let stage_parent = output_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| output_root.clone());
+    std::fs::create_dir_all(&stage_parent).map_err(|error| error.to_string())?;
+    cleanup_stale_stage_directories(&stage_parent, Duration::from_secs(24 * 60 * 60))?;
     let labels = documents
         .iter()
         .map(|document| document.button_label.clone())
@@ -1490,7 +1451,7 @@ fn render_docx_batch(
     let permit =
         reserve_generation_access(&app, &state, documents.len().try_into().unwrap_or(u32::MAX))?;
     let privacy = load_privacy_preferences(&app)?;
-    let stage = output_root.join(format!(
+    let stage = stage_parent.join(format!(
         ".dokkomplekt-manual-stage-{}-{}",
         std::process::id(),
         Uuid::new_v4()
@@ -1501,6 +1462,7 @@ fn render_docx_batch(
     }
 
     let mut counter_reservations = Vec::new();
+    let mut ancillary_warnings = Vec::new();
     let rendered = (|| -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
         let mut report_case = base_case.clone();
@@ -1571,22 +1533,31 @@ fn render_docx_batch(
                 .source_provenance
                 .lock()
                 .map_err(|_| "source provenance state lock failed")?
-                .clone()
-                .ok_or_else(|| {
-                    "Для проверяемого отчёта сначала загрузите файл, вставьте текст или получите HTTPS-источник.".to_string()
-                })?;
-            write_trust_report(
-                &stage,
-                &report_case,
-                TrustReportContext {
-                    source_name: &provenance.source_name,
-                    source_sha256: &provenance.source_sha256,
-                    generated_names: &generated_names,
-                    used_field_ids: &used_field_ids,
-                    include_values: privacy.include_values_in_trust_report,
-                    source_warnings: &[],
-                },
-            )?;
+                .clone();
+            match provenance {
+                Some(provenance) => {
+                    if let Err(error) = write_trust_report(
+                        &stage,
+                        &report_case,
+                        TrustReportContext {
+                            source_name: &provenance.source_name,
+                            source_sha256: &provenance.source_sha256,
+                            generated_names: &generated_names,
+                            used_field_ids: &used_field_ids,
+                            include_values: privacy.include_values_in_trust_report,
+                            source_warnings: &[],
+                        },
+                    ) {
+                        ancillary_warnings.push(format!(
+                            "Документы созданы, но служебный отчёт доверия не записан: {error}"
+                        ));
+                    }
+                }
+                None => ancillary_warnings.push(
+                    "Документы созданы без служебного отчёта доверия: источник provenance недоступен."
+                        .into(),
+                ),
+            }
         }
         Ok(paths)
     })();
@@ -1639,6 +1610,7 @@ fn render_docx_batch(
         }
     };
     let mut warnings = Vec::new();
+    warnings.extend(ancillary_warnings);
     if let Some(backup) = backup_folder.as_ref() {
         warnings.push(format!(
             "Предыдущая версия комплекта сохранена как резервная копия: {}",
@@ -1666,11 +1638,14 @@ fn render_docx_batch(
     warnings.extend(generation_publication::finalize_published_generation(
         &app, &permit, false,
     ));
-    let created_files = staged_paths
-        .iter()
-        .filter_map(|path| path.file_name())
-        .map(|name| output_folder.join(name).display().to_string())
-        .collect::<Vec<_>>();
+    // Never fabricate success from staging file names. The response is emitted
+    // only after every requested final file is physically present, non-empty and
+    // readable as a Word document at the published path.
+    let created_files = verify_published_batch_files(
+        &output_folder,
+        &staged_paths,
+        documents.len(),
+    )?;
     let created_documents = documents
         .iter()
         .zip(created_files.iter())

@@ -1,22 +1,12 @@
 // Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
 
 const MEDICAL_RVK_OPTIONS_BLOCK_ID: &str = "professional.medical.rvk.quick_options";
-const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v3";
+const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v4";
 const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str = concat!(
     "{{#each diaries}}\n",
-    "{{diary.datetime}} ",
-    "{{#if diary.is_dynamic_epicrisis}}",
-    "{{diary.text}}\n",
-    "{{else}}",
-    "{{#if diary.is_final}}",
-    "Состояние удовлетворительное. Жалоб не предъявляет. Настроение ровное. ",
-    "Выраженных психотических расстройств на момент осмотра не выявляет. ",
-    "Сон и аппетит удовлетворительные. Критика к состоянию сохранена. ",
-    "Подготовлен к выписке. Рекомендовано продолжить лечение и наблюдение по месту жительства.",
-    "{{else}}{{diary.text}}{{/if}}\n",
+    "{{diary.datetime}} {{diary.text}}\n",
     "{{diary.treating_physician_signature}}\n",
     "{{diary.department_head_signature}}\n",
-    "{{/if}}\n",
     "\n",
     "{{/each}}\n",
 );
@@ -140,7 +130,6 @@ fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, St
                 text.contains("{{#each diaries}}")
                     && text.contains("{{diary.datetime}}")
                     && text.contains("{{diary.text}}")
-                    && text.contains("{{diary.is_dynamic_epicrisis}}")
                     && text.contains("{{diary.treating_physician_signature}}")
                     && text.contains("{{diary.department_head_signature}}")
             })

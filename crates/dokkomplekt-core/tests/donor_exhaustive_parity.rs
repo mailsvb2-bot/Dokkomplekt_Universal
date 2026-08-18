@@ -80,6 +80,36 @@ fn donor_source_parser_keeps_same_line_dates_and_sanitizes_fio_tail() {
 }
 
 #[test]
+fn polish_only_medical_source_activates_the_same_canonical_medical_parser() {
+    let text = concat!(
+        "Karta informacyjna leczenia szpitalnego\n",
+        "Pacjent: Anna Kowalska\n",
+        "Nr historii choroby: 123/PL\n",
+        "Data urodzenia: 04.01.1980\n",
+        "Data przyjęcia: 2 czerwca 2026\n",
+        "Data wypisu: 12.06.2026\n",
+        "Rozpoznanie: K35.8 Ostre zapalenie wyrostka robaczkowego\n",
+        "Leczenie: appendektomia, antybiotykoterapia\n",
+        "Zalecenia: kontrola w poradni"
+    );
+    let (case, _) = parse_source_text(text, 2026);
+    assert_eq!(case.get("subject.name"), Some("Anna Kowalska"));
+    assert_eq!(case.get("medical.case_number"), Some("123/PL"));
+    assert_eq!(case.get("subject.birth_date"), Some("04.01.1980"));
+    assert_eq!(case.get("medical.admission_date"), Some("02.06.2026"));
+    assert_eq!(case.get("medical.discharge_date"), Some("12.06.2026"));
+    assert_eq!(
+        case.get("medical.diagnosis"),
+        Some("K35.8 Ostre zapalenie wyrostka robaczkowego")
+    );
+    assert_eq!(
+        case.get("medical.treatment"),
+        Some("appendektomia, antybiotykoterapia")
+    );
+    assert_eq!(case.get("medical.recommendations"), Some("kontrola w poradni"));
+}
+
+#[test]
 fn donor_dynamic_epicrisis_schedule_stays_ten_day_anchored_and_before_discharge() {
     let base = dynamic_epicrisis_base_date(d("10.05.2026"), None);
     assert_eq!(base, d("10.05.2026"));

@@ -60,8 +60,9 @@ def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
     assert "психотических расстройств" not in profile_sources.lower()
     assert "критика к состоянию" not in profile_sources.lower()
     assert "NEUTRAL_FINAL_DIARY_TEXT" in records
-    assert "ensure_neutral_final_diary_text(rows);" in records
-    assert "specialist-owned final text wins" in records
+    assert "ensure_donor_final_diary_text(rows, case);" in records
+    assert "ordinary rotating status" in records
+    assert "specialist-owned final source" in records
 
     assert "даты берутся из даты поступления и выписки" in materials
     assert "Отдельная папка «Даты 01–31» для обычного создания не нужна" in materials

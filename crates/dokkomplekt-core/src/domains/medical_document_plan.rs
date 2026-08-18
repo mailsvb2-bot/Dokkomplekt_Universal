@@ -129,7 +129,7 @@ pub fn build_medical_render_plan(
             if sick_leave_enabled {
                 required.push("medical.sick_leave_number".into());
             }
-            optional.extend(["medical.workplace".into(), "medical.position".into()]);
+            required.extend(["medical.workplace".into(), "medical.position".into()]);
             sections.extend([
                 "demographics".into(),
                 "diagnosis".into(),
@@ -213,7 +213,7 @@ pub fn build_medical_render_plan(
         }
         MedicalDocumentRole::PrimaryInspection => {
             require_treatment_if_missing(&mut required, treatment_found);
-            optional.extend(["medical.workplace".into(), "medical.position".into()]);
+            required.extend(["medical.workplace".into(), "medical.position".into()]);
             sections.extend([
                 "complaints".into(),
                 "anamnesis".into(),

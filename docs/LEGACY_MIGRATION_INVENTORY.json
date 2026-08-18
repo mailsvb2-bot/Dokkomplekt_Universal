@@ -169,6 +169,17 @@
           "note": "Legacy implementation is intentionally not shipped in Universal; its behavior is obsolete, unsafe, or replaced by user-owned templates/data."
         },
         {
+          "path": "medical_expert.py",
+          "status": "migrated-domain-profile",
+          "targets": [
+            "crates/dokkomplekt-core/src/domains/medical_semantics.rs",
+            "crates/dokkomplekt-core/src/domains/medical_document_plan.rs",
+            "crates/dokkomplekt-core/tests/donor_medical_expert_anamnesis.rs",
+            "src-tauri/src/subsystems/document_commands.rs"
+          ],
+          "note": "Expert anamnesis is derived only in the Medical render case: primary stays short, discharge includes the confirmed sick-leave decision, number, inclusive treatment period and return-to-work date. The UI sick-leave toggle is persisted as a semantic fact instead of being inferred from missing data."
+        },
+        {
           "path": "medical_models.py",
           "status": "migrated-domain-profile",
           "targets": [

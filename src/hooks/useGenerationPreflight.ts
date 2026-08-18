@@ -32,13 +32,20 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       return;
     }
     const workflow = options.preflightPlan ?? await options.requestWorkflowPlan(options.selectedDocumentIds);
-    if (!workflow) return;
+    if (!workflow) {
+      options.setStatus('Не удалось получить финальный план создания. Комплект не создан.');
+      return;
+    }
     options.setPreflightPlan(workflow);
+
+    // A click on the primary generation action must never look like a no-op.
+    // Keep backend blockers fail-closed, but always open the canonical preflight
+    // so the specialist can see the exact reason and fix the template/data.
+    setGenerationPreflightOpen(true);
     if (workflow.blocked) {
       options.setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
       return;
     }
-    setGenerationPreflightOpen(true);
     options.setStatus('Проверьте данные выбранного комплекта перед созданием.');
   }
 

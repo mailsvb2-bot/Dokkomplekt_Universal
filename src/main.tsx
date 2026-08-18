@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { App } from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { ensureDefaultOutputRoot } from './lib/outputRootBootstrap';
 import './styles.css';
 
 const READY_WINDOW_TITLE = 'Dokkomplekt Universal';
@@ -68,12 +69,21 @@ if (!(rootElement instanceof HTMLElement)) {
   throw new Error('Application root element is missing');
 }
 
-ReactDOM.createRoot(rootElement).render(
-  <React.StrictMode>
-    <AppErrorBoundary>
-      <App />
-    </AppErrorBoundary>
-  </React.StrictMode>
-);
+async function bootstrapApplication(root: HTMLElement): Promise<void> {
+  // Resolve the canonical first-run Desktop output before App's synchronous
+  // useState(loadOutputRoot) executes. This restores the product contract that
+  // generation works without forcing the user to configure a folder first.
+  await ensureDefaultOutputRoot();
 
-signalNativeWindowWhenRendered(rootElement);
+  ReactDOM.createRoot(root).render(
+    <React.StrictMode>
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
+    </React.StrictMode>
+  );
+
+  signalNativeWindowWhenRendered(root);
+}
+
+void bootstrapApplication(rootElement);

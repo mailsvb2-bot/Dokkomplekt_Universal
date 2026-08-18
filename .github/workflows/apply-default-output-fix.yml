@@ -1,20 +1,21 @@
 name: Apply canonical default output root fix
 
 on:
-  push:
-    paths:
-      - .github/workflows/apply-default-output-fix.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply-fix:
+    if: github.head_ref == 'agent/default-output-root-20260818'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - name: Patch canonical startup and generation output flow
         shell: python
@@ -271,4 +272,4 @@ jobs:
           git add src-tauri/src/subsystems/document_commands.rs src/App.tsx src/App.test.tsx src/lib/types.ts .github/workflows/apply-default-output-fix.yml
           git diff --cached --check
           git commit -m "fix: restore canonical default output folder"
-          git push origin HEAD:${{ github.ref_name }}
+          git push origin HEAD:${{ github.head_ref }}

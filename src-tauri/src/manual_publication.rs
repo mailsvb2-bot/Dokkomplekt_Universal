@@ -124,6 +124,13 @@ pub(crate) fn verify_published_docx(
     Ok(created_files)
 }
 
+pub(crate) fn path_strings(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

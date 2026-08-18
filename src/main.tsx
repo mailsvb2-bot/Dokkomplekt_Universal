@@ -69,13 +69,13 @@ if (!(rootElement instanceof HTMLElement)) {
   throw new Error('Application root element is missing');
 }
 
-async function bootstrapApplication(): Promise<void> {
+async function bootstrapApplication(root: HTMLElement): Promise<void> {
   // Resolve the canonical first-run Desktop output before App's synchronous
   // useState(loadOutputRoot) executes. This restores the product contract that
   // generation works without forcing the user to configure a folder first.
   await ensureDefaultOutputRoot();
 
-  ReactDOM.createRoot(rootElement).render(
+  ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <AppErrorBoundary>
         <App />
@@ -83,7 +83,7 @@ async function bootstrapApplication(): Promise<void> {
     </React.StrictMode>
   );
 
-  signalNativeWindowWhenRendered(rootElement);
+  signalNativeWindowWhenRendered(root);
 }
 
-void bootstrapApplication();
+void bootstrapApplication(rootElement);

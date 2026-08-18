@@ -1,6 +1,7 @@
 mod central_queue;
 mod component_manager;
 mod generation_publication;
+mod manual_publication;
 mod privacy_runtime;
 mod reference_data_update;
 mod resume_engine;

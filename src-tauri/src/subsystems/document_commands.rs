@@ -1482,12 +1482,7 @@ fn render_docx_batch(
     // Render beside the final output root instead of creating the user-visible
     // output directory before the batch has actually succeeded. Publication
     // creates the visible root only at the atomic visibility boundary below.
-    let stage_parent = output_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| output_root.clone());
-    std::fs::create_dir_all(&stage_parent).map_err(|error| error.to_string())?;
-    cleanup_stale_stage_directories(&stage_parent, Duration::from_secs(24 * 60 * 60))?;
+    let stage_parent = manual_publication::prepare_stage_parent(&output_root)?;
     let labels = documents
         .iter()
         .map(|document| document.button_label.clone())
@@ -1575,33 +1570,20 @@ fn render_docx_batch(
             .flat_map(|document| document.placeholders.iter().cloned())
             .collect::<BTreeSet<_>>();
         if privacy.write_trust_report {
-            match state.source_provenance.lock() {
-                Ok(guard) => match guard.clone() {
-                    Some(provenance) => {
-                        if let Err(error) = write_trust_report(
-                            &stage,
-                            &report_case,
-                            TrustReportContext {
-                                source_name: &provenance.source_name,
-                                source_sha256: &provenance.source_sha256,
-                                generated_names: &generated_names,
-                                used_field_ids: &used_field_ids,
-                                include_values: privacy.include_values_in_trust_report,
-                                source_warnings: &[],
-                            },
-                        ) {
-                            render_warnings.push(format!(
-                                "DOCX созданы; локальный отчёт проверяемости не создан: {error}"
-                            ));
-                        }
-                    }
-                    None => render_warnings.push(
-                        "DOCX созданы; локальный отчёт проверяемости пропущен: источник не имеет доступного provenance после восстановления состояния.".into(),
-                    ),
-                },
-                Err(_) => render_warnings.push(
-                    "DOCX созданы; локальный отчёт проверяемости пропущен: состояние provenance временно недоступно.".into(),
-                ),
+            let provenance = state
+                .source_provenance
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone());
+            if let Some(warning) = manual_publication::optional_trust_report_warning(
+                &stage,
+                &report_case,
+                provenance.as_ref(),
+                &generated_names,
+                &used_field_ids,
+                privacy.include_values_in_trust_report,
+            ) {
+                render_warnings.push(warning);
             }
         }
         Ok(paths)
@@ -1616,38 +1598,13 @@ fn render_docx_batch(
             return Err(error);
         }
     };
-    if staged_paths.len() != documents.len() {
+    if let Err(error) =
+        manual_publication::verify_staged_docx(&staged_paths, documents.len())
+    {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
         rollback_generation_access(&app, &state, &permit);
-        return Err(format!(
-            "Комплект не опубликован: запрошено {} документ(ов), физически подготовлено {}.",
-            documents.len(),
-            staged_paths.len()
-        ));
-    }
-    for path in &staged_paths {
-        let metadata = match std::fs::metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                let _ = std::fs::remove_dir_all(&stage);
-                rollback_counter_reservations(&app, &counter_reservations);
-                rollback_generation_access(&app, &state, &permit);
-                return Err(format!(
-                    "Комплект не опубликован: подготовленный DOCX исчез до публикации ({}): {error}",
-                    path.display()
-                ));
-            }
-        };
-        if !metadata.is_file() || metadata.len() == 0 {
-            let _ = std::fs::remove_dir_all(&stage);
-            rollback_counter_reservations(&app, &counter_reservations);
-            rollback_generation_access(&app, &state, &permit);
-            return Err(format!(
-                "Комплект не опубликован: подготовленный DOCX пуст или не является файлом: {}",
-                path.display()
-            ));
-        }
+        return Err(error);
     }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
         let _ = std::fs::remove_dir_all(&stage);
@@ -1687,46 +1644,12 @@ fn render_docx_batch(
             ));
         }
     };
-    let created_files = staged_paths
-        .iter()
-        .map(|path| {
-            path.file_name()
-                .ok_or_else(|| format!("Созданный файл не имеет имени: {}", path.display()))
-                .map(|name| output_folder.join(name))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    if created_files.len() != documents.len() {
-        return Err(format!(
-            "КРИТИЧЕСКАЯ ОШИБКА публикации: ожидалось {} DOCX, получено {} в {}.",
-            documents.len(),
-            created_files.len(),
-            output_folder.display()
-        ));
-    }
-    for path in &created_files {
-        let metadata = std::fs::metadata(path).map_err(|error| {
-            format!(
-                "КРИТИЧЕСКАЯ ОШИБКА публикации: файл отсутствует на диске после публикации ({}): {error}",
-                path.display()
-            )
-        })?;
-        if !metadata.is_file() || metadata.len() == 0 {
-            return Err(format!(
-                "КРИТИЧЕСКАЯ ОШИБКА публикации: опубликованный DOCX пуст или не является файлом: {}",
-                path.display()
-            ));
-        }
-        extract_docx_text(path).map_err(|error| {
-            format!(
-                "КРИТИЧЕСКАЯ ОШИБКА публикации: опубликованный DOCX не читается как Word-документ ({}): {error}",
-                path.display()
-            )
-        })?;
-    }
-    let created_file_strings = created_files
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
+    let created_files = manual_publication::verify_published_docx(
+        &staged_paths,
+        &output_folder,
+        documents.len(),
+    )?;
+    let created_file_strings = manual_publication::path_strings(&created_files);
     let mut warnings = Vec::new();
     warnings.extend(render_warnings);
     if let Some(backup) = backup_folder.as_ref() {

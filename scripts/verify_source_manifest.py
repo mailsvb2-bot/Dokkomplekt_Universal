@@ -6,13 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import subprocess
-import sys
 from pathlib import Path
-
-ONE_SHOT = Path(__file__).resolve().with_name("provenance_pr149_one_shot.py")
-if ONE_SHOT.is_file():
-    subprocess.run([sys.executable, str(ONE_SHOT)], check=True)
 
 MODULE_PATH = Path(__file__).resolve().with_name("build_source_archive.py")
 SPEC = importlib.util.spec_from_file_location("build_source_archive", MODULE_PATH)

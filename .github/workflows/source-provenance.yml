@@ -210,68 +210,18 @@ jobs:
           app_path = 'src/App.tsx'
           replace_once(
               app_path,
-              block('''
-                      const res = await firstRunState();
-                      if (!alive) return;
-                      if (res?.pack?.documents?.length) {
-              '''),
-              block('''
-                      const res = await firstRunState();
-                      if (!alive) return;
-                      const defaultOutputRoot = res?.default_output_root?.trim();
-                      if (defaultOutputRoot) {
-                        setOutputRoot((current) => current.trim() || defaultOutputRoot);
-                      }
-                      if (res?.pack?.documents?.length) {
-              ''')
+              "        const res = await firstRunState();\n        if (!alive) return;\n        if (res?.pack?.documents?.length) {",
+              "        const res = await firstRunState();\n        if (!alive) return;\n        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) {\n          setOutputRoot((current) => current.trim() || defaultOutputRoot);\n        }\n        if (res?.pack?.documents?.length) {"
           )
           replace_once(
               app_path,
-              block('''
-                async function chooseExistingOutputPolicy(documentIds: string[]) {
-                  const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
-                  return chooseExistingOutputPolicyFlow({
-                    outputRoot, folderParts, labels,
-              '''),
-              block('''
-                async function resolveOutputRootForGeneration(): Promise<string> {
-                  const configured = outputRoot.trim();
-                  if (configured) return configured;
-                  const startup = await run('first_run_state', () => firstRunState());
-                  const fallback = startup?.default_output_root?.trim() ?? '';
-                  if (!fallback) {
-                    setFolderNamingConfirmed(false);
-                    setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');
-                    return '';
-                  }
-                  setOutputRoot(fallback);
-                  return fallback;
-                }
-
-                async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {
-                  const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
-                  return chooseExistingOutputPolicyFlow({
-                    outputRoot: resolvedOutputRoot, folderParts, labels,
-              ''')
+              "  async function chooseExistingOutputPolicy(documentIds: string[]) {\n    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));\n    return chooseExistingOutputPolicyFlow({\n      outputRoot, folderParts, labels,",
+              "  async function resolveOutputRootForGeneration(): Promise<string> {\n    const configured = outputRoot.trim();\n    if (configured) return configured;\n    const startup = await run('first_run_state', () => firstRunState());\n    const fallback = startup?.default_output_root?.trim() ?? '';\n    if (!fallback) {\n      setFolderNamingConfirmed(false);\n      setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');\n      return '';\n    }\n    setOutputRoot(fallback);\n    return fallback;\n  }\n\n  async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {\n    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));\n    return chooseExistingOutputPolicyFlow({\n      outputRoot: resolvedOutputRoot, folderParts, labels,"
           )
           replace_once(
               app_path,
-              block('''
-                async function performGenerateSelectedDocuments(documentIds: string[]) {
-                  const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);
-                  if (!existingOutputPolicy) return;
-                  const explicitOutputRoot = outputRoot.trim();
-                  if (!explicitOutputRoot) return;
-                  const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
-              '''),
-              block('''
-                async function performGenerateSelectedDocuments(documentIds: string[]) {
-                  const explicitOutputRoot = await resolveOutputRootForGeneration();
-                  if (!explicitOutputRoot) return;
-                  const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);
-                  if (!existingOutputPolicy) return;
-                  const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
-              ''')
+              "  async function performGenerateSelectedDocuments(documentIds: string[]) {\n    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);\n    if (!existingOutputPolicy) return;\n    const explicitOutputRoot = outputRoot.trim();\n    if (!explicitOutputRoot) return;\n    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));",
+              "  async function performGenerateSelectedDocuments(documentIds: string[]) {\n    const explicitOutputRoot = await resolveOutputRootForGeneration();\n    if (!explicitOutputRoot) return;\n    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);\n    if (!existingOutputPolicy) return;\n    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));"
           )
 
           test_path = 'src/App.test.tsx'
@@ -282,37 +232,15 @@ jobs:
           )
           replace_once(
               test_path,
-              block('''
-                afterEach(() => {
-                  vi.restoreAllMocks();
-                  __resetInvokeForTests();
-                });
-
-                it('starts without built-in examples and shows one clear create-buttons action', async () => {
-              '''),
-              block('''
-                afterEach(() => {
-                  vi.restoreAllMocks();
-                  __resetInvokeForTests();
-                  localStorage.clear();
-                });
-
-                it('adopts the backend-created default output folder on first run', async () => {
-                  installTemplateMock(false);
-                  render(<App />);
-                  await waitFor(() => expect(localStorage.getItem('dokkomplekt.output-root.v1')).toBe('C:/Users/Test/Desktop/Выписанные пациенты'));
-                });
-
-                it('starts without built-in examples and shows one clear create-buttons action', async () => {
-              ''')
+              "  afterEach(() => {\n    vi.restoreAllMocks();\n    __resetInvokeForTests();\n  });\n\n  it('starts without built-in examples and shows one clear create-buttons action', async () => {",
+              "  afterEach(() => {\n    vi.restoreAllMocks();\n    __resetInvokeForTests();\n    localStorage.clear();\n  });\n\n  it('adopts the backend-created default output folder on first run', async () => {\n    installTemplateMock(false);\n    render(<App />);\n    await waitFor(() => expect(localStorage.getItem('dokkomplekt.output-root.v1')).toBe('C:/Users/Test/Desktop/Выписанные пациенты'));\n  });\n\n  it('starts without built-in examples and shows one clear create-buttons action', async () => {"
           )
           PY
 
           git checkout origin/main -- .github/workflows/source-provenance.yml
-          rm -f .github/workflows/apply-default-output-fix.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src-tauri/src/subsystems/document_commands.rs src/App.tsx src/App.test.tsx src/lib/types.ts .github/workflows/source-provenance.yml .github/workflows/apply-default-output-fix.yml
+          git add src-tauri/src/subsystems/document_commands.rs src/App.tsx src/App.test.tsx src/lib/types.ts .github/workflows/source-provenance.yml
           git diff --cached --check
           git commit -m "fix: restore canonical default output folder"
           git push origin "HEAD:${BRANCH}"

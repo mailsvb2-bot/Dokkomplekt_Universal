@@ -334,7 +334,12 @@ mod word_layout_completeness_tests {
             requirement: BlockRequirement::AnyRenderedField(vec!["subject.name".into()]),
         };
         let case = case_with(&[("subject.name", "Иванов Иван")]);
-        assert!(unmet_blocks(&[block.clone()], &case, "Пациент Иванов Иван").is_empty());
+        assert!(unmet_blocks(
+            std::slice::from_ref(&block),
+            &case,
+            "Пациент Иванов Иван"
+        )
+        .is_empty());
         assert_eq!(
             unmet_blocks(&[block], &case, "Пациент"),
             vec!["ФИО".to_string()]

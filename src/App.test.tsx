@@ -18,7 +18,7 @@ function installTemplateMock(staticCopy: boolean) {
   const calls: string[] = [];
   __setInvokeForTests(async (name: string) => {
     calls.push(name);
-    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
+    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки', default_output_root: 'C:/Users/Test/Desktop/Выписанные пациенты' } as never;
     if (name === 'get_intake_capabilities') return [] as never;
     if (name === 'pick_template_files') return { files: [{ file_name: 'Акт выполненных работ.docx', template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' }] } as never;
     if (name === 'import_template_file') return { template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' } as never;
@@ -55,6 +55,13 @@ describe('App', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     __resetInvokeForTests();
+    localStorage.clear();
+  });
+
+  it('adopts the backend-created default output folder on first run', async () => {
+    installTemplateMock(false);
+    render(<App />);
+    await waitFor(() => expect(localStorage.getItem('dokkomplekt.output-root.v1')).toBe('C:/Users/Test/Desktop/Выписанные пациенты'));
   });
 
   it('starts without built-in examples and shows one clear create-buttons action', async () => {

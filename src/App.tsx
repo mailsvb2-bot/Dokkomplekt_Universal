@@ -126,6 +126,10 @@ function AppContent() {
       try {
         const res = await firstRunState();
         if (!alive) return;
+        const defaultOutputRoot = res?.default_output_root?.trim();
+        if (defaultOutputRoot) {
+          setOutputRoot((current) => current.trim() || defaultOutputRoot);
+        }
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
           setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
@@ -574,10 +578,24 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function chooseExistingOutputPolicy(documentIds: string[]) {
+  async function resolveOutputRootForGeneration(): Promise<string> {
+    const configured = outputRoot.trim();
+    if (configured) return configured;
+    const startup = await run('first_run_state', () => firstRunState());
+    const fallback = startup?.default_output_root?.trim() ?? '';
+    if (!fallback) {
+      setFolderNamingConfirmed(false);
+      setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');
+      return '';
+    }
+    setOutputRoot(fallback);
+    return fallback;
+  }
+
+  async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {
     const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
     return chooseExistingOutputPolicyFlow({
-      outputRoot, folderParts, labels,
+      outputRoot: resolvedOutputRoot, folderParts, labels,
       getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
       confirm: (options) => dialogs.confirm(options),
       openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
@@ -587,10 +605,10 @@ function AppContent() {
   }
 
   async function performGenerateSelectedDocuments(documentIds: string[]) {
-    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);
-    if (!existingOutputPolicy) return;
-    const explicitOutputRoot = outputRoot.trim();
+    const explicitOutputRoot = await resolveOutputRootForGeneration();
     if (!explicitOutputRoot) return;
+    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);
+    if (!existingOutputPolicy) return;
     const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);

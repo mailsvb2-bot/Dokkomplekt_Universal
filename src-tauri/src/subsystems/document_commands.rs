@@ -1,12 +1,37 @@
+const DEFAULT_OUTPUT_FOLDER_NAME: &str = "Выписанные пациенты";
+
+fn ensure_default_output_root_under(desktop: &Path) -> Result<PathBuf, String> {
+    let output_root = desktop.join(DEFAULT_OUTPUT_FOLDER_NAME);
+    std::fs::create_dir_all(&output_root).map_err(|error| {
+        format!(
+            "Не удалось создать стандартную папку готовых документов «{}»: {error}",
+            output_root.display()
+        )
+    })?;
+    Ok(output_root)
+}
+
+fn ensure_default_output_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .map_err(|error| format!("Не удалось определить Рабочий стол пользователя: {error}"))?;
+    ensure_default_output_root_under(&desktop)
+}
+
 #[derive(Debug, Serialize)]
 struct FirstRunStateResponse {
     pack: DocumentPack,
     has_user_buttons: bool,
     message: String,
+    default_output_root: String,
 }
 
 #[tauri::command]
-fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, String> {
+fn first_run_state(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FirstRunStateResponse, String> {
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let has_user_buttons = !pack.documents.is_empty();
     let message = if state.persistence_blocked.load(Ordering::SeqCst) {
@@ -24,11 +49,42 @@ fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, 
     } else {
         "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию.".into()
     };
+    let (default_output_root, output_warning) = match ensure_default_output_root(&app) {
+        Ok(path) => (path.display().to_string(), None),
+        Err(error) => (String::new(), Some(error)),
+    };
+    let message = match output_warning {
+        Some(warning) => format!(
+            "{message} Стандартная папка готовых документов не создана: {warning}. Выберите папку вручную."
+        ),
+        None => message,
+    };
     Ok(FirstRunStateResponse {
         has_user_buttons,
         pack,
         message,
+        default_output_root,
     })
+}
+
+#[cfg(test)]
+mod default_output_root_tests {
+    use super::*;
+
+    #[test]
+    fn creates_default_output_root_idempotently() {
+        let desktop = std::env::temp_dir().join(format!(
+            "dkk-default-output-root-{}",
+            Uuid::new_v4()
+        ));
+        let expected = desktop.join(DEFAULT_OUTPUT_FOLDER_NAME);
+        let first = ensure_default_output_root_under(&desktop).unwrap();
+        let second = ensure_default_output_root_under(&desktop).unwrap();
+        assert_eq!(first, expected);
+        assert_eq!(second, expected);
+        assert!(expected.is_dir());
+        let _ = std::fs::remove_dir_all(desktop);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2832,7 +2888,7 @@ fn load_state(
 ) -> Result<FirstRunStateResponse, String> {
     let db_path = resolve_user_path(&app, &req.db_path)?;
     load_state_from(&app, &db_path, &state, false)?;
-    first_run_state(state)
+    first_run_state(state, app)
 }
 
 #[derive(Debug, Deserialize)]

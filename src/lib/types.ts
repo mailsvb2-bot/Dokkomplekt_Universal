@@ -81,6 +81,7 @@ export interface FirstRunStateResponse {
   pack: DocumentPack;
   has_user_buttons: boolean;
   message: string;
+  default_output_root: string;
 }
 
 export interface ValueEvidence {

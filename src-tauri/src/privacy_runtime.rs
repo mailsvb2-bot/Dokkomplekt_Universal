@@ -26,6 +26,18 @@ pub(crate) struct PrivacyPreferences {
     pub(crate) service_note_retention_days: u32,
     pub(crate) processed_marker_retention_days: u32,
     pub(crate) archived_source_retention_days: u32,
+    /// v1 installations enabled the trust report implicitly. That made an
+    /// ancillary audit artifact part of the critical publication path: after a
+    /// restart the semantic case could be restored without in-memory source
+    /// provenance, so manual generation rendered DOCX into staging and then
+    /// discarded the whole stage while trying to build the report.
+    ///
+    /// New and migrated installations therefore treat the report as explicit
+    /// opt-in. The flag is persisted only after the user saves privacy settings,
+    /// so an intentional future opt-in is preserved without resurrecting the
+    /// legacy fail-closed default.
+    #[serde(default)]
+    pub(crate) trust_report_explicit: bool,
 }
 
 impl Default for PrivacyPreferences {
@@ -33,7 +45,7 @@ impl Default for PrivacyPreferences {
         let retention = WorkspaceRetentionPolicy::default();
         Self {
             copy_source_to_output: false,
-            write_trust_report: true,
+            write_trust_report: false,
             include_values_in_trust_report: false,
             temp_retention_hours: 0,
             archive_processed_sources: retention.archive_processed_sources,
@@ -41,6 +53,7 @@ impl Default for PrivacyPreferences {
             service_note_retention_days: retention.service_note_retention_days,
             processed_marker_retention_days: retention.processed_marker_retention_days,
             archived_source_retention_days: retention.archived_source_retention_days,
+            trust_report_explicit: false,
         }
     }
 }
@@ -57,14 +70,22 @@ impl PrivacyPreferences {
     }
 }
 
+fn normalize_loaded_privacy_preferences(mut preferences: PrivacyPreferences) -> PrivacyPreferences {
+    if !preferences.trust_report_explicit {
+        preferences.write_trust_report = false;
+    }
+    preferences
+}
+
 pub(crate) fn load_privacy_preferences(
     app: &tauri::AppHandle,
 ) -> Result<PrivacyPreferences, String> {
     let repo = repository_for(&default_state_db_path(app)?)?;
-    Ok(repo
+    let loaded = repo
         .load_state_value::<PrivacyPreferences>(PRIVACY_PREFERENCES_STATE_KEY)
         .map_err(|error| error.to_string())?
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok(normalize_loaded_privacy_preferences(loaded))
 }
 
 pub(crate) fn persist_privacy_preferences(
@@ -75,8 +96,10 @@ pub(crate) fn persist_privacy_preferences(
         return Err("Срок хранения временных источников должен быть от 0 до 720 часов.".into());
     }
     preferences.retention_policy().validate()?;
+    let mut persisted = preferences.clone();
+    persisted.trust_report_explicit = true;
     repository_for(&default_state_db_path(app)?)?
-        .save_state_value(PRIVACY_PREFERENCES_STATE_KEY, preferences)
+        .save_state_value(PRIVACY_PREFERENCES_STATE_KEY, &persisted)
         .map_err(|error| error.to_string())
 }
 
@@ -110,4 +133,38 @@ pub(crate) fn start_periodic_intake_cleanup(app: tauri::AppHandle) {
             eprintln!("Периодическая очистка временных источников пропущена: {error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trust_report_is_not_part_of_default_document_publication() {
+        let preferences = PrivacyPreferences::default();
+        assert!(!preferences.write_trust_report);
+        assert!(!preferences.trust_report_explicit);
+    }
+
+    #[test]
+    fn legacy_implicit_trust_report_is_migrated_off() {
+        let legacy = PrivacyPreferences {
+            write_trust_report: true,
+            trust_report_explicit: false,
+            ..PrivacyPreferences::default()
+        };
+        let migrated = normalize_loaded_privacy_preferences(legacy);
+        assert!(!migrated.write_trust_report);
+    }
+
+    #[test]
+    fn explicit_trust_report_choice_is_preserved() {
+        let explicit = PrivacyPreferences {
+            write_trust_report: true,
+            trust_report_explicit: true,
+            ..PrivacyPreferences::default()
+        };
+        let loaded = normalize_loaded_privacy_preferences(explicit);
+        assert!(loaded.write_trust_report);
+    }
 }

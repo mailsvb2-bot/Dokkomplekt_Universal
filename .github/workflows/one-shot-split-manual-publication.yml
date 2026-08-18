@@ -210,6 +210,17 @@ jobs:
               ''',
               "delegate published verification",
           )
+          commands = replace_once(
+              commands,
+              '''    let created_file_strings = created_files
+                  .iter()
+                  .map(|path| path.display().to_string())
+                  .collect::<Vec<_>>();
+              ''',
+              '''    let created_file_strings = manual_publication::path_strings(&created_files);
+              ''',
+              "delegate path serialization",
+          )
           commands_path.write_text(commands, encoding="utf-8")
 
           test_path = root / "tests/test_manual_generation_physical_publication_contract.py"
@@ -257,6 +268,7 @@ def test_trust_report_is_ancillary_and_cannot_delete_docx():
 def test_success_opens_exact_verified_publication_folder():
     batch = body()
     assert batch.index("manual_publication::verify_published_docx(") < batch.index("open_in_file_manager(")
+    assert "manual_publication::path_strings(&created_files)" in batch
     assert "path: output_folder.display().to_string()" in batch
 ''', encoding="utf-8")
 

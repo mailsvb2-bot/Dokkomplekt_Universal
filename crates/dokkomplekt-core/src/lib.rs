@@ -172,39 +172,86 @@ pub use semantic_llm::{
 };
 
 /// Evaluate post-render completeness while preserving the physical layout semantics
-/// of Word signature blocks. DOCX extraction commonly places the role, signature
-/// rule and signer name into adjacent paragraphs/table cells. The lower-level
-/// validator intentionally reasons line-by-line; before calling it from product
-/// flows we therefore add bounded adjacent-line views without changing the original
-/// text. This prevents a correctly rendered document from being rejected solely
-/// because Word serialized one visual signature row as multiple XML text runs.
+/// of Word signature blocks. DOCX extraction can serialize one visual signature row
+/// as adjacent paragraphs/table cells, so a role line followed by a signature rule
+/// or a signer-shaped name fragment is accepted as one signature block. Every other
+/// requirement stays delegated to the canonical lower-level completeness validator.
 pub fn unmet_blocks(
     blocks: &[RequiredBlock],
     case: &SemanticCase,
     rendered_text: &str,
 ) -> Vec<String> {
-    let augmented = augment_adjacent_word_lines(rendered_text);
-    required_blocks::unmet_blocks(blocks, case, &augmented)
+    blocks
+        .iter()
+        .filter_map(|block| {
+            if required_blocks::unmet_blocks(std::slice::from_ref(block), case, rendered_text)
+                .is_empty()
+            {
+                return None;
+            }
+
+            if let BlockRequirement::SignatureLine(labels) = &block.requirement {
+                if contains_adjacent_word_signature(rendered_text, labels) {
+                    return None;
+                }
+            }
+            Some(block.title.clone())
+        })
+        .collect()
 }
 
-fn augment_adjacent_word_lines(rendered_text: &str) -> String {
+fn contains_adjacent_word_signature(rendered_text: &str, labels: &[String]) -> bool {
     let lines = rendered_text
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
-    if lines.len() < 2 {
-        return rendered_text.to_string();
+
+    lines.windows(2).any(|pair| {
+        let role_line = pair[0].to_lowercase();
+        let has_requested_role = labels
+            .iter()
+            .any(|label| role_line.contains(&label.to_lowercase()));
+        has_requested_role && (has_signature_cue(pair[1]) || looks_like_signer_name_fragment(pair[1]))
+    })
+}
+
+fn has_signature_cue(value: &str) -> bool {
+    let normalized = value.to_lowercase();
+    normalized.contains("___")
+        || normalized.contains("подпись")
+        || normalized.contains("/____")
+        || normalized.contains("м.п.")
+}
+
+fn looks_like_signer_name_fragment(value: &str) -> bool {
+    let trimmed = value.trim_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
+    });
+    if trimmed.is_empty() {
+        return false;
     }
 
-    let mut augmented = rendered_text.trim_end().to_string();
-    for pair in lines.windows(2) {
-        augmented.push('\n');
-        augmented.push_str(pair[0]);
-        augmented.push(' ');
-        augmented.push_str(pair[1]);
+    let words = trimmed.split_whitespace().collect::<Vec<_>>();
+    if words.is_empty() || words.len() > 4 {
+        return false;
     }
-    augmented
+
+    let has_initials = words.iter().any(|word| {
+        let alphabetic = word.chars().filter(|character| character.is_alphabetic()).count();
+        alphabetic > 0 && word.contains('.')
+    });
+    let titlecase_words = words
+        .iter()
+        .filter(|word| {
+            word.chars()
+                .find(|character| character.is_alphabetic())
+                .is_some_and(char::is_uppercase)
+        })
+        .count();
+
+    has_initials || titlecase_words >= 2
 }
 
 #[cfg(test)]
@@ -256,6 +303,20 @@ mod word_layout_completeness_tests {
             requirement: BlockRequirement::SignatureLine(vec!["лечащий врач".into()]),
         };
         let rendered = "Лечащий врач\nосмотрел пациента и продолжил наблюдение.";
+        assert_eq!(
+            unmet_blocks(&[block], &SemanticCase::default(), rendered),
+            vec!["Подпись врача-психиатра".to_string()]
+        );
+    }
+
+    #[test]
+    fn adjacent_plain_heading_still_does_not_become_a_signature() {
+        let block = RequiredBlock {
+            id: "doctor_signature".into(),
+            title: "Подпись врача-психиатра".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["лечащий врач".into()]),
+        };
+        let rendered = "Лечащий врач\nРекомендации";
         assert_eq!(
             unmet_blocks(&[block], &SemanticCase::default(), rendered),
             vec!["Подпись врача-психиатра".to_string()]

@@ -27,7 +27,9 @@ def test_manual_generation_uses_real_source_provenance() -> None:
     assert "Источник не содержит проверяемый SHA-256" in main
     assert "source_sha256: hex::encode(Sha256::digest(&bytes))" in intake
     assert "Отчёт проверяемости требует настоящий SHA-256 исходника" in desktop
-    assert "Для проверяемого отчёта сначала загрузите файл" in commands
+    assert "match state.source_provenance.lock()" in commands
+    assert "DOCX созданы; локальный отчёт проверяемости пропущен" in commands
+    assert "Для проверяемого отчёта сначала загрузите файл" not in commands
 
 
 def test_second_launch_activates_primary_without_setup_panic() -> None:

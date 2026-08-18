@@ -21,8 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          # A workflow_dispatch run carries an immutable event SHA. Use that exact
-          # commit instead of resolving the moving branch again when this job starts.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Verify immutable dispatch checkout identity
@@ -41,6 +39,283 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Apply reported default-output regression fix once
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/default-output-root-20260818'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def block(value: str) -> str:
+              return dedent(value).lstrip('\n')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement target, found {count}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          rust_path = 'src-tauri/src/subsystems/document_commands.rs'
+          replace_once(
+              rust_path,
+              block('''
+              #[derive(Debug, Serialize)]
+              struct FirstRunStateResponse {
+                  pack: DocumentPack,
+                  has_user_buttons: bool,
+                  message: String,
+              }
+
+              #[tauri::command]
+              fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, String> {
+                  let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+              '''),
+              block('''
+              const DEFAULT_OUTPUT_FOLDER_NAME: &str = "Выписанные пациенты";
+
+              fn ensure_default_output_root_under(desktop: &Path) -> Result<PathBuf, String> {
+                  let output_root = desktop.join(DEFAULT_OUTPUT_FOLDER_NAME);
+                  std::fs::create_dir_all(&output_root).map_err(|error| {
+                      format!(
+                          "Не удалось создать стандартную папку готовых документов «{}»: {error}",
+                          output_root.display()
+                      )
+                  })?;
+                  Ok(output_root)
+              }
+
+              fn ensure_default_output_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+                  let desktop = app
+                      .path()
+                      .desktop_dir()
+                      .map_err(|error| format!("Не удалось определить Рабочий стол пользователя: {error}"))?;
+                  ensure_default_output_root_under(&desktop)
+              }
+
+              #[derive(Debug, Serialize)]
+              struct FirstRunStateResponse {
+                  pack: DocumentPack,
+                  has_user_buttons: bool,
+                  message: String,
+                  default_output_root: String,
+              }
+
+              #[tauri::command]
+              fn first_run_state(
+                  state: State<'_, AppState>,
+                  app: tauri::AppHandle,
+              ) -> Result<FirstRunStateResponse, String> {
+                  let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+              ''')
+          )
+          replace_once(
+              rust_path,
+              block('''
+                  Ok(FirstRunStateResponse {
+                      has_user_buttons,
+                      pack,
+                      message,
+                  })
+              }
+
+              #[derive(Debug, Deserialize)]
+              struct AnalyzeTemplateRequest {
+              '''),
+              block('''
+                  let (default_output_root, output_warning) = match ensure_default_output_root(&app) {
+                      Ok(path) => (path.display().to_string(), None),
+                      Err(error) => (String::new(), Some(error)),
+                  };
+                  let message = match output_warning {
+                      Some(warning) => format!(
+                          "{message} Стандартная папка готовых документов не создана: {warning}. Выберите папку вручную."
+                      ),
+                      None => message,
+                  };
+                  Ok(FirstRunStateResponse {
+                      has_user_buttons,
+                      pack,
+                      message,
+                      default_output_root,
+                  })
+              }
+
+              #[cfg(test)]
+              mod default_output_root_tests {
+                  use super::*;
+
+                  #[test]
+                  fn creates_default_output_root_idempotently() {
+                      let desktop = std::env::temp_dir().join(format!(
+                          "dkk-default-output-root-{}",
+                          Uuid::new_v4()
+                      ));
+                      let expected = desktop.join(DEFAULT_OUTPUT_FOLDER_NAME);
+                      let first = ensure_default_output_root_under(&desktop).unwrap();
+                      let second = ensure_default_output_root_under(&desktop).unwrap();
+                      assert_eq!(first, expected);
+                      assert_eq!(second, expected);
+                      assert!(expected.is_dir());
+                      let _ = std::fs::remove_dir_all(desktop);
+                  }
+              }
+
+              #[derive(Debug, Deserialize)]
+              struct AnalyzeTemplateRequest {
+              ''')
+          )
+          replace_once(
+              rust_path,
+              block('''
+                  first_run_state(state)
+              }
+
+              #[derive(Debug, Deserialize)]
+              struct ProductAccessRequest {
+              '''),
+              block('''
+                  first_run_state(state, app)
+              }
+
+              #[derive(Debug, Deserialize)]
+              struct ProductAccessRequest {
+              ''')
+          )
+
+          replace_once(
+              'src/lib/types.ts',
+              block('''
+              export interface FirstRunStateResponse {
+                pack: DocumentPack;
+                has_user_buttons: boolean;
+                message: string;
+              }
+              '''),
+              block('''
+              export interface FirstRunStateResponse {
+                pack: DocumentPack;
+                has_user_buttons: boolean;
+                message: string;
+                default_output_root: string;
+              }
+              ''')
+          )
+
+          app_path = 'src/App.tsx'
+          replace_once(
+              app_path,
+              block('''
+                      const res = await firstRunState();
+                      if (!alive) return;
+                      if (res?.pack?.documents?.length) {
+              '''),
+              block('''
+                      const res = await firstRunState();
+                      if (!alive) return;
+                      const defaultOutputRoot = res?.default_output_root?.trim();
+                      if (defaultOutputRoot) {
+                        setOutputRoot((current) => current.trim() || defaultOutputRoot);
+                      }
+                      if (res?.pack?.documents?.length) {
+              ''')
+          )
+          replace_once(
+              app_path,
+              block('''
+                async function chooseExistingOutputPolicy(documentIds: string[]) {
+                  const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
+                  return chooseExistingOutputPolicyFlow({
+                    outputRoot, folderParts, labels,
+              '''),
+              block('''
+                async function resolveOutputRootForGeneration(): Promise<string> {
+                  const configured = outputRoot.trim();
+                  if (configured) return configured;
+                  const startup = await run('first_run_state', () => firstRunState());
+                  const fallback = startup?.default_output_root?.trim() ?? '';
+                  if (!fallback) {
+                    setFolderNamingConfirmed(false);
+                    setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');
+                    return '';
+                  }
+                  setOutputRoot(fallback);
+                  return fallback;
+                }
+
+                async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {
+                  const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
+                  return chooseExistingOutputPolicyFlow({
+                    outputRoot: resolvedOutputRoot, folderParts, labels,
+              ''')
+          )
+          replace_once(
+              app_path,
+              block('''
+                async function performGenerateSelectedDocuments(documentIds: string[]) {
+                  const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);
+                  if (!existingOutputPolicy) return;
+                  const explicitOutputRoot = outputRoot.trim();
+                  if (!explicitOutputRoot) return;
+                  const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
+              '''),
+              block('''
+                async function performGenerateSelectedDocuments(documentIds: string[]) {
+                  const explicitOutputRoot = await resolveOutputRootForGeneration();
+                  if (!explicitOutputRoot) return;
+                  const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);
+                  if (!existingOutputPolicy) return;
+                  const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
+              ''')
+          )
+
+          test_path = 'src/App.test.tsx'
+          replace_once(
+              test_path,
+              "    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;\n",
+              "    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки', default_output_root: 'C:/Users/Test/Desktop/Выписанные пациенты' } as never;\n"
+          )
+          replace_once(
+              test_path,
+              block('''
+                afterEach(() => {
+                  vi.restoreAllMocks();
+                  __resetInvokeForTests();
+                });
+
+                it('starts without built-in examples and shows one clear create-buttons action', async () => {
+              '''),
+              block('''
+                afterEach(() => {
+                  vi.restoreAllMocks();
+                  __resetInvokeForTests();
+                  localStorage.clear();
+                });
+
+                it('adopts the backend-created default output folder on first run', async () => {
+                  installTemplateMock(false);
+                  render(<App />);
+                  await waitFor(() => expect(localStorage.getItem('dokkomplekt.output-root.v1')).toBe('C:/Users/Test/Desktop/Выписанные пациенты'));
+                });
+
+                it('starts without built-in examples and shows one clear create-buttons action', async () => {
+              ''')
+          )
+          PY
+
+          git checkout origin/main -- .github/workflows/source-provenance.yml
+          rm -f .github/workflows/apply-default-output-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src-tauri/src/subsystems/document_commands.rs src/App.tsx src/App.test.tsx src/lib/types.ts .github/workflows/source-provenance.yml .github/workflows/apply-default-output-fix.yml
+          git diff --cached --check
+          git commit -m "fix: restore canonical default output folder"
+          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

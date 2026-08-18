@@ -458,7 +458,8 @@ pub fn diary_hourly_schedule_from_choice(choice: &str) -> Result<DiaryScheduleSp
 pub fn diary_minute_schedule_from_choice(choice: &str) -> DiaryScheduleSpec {
     let text = choice.trim().to_lowercase().replace('ё', "е");
     let compact = text.replace(' ', "");
-    if text.is_empty() || matches!(text.as_str(), "0" | "1" | "один раз в день" | "без" | "нет") {
+    if text.is_empty() || matches!(text.as_str(), "0" | "1" | "один раз в день" | "без" | "нет")
+    {
         return one_per_day_schedule();
     }
     let preset = match text.as_str() {
@@ -469,13 +470,23 @@ pub fn diary_minute_schedule_from_choice(choice: &str) -> DiaryScheduleSpec {
         "6" => Some(vec![5]),
         _ if compact == "4часа" || compact == "каждые4часа" => Some(vec![240]),
         _ if compact == "1час" || compact == "каждыйчас" => Some(vec![60]),
-        _ if matches!(compact.as_str(), "30" | "30мин" | "30минут" | "каждые30минут") => {
+        _ if matches!(
+            compact.as_str(),
+            "30" | "30мин" | "30минут" | "каждые30минут"
+        ) =>
+        {
             Some(vec![30])
         }
-        _ if matches!(compact.as_str(), "15" | "15мин" | "15минут" | "каждые15минут") => {
+        _ if matches!(
+            compact.as_str(),
+            "15" | "15мин" | "15минут" | "каждые15минут"
+        ) =>
+        {
             Some(vec![15])
         }
-        _ if matches!(compact.as_str(), "5мин" | "5минут" | "каждые5минут") => Some(vec![5]),
+        _ if matches!(compact.as_str(), "5мин" | "5минут" | "каждые5минут") => {
+            Some(vec![5])
+        }
         _ => None,
     };
     let is_preset = preset.is_some();

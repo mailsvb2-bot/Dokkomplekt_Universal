@@ -1,4 +1,6 @@
+use dokkomplekt_core::SemanticCase;
 use dokkomplekt_docx::extract_docx_text;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Manual generation stages beside the user-visible output root. The visible
@@ -9,6 +11,42 @@ pub(crate) fn stage_parent(output_root: &Path) -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| output_root.to_path_buf())
+}
+
+/// A trust report is an ancillary local audit artifact. It must never roll back
+/// a successfully rendered document kit. The caller may surface the returned
+/// warning, but document publication continues regardless of report failure.
+pub(crate) fn optional_trust_report_warning(
+    stage: &Path,
+    semantic_case: &SemanticCase,
+    provenance: Option<&crate::SourceProvenance>,
+    generated_names: &[String],
+    used_field_ids: &BTreeSet<String>,
+    include_values: bool,
+) -> Option<String> {
+    let provenance = match provenance {
+        Some(value) => value,
+        None => {
+            return Some(
+                "DOCX созданы; локальный отчёт проверяемости пропущен: provenance исходника недоступен после восстановления состояния."
+                    .into(),
+            )
+        }
+    };
+    crate::write_trust_report(
+        stage,
+        semantic_case,
+        crate::TrustReportContext {
+            source_name: &provenance.source_name,
+            source_sha256: &provenance.source_sha256,
+            generated_names,
+            used_field_ids,
+            include_values,
+            source_warnings: &[],
+        },
+    )
+    .err()
+    .map(|error| format!("DOCX созданы; локальный отчёт проверяемости не создан: {error}"))
 }
 
 /// Prove that rendering produced exactly one non-empty physical file for every

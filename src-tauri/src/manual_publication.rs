@@ -2,6 +2,7 @@ use dokkomplekt_core::SemanticCase;
 use dokkomplekt_docx::extract_docx_text;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Manual generation stages beside the user-visible output root. The visible
 /// root is created only by the final publication operation, so a render failure
@@ -11,6 +12,13 @@ pub(crate) fn stage_parent(output_root: &Path) -> PathBuf {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| output_root.to_path_buf())
+}
+
+pub(crate) fn prepare_stage_parent(output_root: &Path) -> Result<PathBuf, String> {
+    let parent = stage_parent(output_root);
+    std::fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+    crate::cleanup_stale_stage_directories(&parent, Duration::from_secs(24 * 60 * 60))?;
+    Ok(parent)
 }
 
 /// A trust report is an ancillary local audit artifact. It must never roll back

@@ -22,208 +22,115 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Apply complete module split
+      - name: Apply idempotent publication split
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
           root = Path.cwd()
-
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1 match, found {count}")
-              return text.replace(old, new, 1)
-
-          main = root / "src-tauri/src/main.rs"
-          text = main.read_text(encoding="utf-8")
-          if "mod manual_publication;" not in text:
-              text = replace_once(
-                  text,
-                  "mod generation_publication;\nmod privacy_runtime;",
-                  "mod generation_publication;\nmod manual_publication;\nmod privacy_runtime;",
-                  "register manual publication module",
-              )
-          main.write_text(text, encoding="utf-8")
-
+          main_path = root / "src-tauri/src/main.rs"
           commands_path = root / "src-tauri/src/subsystems/document_commands.rs"
+          test_path = root / "tests/test_manual_generation_physical_publication_contract.py"
+
+          main = main_path.read_text(encoding="utf-8")
+          if "mod manual_publication;" not in main:
+              marker = "mod generation_publication;\n"
+              if marker not in main:
+                  raise SystemExit("cannot register manual_publication module")
+              main = main.replace(marker, marker + "mod manual_publication;\n", 1)
+              main_path.write_text(main, encoding="utf-8")
+
           commands = commands_path.read_text(encoding="utf-8")
-          commands = replace_once(
-              commands,
-              '''    // Render beside the final output root instead of creating the user-visible
-              // output directory before the batch has actually succeeded. Publication
-              // creates the visible root only at the atomic visibility boundary below.
-              let stage_parent = output_root
-                  .parent()
-                  .map(Path::to_path_buf)
-                  .unwrap_or_else(|| output_root.clone());
-              ''',
-              '''    let stage_parent = manual_publication::stage_parent(&output_root);
-              ''',
-              "use stage-parent helper",
-          )
-          commands = replace_once(
-              commands,
-              '''        if privacy.write_trust_report {
-                  match state.source_provenance.lock() {
-                      Ok(guard) => match guard.clone() {
-                          Some(provenance) => {
-                              if let Err(error) = write_trust_report(
-                                  &stage,
-                                  &report_case,
-                                  TrustReportContext {
-                                      source_name: &provenance.source_name,
-                                      source_sha256: &provenance.source_sha256,
-                                      generated_names: &generated_names,
-                                      used_field_ids: &used_field_ids,
-                                      include_values: privacy.include_values_in_trust_report,
-                                      source_warnings: &[],
-                                  },
-                              ) {
-                                  render_warnings.push(format!(
-                                      "DOCX созданы; локальный отчёт проверяемости не создан: {error}"
-                                  ));
-                              }
-                          }
-                          None => render_warnings.push(
-                              "DOCX созданы; локальный отчёт проверяемости пропущен: источник не имеет доступного provenance после восстановления состояния.".into(),
-                          ),
-                      },
-                      Err(_) => render_warnings.push(
-                          "DOCX созданы; локальный отчёт проверяемости пропущен: состояние provenance временно недоступно.".into(),
-                      ),
-                  }
+          batch_start = commands.index("fn render_docx_batch(")
+
+          if "manual_publication::prepare_stage_parent(&output_root)" not in commands[batch_start:]:
+              if "manual_publication::stage_parent(&output_root)" in commands[batch_start:]:
+                  old = (
+                      "    let stage_parent = manual_publication::stage_parent(&output_root);\n"
+                      "    std::fs::create_dir_all(&stage_parent).map_err(|error| error.to_string())?;\n"
+                      "    cleanup_stale_stage_directories(&stage_parent, Duration::from_secs(24 * 60 * 60))?;\n"
+                  )
+                  if commands.count(old) != 1:
+                      raise SystemExit("cannot upgrade existing stage-parent delegation")
+                  commands = commands.replace(
+                      old,
+                      "    let stage_parent = manual_publication::prepare_stage_parent(&output_root)?;\n",
+                      1,
+                  )
+              else:
+                  start = commands.index("    let stage_parent = output_root\n", batch_start)
+                  end = commands.index("    let labels = documents", start)
+                  commands = (
+                      commands[:start]
+                      + "    let stage_parent = manual_publication::prepare_stage_parent(&output_root)?;\n"
+                      + commands[end:]
+                  )
+
+          if "manual_publication::optional_trust_report_warning(" not in commands[batch_start:]:
+              start = commands.index("        if privacy.write_trust_report {", batch_start)
+              end = commands.index("        Ok(paths)", start)
+              replacement = '''        if privacy.write_trust_report {
+              let provenance = state
+                  .source_provenance
+                  .lock()
+                  .ok()
+                  .and_then(|guard| guard.clone());
+              if let Some(warning) = manual_publication::optional_trust_report_warning(
+                  &stage,
+                  &report_case,
+                  provenance.as_ref(),
+                  &generated_names,
+                  &used_field_ids,
+                  privacy.include_values_in_trust_report,
+              ) {
+                  render_warnings.push(warning);
               }
-              ''',
-              '''        if privacy.write_trust_report {
-                  let provenance = state
-                      .source_provenance
-                      .lock()
-                      .ok()
-                      .and_then(|guard| guard.clone());
-                  if let Some(warning) = manual_publication::optional_trust_report_warning(
-                      &stage,
-                      &report_case,
-                      provenance.as_ref(),
-                      &generated_names,
-                      &used_field_ids,
-                      privacy.include_values_in_trust_report,
-                  ) {
-                      render_warnings.push(warning);
-                  }
-              }
-              ''',
-              "delegate ancillary trust report",
-          )
-          commands = replace_once(
-              commands,
-              '''    if staged_paths.len() != documents.len() {
-                  let _ = std::fs::remove_dir_all(&stage);
-                  rollback_counter_reservations(&app, &counter_reservations);
-                  rollback_generation_access(&app, &state, &permit);
-                  return Err(format!(
-                      "Комплект не опубликован: запрошено {} документ(ов), физически подготовлено {}.",
-                      documents.len(),
-                      staged_paths.len()
-                  ));
-              }
-              for path in &staged_paths {
-                  let metadata = match std::fs::metadata(path) {
-                      Ok(metadata) => metadata,
-                      Err(error) => {
-                          let _ = std::fs::remove_dir_all(&stage);
-                          rollback_counter_reservations(&app, &counter_reservations);
-                          rollback_generation_access(&app, &state, &permit);
-                          return Err(format!(
-                              "Комплект не опубликован: подготовленный DOCX исчез до публикации ({}): {error}",
-                              path.display()
-                          ));
-                      }
-                  };
-                  if !metadata.is_file() || metadata.len() == 0 {
-                      let _ = std::fs::remove_dir_all(&stage);
-                      rollback_counter_reservations(&app, &counter_reservations);
-                      rollback_generation_access(&app, &state, &permit);
-                      return Err(format!(
-                          "Комплект не опубликован: подготовленный DOCX пуст или не является файлом: {}",
-                          path.display()
-                      ));
-                  }
-              }
-              ''',
-              '''    if let Err(error) =
-                  manual_publication::verify_staged_docx(&staged_paths, documents.len())
-              {
-                  let _ = std::fs::remove_dir_all(&stage);
-                  rollback_counter_reservations(&app, &counter_reservations);
-                  rollback_generation_access(&app, &state, &permit);
-                  return Err(error);
-              }
-              ''',
-              "delegate staged verification",
-          )
-          commands = replace_once(
-              commands,
-              '''    let created_files = staged_paths
-                  .iter()
-                  .map(|path| {
-                      path.file_name()
-                          .ok_or_else(|| format!("Созданный файл не имеет имени: {}", path.display()))
-                          .map(|name| output_folder.join(name))
-                  })
-                  .collect::<Result<Vec<_>, _>>()?;
-              if created_files.len() != documents.len() {
-                  return Err(format!(
-                      "КРИТИЧЕСКАЯ ОШИБКА публикации: ожидалось {} DOCX, получено {} в {}.",
-                      documents.len(),
-                      created_files.len(),
-                      output_folder.display()
-                  ));
-              }
-              for path in &created_files {
-                  let metadata = std::fs::metadata(path).map_err(|error| {
-                      format!(
-                          "КРИТИЧЕСКАЯ ОШИБКА публикации: файл отсутствует на диске после публикации ({}): {error}",
-                          path.display()
-                      )
-                  })?;
-                  if !metadata.is_file() || metadata.len() == 0 {
-                      return Err(format!(
-                          "КРИТИЧЕСКАЯ ОШИБКА публикации: опубликованный DOCX пуст или не является файлом: {}",
-                          path.display()
-                      ));
-                  }
-                  extract_docx_text(path).map_err(|error| {
-                      format!(
-                          "КРИТИЧЕСКАЯ ОШИБКА публикации: опубликованный DOCX не читается как Word-документ ({}): {error}",
-                          path.display()
-                      )
-                  })?;
-              }
-              ''',
-              '''    let created_files = manual_publication::verify_published_docx(
-                  &staged_paths,
-                  &output_folder,
-                  documents.len(),
-              )?;
-              ''',
-              "delegate published verification",
-          )
-          commands = replace_once(
-              commands,
-              '''    let created_file_strings = created_files
-                  .iter()
-                  .map(|path| path.display().to_string())
-                  .collect::<Vec<_>>();
-              ''',
-              '''    let created_file_strings = manual_publication::path_strings(&created_files);
-              ''',
-              "delegate path serialization",
-          )
+          }
+'''
+              commands = commands[:start] + replacement + commands[end:]
+
+          if "manual_publication::verify_staged_docx(&staged_paths, documents.len())" not in commands[batch_start:]:
+              start = commands.index("    if staged_paths.len() != documents.len() {", batch_start)
+              end = commands.index("    if let Err(error) = template_snapshot::ensure_all_current", start)
+              replacement = '''    if let Err(error) =
+          manual_publication::verify_staged_docx(&staged_paths, documents.len())
+      {
+          let _ = std::fs::remove_dir_all(&stage);
+          rollback_counter_reservations(&app, &counter_reservations);
+          rollback_generation_access(&app, &state, &permit);
+          return Err(error);
+      }
+'''
+              commands = commands[:start] + replacement + commands[end:]
+
+          if "manual_publication::verify_published_docx(" not in commands[batch_start:]:
+              start = commands.index("    let created_files = staged_paths\n", batch_start)
+              end = commands.index("    let created_file_strings = created_files", start)
+              replacement = '''    let created_files = manual_publication::verify_published_docx(
+          &staged_paths,
+          &output_folder,
+          documents.len(),
+      )?;
+'''
+              commands = commands[:start] + replacement + commands[end:]
+
+          old_strings = '''    let created_file_strings = created_files
+          .iter()
+          .map(|path| path.display().to_string())
+          .collect::<Vec<_>>();
+'''
+          if "manual_publication::path_strings(&created_files)" not in commands[batch_start:]:
+              if commands.count(old_strings) != 1:
+                  raise SystemExit("cannot delegate publication path serialization")
+              commands = commands.replace(
+                  old_strings,
+                  "    let created_file_strings = manual_publication::path_strings(&created_files);\n",
+                  1,
+              )
+
           commands_path.write_text(commands, encoding="utf-8")
 
-          test_path = root / "tests/test_manual_generation_physical_publication_contract.py"
           test_path.write_text('''from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -240,7 +147,7 @@ def body() -> str:
 
 def test_visible_output_root_is_not_created_before_success():
     batch = body()
-    assert "manual_publication::stage_parent(&output_root)" in batch
+    assert "manual_publication::prepare_stage_parent(&output_root)" in batch
     assert "let stage = stage_parent.join(format!(" in batch
     assert "std::fs::create_dir_all(&output_root)" not in batch
     assert "mod manual_publication;" in MAIN
@@ -274,8 +181,8 @@ def test_success_opens_exact_verified_publication_folder():
 
           line_count = len(commands_path.read_text(encoding="utf-8").splitlines())
           print(f"document_commands.rs lines={line_count}")
-          if line_count > 3000:
-              raise SystemExit("document_commands.rs remains above 3000-line canon")
+          if line_count >= 3000:
+              raise SystemExit("document_commands.rs must remain below 3000 lines")
           PY
       - name: Verify focused contracts and source quality
         shell: bash

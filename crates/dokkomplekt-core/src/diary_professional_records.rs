@@ -12,6 +12,7 @@ use crate::{
 use chrono::{Datelike, NaiveDate};
 
 const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
+const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. Общее самочувствие стабильное, режим соблюдает, назначения выполняет. На текущую дату оформлена выписка из стационара. Даны рекомендации.";
 
 pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> SemanticCase {
     let mut prepared = professional_records::prepare_professional_collections(template, case);
@@ -23,6 +24,7 @@ pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> 
             continue;
         };
         mark_regular_rows(rows);
+        ensure_neutral_final_diary_text(rows);
         if yes(case.get(DIARY_SICK_LEAVE_EPICRISIS)) {
             merge_dynamic_epicrises(rows, case);
         }
@@ -55,6 +57,28 @@ fn mark_regular_rows(rows: &mut [SemanticRecord]) {
             .or_insert(SemanticAtom::Boolean(false));
         row.entry("kind".into())
             .or_insert_with(|| SemanticAtom::Text("diary".into()));
+    }
+}
+
+/// The donor Dokkomplekt text route always emits a final discharge record. A
+/// specialist-owned final text wins; only an actually missing/blank final body
+/// receives the neutral medical fallback. Keeping the fallback here (inside the
+/// medical profile) prevents narrow clinical prose from leaking into the universal
+/// template or any non-medical profession.
+fn ensure_neutral_final_diary_text(rows: &mut [SemanticRecord]) {
+    for row in rows {
+        if !record_bool(row, "is_final") {
+            continue;
+        }
+        let has_text = row
+            .get("text")
+            .is_some_and(|value| !value.as_text().trim().is_empty());
+        if !has_text {
+            row.insert(
+                "text".into(),
+                SemanticAtom::Text(NEUTRAL_FINAL_DIARY_TEXT.into()),
+            );
+        }
     }
 }
 
@@ -292,5 +316,45 @@ mod tests {
             .unwrap()
             .iter()
             .all(|row| !record_bool(row, "is_dynamic_epicrisis")));
+    }
+
+    #[test]
+    fn final_diary_uses_neutral_donor_text_without_narrow_profile_prose() {
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &base_case("Нет"),
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        let text = final_row.get("text").unwrap().as_text();
+        assert_eq!(text, NEUTRAL_FINAL_DIARY_TEXT);
+        assert!(!text.to_lowercase().contains("психот"));
+    }
+
+    #[test]
+    fn specialist_owned_final_diary_text_overrides_neutral_fallback() {
+        let mut case = base_case("Нет");
+        case.blocks.insert(
+            "medical.diary.final_text".into(),
+            "Финальная запись, подтверждённая специалистом.".into(),
+        );
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            "Финальная запись, подтверждённая специалистом."
+        );
     }
 }

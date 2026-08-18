@@ -12,6 +12,8 @@ use crate::{
 use chrono::{Datelike, NaiveDate};
 
 const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
+const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
+const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. Общее самочувствие стабильное, режим соблюдает, назначения выполняет. На текущую дату оформлена выписка из стационара. Даны рекомендации.";
 
 pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> SemanticCase {
     let mut prepared = professional_records::prepare_professional_collections(template, case);
@@ -23,6 +25,7 @@ pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> 
             continue;
         };
         mark_regular_rows(rows);
+        ensure_donor_final_diary_text(rows, case);
         if yes(case.get(DIARY_SICK_LEAVE_EPICRISIS)) {
             merge_dynamic_epicrises(rows, case);
         }
@@ -55,6 +58,76 @@ fn mark_regular_rows(rows: &mut [SemanticRecord]) {
             .or_insert(SemanticAtom::Boolean(false));
         row.entry("kind".into())
             .or_insert_with(|| SemanticAtom::Text("diary".into()));
+    }
+}
+
+/// The working donor removes the discharge date from the ordinary rotating status
+/// sequence and appends one dedicated final diary row. Preserve an explicitly
+/// specialist-owned final source when one exists; otherwise the final row must use
+/// the donor-neutral discharge text even if the generic row builder happened to
+/// carry a regular diagnosis-library status into that row.
+fn ensure_donor_final_diary_text(rows: &mut [SemanticRecord], case: &SemanticCase) {
+    let specialist_final = has_explicit_final_diary_source(case);
+    for row in rows {
+        if !record_bool(row, "is_final") {
+            continue;
+        }
+        let has_text = row
+            .get("text")
+            .is_some_and(|value| !value.as_text().trim().is_empty());
+        if !specialist_final || !has_text {
+            row.insert(
+                "text".into(),
+                SemanticAtom::Text(NEUTRAL_FINAL_DIARY_TEXT.into()),
+            );
+        }
+    }
+}
+
+fn has_explicit_final_diary_source(case: &SemanticCase) -> bool {
+    if case
+        .blocks
+        .get("medical.diary.final_text")
+        .is_some_and(|value| !value.trim().is_empty())
+        || case
+            .get("medical.discharge_condition")
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+
+    for collection_id in MEDICAL_DIARY_TEXT_COLLECTIONS {
+        if case.collection(collection_id).is_some_and(|rows| {
+            rows.iter().any(|row| {
+                source_row_is_final(row)
+                    && row
+                        .get("text")
+                        .or_else(|| row.get("body"))
+                        .is_some_and(|value| !value.as_text().trim().is_empty())
+            })
+        }) {
+            return true;
+        }
+    }
+
+    case.blocks.iter().any(|(id, value)| {
+        id.starts_with("professional.medical.diary.final.") && !value.trim().is_empty()
+    })
+}
+
+fn source_row_is_final(row: &SemanticRecord) -> bool {
+    match row.get("is_final") {
+        Some(SemanticAtom::Boolean(value)) => *value,
+        Some(value) => matches!(
+            value.as_text().trim().to_lowercase().as_str(),
+            "1" | "true" | "да" | "final" | "итоговый"
+        ),
+        None => row.get("kind").is_some_and(|value| {
+            matches!(
+                value.as_text().trim().to_lowercase().as_str(),
+                "final" | "discharge" | "итоговый" | "выписной"
+            )
+        }),
     }
 }
 
@@ -292,5 +365,46 @@ mod tests {
             .unwrap()
             .iter()
             .all(|row| !record_bool(row, "is_dynamic_epicrisis")));
+    }
+
+    #[test]
+    fn final_diary_uses_neutral_donor_text_instead_of_rotating_regular_status() {
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &base_case("Нет"),
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        let text = final_row.get("text").unwrap().as_text();
+        assert_eq!(text, NEUTRAL_FINAL_DIARY_TEXT);
+        assert!(!text.to_lowercase().contains("психот"));
+        assert!(!text.contains("лечение переносит удовлетворительно"));
+    }
+
+    #[test]
+    fn specialist_owned_final_diary_text_overrides_neutral_fallback() {
+        let mut case = base_case("Нет");
+        case.blocks.insert(
+            "medical.diary.final_text".into(),
+            "Финальная запись, подтверждённая специалистом.".into(),
+        );
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            "Финальная запись, подтверждённая специалистом."
+        );
     }
 }

@@ -162,7 +162,7 @@ pub use product_access::{
     AccessDecision, AccessMode, LicenseEntitlement, PlanLimits, ProductPlanId,
     EXPIRED_DEMO_WATERMARK_TEXT, PRODUCT_ACCESS_CONTRACT_VERSION, TRIAL_WATERMARK_TEXT,
 };
-pub use required_blocks::{required_blocks_for, unmet_blocks, BlockRequirement, RequiredBlock};
+pub use required_blocks::{required_blocks_for, BlockRequirement, RequiredBlock};
 pub use semantic_engine::{extract_semantic, ExtractedField, ExtractionReport, FieldType};
 pub use semantic_llm::{
     apply_model_consensus_with_source, apply_model_output, apply_model_output_with_source,
@@ -170,3 +170,176 @@ pub use semantic_llm::{
     build_extraction_prompt_for_domain_and_language, extract_understanding, extract_with_model,
     parse_model_extraction, parse_model_extraction_with_source, SemanticModel,
 };
+
+/// Evaluate post-render completeness while preserving the physical layout semantics
+/// of Word signature blocks. DOCX extraction can serialize one visual signature row
+/// as adjacent paragraphs/table cells, so a role line followed by a signature rule
+/// or a signer-shaped name fragment is accepted as one signature block. Every other
+/// requirement stays delegated to the canonical lower-level completeness validator.
+pub fn unmet_blocks(
+    blocks: &[RequiredBlock],
+    case: &SemanticCase,
+    rendered_text: &str,
+) -> Vec<String> {
+    blocks
+        .iter()
+        .filter_map(|block| {
+            if required_blocks::unmet_blocks(std::slice::from_ref(block), case, rendered_text)
+                .is_empty()
+            {
+                return None;
+            }
+
+            if let BlockRequirement::SignatureLine(labels) = &block.requirement {
+                if contains_adjacent_word_signature(rendered_text, labels) {
+                    return None;
+                }
+            }
+            Some(block.title.clone())
+        })
+        .collect()
+}
+
+fn contains_adjacent_word_signature(rendered_text: &str, labels: &[String]) -> bool {
+    let lines = rendered_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    lines.windows(2).any(|pair| {
+        let role_line = pair[0].to_lowercase();
+        let has_requested_role = labels
+            .iter()
+            .any(|label| role_line.contains(&label.to_lowercase()));
+        has_requested_role
+            && (has_signature_cue(pair[1]) || looks_like_signer_name_fragment(pair[1]))
+    })
+}
+
+fn has_signature_cue(value: &str) -> bool {
+    let normalized = value.to_lowercase();
+    normalized.contains("___")
+        || normalized.contains("подпись")
+        || normalized.contains("/____")
+        || normalized.contains("м.п.")
+}
+
+fn looks_like_signer_name_fragment(value: &str) -> bool {
+    let trimmed = value.trim_matches(|character: char| {
+        character.is_whitespace() || matches!(character, ':' | '-' | '–' | '—' | '/' | '\\' | '|')
+    });
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let words = trimmed.split_whitespace().collect::<Vec<_>>();
+    if words.is_empty() || words.len() > 4 {
+        return false;
+    }
+
+    let has_initials = words.iter().any(|word| {
+        let alphabetic = word
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .count();
+        alphabetic > 0 && word.contains('.')
+    });
+    let titlecase_words = words
+        .iter()
+        .filter(|word| {
+            word.chars()
+                .find(|character| character.is_alphabetic())
+                .is_some_and(char::is_uppercase)
+        })
+        .count();
+
+    has_initials || titlecase_words >= 2
+}
+
+#[cfg(test)]
+mod word_layout_completeness_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn case_with(pairs: &[(&str, &str)]) -> SemanticCase {
+        let mut values = BTreeMap::new();
+        for (field_id, value) in pairs {
+            values.insert(
+                (*field_id).to_string(),
+                SemanticValue::new(*field_id, *value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        SemanticCase {
+            values,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn signature_role_and_name_in_adjacent_word_cells_are_accepted() {
+        let block = RequiredBlock {
+            id: "head_signature".into(),
+            title: "Подпись заведующего отделением".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["зав. отд.".into()]),
+        };
+        let rendered = "Зав. отд.\nПетров П.П.";
+        assert!(unmet_blocks(&[block], &SemanticCase::default(), rendered).is_empty());
+    }
+
+    #[test]
+    fn signature_role_and_rule_in_adjacent_word_paragraphs_are_accepted() {
+        let block = RequiredBlock {
+            id: "doctor_signature".into(),
+            title: "Подпись врача-психиатра".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["врач-психиатр".into()]),
+        };
+        let rendered = "Врач-психиатр\n__________________ / Иванов И.И. /";
+        assert!(unmet_blocks(&[block], &SemanticCase::default(), rendered).is_empty());
+    }
+
+    #[test]
+    fn adjacent_narrative_still_does_not_become_a_signature() {
+        let block = RequiredBlock {
+            id: "doctor_signature".into(),
+            title: "Подпись врача-психиатра".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["лечащий врач".into()]),
+        };
+        let rendered = "Лечащий врач\nосмотрел пациента и продолжил наблюдение.";
+        assert_eq!(
+            unmet_blocks(&[block], &SemanticCase::default(), rendered),
+            vec!["Подпись врача-психиатра".to_string()]
+        );
+    }
+
+    #[test]
+    fn adjacent_plain_heading_still_does_not_become_a_signature() {
+        let block = RequiredBlock {
+            id: "doctor_signature".into(),
+            title: "Подпись врача-психиатра".into(),
+            requirement: BlockRequirement::SignatureLine(vec!["лечащий врач".into()]),
+        };
+        let rendered = "Лечащий врач\nРекомендации";
+        assert_eq!(
+            unmet_blocks(&[block], &SemanticCase::default(), rendered),
+            vec!["Подпись врача-психиатра".to_string()]
+        );
+    }
+
+    #[test]
+    fn rendered_semantic_value_contract_is_unchanged() {
+        let block = RequiredBlock {
+            id: "rendered:subject.name".into(),
+            title: "ФИО".into(),
+            requirement: BlockRequirement::AnyRenderedField(vec!["subject.name".into()]),
+        };
+        let case = case_with(&[("subject.name", "Иванов Иван")]);
+        assert!(
+            unmet_blocks(std::slice::from_ref(&block), &case, "Пациент Иванов Иван").is_empty()
+        );
+        assert_eq!(
+            unmet_blocks(&[block], &case, "Пациент"),
+            vec!["ФИО".to_string()]
+        );
+    }
+}

@@ -42,23 +42,27 @@ def test_diary_popup_is_fail_closed_and_donor_style_is_present():
     assert "popup_profiles::effective_popup_fields(document)" in diary_popup
 
 
-def test_normal_diary_route_uses_program_calendar_not_numbered_date_templates():
+def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
     profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    records = read("crates/dokkomplekt-core/src/diary_professional_records.rs")
     materials = read("src/components/AdditionalMaterialsPanel.tsx")
     preflight = read("src/components/GenerationPreflightModal.tsx")
 
     assert "MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT" in profile_sources
+    assert 'MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v4"' in profile_sources
     assert "program_calendar_diary_template(app).map(Some)" in profile_sources
     assert "select_diary_template_for_admission" not in profile_sources
     assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
     assert "{{#each diaries}}" in profile_sources
-    assert "{{diary.datetime}}" in profile_sources
-    assert "{{diary.text}}" in profile_sources
+    assert "{{diary.datetime}} {{diary.text}}" in profile_sources
     assert "{{diary.treating_physician_signature}}" in profile_sources
     assert "{{diary.department_head_signature}}" in profile_sources
-    assert "Состояние удовлетворительное. Жалоб не предъявляет. Настроение ровное." in profile_sources
-    assert "Рекомендовано продолжить лечение и наблюдение по месту жительства." in profile_sources
-    assert "На текущую дату оформлена выписка из стационара" not in profile_sources
+    assert "психотических расстройств" not in profile_sources.lower()
+    assert "критика к состоянию" not in profile_sources.lower()
+    assert "NEUTRAL_FINAL_DIARY_TEXT" in records
+    assert "ensure_donor_final_diary_text(rows, case);" in records
+    assert "ordinary rotating status" in records
+    assert "specialist-owned final source" in records
 
     assert "даты берутся из даты поступления и выписки" in materials
     assert "Отдельная папка «Даты 01–31» для обычного создания не нужна" in materials

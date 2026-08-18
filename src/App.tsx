@@ -25,7 +25,7 @@ import { useGenerationPreflight } from './hooks/useGenerationPreflight';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
-import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
+import { prepareGenerationOutputFlow } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
@@ -127,9 +127,7 @@ function AppContent() {
         const res = await firstRunState();
         if (!alive) return;
         const defaultOutputRoot = res?.default_output_root?.trim();
-        if (defaultOutputRoot) {
-          setOutputRoot((current) => current.trim() || defaultOutputRoot);
-        }
+        if (defaultOutputRoot) setOutputRoot((current) => current.trim() || defaultOutputRoot);
         if (res?.pack?.documents?.length) {
           setDocuments(res.pack.documents);
           setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
@@ -578,37 +576,18 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function resolveOutputRootForGeneration(): Promise<string> {
-    const configured = outputRoot.trim();
-    if (configured) return configured;
-    const startup = await run('first_run_state', () => firstRunState());
-    const fallback = startup?.default_output_root?.trim() ?? '';
-    if (!fallback) {
-      setFolderNamingConfirmed(false);
-      setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');
-      return '';
-    }
-    setOutputRoot(fallback);
-    return fallback;
-  }
-
-  async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {
-    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
-    return chooseExistingOutputPolicyFlow({
-      outputRoot: resolvedOutputRoot, folderParts, labels,
+  async function performGenerateSelectedDocuments(documentIds: string[]) {
+    const prepared = await prepareGenerationOutputFlow({
+      outputRoot, folderParts,
+      labels: documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value)),
+      getDefaultRoot: async () => (await run('first_run_state', () => firstRunState()))?.default_output_root ?? '',
       getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
       confirm: (options) => dialogs.confirm(options),
       openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
-      onStatus: setStatus,
-      onMissingRoot: () => setFolderNamingConfirmed(false),
+      onResolvedRoot: setOutputRoot, onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),
     });
-  }
-
-  async function performGenerateSelectedDocuments(documentIds: string[]) {
-    const explicitOutputRoot = await resolveOutputRootForGeneration();
-    if (!explicitOutputRoot) return;
-    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);
-    if (!existingOutputPolicy) return;
+    if (!prepared) return;
+    const { outputRoot: explicitOutputRoot, existingOutputPolicy } = prepared;
     const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);

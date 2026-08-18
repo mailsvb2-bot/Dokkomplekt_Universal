@@ -21,6 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          # A workflow_dispatch run carries an immutable event SHA. Use that exact
+          # commit instead of resolving the moving branch again when this job starts.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Verify immutable dispatch checkout identity
@@ -39,40 +41,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
-      - name: Extract default-output orchestration from App once
-        if: github.event_name == 'pull_request' && github.head_ref == 'agent/default-output-root-20260818'
-        env:
-          BRANCH: ${{ github.head_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('src/App.tsx')
-          text = path.read_text(encoding='utf-8')
-          def replace_once(old: str, new: str) -> None:
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'App.tsx: expected one replacement target, found {count}: {old[:80]!r}')
-              text = text.replace(old, new, 1)
-          replace_once("import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';", "import { prepareGenerationOutputFlow } from './lib/outputFlow';")
-          replace_once("        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) {\n          setOutputRoot((current) => current.trim() || defaultOutputRoot);\n        }", "        const defaultOutputRoot = res?.default_output_root?.trim();\n        if (defaultOutputRoot) setOutputRoot((current) => current.trim() || defaultOutputRoot);")
-          old_helpers = "  async function resolveOutputRootForGeneration(): Promise<string> {\n    const configured = outputRoot.trim();\n    if (configured) return configured;\n    const startup = await run('first_run_state', () => firstRunState());\n    const fallback = startup?.default_output_root?.trim() ?? '';\n    if (!fallback) {\n      setFolderNamingConfirmed(false);\n      setStatus('Не удалось создать стандартную папку «Выписанные пациенты». Выберите папку готовых документов вручную.');\n      return '';\n    }\n    setOutputRoot(fallback);\n    return fallback;\n  }\n\n  async function chooseExistingOutputPolicy(documentIds: string[], resolvedOutputRoot = outputRoot.trim()) {\n    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));\n    return chooseExistingOutputPolicyFlow({\n      outputRoot: resolvedOutputRoot, folderParts, labels,\n      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),\n      confirm: (options) => dialogs.confirm(options),\n      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),\n      onStatus: setStatus,\n      onMissingRoot: () => setFolderNamingConfirmed(false),\n    });\n  }\n\n"
-          replace_once(old_helpers, "")
-          old_generate = "  async function performGenerateSelectedDocuments(documentIds: string[]) {\n    const explicitOutputRoot = await resolveOutputRootForGeneration();\n    if (!explicitOutputRoot) return;\n    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds, explicitOutputRoot);\n    if (!existingOutputPolicy) return;\n    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));"
-          new_generate = "  async function performGenerateSelectedDocuments(documentIds: string[]) {\n    const prepared = await prepareGenerationOutputFlow({\n      outputRoot, folderParts,\n      labels: documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value)),\n      getDefaultRoot: async () => (await run('first_run_state', () => firstRunState()))?.default_output_root ?? '',\n      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),\n      confirm: (options) => dialogs.confirm(options),\n      openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),\n      onResolvedRoot: setOutputRoot, onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),\n    });\n    if (!prepared) return;\n    const { outputRoot: explicitOutputRoot, existingOutputPolicy } = prepared;\n    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));"
-          replace_once(old_generate, new_generate)
-          path.write_text(text, encoding='utf-8')
-          PY
-          test "$(wc -l < src/App.tsx)" -lt 1550
-          git checkout origin/main -- .github/workflows/source-provenance.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/App.tsx .github/workflows/source-provenance.yml
-          git diff --cached --check
-          git commit -m "refactor: keep output orchestration out of App"
-          git push origin "HEAD:${BRANCH}"
       - name: Generate candidate and compare with checked-in manifest
         id: manifest
         continue-on-error: true

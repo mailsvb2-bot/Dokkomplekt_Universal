@@ -1,6 +1,8 @@
 import type { CreatedDocumentOutput, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
 import { newPopupField } from '../components/PopupFieldEditor';
 import type { ScannerFieldSuggestion } from './scannerSuggestions';
+import { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
+export { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
 
 export const DEFAULT_YEAR = new Date().getFullYear();
 export const STATE_DB = 'dokkomplekt-user-state.sqlite';
@@ -202,14 +204,19 @@ export function createdPrintItems(
 }
 
 /** File.arrayBuffer с fallback на FileReader (нужен для jsdom в тестах). */
-export function readFileBytes(file: File): Promise<ArrayBuffer> {
-  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = () => reject(reader.error ?? new Error('file read failed'));
-    reader.readAsArrayBuffer(file);
-  });
+export async function readFileBytes(file: File): Promise<ArrayBuffer> {
+  let buffer: ArrayBuffer;
+  if (typeof file.arrayBuffer === 'function') {
+    buffer = await file.arrayBuffer();
+  } else {
+    buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error ?? new Error('file read failed'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+  return normalizeLegacyTextFileBytes(file.name, buffer);
 }
 
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {

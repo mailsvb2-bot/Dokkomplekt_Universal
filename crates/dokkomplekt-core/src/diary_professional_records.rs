@@ -11,6 +11,9 @@ use crate::{
 };
 use chrono::{Datelike, NaiveDate};
 
+#[path = "diary_gender.rs"]
+mod diary_gender;
+
 const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
 const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
 const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. Общее самочувствие стабильное, режим соблюдает, назначения выполняет. На текущую дату оформлена выписка из стационара. Даны рекомендации.";
@@ -26,6 +29,7 @@ pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> 
         };
         mark_regular_rows(rows);
         ensure_donor_final_diary_text(rows, case);
+        diary_gender::adapt_diary_rows(rows, case);
         if yes(case.get(DIARY_SICK_LEAVE_EPICRISIS)) {
             merge_dynamic_epicrises(rows, case);
         }

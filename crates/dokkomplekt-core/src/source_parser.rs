@@ -1147,7 +1147,9 @@ fn item_column_id(header: &str) -> Option<String> {
         | "name"
         | "description" => "name",
         "кол-во" | "количество" | "qty" | "quantity" => "quantity",
-        "ед" | "ед изм" | "единица" | "единица измерения" | "unit" => "unit",
+        "ед" | "ед изм" | "единица" | "единица измерения" | "unit" => {
+            "unit"
+        }
         "цена" | "цена за ед" | "цена за единицу" | "стоимость за единицу" | "price" => {
             "price"
         }
@@ -1447,7 +1449,8 @@ fn is_medical_template_choice_placeholder(value: &str) -> bool {
 
 fn medical_service_marker_start(value: &str) -> Option<usize> {
     let mut best: Option<usize> = None;
-    for marker in ["сюда подставлять", "сюда подставляется", "выбирается в ui"] {
+    for marker in ["сюда подставлять", "сюда подставляется", "выбирается в ui"]
+    {
         let Some(marker_end) = find_label_end(value, marker) else {
             continue;
         };

@@ -12,6 +12,7 @@ use crate::{
 use chrono::{Datelike, NaiveDate};
 
 const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
+const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
 const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. Общее самочувствие стабильное, режим соблюдает, назначения выполняет. На текущую дату оформлена выписка из стационара. Даны рекомендации.";
 
 pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> SemanticCase {
@@ -24,7 +25,7 @@ pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> 
             continue;
         };
         mark_regular_rows(rows);
-        ensure_neutral_final_diary_text(rows);
+        ensure_donor_final_diary_text(rows, case);
         if yes(case.get(DIARY_SICK_LEAVE_EPICRISIS)) {
             merge_dynamic_epicrises(rows, case);
         }
@@ -60,12 +61,13 @@ fn mark_regular_rows(rows: &mut [SemanticRecord]) {
     }
 }
 
-/// The donor Dokkomplekt text route always emits a final discharge record. A
-/// specialist-owned final text wins; only an actually missing/blank final body
-/// receives the neutral medical fallback. Keeping the fallback here (inside the
-/// medical profile) prevents narrow clinical prose from leaking into the universal
-/// template or any non-medical profession.
-fn ensure_neutral_final_diary_text(rows: &mut [SemanticRecord]) {
+/// The working donor removes the discharge date from the ordinary rotating status
+/// sequence and appends one dedicated final diary row. Preserve an explicitly
+/// specialist-owned final source when one exists; otherwise the final row must use
+/// the donor-neutral discharge text even if the generic row builder happened to
+/// carry a regular diagnosis-library status into that row.
+fn ensure_donor_final_diary_text(rows: &mut [SemanticRecord], case: &SemanticCase) {
+    let specialist_final = has_explicit_final_diary_source(case);
     for row in rows {
         if !record_bool(row, "is_final") {
             continue;
@@ -73,12 +75,59 @@ fn ensure_neutral_final_diary_text(rows: &mut [SemanticRecord]) {
         let has_text = row
             .get("text")
             .is_some_and(|value| !value.as_text().trim().is_empty());
-        if !has_text {
+        if !specialist_final || !has_text {
             row.insert(
                 "text".into(),
                 SemanticAtom::Text(NEUTRAL_FINAL_DIARY_TEXT.into()),
             );
         }
+    }
+}
+
+fn has_explicit_final_diary_source(case: &SemanticCase) -> bool {
+    if case
+        .blocks
+        .get("medical.diary.final_text")
+        .is_some_and(|value| !value.trim().is_empty())
+        || case
+            .get("medical.discharge_condition")
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+
+    for collection_id in MEDICAL_DIARY_TEXT_COLLECTIONS {
+        if case.collection(collection_id).is_some_and(|rows| {
+            rows.iter().any(|row| {
+                source_row_is_final(row)
+                    && row
+                        .get("text")
+                        .or_else(|| row.get("body"))
+                        .is_some_and(|value| !value.as_text().trim().is_empty())
+            })
+        }) {
+            return true;
+        }
+    }
+
+    case.blocks.iter().any(|(id, value)| {
+        id.starts_with("professional.medical.diary.final.") && !value.trim().is_empty()
+    })
+}
+
+fn source_row_is_final(row: &SemanticRecord) -> bool {
+    match row.get("is_final") {
+        Some(SemanticAtom::Boolean(value)) => *value,
+        Some(value) => matches!(
+            value.as_text().trim().to_lowercase().as_str(),
+            "1" | "true" | "да" | "final" | "итоговый"
+        ),
+        None => row.get("kind").is_some_and(|value| {
+            matches!(
+                value.as_text().trim().to_lowercase().as_str(),
+                "final" | "discharge" | "итоговый" | "выписной"
+            )
+        }),
     }
 }
 
@@ -319,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn final_diary_uses_neutral_donor_text_without_narrow_profile_prose() {
+    fn final_diary_uses_neutral_donor_text_instead_of_rotating_regular_status() {
         let prepared = prepare_professional_collections(
             "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
             &base_case("Нет"),
@@ -333,6 +382,7 @@ mod tests {
         let text = final_row.get("text").unwrap().as_text();
         assert_eq!(text, NEUTRAL_FINAL_DIARY_TEXT);
         assert!(!text.to_lowercase().contains("психот"));
+        assert!(!text.contains("лечение переносит удовлетворительно"));
     }
 
     #[test]

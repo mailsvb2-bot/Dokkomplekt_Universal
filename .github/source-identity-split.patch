@@ -1,0 +1,87 @@
+diff --git a/src-tauri/src/main.rs b/src-tauri/src/main.rs
+index 1111111..2222222 100644
+--- a/src-tauri/src/main.rs
++++ b/src-tauri/src/main.rs
+@@ -2183,6 +2183,7 @@
+ include!("subsystems/legacy_template_runtime.rs");
+ include!("subsystems/profile_sources.rs");
+ include!("subsystems/publication_collision.rs");
++include!("subsystems/source_identity_runtime.rs");
+ include!("subsystems/document_commands.rs");
+ include!("subsystems/business_registry.rs");
+ include!("subsystems/knowledge_registry.rs");
+diff --git a/src-tauri/src/subsystems/automation_runtime.rs b/src-tauri/src/subsystems/automation_runtime.rs
+index 1111111..2222222 100644
+--- a/src-tauri/src/subsystems/automation_runtime.rs
++++ b/src-tauri/src/subsystems/automation_runtime.rs
+@@ -1,33 +1,6 @@
+-/// The zero-touch orchestrator shared by the UI command and the background
+-/// watcher thread: one dropped primary DOCX -> the whole configured set into a
+-/// fresh output folder, or a safe attention note. Decision logic lives in
+-/// dokkomplekt_core; this function only does IO.
+-fn file_content_signature(path: &Path) -> Result<(u64, u128, String), String> {
+-    use std::io::Read as _;
+-    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+-    let modified_unix_ms = metadata
+-        .modified()
+-        .ok()
+-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+-        .map(|value| value.as_millis())
+-        .unwrap_or_default();
+-    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+-    let mut hasher = Sha256::new();
+-    let mut buffer = [0u8; 64 * 1024];
+-    loop {
+-        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+-        if read == 0 {
+-            break;
+-        }
+-        hasher.update(&buffer[..read]);
+-    }
+-    Ok((
+-        metadata.len(),
+-        modified_unix_ms,
+-        hex::encode(hasher.finalize()),
+-    ))
+-}
+-
++/// Finalize the top-level source only after its immutable snapshot has been
++/// successfully published with the patient document set. The source hash binds
++/// deletion/archive decisions to the exact bytes that were processed.
+ fn finalize_processed_source(
+     source: &Path,
+     source_sha256: &str,
+diff --git a/src-tauri/src/subsystems/source_identity_runtime.rs b/src-tauri/src/subsystems/source_identity_runtime.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src-tauri/src/subsystems/source_identity_runtime.rs
+@@ -0,0 +1,28 @@
++/// Compute a stable local identity for a user/source/runtime file without
++/// logging or persisting its contents. Shared by document publication, watcher
++/// handoff verification and zero-touch intake.
++fn file_content_signature(path: &Path) -> Result<(u64, u128, String), String> {
++    use std::io::Read as _;
++    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
++    let modified_unix_ms = metadata
++        .modified()
++        .ok()
++        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
++        .map(|value| value.as_millis())
++        .unwrap_or_default();
++    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
++    let mut hasher = Sha256::new();
++    let mut buffer = [0u8; 64 * 1024];
++    loop {
++        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
++        if read == 0 {
++            break;
++        }
++        hasher.update(&buffer[..read]);
++    }
++    Ok((
++        metadata.len(),
++        modified_unix_ms,
++        hex::encode(hasher.finalize()),
++    ))
++}

@@ -16,6 +16,15 @@ struct WatcherInstallRequest {
     max_parallel_cases: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WatcherHandoffOwner {
+    generation: String,
+    executable: String,
+    executable_sha256: String,
+    #[serde(default)]
+    ready: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WatcherRuntimeConfig {
     watch_folder: String,
@@ -28,6 +37,11 @@ struct WatcherRuntimeConfig {
     print_copies_by_document: BTreeMap<String, u16>,
     #[serde(default = "default_parallel_cases")]
     max_parallel_cases: usize,
+    /// Canonical update handoff. Old configs deserialize with `None`, while
+    /// handoff-aware versions can retire a stale watcher after a newer install
+    /// publishes a ready owner.
+    #[serde(default)]
+    handoff_owner: Option<WatcherHandoffOwner>,
 }
 
 fn watcher_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -36,6 +50,151 @@ fn watcher_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("intake-agent-autostart.json"))
+}
+
+fn watcher_owner_for_executable(exe: &Path, ready: bool) -> Result<WatcherHandoffOwner, String> {
+    let (_, _, executable_sha256) = file_content_signature(exe)?;
+    Ok(WatcherHandoffOwner {
+        generation: Uuid::new_v4().to_string(),
+        executable: exe.display().to_string(),
+        executable_sha256,
+        ready,
+    })
+}
+
+fn watcher_owner_target_is_valid(owner: &WatcherHandoffOwner) -> bool {
+    if !owner.ready || owner.executable.trim().is_empty() || owner.executable_sha256.len() != 64 {
+        return false;
+    }
+    let target = PathBuf::from(&owner.executable);
+    target.is_file()
+        && file_content_signature(&target)
+            .map(|(_, _, sha256)| sha256.eq_ignore_ascii_case(&owner.executable_sha256))
+            .unwrap_or(false)
+}
+
+fn watcher_owner_matches_current(owner: &WatcherHandoffOwner) -> Result<bool, String> {
+    if !owner.ready {
+        return Ok(true);
+    }
+    let current = std::env::current_exe().map_err(|error| error.to_string())?;
+    let (_, _, current_sha256) = file_content_signature(&current)?;
+    Ok(Path::new(&owner.executable) == current.as_path()
+        && current_sha256.eq_ignore_ascii_case(&owner.executable_sha256))
+}
+
+fn watcher_owner_superseded(
+    captured: Option<&WatcherHandoffOwner>,
+    latest: Option<&WatcherHandoffOwner>,
+) -> bool {
+    let Some(latest) = latest.filter(|owner| owner.ready) else {
+        return false;
+    };
+    match captured {
+        None => true,
+        Some(captured) => captured.generation != latest.generation
+            || captured.executable != latest.executable
+            || !captured
+                .executable_sha256
+                .eq_ignore_ascii_case(&latest.executable_sha256),
+    }
+}
+
+fn latest_ready_watcher_owner(control_path: Option<&Path>) -> Option<WatcherHandoffOwner> {
+    let path = control_path?;
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice::<WatcherRuntimeConfig>(&bytes)
+        .ok()?
+        .handoff_owner
+        .filter(watcher_owner_target_is_valid)
+}
+
+fn spawn_silent_executable(exe: &Path, background_watch: bool) -> Result<(), String> {
+    let mut command = std::process::Command::new(exe);
+    if background_watch {
+        command.arg("--background-watch");
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Не удалось запустить актуальный Dokkomplekt: {error}"))
+}
+
+/// Launch the canonical normal UI process for an accepted dropped source. If a
+/// UI is already running, the normal singleton path turns this launch into an
+/// activation request and exits, so the watcher never creates a second UI.
+fn launch_or_activate_watcher_ui(control_path: Option<&Path>) -> Result<(), String> {
+    let target = latest_ready_watcher_owner(control_path)
+        .map(|owner| PathBuf::from(owner.executable))
+        .unwrap_or(std::env::current_exe().map_err(|error| error.to_string())?);
+    spawn_silent_executable(&target, false)
+}
+
+fn release_watcher_instance_lock(app: &tauri::AppHandle) -> Result<Option<PathBuf>, String> {
+    let state = app.state::<AppState>();
+    let mut slot = state
+        .instance_lock
+        .lock()
+        .map_err(|_| "instance state lock failed".to_string())?;
+    let path = slot.take();
+    if let Some(path) = path.as_ref() {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                *slot = Some(path.clone());
+                return Err(format!(
+                    "Не удалось освободить singleton старого фонового агента: {error}"
+                ));
+            }
+        }
+    }
+    Ok(path)
+}
+
+fn restore_watcher_instance_lock(app: &tauri::AppHandle) -> Result<(), String> {
+    match acquire_instance_lock(app, true)? {
+        InstanceLockOutcome::Acquired(path) => {
+            let state = app.state::<AppState>();
+            *state
+                .instance_lock
+                .lock()
+                .map_err(|_| "instance state lock failed".to_string())? = Some(path);
+            Ok(())
+        }
+        InstanceLockOutcome::AlreadyRunning => Err(
+            "Новый фоновый агент уже занял singleton после неудачной передачи.".into(),
+        ),
+    }
+}
+
+fn handoff_watcher_to_successor(
+    app: &tauri::AppHandle,
+    owner: &WatcherHandoffOwner,
+) -> Result<(), String> {
+    if !watcher_owner_target_is_valid(owner) {
+        return Err("Новый владелец фонового агента не прошёл проверку executable SHA-256.".into());
+    }
+    let _released_path = release_watcher_instance_lock(app)?;
+    let target = PathBuf::from(&owner.executable);
+    if let Err(error) = spawn_silent_executable(&target, true) {
+        let restore = restore_watcher_instance_lock(app);
+        return match restore {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!("{error}; singleton не восстановлен: {restore_error}")),
+        };
+    }
+    Ok(())
 }
 
 fn xml_escape(raw: &str) -> String {
@@ -154,7 +313,6 @@ fn remove_autostart_entries() -> (Vec<PathBuf>, Vec<String>) {
             if let Err(error) = remove_windows_run_entry() {
                 warnings.push(format!("Запись автозапуска Windows не удалена: {error}"));
             }
-            // Clean legacy flashing launcher from older versions.
             if let Ok(appdata) = std::env::var("APPDATA") {
                 let legacy = PathBuf::from(appdata)
                     .join("Microsoft/Windows/Start Menu/Programs/Startup/Dokkomplekt-Watcher.cmd");
@@ -217,80 +375,39 @@ fn classify_processing_error(error: &str) -> (&'static str, UnreadableRetryPolic
         return ("internal_failure", UnreadableRetryPolicy::ContentChange);
     }
     let permanent_source_markers = [
-        "поврежд",
-        "invalid zip",
-        "invalid docx",
-        "invalid xml",
-        "неподдерживаемый формат",
-        "unsupported format",
-        "не удалось распознать формат",
-        "path traversal",
-        "превышает допустимый размер",
-        "слишком большой",
-        "too large",
-        "payload too large",
+        "поврежд", "invalid zip", "invalid docx", "invalid xml", "неподдерживаемый формат",
+        "unsupported format", "не удалось распознать формат", "path traversal",
+        "превышает допустимый размер", "слишком большой", "too large", "payload too large",
     ];
-    if permanent_source_markers
-        .iter()
-        .any(|marker| normalized.contains(marker))
-    {
+    if permanent_source_markers.iter().any(|marker| normalized.contains(marker)) {
         return ("source_invalid", UnreadableRetryPolicy::ContentChange);
     }
-
     let component_markers = [
-        "component",
-        "sidecar",
-        "tesseract",
-        "poppler",
-        "libreoffice",
-        "soffice",
-        "llama",
-        "ocr",
+        "component", "sidecar", "tesseract", "poppler", "libreoffice", "soffice", "llama", "ocr",
     ];
-    if component_markers
-        .iter()
-        .any(|marker| normalized.contains(marker))
-    {
+    if component_markers.iter().any(|marker| normalized.contains(marker)) {
         return (
             "component_unavailable",
             UnreadableRetryPolicy::Timed(Duration::from_secs(2 * 60)),
         );
     }
-
     let storage_markers = [
-        "database",
-        "postgres",
-        "sqlite",
-        "permission denied",
-        "access is denied",
-        "занят другим процессом",
-        "нет доступа",
-        "network",
-        "timeout",
-        "connection",
-        "queue",
+        "database", "postgres", "sqlite", "permission denied", "access is denied",
+        "занят другим процессом", "нет доступа", "network", "timeout", "connection", "queue",
     ];
-    if storage_markers
-        .iter()
-        .any(|marker| normalized.contains(marker))
-    {
+    if storage_markers.iter().any(|marker| normalized.contains(marker)) {
         return (
             "infrastructure_unavailable",
             UnreadableRetryPolicy::Timed(Duration::from_secs(60)),
         );
     }
-
     let license_markers = ["license", "лиценз", "лимит", "activation"];
-    if license_markers
-        .iter()
-        .any(|marker| normalized.contains(marker))
-    {
+    if license_markers.iter().any(|marker| normalized.contains(marker)) {
         return (
             "access_temporarily_denied",
             UnreadableRetryPolicy::Timed(Duration::from_secs(10 * 60)),
         );
     }
-
     (
         "processing_error",
         UnreadableRetryPolicy::Timed(Duration::from_secs(5 * 60)),
@@ -413,8 +530,6 @@ fn unreadable_note_blocks_retry(
             .find_map(|line| line.trim().strip_prefix(NOTE_RETRY_AFTER_PREFIX))
             .and_then(|value| value.parse::<u128>().ok())
             .is_some_and(|retry_after| unix_time_ms(now) < retry_after),
-        // Legacy notes used source-hash-only permanent blocking. Treat them as
-        // immediately retryable so upgrading the application cannot freeze a case.
         _ => false,
     }
 }
@@ -428,9 +543,6 @@ struct FileStabilityObservation {
     last_seen: std::time::SystemTime,
 }
 
-/// A source is considered complete only after two full, byte-identical reads on
-/// separate watcher polls. This does not trust mtime and therefore remains safe
-/// for slow SMB/NFS copies that preserve the original timestamp.
 fn observe_file_stability(
     path: &Path,
     observations: &mut HashMap<PathBuf, FileStabilityObservation>,
@@ -513,11 +625,7 @@ fn write_unreadable_source_note(
     };
     let body = format!(
         "ДОКУМЕНТ НЕ ОБРАБОТАН\n\nТип ошибки: {category}\nИсточник: {source_kind}\nПричина: {}\n\nЧто сделать:\n{next_action}\n\nСистема не будет бесконечно повторять ошибку: постоянные дефекты источника ждут изменения файла, временные сбои повторяются с ограниченной задержкой.\n",
-        if safe_error.is_empty() {
-            "неизвестная ошибка"
-        } else {
-            safe_error.as_str()
-        }
+        if safe_error.is_empty() { "неизвестная ошибка" } else { safe_error.as_str() }
     );
     let metadata = std::fs::metadata(source).map_err(|error| error.to_string())?;
     let note_body = if metadata.len() <= universal_intake::MAX_SOURCE_FILE_BYTES {
@@ -545,13 +653,11 @@ fn write_unreadable_source_note(
             now,
         )
     };
-    std::fs::write(&note_path, note_body)
-    .map_err(|write_error| {
+    std::fs::write(&note_path, note_body).map_err(|write_error| {
         format!("Не удалось записать понятное сообщение об ошибке: {write_error}")
     })?;
     Ok(note_path)
 }
-
 
 fn default_parallel_cases() -> usize {
     2
@@ -575,6 +681,18 @@ fn process_watcher_source(
     log_path: PathBuf,
 ) {
     use std::io::Write;
+    // Donor parity: a stable primary dropped while the main UI is closed must
+    // open the program. Launch the normal singleton path, never the hidden
+    // watcher window; an existing UI receives its ordinary activation request.
+    if launch_or_activate_watcher_ui(control_path.as_deref()).is_err() {
+        if let Ok(mut log) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            let _ = writeln!(log, "[watcher] ui_activation_failed=true");
+        }
+    }
     let req = CreatedDocumentsIntakeRequest {
         source_path: path.display().to_string(),
         output_root: folder.display().to_string(),
@@ -591,10 +709,7 @@ fn process_watcher_source(
     let state = app.state::<AppState>();
     match perform_created_documents_intake(&state, &app, req) {
         Ok(response) => {
-            let stem = path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default();
+            let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or_default();
             let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
             let _ = std::fs::remove_file(&unreadable_note);
             let _ = app.emit("document-batch-ready", response.clone());
@@ -692,11 +807,7 @@ fn process_watcher_source(
                     };
                     let print_result = print_resolved_jobs(&jobs, &print_preferences);
                     if !print_result.failed_files.is_empty() {
-                        increment_metric(
-                            &app,
-                            "print_failures",
-                            print_result.failed_files.len() as u64,
-                        );
+                        increment_metric(&app, "print_failures", print_result.failed_files.len() as u64);
                         let details = serde_json::to_value(&print_result).unwrap_or_else(|_| {
                             serde_json::json!({ "failed_count": print_result.failed_files.len() })
                         });
@@ -707,12 +818,7 @@ fn process_watcher_source(
                             "Не все документы были отправлены на печать.",
                             &details,
                         );
-                        let _ = append_audit_event(
-                            &app,
-                            "automatic_print_failed",
-                            "",
-                            &details,
-                        );
+                        let _ = append_audit_event(&app, "automatic_print_failed", "", &details);
                         if let Ok(mut log) = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
@@ -797,10 +903,6 @@ fn process_watcher_source(
     }
 }
 
-/// The real background watcher: native filesystem notifications with a short
-/// rescan fallback for network/virtual filesystems that do not emit reliable events.
-/// The intake deduplicator still guarantees process-once semantics across noisy
-/// editor event sequences. Diagnostic logs never contain source paths or content.
 fn start_watcher_thread(
     app: tauri::AppHandle,
     config: WatcherRuntimeConfig,
@@ -814,13 +916,21 @@ fn start_watcher_thread(
         auto_print,
         print_copies_by_document,
         max_parallel_cases,
+        handoff_owner,
     } = config;
+    if let Some(owner) = handoff_owner.as_ref().filter(|owner| owner.ready) {
+        if !watcher_owner_matches_current(owner)? {
+            return Err(
+                "Этот фоновый агент устарел: конфигурация уже принадлежит другому проверенному executable."
+                    .into(),
+            );
+        }
+    }
     let max_parallel_cases = normalize_parallel_cases(max_parallel_cases);
     let folder = PathBuf::from(watch_folder);
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
     {
-        // Scoped: `state` borrows `app`, and `app` is moved into the thread below.
         let state = app.state::<AppState>();
         let mut guard = state.watcher.lock().map_err(|_| "state lock failed")?;
         if let Some(existing) = guard.take() {
@@ -834,6 +944,7 @@ fn start_watcher_thread(
 
     let thread_stop = Arc::clone(&stop);
     let control_path = watcher_config_path(&app).ok();
+    let captured_owner = handoff_owner.clone();
     let log_path = app
         .path()
         .app_data_dir()
@@ -857,9 +968,7 @@ fn start_watcher_thread(
         let in_flight = Arc::new(Mutex::new(BTreeSet::<PathBuf>::new()));
         while !thread_stop.load(Ordering::SeqCst) {
             let now = std::time::SystemTime::now();
-            if now
-                .duration_since(last_hygiene)
-                .unwrap_or_default()
+            if now.duration_since(last_hygiene).unwrap_or_default()
                 >= Duration::from_secs(15 * 60)
             {
                 if let Ok(privacy) = load_privacy_preferences(&app) {
@@ -882,19 +991,33 @@ fn start_watcher_thread(
                 }
                 last_hygiene = now;
             }
-            if control_path
-                .as_ref()
-                .map(|path| !path.exists())
-                .unwrap_or(false)
-            {
+            if control_path.as_ref().map(|path| !path.exists()).unwrap_or(false) {
                 if terminate_app_when_disabled {
                     app.exit(0);
                 }
                 return;
             }
-            // Native notifications nominate concrete paths. A slower fallback scan
-            // covers SMB/NFS/WSL filesystems that may drop events without re-hashing
-            // the entire folder every two seconds.
+
+            // Handoff is fail-safe and drain-first. A pending owner never retires
+            // the current watcher. Once a newer ready owner is published, stop
+            // admitting work, drain active cases, release the watcher singleton,
+            // verify the target by SHA-256 and launch the successor without shell.
+            if let Some(latest_owner) = latest_ready_watcher_owner(control_path.as_deref()) {
+                if watcher_owner_superseded(captured_owner.as_ref(), Some(&latest_owner)) {
+                    let active = in_flight.lock().map(|items| items.len()).unwrap_or(1);
+                    if active == 0
+                        && handoff_watcher_to_successor(&app, &latest_owner).is_ok()
+                    {
+                        if terminate_app_when_disabled {
+                            app.exit(0);
+                        }
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            }
+
             while let Ok(event_result) = event_rx.try_recv() {
                 if let Ok(event) = event_result {
                     for path in event.paths {
@@ -902,9 +1025,7 @@ fn start_watcher_thread(
                     }
                 }
             }
-            if now
-                .duration_since(last_fallback_scan)
-                .unwrap_or_default()
+            if now.duration_since(last_fallback_scan).unwrap_or_default()
                 >= Duration::from_secs(30)
             {
                 if let Ok(entries) = std::fs::read_dir(&folder) {
@@ -926,132 +1047,118 @@ fn start_watcher_thread(
                     stability_observations.remove(&path);
                     continue;
                 }
-                    if let Err(error) = universal_intake::validate_source_file_size(&path) {
-                        let _ = write_unreadable_source_note(&path, &error, now);
-                        pending_paths.remove(&path);
-                        stability_observations.remove(&path);
-                        continue;
-                    }
-                    // Require two identical full reads on separate polls. A fixed
-                    // mtime delay is insufficient when a network copy preserves time.
-                    if !observe_file_stability(&path, &mut stability_observations, now)
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    // Attention-cases stay in the folder by design. Don't re-run
-                    // them on every poll: skip while the note is at least as fresh
-                    // as the source; once the user fixes and re-saves the source
-                    // (newer mtime), intake reruns and clears the note.
-                    let stem = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or_default();
-                    let attention_note = path.with_file_name(attention_file_name(stem));
-                    let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
-                    // Retry decisions are content-addressed, not timestamp-based. Some
-                    // copy/synchronisation tools preserve mtime while replacing bytes;
-                    // a SHA-256 mismatch must therefore always trigger a fresh intake.
-                    if note_matches_source_content(&attention_note, &path)
-                        || unreadable_note_blocks_retry(&unreadable_note, &path, now)
-                    {
-                        pending_paths.remove(&path);
-                        stability_observations.remove(&path);
-                        continue;
-                    }
-                    let can_start = in_flight
-                        .lock()
-                        .map(|active| active.len() < max_parallel_cases)
-                        .unwrap_or(false);
-                    if !can_start {
-                        continue;
-                    }
-                    let inserted = in_flight
-                        .lock()
-                        .map(|mut active| active.insert(path.clone()))
-                        .unwrap_or(false);
-                    if !inserted {
-                        pending_paths.remove(&path);
-                        stability_observations.remove(&path);
-                        continue;
-                    }
+                if let Err(error) = universal_intake::validate_source_file_size(&path) {
+                    let _ = write_unreadable_source_note(&path, &error, now);
                     pending_paths.remove(&path);
                     stability_observations.remove(&path);
-                    let worker_app = app.clone();
-                    let worker_path = path.clone();
-                    let worker_folder = folder.clone();
-                    let worker_folder_parts = folder_parts.clone();
-                    let worker_copies = print_copies_by_document.clone();
-                    let worker_control_path = control_path.clone();
-                    let worker_log_path = log_path.clone();
-                    let worker_in_flight = Arc::clone(&in_flight);
-                    std::thread::spawn(move || {
-                        let processing_app = worker_app.clone();
-                        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            process_watcher_source(
-                                processing_app,
-                                worker_path.clone(),
-                                worker_folder,
-                                default_year,
-                                sick_leave_enabled,
-                                worker_folder_parts,
-                                auto_print,
-                                worker_copies,
-                                worker_control_path,
-                                worker_log_path.clone(),
-                            );
-                        }));
-                        if panic_result.is_err() {
-                            increment_metric(&worker_app, "failed_sources", 1);
-                            let error = "internal watcher panic: обработка аварийно остановлена до безопасной публикации";
-                            let now = std::time::SystemTime::now();
-                            let note = write_unreadable_source_note(&worker_path, error, now).ok();
-                            let details = serde_json::json!({
-                                "category": "internal_failure",
-                                "source_content_not_logged": true,
-                                "retry_requires_source_change": true,
-                            });
-                            let _ = create_automation_exception(
-                                &worker_app,
-                                "internal_failure",
-                                &worker_path.display().to_string(),
-                                "Внутренняя ошибка фонового обработчика. Исходник сохранён и не будет зациклен.",
-                                &details,
-                            );
-                            let _ = append_audit_event(
-                                &worker_app,
-                                "watcher_worker_panic_blocked",
-                                "",
-                                &details,
-                            );
-                            let response = CreatedDocumentsIntakeResponse {
-                                status: "attention".into(),
-                                patient_folder: None,
-                                created_files: Vec::new(),
-                                created_documents: Vec::new(),
-                                missing: Vec::new(),
-                                attention_file: note.as_ref().map(|path| path.display().to_string()),
-                                print_triage: None,
-                                message: "Фоновая обработка аварийно остановлена. Исходник не удалён; рядом создан файл «НЕ ПРОЧИТАН», повторный цикл заблокирован до изменения источника.".into(),
-                            };
-                            let _ = worker_app.emit("document-batch-ready", response);
-                            if let Ok(mut log) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&worker_log_path)
-                            {
-                                let _ = writeln!(log, "[watcher] worker_panic; retry_blocked=true");
-                            }
+                    continue;
+                }
+                if !observe_file_stability(&path, &mut stability_observations, now)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                let attention_note = path.with_file_name(attention_file_name(stem));
+                let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
+                if note_matches_source_content(&attention_note, &path)
+                    || unreadable_note_blocks_retry(&unreadable_note, &path, now)
+                {
+                    pending_paths.remove(&path);
+                    stability_observations.remove(&path);
+                    continue;
+                }
+                let can_start = in_flight
+                    .lock()
+                    .map(|active| active.len() < max_parallel_cases)
+                    .unwrap_or(false);
+                if !can_start {
+                    continue;
+                }
+                let inserted = in_flight
+                    .lock()
+                    .map(|mut active| active.insert(path.clone()))
+                    .unwrap_or(false);
+                if !inserted {
+                    pending_paths.remove(&path);
+                    stability_observations.remove(&path);
+                    continue;
+                }
+                pending_paths.remove(&path);
+                stability_observations.remove(&path);
+                let worker_app = app.clone();
+                let worker_path = path.clone();
+                let worker_folder = folder.clone();
+                let worker_folder_parts = folder_parts.clone();
+                let worker_copies = print_copies_by_document.clone();
+                let worker_control_path = control_path.clone();
+                let worker_log_path = log_path.clone();
+                let worker_in_flight = Arc::clone(&in_flight);
+                std::thread::spawn(move || {
+                    let processing_app = worker_app.clone();
+                    let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        process_watcher_source(
+                            processing_app,
+                            worker_path.clone(),
+                            worker_folder,
+                            default_year,
+                            sick_leave_enabled,
+                            worker_folder_parts,
+                            auto_print,
+                            worker_copies,
+                            worker_control_path,
+                            worker_log_path.clone(),
+                        );
+                    }));
+                    if panic_result.is_err() {
+                        increment_metric(&worker_app, "failed_sources", 1);
+                        let error = "internal watcher panic: обработка аварийно остановлена до безопасной публикации";
+                        let now = std::time::SystemTime::now();
+                        let note = write_unreadable_source_note(&worker_path, error, now).ok();
+                        let details = serde_json::json!({
+                            "category": "internal_failure",
+                            "source_content_not_logged": true,
+                            "retry_requires_source_change": true,
+                        });
+                        let _ = create_automation_exception(
+                            &worker_app,
+                            "internal_failure",
+                            &worker_path.display().to_string(),
+                            "Внутренняя ошибка фонового обработчика. Исходник сохранён и не будет зациклен.",
+                            &details,
+                        );
+                        let _ = append_audit_event(
+                            &worker_app,
+                            "watcher_worker_panic_blocked",
+                            "",
+                            &details,
+                        );
+                        let response = CreatedDocumentsIntakeResponse {
+                            status: "attention".into(),
+                            patient_folder: None,
+                            created_files: Vec::new(),
+                            created_documents: Vec::new(),
+                            missing: Vec::new(),
+                            attention_file: note.as_ref().map(|path| path.display().to_string()),
+                            print_triage: None,
+                            message: "Фоновая обработка аварийно остановлена. Исходник не удалён; рядом создан файл «НЕ ПРОЧИТАН», повторный цикл заблокирован до изменения источника.".into(),
+                        };
+                        let _ = worker_app.emit("document-batch-ready", response);
+                        if let Ok(mut log) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&worker_log_path)
+                        {
+                            let _ = writeln!(log, "[watcher] worker_panic; retry_blocked=true");
                         }
-                        if let Ok(mut active) = worker_in_flight.lock() {
-                            active.remove(&worker_path);
-                        }
-                    });
+                    }
+                    if let Ok(mut active) = worker_in_flight.lock() {
+                        active.remove(&worker_path);
+                    }
+                });
             }
             prune_file_stability_observations(&mut stability_observations, now);
             if native_watcher.is_some() {
-                // Preserve the event that wakes the loop; discarding it would
-                // delay the concrete path until the next fallback scan.
                 if let Ok(Ok(event)) = event_rx.recv_timeout(Duration::from_secs(2)) {
                     for path in event.paths {
                         pending_paths.insert(path);
@@ -1090,7 +1197,8 @@ fn install_background_watcher(
         ));
     }
 
-    let runtime = WatcherRuntimeConfig {
+    let mut owner = watcher_owner_for_executable(&exe, false)?;
+    let mut runtime = WatcherRuntimeConfig {
         watch_folder: watch_folder.display().to_string(),
         default_year,
         sick_leave_enabled: req.sick_leave_enabled,
@@ -1098,6 +1206,7 @@ fn install_background_watcher(
         auto_print: req.auto_print,
         print_copies_by_document: req.print_copies_by_document.clone(),
         max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
+        handoff_owner: Some(owner.clone()),
     };
     let config_path = watcher_config_path(&app)?;
     let previous_config = if config_path.exists() {
@@ -1108,11 +1217,13 @@ fn install_background_watcher(
     } else {
         None
     };
-    let runtime_bytes = serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?;
-    atomic_write_file(&config_path, &runtime_bytes)?;
+    // Phase 1: publish a pending owner. Old watchers deliberately do not retire
+    // until OS autostart has been proven and the ready phase is durable.
+    atomic_write_file(
+        &config_path,
+        &serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?,
+    )?;
 
-    // Durable OS autostart is part of the installation contract. Never report
-    // `installed=true` when the watcher would disappear after the next login.
     let (autostart_files, warnings) = match write_autostart_entries(&exe) {
         Ok(result) => result,
         Err(error) => {
@@ -1135,8 +1246,31 @@ fn install_background_watcher(
         }
     };
 
-    // Start only after persistence is proven. If startup fails on a first install,
-    // remove the just-created autostart entry so no half-installed watcher remains.
+    // Phase 2: only after autostart is durable may the new executable become the
+    // retirement target for a stale owner.
+    owner.ready = true;
+    runtime.handoff_owner = Some(owner.clone());
+    if let Err(error) = atomic_write_file(
+        &config_path,
+        &serde_json::to_vec_pretty(&runtime).map_err(|e| e.to_string())?,
+    ) {
+        let rollback = match previous_config.as_deref() {
+            Some(bytes) => atomic_write_file(&config_path, bytes),
+            None => {
+                let (_, _) = remove_autostart_entries();
+                if config_path.exists() {
+                    std::fs::remove_file(&config_path).map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        return match rollback {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!("{error}; откат не завершён: {rollback_error}")),
+        };
+    }
+
     let max_parallel_cases = runtime.max_parallel_cases;
     if let Err(error) = start_watcher_thread(app.clone(), runtime, false) {
         let rollback_config = match previous_config.as_deref() {
@@ -1177,6 +1311,8 @@ fn install_background_watcher(
         "installed": true,
         "watch_folder": watch_folder.display().to_string(),
         "executable": exe.display().to_string(),
+        "executable_sha256": owner.executable_sha256,
+        "handoff_generation": owner.generation,
         "args": ["--background-watch"],
         "autostart_files": autostart_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
         "warnings": warnings,
@@ -1228,7 +1364,6 @@ fn uninstall_background_watcher(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    // Stop the native watcher thread.
     let stopped_folder = {
         let mut guard = state.watcher.lock().map_err(|_| "state lock failed")?;
         guard.take().map(|handle| {
@@ -1236,7 +1371,6 @@ fn uninstall_background_watcher(
             handle.folder.display().to_string()
         })
     };
-    // Remove OS autostart entries and the recorded plan.
     let (removed, warnings) = remove_autostart_entries();
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let plan_file = app_data.join("intake-agent-autostart.json");
@@ -1250,4 +1384,47 @@ fn uninstall_background_watcher(
         "removed_files": removed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
         "warnings": warnings,
     }))
+}
+
+#[cfg(test)]
+mod watcher_handoff_tests {
+    use super::*;
+
+    fn owner(generation: &str, ready: bool) -> WatcherHandoffOwner {
+        WatcherHandoffOwner {
+            generation: generation.into(),
+            executable: "/install/app.exe".into(),
+            executable_sha256: "a".repeat(64),
+            ready,
+        }
+    }
+
+    #[test]
+    fn pending_owner_never_retires_running_watcher() {
+        assert!(!watcher_owner_superseded(
+            Some(&owner("A", true)),
+            Some(&owner("B", false))
+        ));
+    }
+
+    #[test]
+    fn newer_ready_owner_retires_stale_watcher() {
+        assert!(watcher_owner_superseded(
+            Some(&owner("A", true)),
+            Some(&owner("B", true))
+        ));
+    }
+
+    #[test]
+    fn current_ready_owner_stays_in_charge() {
+        assert!(!watcher_owner_superseded(
+            Some(&owner("B", true)),
+            Some(&owner("B", true))
+        ));
+    }
+
+    #[test]
+    fn legacy_watcher_can_handoff_once_ready_owner_exists() {
+        assert!(watcher_owner_superseded(None, Some(&owner("B", true))));
+    }
 }

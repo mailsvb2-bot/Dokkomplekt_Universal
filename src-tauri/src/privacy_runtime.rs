@@ -44,7 +44,11 @@ impl Default for PrivacyPreferences {
     fn default() -> Self {
         let retention = WorkspaceRetentionPolicy::default();
         Self {
-            copy_source_to_output: false,
+            // A primary document dropped into the created-documents intake is a
+            // user document, not a service artifact. The canonical publication
+            // contract therefore keeps an immutable copy in the patient folder
+            // by default before the original top-level source is finalized.
+            copy_source_to_output: true,
             write_trust_report: false,
             include_values_in_trust_report: false,
             temp_retention_hours: 0,
@@ -74,6 +78,12 @@ fn normalize_loaded_privacy_preferences(mut preferences: PrivacyPreferences) -> 
     if !preferences.trust_report_explicit {
         preferences.write_trust_report = false;
     }
+    // Pre-parity installations could persist the old opt-out value. Keeping it
+    // would make a successfully processed dropped primary disappear from the
+    // user's patient folder after upgrade. Source placement is now a canonical
+    // created-documents invariant; retention/archiving of the original remains
+    // independently configurable below.
+    preferences.copy_source_to_output = true;
     preferences
 }
 
@@ -97,6 +107,9 @@ pub(crate) fn persist_privacy_preferences(
     }
     preferences.retention_policy().validate()?;
     let mut persisted = preferences.clone();
+    // The dropped primary belongs to the patient document set. Do not allow an
+    // old UI/state payload to silently turn this user-visible invariant off.
+    persisted.copy_source_to_output = true;
     persisted.trust_report_explicit = true;
     repository_for(&default_state_db_path(app)?)?
         .save_state_value(PRIVACY_PREFERENCES_STATE_KEY, &persisted)
@@ -138,6 +151,22 @@ pub(crate) fn start_periodic_intake_cleanup(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_primary_is_part_of_default_patient_folder_publication() {
+        let preferences = PrivacyPreferences::default();
+        assert!(preferences.copy_source_to_output);
+    }
+
+    #[test]
+    fn legacy_source_opt_out_is_migrated_to_patient_folder_contract() {
+        let legacy = PrivacyPreferences {
+            copy_source_to_output: false,
+            ..PrivacyPreferences::default()
+        };
+        let migrated = normalize_loaded_privacy_preferences(legacy);
+        assert!(migrated.copy_source_to_output);
+    }
 
     #[test]
     fn trust_report_is_not_part_of_default_document_publication() {

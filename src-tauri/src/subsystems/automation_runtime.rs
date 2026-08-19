@@ -1,33 +1,6 @@
-/// The zero-touch orchestrator shared by the UI command and the background
-/// watcher thread: one dropped primary DOCX -> the whole configured set into a
-/// fresh output folder, or a safe attention note. Decision logic lives in
-/// dokkomplekt_core; this function only does IO.
-fn file_content_signature(path: &Path) -> Result<(u64, u128, String), String> {
-    use std::io::Read as _;
-    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
-    let modified_unix_ms = metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|value| value.as_millis())
-        .unwrap_or_default();
-    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok((
-        metadata.len(),
-        modified_unix_ms,
-        hex::encode(hasher.finalize()),
-    ))
-}
-
+/// Finalize the top-level source only after its immutable snapshot has been
+/// successfully published with the patient document set. The source hash binds
+/// deletion/archive decisions to the exact bytes that were processed.
 fn finalize_processed_source(
     source: &Path,
     source_sha256: &str,
@@ -1047,12 +1020,14 @@ fn perform_created_documents_intake(
                     ));
                     names.push(out.file_name.clone());
                 }
-                if privacy.copy_source_to_output {
-                    std::fs::copy(source_snapshot.path(), stage.join(&source_target_name))
-                        .map_err(|e| format!("Не удалось скопировать snapshot исходника в комплект: {e}"))?;
-                }
+                // The dropped primary is a user document and is always part of
+                // the atomically published patient set. Privacy retention controls
+                // what happens to the original top-level source after publication,
+                // not whether the patient folder loses its primary document.
+                std::fs::copy(source_snapshot.path(), stage.join(&source_target_name))
+                    .map_err(|e| format!("Не удалось скопировать snapshot исходника в комплект: {e}"))?;
                 if privacy.write_trust_report {
-                    write_trust_report(
+                    if let Err(error) = write_trust_report(
                         &stage,
                         &report_case,
                         TrustReportContext {
@@ -1063,7 +1038,15 @@ fn perform_created_documents_intake(
                             include_values: privacy.include_values_in_trust_report,
                             source_warnings: &source_report.warnings,
                         },
-                    )?;
+                    ) {
+                        let _ = create_automation_exception(
+                            app,
+                            "trust_report_failure",
+                            "",
+                            "Комплект будет создан без необязательного служебного отчёта доверия.",
+                            &serde_json::json!({ "error": error }),
+                        );
+                    }
                 }
                 Ok(names)
             })();
@@ -1179,7 +1162,7 @@ fn perform_created_documents_intake(
                 "output_folder": patient_dir.display().to_string(),
                 "documents": &names,
                 "source_kind": &source_kind,
-                "source_copied": privacy.copy_source_to_output,
+                "source_copied": true,
                 "trust_report": privacy.write_trust_report,
                 "reused_documents": reused_documents,
                 "rerendered_documents": rerendered_documents,

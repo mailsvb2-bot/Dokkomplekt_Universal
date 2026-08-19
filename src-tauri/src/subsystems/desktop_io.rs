@@ -1547,7 +1547,32 @@ fn write_trust_report(
         return Err("Отчёт проверяемости требует настоящий SHA-256 исходника.".into());
     }
     let source_name = sanitize_source_name(source_name);
-    let report_path = folder.join("ПРОВЕРИТЬ_КОМПЛЕКТ.txt");
+    // Service diagnostics never belong to the user-facing patient folder. Both
+    // manual and zero-touch publication render into hidden staging directories;
+    // route trust reports to a dedicated sibling service area before that stage
+    // is atomically renamed into the final patient folder.
+    let folder_name = folder
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let report_path = if folder_name.starts_with(".dokkomplekt-stage-")
+        || folder_name.starts_with(".dokkomplekt-manual-stage-")
+    {
+        let service_root = folder
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("_служебные_отчёты");
+        std::fs::create_dir_all(&service_root).map_err(|error| {
+            format!("Не удалось создать служебную папку отчётов: {error}")
+        })?;
+        service_root.join(format!(
+            "ПРОВЕРИТЬ_КОМПЛЕКТ-{}-{}.txt",
+            &source_sha256[..12],
+            Uuid::new_v4()
+        ))
+    } else {
+        folder.join("ПРОВЕРИТЬ_КОМПЛЕКТ.txt")
+    };
     let mut report = String::new();
     report.push_str("ДОККОМПЛЕКТ — ОТЧЁТ ПРОВЕРЯЕМОСТИ\n");
     report.push_str("======================================\n\n");
@@ -1595,4 +1620,38 @@ fn write_trust_report(
     std::fs::write(&report_path, report)
         .map_err(|error| format!("Не удалось записать отчёт проверяемости: {error}"))?;
     Ok(report_path)
+}
+
+#[cfg(test)]
+mod trust_report_routing_tests {
+    use super::*;
+
+    #[test]
+    fn staged_patient_publication_keeps_service_report_outside_patient_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-trust-report-routing-{}",
+            Uuid::new_v4()
+        ));
+        let stage = root.join(format!(".dokkomplekt-stage-{}-1", std::process::id()));
+        std::fs::create_dir_all(&stage).unwrap();
+        let report = write_trust_report(
+            &stage,
+            &SemanticCase::default(),
+            TrustReportContext {
+                source_name: "Первичный.docx",
+                source_sha256: &"a".repeat(64),
+                generated_names: &[],
+                used_field_ids: &BTreeSet::new(),
+                include_values: false,
+                source_warnings: &[],
+            },
+        )
+        .unwrap();
+        assert!(!report.starts_with(&stage));
+        assert_eq!(
+            report.parent().and_then(|path| path.file_name()).and_then(|name| name.to_str()),
+            Some("_служебные_отчёты")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

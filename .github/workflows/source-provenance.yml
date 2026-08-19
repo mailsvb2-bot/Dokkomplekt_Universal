@@ -46,6 +46,18 @@ jobs:
           set -euo pipefail
           test -f scripts/port_donor_total_parity.py || exit 0
           python scripts/port_donor_total_parity.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/src/universal_intake.rs')
+          text = p.read_text(encoding='utf-8')
+          old = '        assert_eq!(decode_text_bytes(b"\\xEF\\xBB\\xBFПривет"), "Привет");'
+          new = '''        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];
+                  utf8_bom.extend_from_slice("Привет".as_bytes());
+                  assert_eq!(decode_text_bytes(&utf8_bom), "Привет");'''
+          if old not in text:
+              raise SystemExit('UTF-8 BOM fixture anchor missing')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           cargo fmt --all
           cargo fmt --all -- --check
           cargo test -p dokkomplekt-core --test donor_labs_legacy_parity

@@ -60,10 +60,21 @@ pub fn apply_popup_answers(
         .iter()
         .map(|answer| (answer.field_id.trim(), answer))
         .collect::<BTreeMap<_, _>>();
+    let explicit_without_labs = by_id.get("medical.labs_without").is_some_and(|answer| {
+        matches!(
+            answer.value.trim().to_lowercase().as_str(),
+            "да" | "yes" | "true"
+        )
+    });
     let mut next = case.clone();
     let mut still_missing = Vec::new();
 
     for prompt in &plan.prompts {
+        if prompt.field_id == "medical.labs" && explicit_without_labs {
+            next.unskip("medical.labs");
+            set_user_value(&mut next, "medical.labs", "Нет анализов");
+            continue;
+        }
         let Some(answer) = by_id.get(prompt.field_id.as_str()) else {
             if prompt.required {
                 still_missing.push(prompt.clone());

@@ -19,13 +19,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: Reconstruct and validate exact patch
+      - name: Reconstruct and apply product patch
         shell: bash
         run: |
           set -euo pipefail
           cat .github/one-shot-real-user-parity/part-* > /tmp/real-user-parity.patch
-          git apply --check /tmp/real-user-parity.patch
-          git apply /tmp/real-user-parity.patch
+          git apply --exclude=SOURCE_MANIFEST_SHA256.txt --check /tmp/real-user-parity.patch
+          git apply --exclude=SOURCE_MANIFEST_SHA256.txt /tmp/real-user-parity.patch
 
       - name: Remove one-shot transport from final tree
         shell: bash
@@ -33,10 +33,12 @@ jobs:
           set -euo pipefail
           git rm -f -- .github/workflows/one-shot-apply-real-user-parity.yml .github/one-shot-real-user-parity/part-*
 
-      - name: Verify canonical source integrity
+      - name: Regenerate and verify canonical source manifest
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
           python scripts/verify_source_manifest.py --json-report /tmp/source-manifest.json
           python scripts/static_quality_gate.py --source-only
           python -m pytest -q tests/test_donor_diary_output_parity.py

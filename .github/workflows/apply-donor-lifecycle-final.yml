@@ -1,9 +1,9 @@
 name: Apply final donor lifecycle parity
 
 on:
-  push:
-    branches:
-      - agent/exhaustive-donor-parity-20260819
+  pull_request:
+    branches: [main]
+    types: [synchronize]
     paths:
       - .github/workflows/apply-donor-lifecycle-final.yml
 
@@ -12,11 +12,13 @@ permissions:
 
 jobs:
   apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/exhaustive-donor-parity-20260819'
     runs-on: ubuntu-24.04
     steps:
-      - name: Check out exact branch head
+      - name: Check out exact branch head, not pull-request merge ref
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          ref: agent/exhaustive-donor-parity-20260819
           fetch-depth: 0
 
       - name: Install pinned Rust formatter
@@ -54,4 +56,4 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Complete donor patient-folder and watcher lifecycle parity"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:agent/exhaustive-donor-parity-20260819

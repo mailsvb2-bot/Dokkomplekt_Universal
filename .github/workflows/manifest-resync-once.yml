@@ -33,11 +33,11 @@ jobs:
             --top-level Dokkomplekt_Universal \
             --manifest-json "$RUNNER_TEMP/source-archive-report.json"
           python scripts/verify_source_manifest.py
-      - name: Commit only the self-removal and generated manifest
+      - name: Commit self-removal and generated manifest
         shell: bash
         run: |
           set -euo pipefail
-          git add SOURCE_MANIFEST_SHA256.txt .github/workflows/manifest-resync-once.yml
+          git add SOURCE_MANIFEST_SHA256.txt
           git diff --cached --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

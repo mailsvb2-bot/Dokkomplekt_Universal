@@ -39,6 +39,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
+      - name: Install canonical Linux Tauri compile dependencies
+        if: github.event_name == 'pull_request'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: One-shot canonical predecessor port
         if: github.event_name == 'pull_request'
         shell: bash

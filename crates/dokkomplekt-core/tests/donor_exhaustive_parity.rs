@@ -3,8 +3,9 @@ use dokkomplekt_core::universal_behavior_port::{
     diary_hourly_schedule_from_choice, diary_minute_schedule_from_choice,
 };
 use dokkomplekt_core::{
-    clinical_calendar_diary_schedule, dynamic_epicrisis_base_date, dynamic_epicrisis_dates,
-    parse_flexible_date, parse_source_text, search_icd10,
+    build_diary_plan, clinical_calendar_diary_schedule, dynamic_epicrisis_base_date,
+    dynamic_epicrisis_dates, merge_value, parse_flexible_date, parse_source_text, search_icd10,
+    set_user_value, SemanticCase, SemanticValue, ValueSource,
 };
 
 fn d(value: &str) -> NaiveDate {
@@ -65,6 +66,60 @@ fn donor_date_formats_include_compact_russian_and_polish_word_dates() {
         parse_flexible_date("2 czerwca 2026", 2026).as_deref(),
         Some("02.06.2026")
     );
+}
+
+#[test]
+fn early_diary_filler_month_rollover_stays_calendar_exact() {
+    let plan = build_diary_plan(Some("30.01.2026"), Some("02.02.2026"), 2026).unwrap();
+    assert_eq!(
+        plan.iter()
+            .map(|entry| entry.date.as_str())
+            .collect::<Vec<_>>(),
+        vec!["31.01.2026", "01.02.2026", "02.02.2026"]
+    );
+    assert_eq!(
+        plan.iter().map(|entry| entry.month).collect::<Vec<_>>(),
+        vec![1, 2, 2]
+    );
+}
+
+#[test]
+fn doctor_confirmed_diary_date_remains_stronger_than_later_automation() {
+    let mut case = SemanticCase::default();
+    assert!(merge_value(
+        &mut case,
+        SemanticValue::new(
+            "medical.admission_date",
+            "01.06.2026",
+            ValueSource::Scanner,
+            0.95,
+        ),
+    ));
+    set_user_value(&mut case, "medical.admission_date", "02.06.2026");
+    assert!(!merge_value(
+        &mut case,
+        SemanticValue::new(
+            "medical.admission_date",
+            "03.06.2026",
+            ValueSource::Scanner,
+            1.0,
+        ),
+    ));
+    assert_eq!(case.get("medical.admission_date"), Some("02.06.2026"));
+}
+
+#[test]
+fn birth_date_before_admission_never_becomes_the_admission_date() {
+    let text = concat!(
+        "Первичный осмотр\n",
+        "Пациент: Иванов Иван Иванович\n",
+        "Дата рождения: 05.05.1980. Дата поступления: 10.02.2026.\n",
+        "Диагноз: J20 Острый бронхит\n",
+        "Лечение: терапия"
+    );
+    let (case, _) = parse_source_text(text, 2026);
+    assert_eq!(case.get("subject.birth_date"), Some("05.05.1980"));
+    assert_eq!(case.get("medical.admission_date"), Some("10.02.2026"));
 }
 
 #[test]

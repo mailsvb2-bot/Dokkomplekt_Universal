@@ -1047,12 +1047,14 @@ fn perform_created_documents_intake(
                     ));
                     names.push(out.file_name.clone());
                 }
-                if privacy.copy_source_to_output {
-                    std::fs::copy(source_snapshot.path(), stage.join(&source_target_name))
-                        .map_err(|e| format!("Не удалось скопировать snapshot исходника в комплект: {e}"))?;
-                }
+                // The dropped primary is a user document and is always part of
+                // the atomically published patient set. Privacy retention controls
+                // what happens to the original top-level source after publication,
+                // not whether the patient folder loses its primary document.
+                std::fs::copy(source_snapshot.path(), stage.join(&source_target_name))
+                    .map_err(|e| format!("Не удалось скопировать snapshot исходника в комплект: {e}"))?;
                 if privacy.write_trust_report {
-                    write_trust_report(
+                    if let Err(error) = write_trust_report(
                         &stage,
                         &report_case,
                         TrustReportContext {
@@ -1063,7 +1065,15 @@ fn perform_created_documents_intake(
                             include_values: privacy.include_values_in_trust_report,
                             source_warnings: &source_report.warnings,
                         },
-                    )?;
+                    ) {
+                        let _ = create_automation_exception(
+                            app,
+                            "trust_report_failure",
+                            "",
+                            "Комплект будет создан без необязательного служебного отчёта доверия.",
+                            &serde_json::json!({ "error": error }),
+                        );
+                    }
                 }
                 Ok(names)
             })();
@@ -1179,7 +1189,7 @@ fn perform_created_documents_intake(
                 "output_folder": patient_dir.display().to_string(),
                 "documents": &names,
                 "source_kind": &source_kind,
-                "source_copied": privacy.copy_source_to_output,
+                "source_copied": true,
                 "trust_report": privacy.write_trust_report,
                 "reused_documents": reused_documents,
                 "rerendered_documents": rerendered_documents,

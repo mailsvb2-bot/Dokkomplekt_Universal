@@ -74,8 +74,12 @@ def test_rustsec_evidence_requires_a_real_database_commit() -> None:
 def test_background_watcher_install_is_durable_and_error_events_match_frontend_contract() -> None:
     source = (ROOT / "src-tauri/src/subsystems/watcher_commands.rs").read_text("utf-8")
     assert "fn write_autostart_entries(exe: &Path) -> Result<(Vec<PathBuf>, Vec<String>), String>" in source
-    assert "installed=true" in source
+    assert '"installed": true' in source
     assert "match write_autostart_entries(&exe)" in source
+    assert "struct WatcherHandoffOwner" in source
+    assert "executable_sha256" in source
+    assert "owner.ready = true" in source
+    assert "handoff_watcher_to_successor" in source
     assert "status: \"error\".into()" not in source
     assert source.count("status: \"attention\".into()") >= 2
 

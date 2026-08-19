@@ -102,14 +102,26 @@ Retained donor contracts:
 
 The Universal source parser already contains the donor Polish labels (`Pacjent/Pacjentka`, `Nr historii choroby`, `Data urodzenia`, `Data przyjęcia`, `Data wypisu`, `Rozpoznanie`, `Leczenie`, `Zalecenia`, anamnesis/status/work/signature labels), Polish word-date parsing and Polish diary gender pairs.
 
-The audit found one remaining activation risk: the medical-profile gate in `parse_source_text` is currently keyed primarily by Russian medical marker words. A Polish-only source must therefore be locked by an end-to-end regression before this audit can call the Polish path complete. This is a concrete follow-up in this branch, not a reason to introduce a separate Polish parser.
+Polish-only activation is now locked end to end in the same canonical parser: Polish medical markers activate the medical profile without introducing a separate language engine. The regression verifies patient identity, case number, birth/admission/discharge dates, diagnosis, treatment and recommendations from a source that contains no Russian medical marker.
 
 ### Output and publication
 
 - Patient/result folder naming follows persisted user-confirmed naming strategy.
+- A primary source accepted from the watched created-documents root is an obligatory member of the atomically published patient document set; it is no longer lost to the processed-source archive by default.
+- Original-source retention/archiving remains a separate privacy/lifecycle policy after successful patient-folder publication.
 - Generated documents preserve the user's Word template structure instead of flattening to plain text.
+- Optional trust/diagnostic reports are service artifacts and are routed outside the patient staging/final folder; failure to write an optional report cannot discard an otherwise valid document set.
 - Successful generation does not require an informational success popup; opening/surfacing the output can remain the completion UX.
 - Printing remains a publication action, not part of semantic extraction.
+
+### Watched-folder lifecycle and updates
+
+- A stable supported primary dropped into the watched top level opens/activates the normal application UI without shell/PowerShell flashing; the existing UI singleton prevents a second visible window.
+- The hidden watcher remains the existing canonical Rust/Tauri intake owner; no donor Python agent or parallel state store is restored.
+- Watcher ownership is versioned by a generation plus executable path and SHA-256.
+- Installation publishes ownership in two phases (`ready=false` then `ready=true` only after OS autostart is durable), so a failed/incomplete update cannot retire the working agent.
+- A stale handoff-aware watcher stops admitting new work, drains in-flight cases, validates the successor executable hash, releases its watcher singleton, and starts the current executable with `--background-watch`.
+- Legacy watcher configs remain readable through serde defaults; missing or hash-invalid successor targets fail safe and leave the current watcher in charge.
 
 ## Explicitly superseded — do not resurrect
 
@@ -129,7 +141,9 @@ Their useful behavior is preserved in the canonical Universal owner instead.
 
 ## Evidence added by this audit
 
-`crates/dokkomplekt-core/tests/donor_exhaustive_parity.rs` locks late donor contracts that were previously spread across many Python regressions: clinical calendar offsets, minute-menu semantics, custom minute/hour choices, negative-input rejection, compact/Russian/Polish dates, same-line source parsing/FIO sanitization, dynamic epicrisis cadence and representative full ICD-10 rows.
+`crates/dokkomplekt-core/tests/donor_exhaustive_parity.rs` locks donor contracts that were previously spread across many Python regressions: clinical calendar offsets, minute-menu semantics, custom minute/hour choices, negative-input rejection, compact/Russian/Polish dates, same-line source parsing/FIO sanitization, birth-date/admission separation, January→February diary rollover, doctor-confirmed date priority, Polish-only medical activation, dynamic epicrisis cadence and representative full ICD-10 rows.
+
+`tests/test_donor_patient_folder_watcher_parity.py` locks the user-visible desktop chain: primary source is part of patient publication, service reports stay outside the patient folder, background drop opens/activates the normal UI without a shell, and update handoff is SHA-bound, drain-first and backward-compatible. Rust tests additionally execute the trust-report routing and watcher-owner decision primitives.
 
 The compatibility schedule parser is aligned with the same donor menu/custom interval semantics rather than having a second interpretation.
 
@@ -137,10 +151,9 @@ The compatibility schedule parser is aligned with the same donor menu/custom int
 
 Before merge:
 
-- prove the new parity suite on exact branch SHA;
-- add an end-to-end Polish-only medical source regression and close the medical-marker activation gap if it fails;
-- compare donor install/update intake handoff with the current Tauri watcher lifecycle and port only any behavior not already structurally superseded;
-- verify custom-button diary flow reaches the same cadence fields as checkbox/profile generation;
+- prove the expanded donor parity suite and patient-folder/watcher lifecycle contracts on the exact branch SHA;
+- keep custom-button diary flow on the already confirmed canonical cadence/preflight path;
+- regenerate and verify the read-only source provenance manifest for the exact final tree;
 - run complete canonical Quality Gate, Windows preview/installer and macOS smoke; no bypass/merge on partial green.
 
 Production issue #5 remains a separate physical signing/hardware acceptance boundary and must not be falsely closed by donor code migration.

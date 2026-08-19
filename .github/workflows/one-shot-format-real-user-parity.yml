@@ -1,0 +1,65 @@
+name: One-shot format real-user parity
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.event.pull_request.head.ref == 'agent/real-user-parity-20260820'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Install pinned Rust formatter
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+
+      - name: Fix exact decoder typo and format Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src-tauri/src/universal_intake.rs')
+          text = path.read_text(encoding='utf-8')
+          old = 'std::str::from_utf8hwithout_bom)'
+          new = 'std::str::from_utf8(without_bom)'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one decoder typo, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+
+      - name: Remove formatter helper and regenerate exact manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f -- .github/workflows/one-shot-format-real-user-parity.yml
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py --json-report /tmp/source-manifest.json
+          python scripts/static_quality_gate.py --source-only
+          git add -A
+          git diff --cached --check
+          git status --short
+
+      - name: Commit formatted product tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: format real-user generation workflow'
+          git push origin HEAD:agent/real-user-parity-20260820

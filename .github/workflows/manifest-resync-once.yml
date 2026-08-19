@@ -1,21 +1,22 @@
 name: One-shot source manifest resync
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/exhaustive-donor-parity-20260818
+      - main
 
 permissions:
   contents: write
 
 jobs:
   regenerate-and-remove-self:
+    if: github.head_ref == 'agent/exhaustive-donor-parity-20260818'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -41,4 +42,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "chore(provenance): regenerate source manifest"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"

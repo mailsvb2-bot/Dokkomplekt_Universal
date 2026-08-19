@@ -1,0 +1,92 @@
+name: One-shot align real-user governance
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.event.pull_request.head.ref == 'agent/real-user-parity-20260820'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Install pinned Rust formatter
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+
+      - name: Align governance contracts and split decoder regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          popup_contract = Path('tests/test_v18_0_4_professional_popup_contracts.py')
+          text = popup_contract.read_text(encoding='utf-8')
+          old = 'applyPopupBatch(ids, sickLeave, payload)'
+          new = 'applyPopupBatch(ids, sickLeave, payload, folderParts)'
+          if text.count(old) != 1:
+              raise SystemExit(f'professional popup contract expected one old signature, found {text.count(old)}')
+          popup_contract.write_text(text.replace(old, new), encoding='utf-8')
+
+          governance = Path('tests/test_v18_4_3_generation_plan_governance.py')
+          text = governance.read_text(encoding='utf-8')
+          old = 'getWorkflowPlanBatch(documentIds, sickLeave)'
+          new = 'getWorkflowPlanBatch(documentIds, sickLeave, folderParts)'
+          if text.count(old) != 1:
+              raise SystemExit(f'generation governance expected one old signature, found {text.count(old)}')
+          governance.write_text(text.replace(old, new), encoding='utf-8')
+
+          intake = Path('src-tauri/src/universal_intake.rs')
+          text = intake.read_text(encoding='utf-8')
+          marker = 'mod web;\n'
+          addition = 'mod web;\n#[cfg(test)]\nmod text_decoder_tests;\n'
+          if text.count(marker) != 1 or 'mod text_decoder_tests;' in text:
+              raise SystemExit('unexpected universal intake module marker state')
+          text = text.replace(marker, addition, 1)
+          block = '''    #[test]\n    fn plain_text_decoder_preserves_utf8_bom_and_windows_1251() {\n        let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];\n        utf8_bom.extend_from_slice("Привет".as_bytes());\n        assert_eq!(decode_text_bytes(&utf8_bom), "Привет");\n        assert_eq!(\n            decode_text_bytes(&[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2]),\n            "Привет"\n        );\n    }\n\n'''
+          if text.count(block) != 1:
+              raise SystemExit(f'expected one inline decoder regression, found {text.count(block)}')
+          intake.write_text(text.replace(block, '', 1), encoding='utf-8')
+
+          decoder_test = Path('src-tauri/src/universal_intake/text_decoder_tests.rs')
+          decoder_test.write_text('''use super::decode_text_bytes;\n\n#[test]\nfn plain_text_decoder_preserves_utf8_bom_and_windows_1251() {\n    let mut utf8_bom = vec![0xEF, 0xBB, 0xBF];\n    utf8_bom.extend_from_slice("Привет".as_bytes());\n    assert_eq!(decode_text_bytes(&utf8_bom), "Привет");\n    assert_eq!(\n        decode_text_bytes(&[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2]),\n        "Привет"\n    );\n}\n''', encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          test "$(wc -l < src-tauri/src/universal_intake.rs)" -lt 3000
+          grep -Fq 'applyPopupBatch(ids, sickLeave, payload, folderParts)' tests/test_v18_0_4_professional_popup_contracts.py
+          grep -Fq 'getWorkflowPlanBatch(documentIds, sickLeave, folderParts)' tests/test_v18_4_3_generation_plan_governance.py
+
+      - name: Remove helper and regenerate exact manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f -- .github/workflows/one-shot-governance-real-user-parity.yml
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py --json-report /tmp/source-manifest.json
+          python scripts/static_quality_gate.py --source-only
+          git add -A
+          git diff --cached --check
+          git status --short
+
+      - name: Commit clean governance tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test: align real-user generation governance'
+          git push origin HEAD:agent/real-user-parity-20260820

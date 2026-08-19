@@ -24,7 +24,7 @@ class ProfessionalPopupContracts(unittest.TestCase):
         self.assertIn("fn get_workflow_plan_batch", main)
         self.assertIn("fn apply_popup_batch", main)
         self.assertIn("useGenerationPreflight({", app)
-        self.assertIn("applyPopupBatch(ids, sickLeave, payload)", app)
+        self.assertIn("applyPopupBatch(ids, sickLeave, payload, folderParts)", app)
         self.assertIn("requestWorkflowPlan(options.selectedDocumentIds)", preflight)
         self.assertIn("Проверить и создать", workspace)
 

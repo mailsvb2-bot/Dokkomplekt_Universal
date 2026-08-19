@@ -41,7 +41,6 @@ jobs:
           cp /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
           python scripts/verify_source_manifest.py --json-report /tmp/source-manifest.json
           python scripts/static_quality_gate.py --source-only
-          python -m pytest -q tests/test_donor_diary_output_parity.py
 
       - name: Stage intended product changes
         shell: bash

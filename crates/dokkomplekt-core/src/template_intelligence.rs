@@ -66,7 +66,17 @@ pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
 }
 
 fn canonical_template_fields(placeholder: &str, domain: &DomainKind, role_id: &str) -> Vec<String> {
-    let Some(field_id) = canonical_field_id_for_domain(placeholder, Some(domain)) else {
+    // Storage aliases are older technical placeholder ids that already have one
+    // canonical semantic owner (for example LAB_BLOCK -> medical.labs). Resolve
+    // them before the field registry so they cannot fall through as arbitrary
+    // custom ids merely because their spelling is syntactically valid.
+    let storage_id = crate::canonical_storage_field_id(placeholder);
+    let lookup = if storage_id.as_str() == placeholder {
+        placeholder
+    } else {
+        storage_id.as_str()
+    };
+    let Some(field_id) = canonical_field_id_for_domain(lookup, Some(domain)) else {
         return Vec::new();
     };
     if !matches!(domain, DomainKind::Medical) {
@@ -350,6 +360,15 @@ mod alias_regression_tests {
             ]
         );
         assert!(analysis.unknown_placeholders.is_empty());
+    }
+
+    #[test]
+    fn legacy_laboratory_storage_aliases_become_one_template_field() {
+        for alias in ["laboratory.results", "LAB_BLOCK", "labs_block"] {
+            let analysis = analyze_template_text(&format!("Выписной эпикриз\n{{{{{alias}}}}}"));
+            assert_eq!(analysis.placeholders, vec!["medical.labs"]);
+            assert!(analysis.unknown_placeholders.is_empty(), "alias={alias}");
+        }
     }
 
     #[test]

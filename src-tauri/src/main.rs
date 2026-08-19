@@ -2183,6 +2183,7 @@ fn current_year_utc() -> i32 {
 include!("subsystems/legacy_template_runtime.rs");
 include!("subsystems/profile_sources.rs");
 include!("subsystems/publication_collision.rs");
+include!("subsystems/source_identity_runtime.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");

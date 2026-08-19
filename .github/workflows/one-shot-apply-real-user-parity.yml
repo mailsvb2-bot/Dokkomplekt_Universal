@@ -1,23 +1,23 @@
 name: One-shot apply real-user parity
 
 on:
-  push:
-    branches:
-      - agent/real-user-parity-20260820
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event.pull_request.head.ref == 'agent/real-user-parity-20260820'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout exact branch head
+      - name: Checkout exact PR head
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           fetch-depth: 0
-          ref: agent/real-user-parity-20260820
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Reconstruct and validate exact patch
         shell: bash
@@ -41,7 +41,7 @@ jobs:
           python scripts/static_quality_gate.py --source-only
           python -m pytest -q tests/test_donor_diary_output_parity.py
 
-      - name: Stage only intended product changes
+      - name: Stage intended product changes
         shell: bash
         run: |
           set -euo pipefail

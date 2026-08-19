@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/universal-donor-user-flow-20260819
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write

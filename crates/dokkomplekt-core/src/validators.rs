@@ -26,9 +26,12 @@ pub fn validate_field_value(field_id: &str, value: &str) -> Result<(), String> {
     exact?;
     let id = field_id.to_ascii_lowercase();
     if id.ends_with("_date") || id.ends_with(".date") || id.contains("date_") {
-        parse_supported_date(v).map(|_| ()).ok_or_else(|| {
-            format!("{field_id}: дата должна быть в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД")
-        })?;
+        let birth_year_only = field_id == "subject.birth_date" && is_plausible_birth_year(v);
+        if !birth_year_only {
+            parse_supported_date(v).map(|_| ()).ok_or_else(|| {
+                format!("{field_id}: дата должна быть в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД")
+            })?;
+        }
     }
     if matches!(
         crate::infer_input_kind(field_id),
@@ -114,7 +117,50 @@ pub fn validate_case_relations(case: &SemanticCase) -> Vec<(String, String)> {
             }
         }
     }
+    for field_id in ["medical.workplace", "subject.organization"] {
+        let Some(value) = case.get(field_id) else {
+            continue;
+        };
+        if is_no_employment_marker(value)
+            && !errors.iter().any(|(existing, _)| existing == field_id)
+        {
+            errors.push((
+                field_id.to_string(),
+                "Значение означает отсутствие места работы и не может быть названием организации."
+                    .into(),
+            ));
+        }
+    }
     errors
+}
+
+fn is_plausible_birth_year(value: &str) -> bool {
+    value.len() == 4
+        && value.chars().all(|ch| ch.is_ascii_digit())
+        && value
+            .parse::<i32>()
+            .is_ok_and(|year| (1900..=2200).contains(&year))
+}
+
+fn is_no_employment_marker(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .to_lowercase()
+        .replace('ё', "е")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    [
+        "не работает",
+        "не работаю",
+        "не трудоустроен",
+        "не трудоустроена",
+        "безработный",
+        "безработная",
+        "безработен",
+    ]
+    .iter()
+    .any(|marker| normalized == *marker || normalized.starts_with(&format!("{marker} ")))
 }
 
 fn validate_date_order(

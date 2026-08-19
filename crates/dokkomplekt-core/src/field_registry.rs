@@ -1267,10 +1267,22 @@ pub fn normalized_field_alias_key(raw: &str) -> String {
 /// Return every canonical registry field matching a canonical id, title or alias.
 /// Multiple values are preserved because labels such as «Должность» are
 /// legitimately domain-dependent and must not be guessed globally.
+pub const MEDICAL_WORK_POSITION: &str = "medical.work_position";
+
+fn is_combined_work_position_alias(raw: &str) -> bool {
+    matches!(
+        normalized_field_alias_key(raw).as_str(),
+        "местоработыдолжность" | "работадолжность" | "workposition" | "workplaceposition"
+    )
+}
+
 pub fn canonical_field_candidates(raw: &str) -> Vec<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Vec::new();
+    }
+    if is_combined_work_position_alias(trimmed) {
+        return vec![MEDICAL_WORK_POSITION.to_string()];
     }
     let key = normalized_field_alias_key(trimmed);
     let mut matches = all_fields()
@@ -1298,6 +1310,10 @@ pub fn canonical_field_id_for_domain(
     preferred_domain: Option<&DomainKind>,
 ) -> Option<String> {
     let trimmed = raw.trim();
+    if is_combined_work_position_alias(trimmed) {
+        return matches!(preferred_domain, None | Some(DomainKind::Medical))
+            .then(|| MEDICAL_WORK_POSITION.to_string());
+    }
     let candidates = canonical_field_candidates(trimmed);
     if candidates.len() == 1 {
         return candidates.into_iter().next();

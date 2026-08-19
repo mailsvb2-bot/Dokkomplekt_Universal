@@ -1,14 +1,28 @@
 use crate::{
-    prepare_professional_collections, render_advanced_text_template, render_advanced_xml_template,
-    RenderResult, SemanticCase,
+    analyze_template_text, best_domain, prepare_professional_collections,
+    render_advanced_text_template, render_advanced_xml_template, DomainKind, RenderResult,
+    SemanticCase,
 };
 
-pub fn render_text_template(template: &str, case: &SemanticCase, strict: bool) -> RenderResult {
+fn prepare_case_for_template(template: &str, case: &SemanticCase) -> SemanticCase {
     let prepared = prepare_professional_collections(template, case);
+    let analysis = analyze_template_text(template);
+    if best_domain(&analysis) == DomainKind::Medical {
+        crate::domains::medical_semantics::case_for_medical_document_render(
+            &prepared,
+            &analysis.role_id,
+        )
+    } else {
+        prepared
+    }
+}
+
+pub fn render_text_template(template: &str, case: &SemanticCase, strict: bool) -> RenderResult {
+    let prepared = prepare_case_for_template(template, case);
     render_advanced_text_template(template, &prepared, strict)
 }
 pub fn render_docx_xml_template(template: &str, case: &SemanticCase, strict: bool) -> RenderResult {
-    let prepared = prepare_professional_collections(template, case);
+    let prepared = prepare_case_for_template(template, case);
     render_advanced_xml_template(template, &prepared, strict)
 }
 pub fn escape_xml(value: &str) -> String {
@@ -146,5 +160,42 @@ mod tests {
         let case = case_with(&[("hr.position", "Инженер")]);
         let result = render_text_template("{{Должность}}", &case, true);
         assert_eq!(result.output_text, "Инженер");
+    }
+}
+
+#[cfg(test)]
+mod donor_salvage_regressions {
+    use super::*;
+    use crate::domains::medical_semantics::{
+        SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_WORKPLACE, VK_MSE_POSITION, VK_MSE_WORKPLACE,
+    };
+    use crate::{SemanticValue, ValueSource};
+
+    fn put(case: &mut SemanticCase, field_id: &str, value: &str) {
+        case.values.insert(
+            field_id.to_string(),
+            SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
+        );
+    }
+
+    #[test]
+    fn old_combined_placeholder_renders_from_current_role_without_persisting_it() {
+        let mut case = SemanticCase::default();
+        put(&mut case, VK_MSE_WORKPLACE, "ООО МСЭ");
+        put(&mut case, VK_MSE_POSITION, "Инженер");
+        put(&mut case, SICK_LEAVE_VK_WORKPLACE, "АО Больничный");
+        put(&mut case, SICK_LEAVE_VK_POSITION, "Водитель");
+
+        let mse = render_text_template("ВК на МСЭ\n{{Место работы / должность}}", &case, true);
+        let sick = render_text_template(
+            "ВК по больничному\n{{Место работы / должность}}",
+            &case,
+            true,
+        );
+        assert!(mse.output_text.ends_with("ООО МСЭ / Инженер"));
+        assert!(sick.output_text.ends_with("АО Больничный / Водитель"));
+        assert!(mse.missing_fields.is_empty());
+        assert!(sick.missing_fields.is_empty());
+        assert_eq!(case.get(crate::MEDICAL_WORK_POSITION), None);
     }
 }

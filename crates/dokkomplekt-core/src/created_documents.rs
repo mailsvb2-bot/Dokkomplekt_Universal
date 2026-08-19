@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     build_output_folder_name, missing_output_folder_fields, plan_workflow, render_text_template,
-    required_blocks_for,
-    sanitize_folder_name, sanitize_path_component, title_for_field, unmet_blocks,
-    DocumentTemplateSpec, DomainKind, FolderNamePart, SemanticCase, WorkflowFlags,
+    required_blocks_for, sanitize_folder_name, sanitize_path_component, title_for_field,
+    unmet_blocks, DocumentTemplateSpec, DomainKind, FolderNamePart, SemanticCase, WorkflowFlags,
 };
 
 pub const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";

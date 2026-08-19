@@ -748,11 +748,8 @@ mod tests {
 
         assert!(result.accepted);
         assert!(result.semantic_case.is_skipped("custom.details"));
-        let rendered = crate::render_text_template(
-            "До {{custom.details}} после",
-            &result.semantic_case,
-            true,
-        );
+        let rendered =
+            crate::render_text_template("До {{custom.details}} после", &result.semantic_case, true);
         assert_eq!(rendered.output_text, "До  после");
         assert!(rendered.missing_fields.is_empty());
     }

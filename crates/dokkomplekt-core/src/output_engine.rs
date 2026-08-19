@@ -103,7 +103,10 @@ mod tests {
         let case = SemanticCase::default();
         let doc = output_folder_requirement_document(
             &case,
-            &[FolderNamePart::FullSubjectName, FolderNamePart::DocumentNumber],
+            &[
+                FolderNamePart::FullSubjectName,
+                FolderNamePart::DocumentNumber,
+            ],
         )
         .unwrap();
         assert_eq!(doc.category, DomainKind::Generic);

@@ -44,11 +44,19 @@ pub fn missing_output_folder_fields(case: &SemanticCase, parts: &[FolderNamePart
                 "subject.name",
             ),
             FolderNamePart::OrganizationName => require(
-                first(case, &["organization.name", "org.name", "subject.organization"]).is_some(),
+                first(
+                    case,
+                    &["organization.name", "org.name", "subject.organization"],
+                )
+                .is_some(),
                 "org.name",
             ),
             FolderNamePart::DocumentNumber => require(
-                first(case, &["document.number", "case.number", "medical.case_number"]).is_some(),
+                first(
+                    case,
+                    &["document.number", "case.number", "medical.case_number"],
+                )
+                .is_some(),
                 "document.number",
             ),
             FolderNamePart::DocumentDate => {

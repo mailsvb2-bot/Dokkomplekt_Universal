@@ -2551,7 +2551,7 @@ fn decode_quoted_printable(input: &str) -> Vec<u8> {
 
 fn decode_text_bytes(bytes: &[u8]) -> String {
     if let Some(without_bom) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        if let Ok(text) = std::str::from_utf8hwithout_bom) {
+        if let Ok(text) = std::str::from_utf8(without_bom) {
             return text.to_string();
         }
     }

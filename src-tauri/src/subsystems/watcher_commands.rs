@@ -79,7 +79,7 @@ fn watcher_owner_matches_current(owner: &WatcherHandoffOwner) -> Result<bool, St
     }
     let current = std::env::current_exe().map_err(|error| error.to_string())?;
     let (_, _, current_sha256) = file_content_signature(&current)?;
-    Ok(PathBuf::from(&owner.executable) == current
+    Ok(Path::new(&owner.executable) == current.as_path()
         && current_sha256.eq_ignore_ascii_case(&owner.executable_sha256))
 }
 
@@ -1005,13 +1005,13 @@ fn start_watcher_thread(
             if let Some(latest_owner) = latest_ready_watcher_owner(control_path.as_deref()) {
                 if watcher_owner_superseded(captured_owner.as_ref(), Some(&latest_owner)) {
                     let active = in_flight.lock().map(|items| items.len()).unwrap_or(1);
-                    if active == 0 {
-                        if handoff_watcher_to_successor(&app, &latest_owner).is_ok() {
-                            if terminate_app_when_disabled {
-                                app.exit(0);
-                            }
-                            return;
+                    if active == 0
+                        && handoff_watcher_to_successor(&app, &latest_owner).is_ok()
+                    {
+                        if terminate_app_when_disabled {
+                            app.exit(0);
                         }
+                        return;
                     }
                     std::thread::sleep(Duration::from_millis(100));
                     continue;

@@ -1,0 +1,124 @@
+nd === 'apply_popup_batch')).toHaveLength(batchApplyCountBefore);
+     fireEvent.click(within(batchPreflight).getByRole('button', { name: 'Создать документы' }));
+     await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
+-      req: { document_ids: ['acc_1', 'doc_2'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
++      req: { document_ids: ['acc_1', 'doc_2'], folder_parts: ['DocumentNumber', 'DocumentDate'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
+     }));
+     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
+       req: { document_ids: ['acc_1', 'doc_2'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
+@@ -321,7 +321,7 @@ describe('Полный прогон пользовательских сцена
+     const singlePreflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+     fireEvent.click(within(singlePreflight).getByRole('button', { name: 'Создать документы' }));
+     await waitFor(() => expect(parsePayload(calls, 'apply_popup')).toMatchObject({
+-      req: { document_id: 'acc_1', answers: [{ field_id: 'org.inn', value: '7701234567' }] },
++      req: { document_id: 'acc_1', folder_parts: ['DocumentNumber', 'DocumentDate'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
+     }));
+     const batchCalls = calls.filter((call) => call.command === 'render_docx_batch');
+     expect(batchCalls.at(-1)?.payload).toMatchObject({
+diff --git a/src/App.tsx b/src/App.tsx
+index 26fa61d..1e0406b 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -244,7 +244,7 @@ function AppContent() {
+       })
+       .finally(() => { if (!cancelled) setPreflightLoading(false); });
+     return () => { cancelled = true; };
+-  }, [sourceFileName, parsed, selectedDocIds, sickLeave]);
++  }, [sourceFileName, parsed, selectedDocIds, sickLeave, folderParts]);
+ 
+   const previewTitle = detectTitle(templateText) || 'Документ';
+   const previewLabel = buttonLabel.trim() || previewTitle;
+@@ -604,16 +604,16 @@ function AppContent() {
+ 
+   async function loadWorkflowPlan(documentIds: string[]): Promise<WorkflowPlan> {
+     return documentIds.length === 1
+-      ? getWorkflowPlan(documentIds[0], sickLeave)
+-      : getWorkflowPlanBatch(documentIds, sickLeave);
++      ? getWorkflowPlan(documentIds[0], sickLeave, folderParts)
++      : getWorkflowPlanBatch(documentIds, sickLeave, folderParts);
+   }
+ 
+   const { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
+     selectedDocumentIds: selectedDocIds, preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
+     requestWorkflowPlan: (ids) => run(ids.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(ids)),
+     applyAnswers: (ids, payload) => ids.length === 1
+-      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload))
+-      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload)),
++      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload, folderParts))
++      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload, folderParts)),
+     onConfirmed: performGenerateSelectedDocuments,
+   });
+ 
+diff --git a/src/components/GenerationPreflightModal.tsx b/src/components/GenerationPreflightModal.tsx
+index aab8bbc..5746fde 100644
+--- a/src/components/GenerationPreflightModal.tsx
++++ b/src/components/GenerationPreflightModal.tsx
+@@ -1,5 +1,6 @@
+ import type { Dispatch, SetStateAction } from 'react';
+ import type { DocumentTemplateSpec, PromptSpec, WorkflowPlan } from '../lib/types';
++import { activeWorkflowPrompts } from '../lib/workflowPromptVisibility';
+ import { WorkflowPromptField } from './Workspace';
+ 
+ const INTERNAL_DIARY_RUNTIME_FIELDS = new Set([
+@@ -26,20 +27,12 @@ interface GenerationPreflightModalProps {
+ 
+ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
+   const selected = props.documents.filter((document) => props.selectedDocumentIds.includes(document.id));
+-  const prompts = props.plan.prompts;
+-  const promptById = new Map(prompts.map((prompt) => [prompt.field_id, prompt]));
+-  const affirmative = (value: string) => ['да', 'yes', 'true', '1', '+', 'нужен', 'нужна'].includes(value.trim().toLowerCase().replaceAll('ё', 'е'));
+-  const visibleByLink = (prompt: PromptSpec) => {
+-    if (!prompt.linked_to) return true;
+-    const source = promptById.get(prompt.linked_to);
+-    if (source?.input_kind !== 'yes_no') return true;
+-    return affirmative(props.answers[source.field_id] ?? source.current_value ?? '');
+-  };
++  const prompts = activeWorkflowPrompts(props.plan.prompts, props.answers);
+   // These values are backend-owned bounds for the generic repeated-record engine.
+   // They remain in the WorkflowPlan and are submitted by useGenerationPreflight,
+   // but are not extra user questions. Donor-facing choices stay in the WorkflowPlan; only these
+   // technical bounds are hidden from the specialist.
+-  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id) && visibleByLink(prompt));
++  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id));
+   const sections = visiblePrompts.reduce<Array<{ title: string; prompts: PromptSpec[] }>>((groups, prompt) => {
+     const title = prompt.section?.trim() || 'Данные документа';
+     const existing = groups.find((group) => group.title === title);
+diff --git a/src/hooks/useGenerationPreflight.test.tsx b/src/hooks/useGenerationPreflight.test.tsx
+index 4592e35..7090e38 100644
+--- a/src/hooks/useGenerationPreflight.test.tsx
++++ b/src/hooks/useGenerationPreflight.test.tsx
+@@ -79,4 +79,61 @@ describe('useGenerationPreflight', () => {
+       'Не удалось получить финальный план создания. Комплект не создан.',
+     );
+   });
++  it('does not validate or submit a required prompt hidden by a negative Yes/No dependency', async () => {
++    const conditionalPlan: WorkflowPlan = {
++      document_id: 'generic.contract',
++      prompts: [
++        {
++          field_id: 'custom.need_details',
++          title: 'Нужны дополнительные сведения?',
++          required: true,
++          input_kind: 'yes_no',
++          ask_mode: 'always',
++          options: ['Нет', 'Да'],
++        },
++        {
++          field_id: 'custom.details',
++          title: 'Дополнительные сведения',
++          required: true,
++          input_kind: 'long_text',
++          ask_mode: 'always',
++          linked_to: 'custom.need_details',
++        },
++      ],
++      blocked: false,
++      block_reasons: [],
++    };
++    const applied: PopupApplyResult = {
++      accepted: true,
++      semantic_case: { values: {}, collections: {}, blocks: {}, skipped_fields: [] },
++      still_missing: [],
++      message: 'ok',
++    };
++    const applyAnswers = vi.fn(async (_ids: string[], _a

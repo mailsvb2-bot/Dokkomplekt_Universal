@@ -462,6 +462,9 @@ pub fn medical_fields() -> Vec<FieldDefinition> {
             &[
                 "labs.results",
                 "labs.block",
+                "labs_block",
+                "LAB_BLOCK",
+                "laboratory.results",
                 "analysis.results",
                 "analyses.results",
                 "labResults",

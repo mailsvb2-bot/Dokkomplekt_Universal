@@ -45,9 +45,8 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
         "examination.plan" | "examination_plan" => "medical.examination_plan".into(),
         "treatment.result" => "medical.treatment_result".into(),
         "condition.discharge" => "medical.discharge_condition".into(),
-        "labs.results" | "labs.block" | "analysis.results" | "analyses.results" => {
-            "medical.labs".into()
-        }
+        "labs.results" | "labs.block" | "labs_block" | "LAB_BLOCK" | "laboratory.results"
+        | "analysis.results" | "analyses.results" => "medical.labs".into(),
         "labs.date" => "medical.labs_date".into(),
         "labs.source" => "medical.labs_source".into(),
         "labs.date_policy" => "medical.labs_date_policy".into(),
@@ -169,6 +168,9 @@ pub fn storage_equivalent_field_ids(raw: &str) -> &'static [&'static str] {
             "medical.labs",
             "labs.results",
             "labs.block",
+            "labs_block",
+            "LAB_BLOCK",
+            "laboratory.results",
             "analysis.results",
             "analyses.results",
         ],

@@ -1,6 +1,7 @@
 use crate::{
     canonical_field_id_for_domain, inspect_template_syntax, is_valid_field_id, known_field_ids,
     template_field_references, DocumentTemplateSpec, DomainKind, TemplateAnalysis,
+    MEDICAL_WORK_POSITION,
 };
 use std::collections::BTreeMap;
 
@@ -10,16 +11,18 @@ pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
     let raw_placeholders = template_field_references(text);
     let initial_scores = score_domains(text, &raw_placeholders);
     let preferred_domain = domain_from_scores(&initial_scores);
-    let placeholders = raw_placeholders
-        .iter()
-        .filter_map(|placeholder| {
-            canonical_template_field(placeholder, &preferred_domain, &role_id)
-        })
-        .collect::<Vec<_>>();
+    let mut placeholders = Vec::new();
+    for placeholder in &raw_placeholders {
+        for field_id in canonical_template_fields(placeholder, &preferred_domain, &role_id) {
+            if !placeholders.contains(&field_id) {
+                placeholders.push(field_id);
+            }
+        }
+    }
     let unknown_placeholders = raw_placeholders
         .iter()
         .filter(|placeholder| {
-            canonical_template_field(placeholder, &preferred_domain, &role_id).is_none()
+            canonical_template_fields(placeholder, &preferred_domain, &role_id).is_empty()
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -62,18 +65,22 @@ pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
     }
 }
 
-fn canonical_template_field(
-    placeholder: &str,
-    domain: &DomainKind,
-    role_id: &str,
-) -> Option<String> {
-    canonical_field_id_for_domain(placeholder, Some(domain)).map(|field_id| {
-        if matches!(domain, DomainKind::Medical) {
-            crate::domains::medical_semantics::scope_legacy_field_for_role(role_id, &field_id)
-        } else {
-            field_id
-        }
-    })
+fn canonical_template_fields(placeholder: &str, domain: &DomainKind, role_id: &str) -> Vec<String> {
+    let Some(field_id) = canonical_field_id_for_domain(placeholder, Some(domain)) else {
+        return Vec::new();
+    };
+    if !matches!(domain, DomainKind::Medical) {
+        return vec![field_id];
+    }
+    if field_id == MEDICAL_WORK_POSITION {
+        return ["medical.workplace", "medical.position"]
+            .into_iter()
+            .map(|component| {
+                crate::domains::medical_semantics::scope_legacy_field_for_role(role_id, component)
+            })
+            .collect();
+    }
+    vec![crate::domains::medical_semantics::scope_legacy_field_for_role(role_id, &field_id)]
 }
 
 pub fn detect_title(text: &str) -> Option<String> {
@@ -379,5 +386,36 @@ mod alias_regression_tests {
         assert_eq!(mse.placeholders, vec![VK_MSE_PROTOCOL_NUMBER]);
         assert_eq!(sick.placeholders, vec![SICK_LEAVE_VK_PROTOCOL_NUMBER]);
         assert_ne!(mse.placeholders, sick.placeholders);
+    }
+}
+
+#[cfg(test)]
+mod donor_salvage_regressions {
+    use super::*;
+
+    #[test]
+    fn combined_work_position_becomes_two_role_scoped_medical_fields() {
+        let analysis = analyze_template_text("ВК на МСЭ\n{{Место работы / должность}}");
+        assert_eq!(analysis.role_id, "vk_mse");
+        assert!(analysis
+            .placeholders
+            .contains(&"medical.vk_mse.workplace".to_string()));
+        assert!(analysis
+            .placeholders
+            .contains(&"medical.vk_mse.position".to_string()));
+        assert!(analysis.unknown_placeholders.is_empty());
+    }
+
+    #[test]
+    fn combined_medical_alias_does_not_capture_hr_templates() {
+        let analysis = analyze_template_text(
+            "КАДРОВЫЙ ПРИКАЗ СОТРУДНИК ДОЛЖНОСТЬ ОТДЕЛ\n{{Место работы / должность}}",
+        );
+        assert_ne!(best_domain(&analysis), DomainKind::Medical);
+        assert!(analysis.placeholders.is_empty());
+        assert_eq!(
+            analysis.unknown_placeholders,
+            vec!["Место работы / должность"]
+        );
     }
 }

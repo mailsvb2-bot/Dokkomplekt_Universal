@@ -73,6 +73,23 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
         }
     }
 
+    // Historical templates used one visual placeholder `Место работы / должность`.
+    // Build it only in this render clone from the current role-scoped facts; never
+    // persist it as another source of truth.
+    if let Some(combined) = combined_work_position(&scoped_case) {
+        scoped_case.values.insert(
+            crate::MEDICAL_WORK_POSITION.to_string(),
+            SemanticValue::new(
+                crate::MEDICAL_WORK_POSITION,
+                combined,
+                ValueSource::SafeDefault,
+                1.0,
+            ),
+        );
+    } else {
+        scoped_case.values.remove(crate::MEDICAL_WORK_POSITION);
+    }
+
     let canonical_role = crate::domains::medical::canonical_medical_role(role_id);
     if matches!(canonical_role.as_str(), "primary" | "discharge") {
         // Never reuse a stale expert paragraph from the source document. Build an
@@ -92,6 +109,25 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
         }
     }
     scoped_case
+}
+
+fn combined_work_position(case: &SemanticCase) -> Option<String> {
+    let workplace = case
+        .get("medical.workplace")
+        .or_else(|| case.get("subject.organization"))
+        .map(clean_expert_component)
+        .filter(|value| !value.is_empty());
+    let position = case
+        .get("medical.position")
+        .or_else(|| case.get("subject.position"))
+        .map(clean_expert_component)
+        .filter(|value| !value.is_empty());
+    match (workplace, position) {
+        (Some(workplace), Some(position)) => Some(format!("{workplace} / {position}")),
+        (Some(workplace), None) => Some(workplace),
+        (None, Some(position)) => Some(position),
+        (None, None) => None,
+    }
 }
 
 pub fn set_medical_sick_leave_choice(case: &mut SemanticCase, enabled: bool) {

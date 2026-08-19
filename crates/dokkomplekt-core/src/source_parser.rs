@@ -123,6 +123,10 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
             if let Some(diagnosis) = case.get("medical.diagnosis").map(str::to_owned) {
                 if let Some(code) = extract_explicit_icd10_from_diagnosis(&diagnosis) {
                     put(&mut case, &mut report, "medical.icd10", &code, 0.90);
+                } else if let Some(code) = exact_icd_for_diagnosis(&diagnosis) {
+                    // Zero-touch enrichment is intentionally exact-only. Fuzzy
+                    // catalogue suggestions remain an explicit UI interaction.
+                    put(&mut case, &mut report, "medical.icd10", &code, 0.89);
                 }
             }
         }
@@ -149,6 +153,13 @@ pub fn parse_source_text(text: &str, default_year: i32) -> (SemanticCase, Parsed
         if !report.warnings.contains(&warning) {
             report.warnings.push(warning);
         }
+    }
+
+    // Late donor documents often encode only a birth year as `1985 г.р.` on
+    // the patient-name line. Treat it as lower-confidence evidence and never
+    // let it override a full explicit date of birth.
+    if let Some(birth) = suffix_birth_value(text, default_year) {
+        put(&mut case, &mut report, "subject.birth_date", &birth, 0.73);
     }
 
     // A higher-confidence generic extractor must never be able to restore a
@@ -1413,6 +1424,97 @@ fn extract_explicit_icd10_from_diagnosis(value: &str) -> Option<String> {
         .map(|row| row.code)
 }
 
+fn exact_icd_for_diagnosis(diagnosis: &str) -> Option<String> {
+    let query = normalize_diagnosis_title(diagnosis);
+    if query.is_empty() {
+        return None;
+    }
+    crate::search_icd10(&query, 25)
+        .into_iter()
+        .find(|row| normalize_diagnosis_title(&row.title) == query)
+        .map(|row| row.code)
+}
+
+fn normalize_diagnosis_title(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches(['.', ',', ';', ':'])
+        .to_lowercase()
+        .replace('ё', "е")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn suffix_birth_value(text: &str, default_year: i32) -> Option<String> {
+    let folded = text
+        .replace('\u{00a0}', " ")
+        .to_lowercase()
+        .replace('ё', "е");
+    let mut best: Option<(usize, String)> = None;
+    for marker in ["г.р.", "г.р", "года рождения", "год рождения"] {
+        let mut offset = 0usize;
+        while offset < folded.len() {
+            let Some(relative) = folded[offset..].find(marker) else {
+                break;
+            };
+            let marker_start = offset + relative;
+            if !folded.is_char_boundary(marker_start) {
+                break;
+            }
+            let prefix = &folded[..marker_start];
+            let local = prefix
+                .rsplit(['\n', ';'])
+                .next()
+                .unwrap_or(prefix)
+                .trim_end();
+            let token = local
+                .split_whitespace()
+                .next_back()
+                .map(|value| {
+                    value.trim_matches(|ch: char| {
+                        matches!(ch, ',' | ';' | ':' | '(' | ')' | '[' | ']')
+                    })
+                })
+                .unwrap_or_default();
+            if let Some(value) = birth_token_value(token, default_year) {
+                if best
+                    .as_ref()
+                    .is_none_or(|(position, _)| marker_start >= *position)
+                {
+                    best = Some((marker_start, value));
+                }
+            }
+            offset = marker_start.saturating_add(marker.len());
+        }
+    }
+    best.map(|(_, value)| value)
+}
+
+fn birth_token_value(token: &str, default_year: i32) -> Option<String> {
+    let clean = token.trim().trim_end_matches('.');
+    if clean.is_empty() {
+        return None;
+    }
+    if clean.contains('.') || clean.contains('/') || clean.contains('-') {
+        if let Some(date) = crate::parse_flexible_date(clean, default_year) {
+            return Some(date);
+        }
+    }
+    if clean.len() == 4 && clean.chars().all(|ch| ch.is_ascii_digit()) {
+        let year = clean.parse::<i32>().ok()?;
+        let upper = if (1900..=2200).contains(&default_year) {
+            default_year
+        } else {
+            2200
+        };
+        if (1900..=upper).contains(&year) {
+            return Some(format!("{year:04}"));
+        }
+    }
+    None
+}
+
 fn sanitize_medical_source_value(value: &str) -> Option<String> {
     let mut lines = Vec::new();
     for raw_line in value.lines() {
@@ -2112,5 +2214,66 @@ mod tests {
         assert_eq!(case.get("employee.name"), Some("Иванова Ивана Ивановича"));
         assert_eq!(case.get("employee.position"), Some("инженера"));
         assert_eq!(case.get("employee.hire_date"), Some("01.08.2026"));
+    }
+}
+
+#[cfg(test)]
+mod donor_salvage_regressions {
+    use super::*;
+
+    #[test]
+    fn suffix_birth_year_does_not_consume_episode_dates() {
+        let text = concat!(
+            "ПЕРВИЧНЫЙ ОСМОТР\n",
+            "Пациентка: Орлова Мария Ивановна, 1985 г.р.\n",
+            "Дата поступления: 05.05.2026. Дата выписки: 19.05.2026.\n",
+            "Диагноз: Депрессивный эпизод средней степени."
+        );
+        let (case, _) = parse_source_text(text, 2026);
+        assert_eq!(case.get("subject.name"), Some("Орлова Мария Ивановна"));
+        assert_eq!(case.get("subject.birth_date"), Some("1985"));
+        assert_eq!(case.get("medical.admission_date"), Some("05.05.2026"));
+        assert_eq!(case.get("medical.discharge_date"), Some("19.05.2026"));
+    }
+
+    #[test]
+    fn explicit_birth_date_beats_suffix_year() {
+        let text = concat!(
+            "ПЕРВИЧНЫЙ ОСМОТР\n",
+            "Дата рождения: 01.09.1985\n",
+            "Пациентка: Орлова Мария Ивановна, 1985 г.р.\n",
+            "Диагноз: F32.1 Депрессивный эпизод средней степени"
+        );
+        let (case, _) = parse_source_text(text, 2026);
+        assert_eq!(case.get("subject.birth_date"), Some("01.09.1985"));
+    }
+
+    #[test]
+    fn exact_diagnosis_title_enriches_icd_without_fuzzy_guessing() {
+        for (diagnosis, expected) in [
+            ("Параноидная шизофрения.", "F20.0"),
+            ("Депрессивный эпизод средней степени.", "F32.1"),
+            ("Биполярное аффективное расстройство.", "F31"),
+        ] {
+            let text = format!("ПЕРВИЧНЫЙ ОСМОТР\nДиагноз: {diagnosis}");
+            let (case, _) = parse_source_text(&text, 2026);
+            assert_eq!(case.get("medical.icd10"), Some(expected), "{diagnosis}");
+        }
+    }
+
+    #[test]
+    fn unemployment_marker_is_not_persisted_as_employer() {
+        let text = concat!(
+            "ПЕРВИЧНЫЙ ОСМОТР\n",
+            "Место работы: не работает\n",
+            "Диагноз: F20.0 Параноидная шизофрения"
+        );
+        let (case, report) = parse_source_text(text, 2026);
+        assert_eq!(case.get("medical.workplace"), None);
+        assert_eq!(case.get("subject.organization"), None);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("отсутствие места работы")));
     }
 }

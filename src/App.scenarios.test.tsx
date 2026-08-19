@@ -295,7 +295,7 @@ describe('Полный прогон пользовательских сцена�
     expect(calls.filter((call) => call.command === 'apply_popup_batch')).toHaveLength(batchApplyCountBefore);
     fireEvent.click(within(batchPreflight).getByRole('button', { name: 'Создать документы' }));
     await waitFor(() => expect(parsePayload(calls, 'apply_popup_batch')).toMatchObject({
-      req: { document_ids: ['acc_1', 'doc_2'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
+      req: { document_ids: ['acc_1', 'doc_2'], folder_parts: ['DocumentNumber', 'DocumentDate'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
     }));
     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
       req: { document_ids: ['acc_1', 'doc_2'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
@@ -321,7 +321,7 @@ describe('Полный прогон пользовательских сцена�
     const singlePreflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
     fireEvent.click(within(singlePreflight).getByRole('button', { name: 'Создать документы' }));
     await waitFor(() => expect(parsePayload(calls, 'apply_popup')).toMatchObject({
-      req: { document_id: 'acc_1', answers: [{ field_id: 'org.inn', value: '7701234567' }] },
+      req: { document_id: 'acc_1', folder_parts: ['DocumentNumber', 'DocumentDate'], answers: [{ field_id: 'org.inn', value: '7701234567' }] },
     }));
     const batchCalls = calls.filter((call) => call.command === 'render_docx_batch');
     expect(batchCalls.at(-1)?.payload).toMatchObject({

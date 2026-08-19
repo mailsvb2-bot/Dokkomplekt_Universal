@@ -244,7 +244,7 @@ function AppContent() {
       })
       .finally(() => { if (!cancelled) setPreflightLoading(false); });
     return () => { cancelled = true; };
-  }, [sourceFileName, parsed, selectedDocIds, sickLeave]);
+  }, [sourceFileName, parsed, selectedDocIds, sickLeave, folderParts]);
 
   const previewTitle = detectTitle(templateText) || 'Документ';
   const previewLabel = buttonLabel.trim() || previewTitle;
@@ -604,16 +604,16 @@ function AppContent() {
 
   async function loadWorkflowPlan(documentIds: string[]): Promise<WorkflowPlan> {
     return documentIds.length === 1
-      ? getWorkflowPlan(documentIds[0], sickLeave)
-      : getWorkflowPlanBatch(documentIds, sickLeave);
+      ? getWorkflowPlan(documentIds[0], sickLeave, folderParts)
+      : getWorkflowPlanBatch(documentIds, sickLeave, folderParts);
   }
 
   const { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (ids) => run(ids.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(ids)),
     applyAnswers: (ids, payload) => ids.length === 1
-      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload))
-      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload)),
+      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload, folderParts))
+      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload, folderParts)),
     onConfirmed: performGenerateSelectedDocuments,
   });
 

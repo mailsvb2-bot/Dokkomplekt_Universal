@@ -1,5 +1,8 @@
 use crate::output_naming::{build_output_folder_name, sanitize_folder_name};
-use crate::{FolderNamePart, SemanticCase};
+use crate::{
+    missing_output_folder_fields, popup_config_for_field, DocumentTemplateSpec, DomainKind,
+    FolderNamePart, SemanticCase,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -10,6 +13,46 @@ pub struct OutputPlan {
     pub files: Vec<PathBuf>,
     pub warnings: Vec<String>,
     pub exists: bool,
+}
+
+pub fn output_folder_requirement_document(
+    case: &SemanticCase,
+    folder_parts: &[FolderNamePart],
+) -> Option<DocumentTemplateSpec> {
+    let missing = missing_output_folder_fields(case, folder_parts);
+    if missing.is_empty() {
+        return None;
+    }
+    let mut popup_fields = missing
+        .iter()
+        .map(|field_id| {
+            let mut config =
+                popup_config_for_field(field_id, true, &DomainKind::Generic, "output_folder");
+            config.section = Some("Папка результата".into());
+            config.help_text = Some(
+                "Значение нужно только потому, что вы выбрали его частью имени итоговой папки."
+                    .into(),
+            );
+            config
+        })
+        .collect::<Vec<_>>();
+    popup_fields.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then(left.field_id.cmp(&right.field_id))
+    });
+    Some(DocumentTemplateSpec {
+        id: "__output_folder__".into(),
+        button_label: "Папка результата".into(),
+        template_path: String::new(),
+        category: DomainKind::Generic,
+        role_id: "output_folder".into(),
+        required_fields: missing.clone(),
+        placeholders: missing,
+        is_static_copy: false,
+        popup_fields,
+        popup_configured: true,
+    })
 }
 
 pub fn plan_output_paths(
@@ -53,6 +96,30 @@ mod tests {
         assert_eq!(sanitize_path_component("NUL"), "_NUL");
         assert_eq!(sanitize_path_component("COM1.txt"), "_COM1.txt");
         assert_eq!(sanitize_path_component("Отчёт..."), "Отчёт");
+    }
+
+    #[test]
+    fn selected_folder_parts_become_normal_workflow_requirements() {
+        let case = SemanticCase::default();
+        let doc = output_folder_requirement_document(
+            &case,
+            &[FolderNamePart::FullSubjectName, FolderNamePart::DocumentNumber],
+        )
+        .unwrap();
+        assert_eq!(doc.category, DomainKind::Generic);
+        assert!(doc.required_fields.contains(&"subject.name".to_string()));
+        assert!(doc.required_fields.contains(&"document.number".to_string()));
+        assert!(doc.popup_fields.iter().all(|field| {
+            field.required && field.section.as_deref() == Some("Папка результата")
+        }));
+        let plan = crate::plan_workflow(&doc, &case, &crate::WorkflowFlags::default());
+        assert_eq!(
+            plan.prompts
+                .iter()
+                .map(|prompt| prompt.field_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["document.number", "subject.name"]),
+        );
     }
 
     #[test]

@@ -183,20 +183,62 @@ export async function setField(fieldId: string, value: string): Promise<Semantic
   return callRust('set_field', { req: { field_id: fieldId, value } });
 }
 
-export async function getWorkflowPlan(documentId: string, sickLeaveEnabled: boolean): Promise<WorkflowPlan> {
-  return callRust('get_workflow_plan', { req: { document_id: documentId, sick_leave_enabled: sickLeaveEnabled } });
+export async function getWorkflowPlan(
+  documentId: string,
+  sickLeaveEnabled: boolean,
+  folderParts: FolderNamePartDto[] = [],
+): Promise<WorkflowPlan> {
+  const req: { document_id: string; sick_leave_enabled: boolean; folder_parts?: FolderNamePartDto[] } = {
+    document_id: documentId,
+    sick_leave_enabled: sickLeaveEnabled,
+  };
+  if (folderParts.length) req.folder_parts = folderParts;
+  return callRust('get_workflow_plan', { req });
 }
 
-export async function getWorkflowPlanBatch(documentIds: string[], sickLeaveEnabled: boolean): Promise<WorkflowPlan> {
-  return callRust('get_workflow_plan_batch', { req: { document_ids: documentIds, sick_leave_enabled: sickLeaveEnabled } });
+export async function getWorkflowPlanBatch(
+  documentIds: string[],
+  sickLeaveEnabled: boolean,
+  folderParts: FolderNamePartDto[] = [],
+): Promise<WorkflowPlan> {
+  const req: { document_ids: string[]; sick_leave_enabled: boolean; folder_parts?: FolderNamePartDto[] } = {
+    document_ids: documentIds,
+    sick_leave_enabled: sickLeaveEnabled,
+  };
+  if (folderParts.length) req.folder_parts = folderParts;
+  return callRust('get_workflow_plan_batch', { req });
 }
 
-export async function applyPopup(documentId: string, sickLeaveEnabled: boolean, answers: PopupAnswerDto[]): Promise<PopupApplyResult> {
-  return callRust('apply_popup', { req: { document_id: documentId, sick_leave_enabled: sickLeaveEnabled, answers } });
+export async function applyPopup(
+  documentId: string,
+  sickLeaveEnabled: boolean,
+  answers: PopupAnswerDto[],
+  folderParts: FolderNamePartDto[] = [],
+): Promise<PopupApplyResult> {
+  const req: {
+    document_id: string;
+    sick_leave_enabled: boolean;
+    answers: PopupAnswerDto[];
+    folder_parts?: FolderNamePartDto[];
+  } = { document_id: documentId, sick_leave_enabled: sickLeaveEnabled, answers };
+  if (folderParts.length) req.folder_parts = folderParts;
+  return callRust('apply_popup', { req });
 }
 
-export async function applyPopupBatch(documentIds: string[], sickLeaveEnabled: boolean, answers: PopupAnswerDto[]): Promise<PopupApplyResult> {
-  return callRust('apply_popup_batch', { req: { document_ids: documentIds, sick_leave_enabled: sickLeaveEnabled, answers } });
+export async function applyPopupBatch(
+  documentIds: string[],
+  sickLeaveEnabled: boolean,
+  answers: PopupAnswerDto[],
+  folderParts: FolderNamePartDto[] = [],
+): Promise<PopupApplyResult> {
+  const req: {
+    document_ids: string[];
+    sick_leave_enabled: boolean;
+    answers: PopupAnswerDto[];
+    folder_parts?: FolderNamePartDto[];
+  } = { document_ids: documentIds, sick_leave_enabled: sickLeaveEnabled, answers };
+  if (folderParts.length) req.folder_parts = folderParts;
+  return callRust('apply_popup_batch', { req });
 }
 
 export async function renderPreview(templateText: string, strict = true): Promise<RenderResult> {

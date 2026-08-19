@@ -1,5 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from 'react';
 import type { PopupAnswerDto, PopupApplyResult, WorkflowPlan } from '../lib/types';
+import { activeWorkflowPrompts } from '../lib/workflowPromptVisibility';
 
 interface UseGenerationPreflightOptions {
   selectedDocumentIds: string[];
@@ -57,14 +58,15 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       return;
     }
     if (workflow.prompts.length) {
-      const missing = workflow.prompts.filter((prompt) => prompt.required
+      const activePrompts = activeWorkflowPrompts(workflow.prompts, options.answers);
+      const missing = activePrompts.filter((prompt) => prompt.required
         && !options.skippedAnswers[prompt.field_id]
         && !(options.answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
       if (missing.length) {
         options.setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`);
         return;
       }
-      const payload: PopupAnswerDto[] = workflow.prompts.map((prompt) => ({
+      const payload: PopupAnswerDto[] = activePrompts.map((prompt) => ({
         field_id: prompt.field_id,
         value: options.skippedAnswers[prompt.field_id] ? '' : options.answers[prompt.field_id] ?? prompt.current_value ?? '',
         continue_without_value: Boolean(options.skippedAnswers[prompt.field_id]),

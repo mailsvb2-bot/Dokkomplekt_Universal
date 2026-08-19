@@ -1,5 +1,4 @@
 use super::*;
-use std::io::Write as _;
 
 pub(super) fn validate_archive_relative_path(raw: &str) -> Result<PathBuf, String> {
     let normalized = raw.replace('\\', "/");

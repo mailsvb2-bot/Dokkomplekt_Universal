@@ -1101,13 +1101,14 @@ fn apply_popup(
             .find(|document| document.id == req.document_id)
             .cloned()
             .ok_or_else(|| "document not found".to_string())?;
-        let plan = build_merged_popup_plan(
+        let mut plan = build_merged_popup_plan(
             &doc,
             &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
         );
+        apply_profile_prompt_overrides(&app, &mut plan)?;
         let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
             snapshot.semantic_case = result.semantic_case.clone();
@@ -1154,13 +1155,14 @@ fn apply_popup_batch(
         if documents.len() != requested.len() {
             return Err("Один или несколько документов комплекта не найдены".into());
         }
-        let plan = plan_workflow_batch(
+        let mut plan = plan_workflow_batch(
             &documents,
             &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
         );
+        apply_profile_prompt_overrides(&app, &mut plan)?;
         let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
         if result.accepted {
             snapshot.semantic_case = result.semantic_case.clone();
@@ -1463,6 +1465,7 @@ fn render_docx_batch(
 
     let mut counter_reservations = Vec::new();
     let mut ancillary_warnings = Vec::new();
+    let mut staged_source_copy: Option<PathBuf> = None;
     let rendered = (|| -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
         let mut report_case = base_case.clone();
@@ -1524,6 +1527,16 @@ fn render_docx_batch(
             .filter_map(|path| path.file_name())
             .map(|name| name.to_string_lossy().to_string())
             .collect::<Vec<_>>();
+        staged_source_copy = {
+            let retained = state
+                .retained_uploaded_source
+                .lock()
+                .map_err(|_| "uploaded source state lock failed")?;
+            retained
+                .as_ref()
+                .map(|source| source.copy_to_directory(&stage, "Исходный - "))
+                .transpose()?
+        };
         let used_field_ids = documents
             .iter()
             .flat_map(|document| document.placeholders.iter().cloned())
@@ -1646,6 +1659,25 @@ fn render_docx_batch(
         &staged_paths,
         documents.len(),
     )?;
+    if let Some(staged_source) = staged_source_copy.as_ref() {
+        let source_name = staged_source.file_name().ok_or_else(|| {
+            "Публикация комплекта не подтверждена: копия исходника не имеет имени файла."
+                .to_string()
+        })?;
+        let published_source = output_folder.join(source_name);
+        let metadata = std::fs::metadata(&published_source).map_err(|error| {
+            format!(
+                "Публикация комплекта не подтверждена: исходный документ отсутствует {}: {error}",
+                published_source.display()
+            )
+        })?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            return Err(format!(
+                "Публикация комплекта не подтверждена: копия исходного документа пуста или отсутствует: {}",
+                published_source.display()
+            ));
+        }
+    }
     let created_documents = documents
         .iter()
         .zip(created_files.iter())

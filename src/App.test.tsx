@@ -16,7 +16,8 @@ const sampleDocument = {
 
 function installTemplateMock(staticCopy: boolean) {
   const calls: string[] = [];
-  __setInvokeForTests(async (name: string) => {
+  const confirmRequests: Array<Record<string, unknown> | undefined> = [];
+  __setInvokeForTests(async (name: string, payload?: Record<string, unknown>) => {
     calls.push(name);
     if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
     if (name === 'get_intake_capabilities') return [] as never;
@@ -37,12 +38,13 @@ function installTemplateMock(staticCopy: boolean) {
       }] as never;
     }
     if (name === 'confirm_template_setup') {
+      confirmRequests.push(payload);
       return { pack_id: 'default', name: 'Набор', documents: [{ ...sampleDocument, is_static_copy: staticCopy }] } as never;
     }
     if (name === 'get_workflow_plan') return { document_id: 'template_1', prompts: [], blocked: false, block_reasons: [] } as never;
     return {} as never;
   });
-  return calls;
+  return { calls, confirmRequests };
 }
 
 async function selectTemplateAndCreateButton() {
@@ -65,7 +67,7 @@ describe('App', () => {
   });
 
   it('adds a document through the simple Rust-backed setup path', async () => {
-    const calls = installTemplateMock(false);
+    const { calls } = installTemplateMock(false);
     render(<App />);
     await selectTemplateAndCreateButton();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Акт выполненных работ' })).toBeTruthy());
@@ -73,11 +75,14 @@ describe('App', () => {
   });
 
   it('creates an unmarked template button without blocking first run', async () => {
-    const calls = installTemplateMock(true);
+    const { calls, confirmRequests } = installTemplateMock(true);
     render(<App />);
     await selectTemplateAndCreateButton();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Акт выполненных работ' })).toBeTruthy());
     expect(calls).toContain('pick_template_files');
     expect(calls).toContain('confirm_template_setup');
+    expect(confirmRequests.at(-1)).toMatchObject({
+      req: { auto_infer_static_templates: true },
+    });
   });
 });

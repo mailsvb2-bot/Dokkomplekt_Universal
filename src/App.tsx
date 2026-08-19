@@ -81,7 +81,7 @@ function AppContent() {
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
-  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(false);
+  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(true);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
   const [icdQuery, setIcdQuery] = useState('');
@@ -766,7 +766,7 @@ function AppContent() {
   }
 
   async function openTemplateSetup() {
-    setAutoInferStaticTemplates(false);
+    setAutoInferStaticTemplates(true);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -814,7 +814,7 @@ function AppContent() {
   }
 
   function openTextTemplateSetup() {
-    setAutoInferStaticTemplates(false);
+    setAutoInferStaticTemplates(true);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -1144,7 +1144,7 @@ function AppContent() {
     setPendingTemplates([]);
     setDraftPopupFields([]);
     setDraftDomainOverride(null);
-    setAutoInferStaticTemplates(false);
+    setAutoInferStaticTemplates(true);
     setSetupOpen(false);
     setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
   }

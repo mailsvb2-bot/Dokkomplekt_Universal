@@ -60,6 +60,7 @@ pub mod universal_pipeline;
 pub mod validators;
 pub mod workflow_engine;
 pub mod workflow_scenario_engine;
+pub mod workspace_profile;
 
 pub use approval_blocks::*;
 pub use automation_quality::*;
@@ -147,6 +148,7 @@ pub use workflow_scenario_engine::{
     build_button_scenario_v2, validate_scenario_answers_v2, ButtonScenarioV2,
     WorkflowFieldRequirementV2, WorkflowFlagSetV2,
 };
+pub use workspace_profile::*;
 
 pub use corpus_recorder::*;
 pub use created_documents::{

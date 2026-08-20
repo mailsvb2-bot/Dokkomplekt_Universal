@@ -1,7 +1,8 @@
 use crate::{
-    analyze_template_text, create_document_spec, default_popup_fields_for_document,
-    normalize_popup_fields, DocumentPack, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
-    TemplateAnalysis,
+    analyze_template_text, analyze_template_text_with_domain_hint, create_document_spec,
+    default_popup_fields_for_document, infer_workspace_profile, normalize_popup_fields,
+    DocumentPack, DocumentTemplateSpec, DomainKind, PopupFieldConfig, TemplateAnalysis,
+    WorkspaceProfileInference,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -28,6 +29,8 @@ pub struct TemplateConfirmationRow {
     pub popup_fields: Vec<PopupFieldConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_override: Option<DomainKind>,
+    #[serde(default)]
+    pub workspace_inference: WorkspaceProfileInference,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,11 +107,30 @@ pub fn empty_first_run_pack(pack_id: impl Into<String>, name: impl Into<String>)
 pub fn prepare_template_confirmations(
     candidates: &[TemplateCandidate],
 ) -> Vec<TemplateConfirmationRow> {
-    let mut used = BTreeSet::new();
-    candidates
+    let analyzed = candidates
         .iter()
-        .map(|candidate| {
-            let analysis = analyze_template_text(&candidate.extracted_text);
+        .map(|candidate| (candidate, analyze_template_text(&candidate.extracted_text)))
+        .collect::<Vec<_>>();
+    let workspace_inputs = analyzed
+        .iter()
+        .map(|(candidate, analysis)| (candidate.document_id.clone(), analysis.clone()))
+        .collect::<Vec<_>>();
+    let workspace_inference = infer_workspace_profile(&workspace_inputs);
+    let automatic_domain = workspace_inference
+        .auto_apply
+        .then(|| workspace_inference.suggested_domain.clone())
+        .flatten();
+
+    let mut used = BTreeSet::new();
+    analyzed
+        .into_iter()
+        .map(|(candidate, initial_analysis)| {
+            let analysis = automatic_domain
+                .as_ref()
+                .map(|domain| {
+                    analyze_template_text_with_domain_hint(&candidate.extracted_text, Some(domain))
+                })
+                .unwrap_or(initial_analysis);
             let base = candidate
                 .preferred_button_label
                 .as_deref()
@@ -131,7 +153,8 @@ pub fn prepare_template_confirmations(
                 role_id: analysis.role_id.clone(),
                 is_static_copy: analysis.is_static,
                 popup_fields: preview_document.popup_fields,
-                domain_override: None,
+                domain_override: automatic_domain.clone(),
+                workspace_inference: workspace_inference.clone(),
                 analysis,
             }
         })
@@ -320,6 +343,73 @@ mod tests {
         ]);
         assert_eq!(rows[0].editable_button_label, "Выписной эпикриз");
         assert_eq!(rows[1].editable_button_label, "Выписной эпикриз 2");
+    }
+
+    #[test]
+    fn coherent_workspace_profile_is_applied_to_every_created_button() {
+        let rows = prepare_template_confirmations(&[
+            TemplateCandidate {
+                document_id: "primary".into(),
+                template_path: "primary.docx".into(),
+                extracted_text: "Первичный осмотр\nДиагноз\nЛечение\nМКБ-10\nИстория болезни"
+                    .into(),
+                preferred_button_label: None,
+            },
+            TemplateCandidate {
+                document_id: "discharge".into(),
+                template_path: "discharge.docx".into(),
+                extracted_text: "Выписной эпикриз\nДиагноз\nЛечение\nДата выписки".into(),
+                preferred_button_label: None,
+            },
+            TemplateCandidate {
+                document_id: "consent".into(),
+                template_path: "consent.docx".into(),
+                extracted_text: "Согласие пациента\n{{subject.name}}\n{{Должность}}".into(),
+                preferred_button_label: None,
+            },
+        ]);
+
+        assert_eq!(rows.len(), 3);
+        assert!(rows
+            .iter()
+            .all(|row| row.domain_override == Some(DomainKind::Medical)));
+        assert!(rows.iter().all(|row| row.workspace_inference.auto_apply));
+        let consent = rows
+            .iter()
+            .find(|row| row.document_id == "consent")
+            .unwrap();
+        assert!(consent
+            .analysis
+            .placeholders
+            .contains(&"medical.position".to_string()));
+        assert!(!consent
+            .analysis
+            .placeholders
+            .contains(&"employee.position".to_string()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        assert!(result
+            .pack
+            .documents
+            .iter()
+            .all(|document| document.category == DomainKind::Medical));
+    }
+
+    #[test]
+    fn ambiguous_single_template_keeps_automatic_profile_unset() {
+        let rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "act".into(),
+            template_path: "act.docx".into(),
+            extracted_text: "Акт\nНомер {{document.number}}".into(),
+            preferred_button_label: None,
+        }]);
+
+        assert_eq!(rows[0].domain_override, None);
+        assert!(!rows[0].workspace_inference.auto_apply);
+        assert_eq!(
+            rows[0].workspace_inference.level,
+            crate::WorkspaceInferenceLevel::Low
+        );
     }
 
     #[test]

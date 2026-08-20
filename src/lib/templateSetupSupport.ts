@@ -19,7 +19,9 @@ export function buildTemplateConfirmationRows(
       popup_fields: pending?.popup_fields
         ?? (rows.length === 1 ? draftPopupFields : row.popup_fields ?? []),
       domain_override: pending?.domain_override
-        ?? (rows.length === 1 ? draftDomainOverride : null),
+        ?? (rows.length === 1 ? draftDomainOverride : null)
+        ?? row.domain_override
+        ?? null,
     };
   });
 }

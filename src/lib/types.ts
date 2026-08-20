@@ -1,5 +1,27 @@
 export type DomainKind = 'Generic' | 'Medical' | 'Legal' | 'Hr' | 'Accounting' | 'Education' | { Custom: string };
 
+export type WorkspaceInferenceLevel = 'high' | 'medium' | 'low';
+
+export interface WorkspaceProfileEvidence {
+  document_id: string;
+  title: string;
+  role_id: string;
+  attributed_domain: DomainKind;
+  score: number;
+  field_ids: string[];
+}
+
+export interface WorkspaceProfileInference {
+  suggested_domain?: DomainKind | null;
+  confidence: number;
+  level: WorkspaceInferenceLevel;
+  auto_apply: boolean;
+  mixed_domains: boolean;
+  domain_scores: Record<string, number>;
+  evidence: WorkspaceProfileEvidence[];
+  reasons: string[];
+}
+
 export type PromptInputKind = 'text' | 'long_text' | 'date' | 'number' | 'money' | 'inn' | 'kpp' | 'ogrn' | 'snils' | 'passport' | 'vin' | 'icd10' | 'select' | 'yes_no';
 export type PromptAskMode = 'if_missing' | 'confirm' | 'always';
 
@@ -486,6 +508,8 @@ export interface TemplateConfirmationRowDto {
   is_static_copy: boolean;
   analysis: unknown;
   popup_fields?: PopupFieldConfig[];
+  domain_override?: DomainKind | null;
+  workspace_inference?: WorkspaceProfileInference;
 }
 
 export interface ScannerMarkDto {

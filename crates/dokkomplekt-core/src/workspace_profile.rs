@@ -1,0 +1,297 @@
+use crate::{DomainKind, TemplateAnalysis};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceInferenceLevel {
+    High,
+    Medium,
+    #[default]
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceProfileEvidence {
+    pub document_id: String,
+    pub title: String,
+    pub role_id: String,
+    pub attributed_domain: DomainKind,
+    pub score: usize,
+    pub field_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceProfileInference {
+    pub suggested_domain: Option<DomainKind>,
+    pub confidence: f32,
+    pub level: WorkspaceInferenceLevel,
+    pub auto_apply: bool,
+    pub mixed_domains: bool,
+    pub domain_scores: BTreeMap<String, usize>,
+    pub evidence: Vec<WorkspaceProfileEvidence>,
+    pub reasons: Vec<String>,
+}
+
+impl Default for WorkspaceProfileInference {
+    fn default() -> Self {
+        Self {
+            suggested_domain: None,
+            confidence: 0.0,
+            level: WorkspaceInferenceLevel::Low,
+            auto_apply: false,
+            mixed_domains: false,
+            domain_scores: BTreeMap::new(),
+            evidence: Vec::new(),
+            reasons: vec!["Недостаточно согласованных профессиональных признаков.".into()],
+        }
+    }
+}
+
+const SPECIFIC_DOMAINS: [(&str, DomainKind); 5] = [
+    ("medical", DomainKind::Medical),
+    ("legal", DomainKind::Legal),
+    ("hr", DomainKind::Hr),
+    ("accounting", DomainKind::Accounting),
+    ("education", DomainKind::Education),
+];
+
+/// Infer one workspace profile from the complete set of templates selected by the
+/// specialist. This function deliberately does not own a profession vocabulary:
+/// it aggregates the canonical per-template `domain_scores` produced by Template
+/// Intelligence. That keeps one source of truth for terminology and avoids a
+/// parallel classifier/"second brain".
+pub fn infer_workspace_profile(
+    analyses: &[(String, TemplateAnalysis)],
+) -> WorkspaceProfileInference {
+    if analyses.is_empty() {
+        return WorkspaceProfileInference::default();
+    }
+
+    let mut totals = BTreeMap::<String, usize>::new();
+    for (key, _) in SPECIFIC_DOMAINS {
+        totals.insert(key.to_string(), 0);
+    }
+    for (_, analysis) in analyses {
+        for (key, _) in SPECIFIC_DOMAINS {
+            *totals.entry(key.to_string()).or_default() +=
+                analysis.domain_scores.get(key).copied().unwrap_or_default();
+        }
+    }
+
+    let mut ranked = totals
+        .iter()
+        .map(|(domain, score)| (domain.as_str(), *score))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    let Some((top_key, top_score)) = ranked.first().copied() else {
+        return WorkspaceProfileInference::default();
+    };
+    let runner_score = ranked.get(1).map(|(_, score)| *score).unwrap_or_default();
+    if top_score == 0 {
+        return WorkspaceProfileInference {
+            domain_scores: totals,
+            ..WorkspaceProfileInference::default()
+        };
+    }
+
+    let top_domain = domain_for_key(top_key).expect("specific workspace domain");
+    let mut support_count = 0usize;
+    let mut contradictory_count = 0usize;
+    let mut evidence = Vec::new();
+
+    for (document_id, analysis) in analyses {
+        let mut per_document = SPECIFIC_DOMAINS
+            .iter()
+            .map(|(key, _)| {
+                (
+                    *key,
+                    analysis
+                        .domain_scores
+                        .get(*key)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+        per_document.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+        let (document_key, document_score) = per_document[0];
+        let next_score = per_document
+            .get(1)
+            .map(|(_, score)| *score)
+            .unwrap_or_default();
+        let has_clear_signal = document_score >= 2 && document_score > next_score;
+
+        if has_clear_signal && document_key == top_key {
+            support_count += 1;
+            evidence.push(WorkspaceProfileEvidence {
+                document_id: document_id.clone(),
+                title: analysis.title.clone(),
+                role_id: analysis.role_id.clone(),
+                attributed_domain: top_domain.clone(),
+                score: document_score,
+                field_ids: analysis.placeholders.iter().take(8).cloned().collect(),
+            });
+        } else if has_clear_signal && document_key != top_key {
+            contradictory_count += 1;
+        }
+    }
+
+    evidence.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    evidence.truncate(6);
+
+    let total_specific = totals.values().copied().sum::<usize>().max(1);
+    let dominance = top_score as f32 / total_specific as f32;
+    let margin = top_score.saturating_sub(runner_score) as f32 / top_score.max(1) as f32;
+    let coverage = support_count as f32 / analyses.len().max(1) as f32;
+    let expected_strength = analyses.len().max(1) * 5;
+    let strength = (top_score as f32 / expected_strength as f32).min(1.0);
+    let confidence =
+        (dominance * 0.32 + margin * 0.28 + coverage * 0.30 + strength * 0.10).clamp(0.0, 0.99);
+
+    let mixed_domains = contradictory_count > 0
+        && runner_score >= 3
+        && runner_score.saturating_mul(100) >= top_score.saturating_mul(55);
+    let minimum_high_score = if analyses.len() == 1 {
+        5
+    } else {
+        (analyses.len() * 2).max(6)
+    };
+    let minimum_support = analyses.len().div_ceil(2).max(1);
+
+    let level = if !mixed_domains
+        && top_score >= minimum_high_score
+        && support_count >= minimum_support
+        && confidence >= 0.70
+    {
+        WorkspaceInferenceLevel::High
+    } else if !mixed_domains && top_score >= 4 && support_count >= 1 && confidence >= 0.52 {
+        WorkspaceInferenceLevel::Medium
+    } else {
+        WorkspaceInferenceLevel::Low
+    };
+    let suggested_domain = match level {
+        WorkspaceInferenceLevel::High | WorkspaceInferenceLevel::Medium => Some(top_domain.clone()),
+        WorkspaceInferenceLevel::Low => None,
+    };
+    let auto_apply = level == WorkspaceInferenceLevel::High;
+
+    let mut reasons = Vec::new();
+    if mixed_domains {
+        reasons.push(format!(
+            "Набор содержит уверенные признаки нескольких областей: {top_key}={top_score}, следующий профиль={runner_score}. Автовыбор отключён."
+        ));
+    } else {
+        reasons.push(format!(
+            "{support_count} из {} шаблонов независимо поддерживают один рабочий профиль.",
+            analyses.len()
+        ));
+        reasons.push(format!(
+            "Суммарный вес профиля {top_key}: {top_score}; ближайшего альтернативного: {runner_score}."
+        ));
+    }
+    if level == WorkspaceInferenceLevel::Low {
+        reasons.push(
+            "Слабые или неоднозначные признаки не используются для автоматического выбора профессии."
+                .into(),
+        );
+    }
+
+    WorkspaceProfileInference {
+        suggested_domain,
+        confidence,
+        level,
+        auto_apply,
+        mixed_domains,
+        domain_scores: totals,
+        evidence,
+        reasons,
+    }
+}
+
+fn domain_for_key(key: &str) -> Option<DomainKind> {
+    SPECIFIC_DOMAINS
+        .iter()
+        .find(|(candidate, _)| *candidate == key)
+        .map(|(_, domain)| domain.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyze_template_text;
+
+    fn item(id: &str, text: &str) -> (String, TemplateAnalysis) {
+        (id.into(), analyze_template_text(text))
+    }
+
+    #[test]
+    fn coherent_medical_workspace_is_high_confidence_and_auto_applied() {
+        let inference = infer_workspace_profile(&[
+            item(
+                "primary",
+                "Первичный осмотр\nДиагноз: {{medical.diagnosis}}\nМКБ-10: {{medical.icd10}}\nЛечение: {{medical.treatment}}",
+            ),
+            item(
+                "discharge",
+                "Выписной эпикриз\nИстория болезни № {{medical.case_number}}\nДата выписки {{medical.discharge_date}}",
+            ),
+            item(
+                "diaries",
+                "Дневники наблюдения\nДиагноз\nЛечение\nЛечащий врач",
+            ),
+            item("consent", "Согласие пациента\n{{subject.name}}"),
+        ]);
+
+        assert_eq!(inference.suggested_domain, Some(DomainKind::Medical));
+        assert_eq!(inference.level, WorkspaceInferenceLevel::High);
+        assert!(inference.auto_apply);
+        assert!(!inference.mixed_domains);
+        assert!(inference.confidence >= 0.70);
+    }
+
+    #[test]
+    fn one_ambiguous_word_does_not_choose_a_profession() {
+        let inference = infer_workspace_profile(&[item("act", "Акт\nНомер: {{document.number}}")]);
+
+        assert_eq!(inference.suggested_domain, None);
+        assert_eq!(inference.level, WorkspaceInferenceLevel::Low);
+        assert!(!inference.auto_apply);
+    }
+
+    #[test]
+    fn mixed_legal_and_hr_workspace_never_auto_applies_one_side() {
+        let inference = infer_workspace_profile(&[
+            item("claim", "Исковое заявление\nИстец\nОтветчик\nСуд\nДело"),
+            item("contract", "Договор\nСторона\nЗаказчик\nИсполнитель"),
+            item(
+                "hire",
+                "Приказ о приёме сотрудника\nДолжность\nОтдел\nКадровая служба",
+            ),
+            item(
+                "dismiss",
+                "Приказ об увольнении сотрудника\nДолжность\nОтдел\nКадровая служба",
+            ),
+        ]);
+
+        assert!(!inference.auto_apply);
+        assert!(inference.mixed_domains || inference.level != WorkspaceInferenceLevel::High);
+    }
+
+    #[test]
+    fn strong_single_template_can_be_recognized_without_profession_question() {
+        let inference = infer_workspace_profile(&[item(
+            "medical",
+            "Выписной эпикриз\nДиагноз\nЛечение\nАнамнез\nИстория болезни\nМКБ-10\nДневник",
+        )]);
+
+        assert_eq!(inference.suggested_domain, Some(DomainKind::Medical));
+        assert_eq!(inference.level, WorkspaceInferenceLevel::High);
+        assert!(inference.auto_apply);
+    }
+}

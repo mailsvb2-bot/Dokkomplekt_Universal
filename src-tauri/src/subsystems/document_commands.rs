@@ -55,7 +55,7 @@ fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, 
     } else if has_user_buttons {
         "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
     } else {
-        "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию.".into()
+        "Первоначальная настройка: нажмите «Создать свои кнопки» и выберите реальные рабочие шаблоны. Программа сама определит рабочий профиль по всему набору; профессию выбирать не нужно.".into()
     };
     Ok(FirstRunStateResponse {
         has_user_buttons,
@@ -531,6 +531,31 @@ fn register_learned_template(
     Ok(result)
 }
 
+fn reanalyze_confirmation_rows_with_domain_hints(
+    app: &tauri::AppHandle,
+    rows: &mut [TemplateConfirmationRow],
+) -> Result<(), String> {
+    for row in rows {
+        let Some(domain) = row.domain_override.as_ref() else {
+            continue;
+        };
+        let template_path = resolve_user_path(app, &row.template_path)?;
+        let template_text = extract_docx_text(&template_path).map_err(|error| {
+            format!(
+                "Не удалось повторно проверить шаблон «{}» с рабочим профилем: {error}",
+                row.editable_button_label
+            )
+        })?;
+        let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
+        row.detected_title = analysis.title.clone();
+        row.suggested_button_label = analysis.suggested_button_label.clone();
+        row.role_id = analysis.role_id.clone();
+        row.is_static_copy = analysis.is_static;
+        row.analysis = analysis;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct ConfirmTemplatesRequest {
     rows: Vec<TemplateConfirmationRow>,
@@ -556,7 +581,7 @@ fn confirm_template_setup(
     }
 
     let requested_rows = req.rows;
-    let (rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
+    let (mut rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
         infer_static_template_rows(&app, &requested_rows)?
     } else {
         (
@@ -565,6 +590,7 @@ fn confirm_template_setup(
             LegacyTemplateInferenceSummary::default(),
         )
     };
+    reanalyze_confirmation_rows_with_domain_hints(&app, &mut rows)?;
     let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
     let template_snapshots = rows
         .iter()

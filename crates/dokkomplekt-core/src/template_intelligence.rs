@@ -6,11 +6,24 @@ use crate::{
 use std::collections::BTreeMap;
 
 pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
+    analyze_template_text_with_domain_hint(text, None)
+}
+
+/// Analyze one template using the same canonical Template Intelligence, while
+/// allowing an already-proven workspace profile to disambiguate human field
+/// names such as `Должность`. The hint does not alter domain scoring and is not
+/// a second classifier; it only selects the semantic owner for ambiguous aliases.
+pub fn analyze_template_text_with_domain_hint(
+    text: &str,
+    domain_hint: Option<&DomainKind>,
+) -> TemplateAnalysis {
     let title = detect_title(text).unwrap_or_else(|| "Документ".to_string());
     let role_id = detect_role(text, &title);
     let raw_placeholders = template_field_references(text);
     let initial_scores = score_domains(text, &raw_placeholders);
-    let preferred_domain = domain_from_scores(&initial_scores);
+    let preferred_domain = domain_hint
+        .cloned()
+        .unwrap_or_else(|| domain_from_scores(&initial_scores));
     let mut placeholders = Vec::new();
     for placeholder in &raw_placeholders {
         for field_id in canonical_template_fields(placeholder, &preferred_domain, &role_id) {
@@ -36,7 +49,11 @@ pub fn analyze_template_text(text: &str) -> TemplateAnalysis {
                 && is_valid_field_id(placeholder)
         })
         .count();
-    let domain_scores = score_domains(text, &placeholders);
+    let domain_scores = if domain_hint.is_some() {
+        initial_scores.clone()
+    } else {
+        score_domains(text, &placeholders)
+    };
     let suggested_button_label = normalize_button_label(&title);
     let is_static = raw_placeholders.is_empty();
     let mut warnings = Vec::new();
@@ -369,6 +386,19 @@ mod alias_regression_tests {
             assert_eq!(analysis.placeholders, vec!["medical.labs"]);
             assert!(analysis.unknown_placeholders.is_empty(), "alias={alias}");
         }
+    }
+
+    #[test]
+    fn workspace_hint_rebinds_ambiguous_human_field_without_changing_scores() {
+        let ordinary = analyze_template_text("Справка\n{{Должность}}");
+        let hinted = analyze_template_text_with_domain_hint(
+            "Справка\n{{Должность}}",
+            Some(&DomainKind::Medical),
+        );
+
+        assert_eq!(ordinary.placeholders, vec!["employee.position"]);
+        assert_eq!(hinted.placeholders, vec!["medical.position"]);
+        assert_eq!(ordinary.domain_scores, hinted.domain_scores);
     }
 
     #[test]

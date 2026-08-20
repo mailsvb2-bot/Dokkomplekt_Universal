@@ -22,6 +22,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
@@ -77,6 +78,7 @@ function AppContent() {
   const [buttonLabel, setButtonLabel] = useState('');
   const [importedTemplatePath, setImportedTemplatePath] = useState<string | null>(null);
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
+  const { workspaceInference, setWorkspaceInference, refreshWorkspaceInference } = useWorkspaceProfileInference(setStatus);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
   const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(true);
@@ -800,7 +802,7 @@ function AppContent() {
       return;
     }
 
-    setPendingTemplates(importedRows);
+    setPendingTemplates(importedRows); await refreshWorkspaceInference(importedRows);
     const last = importedRows.at(-1)!;
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
@@ -848,7 +850,8 @@ function AppContent() {
       });
     }
     if (!importedRows.length) return;
-    setPendingTemplates((previous) => [...previous, ...importedRows]);
+    const combinedTemplates = [...pendingTemplates, ...importedRows];
+    setPendingTemplates(combinedTemplates); await refreshWorkspaceInference(combinedTemplates);
     const last = importedRows.at(-1)!;
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
@@ -1098,12 +1101,7 @@ function AppContent() {
 
   async function createButtonFromTemplate() {
     const candidates = pendingTemplates.length
-      ? pendingTemplates.map((item) => ({
-          document_id: item.document_id,
-          template_path: item.template_path,
-          extracted_text: item.extracted_text,
-          preferred_button_label: item.button_label.trim() || item.file_name.replace(/\.doc[xm]$/i, ''),
-        }))
+      ? pendingTemplateCandidates(pendingTemplates)
       : [];
 
     if (!candidates.length) {
@@ -1137,7 +1135,7 @@ function AppContent() {
     setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
-    setPendingTemplates([]);
+    setPendingTemplates([]); setWorkspaceInference(null);
     setDraftPopupFields([]);
     setDraftDomainOverride(null);
     setAutoInferStaticTemplates(true);
@@ -1472,6 +1470,7 @@ function AppContent() {
           draftPopupFields={draftPopupFields}
           draftDomainOverride={draftDomainOverride}
           autoInferStaticTemplates={autoInferStaticTemplates}
+          workspaceInference={workspaceInference}
           onTemplateTextChange={setTemplateText}
           onButtonLabelChange={setButtonLabel}
           onDraftPopupFieldsChange={setDraftPopupFields}
@@ -1479,6 +1478,7 @@ function AppContent() {
           onAutoInferStaticTemplatesChange={setAutoInferStaticTemplates}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}
           onPendingTemplateDomainChange={(documentId, value) => setPendingTemplates((previous) => withPendingTemplateDomain(previous, documentId, value))}
+          onApplyWorkspaceDomain={(domain) => { setPendingTemplates((previous) => applyWorkspaceDomainToPending(previous, domain)); setStatus('Предложенный рабочий профиль применён ко всем подготовленным кнопкам.'); }}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
           onLearnPendingTemplate={learnPendingTemplateFromExamples}

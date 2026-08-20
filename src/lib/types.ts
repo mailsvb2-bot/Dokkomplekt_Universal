@@ -164,10 +164,29 @@ export interface DocumentRoutingRecommendation {
   reasons: string[];
 }
 
+export type BundleDecisionSource =
+  | 'specialist_confirmation'
+  | 'promoted_learning_rule'
+  | 'deterministic_route'
+  | 'review_proposal'
+  | 'ambiguous_candidates'
+  | 'no_safe_proposal';
+
+export interface BundleDecision {
+  document_ids: string[];
+  source: BundleDecisionSource;
+  confidence: number;
+  auto_apply: boolean;
+  review_required: boolean;
+  question?: string | null;
+  reasons: string[];
+}
+
 export interface ParseSourceResponse {
   semantic_case: SemanticCase;
   report: ParsedSourceReport;
-  routing?: DocumentRoutingRecommendation;
+  routing: DocumentRoutingRecommendation;
+  bundle_decision: BundleDecision;
 }
 
 export interface LayoutBoundingBox {

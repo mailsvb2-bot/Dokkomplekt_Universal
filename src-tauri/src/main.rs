@@ -31,7 +31,7 @@ use dokkomplekt_core::{
     set_user_value, suggest_icd10, suggest_template_markup, template_counter_requests,
     template_image_requests, validate_case_relations, validate_field_value, validate_popup_fields,
     CaseFragment, ConfiguredDocument, CorpusAcceptanceSource, CorpusEntry, CorpusEntryMetrics,
-    CorpusEntryRequest, CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation,
+    BundleDecision, CorpusEntryRequest, CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation,
     DocumentTemplateSpec, DomainKind, ExtractedField, FolderNamePart, IntakeDecision,
     IntakeDeduplicator, KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable,
     ParsedSourceReport, PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport,
@@ -2184,6 +2184,7 @@ include!("subsystems/legacy_template_runtime.rs");
 include!("subsystems/profile_sources.rs");
 include!("subsystems/publication_collision.rs");
 include!("subsystems/source_identity_runtime.rs");
+include!("subsystems/source_intake_commands.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");

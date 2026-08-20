@@ -41,37 +41,25 @@ describe('output root persistence', () => {
 });
 
 describe('default document selection', () => {
-  it('keeps medical discharge and diaries off regardless of renamed button labels', () => {
-    expect(shouldSelectDocumentByDefault(document('discharge', 'Medical', 'Мой документ'))).toBe(false);
-    expect(shouldSelectDocumentByDefault(document('diaries', 'Medical', 'Ежедневные записи'))).toBe(false);
-    expect(shouldSelectDocumentByDefault(document('medical.discharge', 'Medical'))).toBe(false);
-    expect(shouldSelectDocumentByDefault(document('medical.diary', 'Medical'))).toBe(false);
+  it('starts with no guessed kit for every profession', () => {
+    const documents = [
+      document('primary', 'Medical'),
+      document('discharge', 'Medical'),
+      document('diaries', 'Medical'),
+      document('discharge', 'Legal'),
+      document('contract', 'Hr'),
+      document('invoice', 'Accounting'),
+      document('lesson-plan', 'Education'),
+      document('custom', { Custom: 'architecture' }),
+    ];
+    expect(defaultSelectedDocumentIds(documents)).toEqual([]);
+    for (const item of documents) expect(shouldSelectDocumentByDefault(item)).toBe(false);
   });
 
-
-it('applies the same defaults to a whole pack after setup, startup, or reload', () => {
-  const documents = [
-    document('primary', 'Medical'),
-    document('discharge', 'Medical'),
-    document('diaries', 'Medical'),
-    document('discharge', 'Legal'),
-  ];
-  expect(defaultSelectedDocumentIds(documents)).toEqual([
-    'doc-primary',
-    'doc-discharge',
-  ]);
-});
-
-  it('keeps other medical roles selected by default', () => {
-    for (const role of ['primary', 'rvk_act', 'commission', 'vk_mse', 'sick_leave_vk', 'reception']) {
-      expect(shouldSelectDocumentByDefault(document(role, 'Medical'))).toBe(true);
-    }
-  });
-
-  it('never applies medical defaults to other professions even when role ids collide', () => {
-    for (const category of ['Generic', 'Legal', 'Hr', 'Education', 'Accounting'] as DomainKind[]) {
-      expect(shouldSelectDocumentByDefault(document('discharge', category))).toBe(true);
-      expect(shouldSelectDocumentByDefault(document('diaries', category))).toBe(true);
-    }
+  it('does not special-case identical role ids by profession', () => {
+    expect(shouldSelectDocumentByDefault(document('discharge', 'Medical'))).toBe(false);
+    expect(shouldSelectDocumentByDefault(document('discharge', 'Legal'))).toBe(false);
+    expect(shouldSelectDocumentByDefault(document('diaries', 'Medical'))).toBe(false);
+    expect(shouldSelectDocumentByDefault(document('diaries', 'Education'))).toBe(false);
   });
 });

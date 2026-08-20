@@ -118,13 +118,27 @@ function validateRouting(command: string, value: unknown): void {
   boolean(command, routing.review_required, 'routing.review_required');
 }
 
+function validateBundleDecision(command: string, value: unknown): void {
+  const decision = record(command, value, 'bundle_decision');
+  stringArray(command, decision.document_ids, 'bundle_decision.document_ids');
+  string(command, decision.source, 'bundle_decision.source');
+  number(command, decision.confidence, 'bundle_decision.confidence');
+  boolean(command, decision.auto_apply, 'bundle_decision.auto_apply');
+  boolean(command, decision.review_required, 'bundle_decision.review_required');
+  stringArray(command, decision.reasons, 'bundle_decision.reasons');
+  if (decision.question !== undefined && decision.question !== null) {
+    string(command, decision.question, 'bundle_decision.question');
+  }
+}
+
 function validateParseSource(command: string, value: unknown): void {
   const root = record(command, value);
   const semanticCase = record(command, root.semantic_case, 'semantic_case');
   record(command, semanticCase.values, 'semantic_case.values');
   const report = record(command, root.report, 'report');
   stringArray(command, report.warnings, 'report.warnings');
-  if (root.routing !== undefined && root.routing !== null) validateRouting(command, root.routing);
+  validateRouting(command, root.routing);
+  validateBundleDecision(command, root.bundle_decision);
 }
 
 function validateRender(command: string, value: unknown): void {

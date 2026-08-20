@@ -12,7 +12,11 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing' } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none' } = {}) {
+  const bundleMode = options.bundleMode ?? 'auto';
+  const bundleDocumentIds = bundleMode === 'none' ? [] : bundleMode === 'review' ? ['acc_1'] : ['acc_1', 'doc_2'];
+  const routing = { domain: 'Accounting', domain_confidence: 0.99, predicted_role: 'invoice', cluster_id: 'invoice', cluster_confidence: 0.99, recommended_document_ids: bundleDocumentIds, matches: [{ document_id: 'acc_1', button_label: 'Счёт на оплату', role_id: 'invoice', score: 0.99, evidence: ['title'] }], auto_select: bundleMode === 'auto', review_required: bundleMode !== 'auto', reasons: ['route'] };
+  const bundleDecision = { document_ids: bundleDocumentIds, source: bundleMode === 'auto' ? 'deterministic_route' : bundleMode === 'review' ? 'review_proposal' : 'no_safe_proposal', confidence: 0.99, auto_apply: bundleMode === 'auto', review_required: bundleMode !== 'auto', question: bundleMode === 'auto' ? null : 'Подтвердите состав', reasons: ['route'] };
   let componentState = options.componentState ?? ((options.componentInstalled ?? true) ? 'downloaded' : 'missing');
   const componentInstalled = () => componentState === 'downloaded';
   const componentAvailable = () => componentState !== 'missing';
@@ -24,9 +28,9 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'load_state':
         return { pack, has_user_buttons: true, message: 'ok' } as never;
       case 'parse_source':
-        return { semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] } } as never;
+        return { semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'parse_source_file':
-        return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] } } as never;
+        return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', source_kind: 'docx', layout_items: [], semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'get_intake_capabilities':
         return [{ format: 'PDF', extensions: ['pdf'], available: true, built_in: true, engine: 'pdftotext/OCR', details: 'готово' }] as never;
       case 'get_reference_data_status': return { installed: false, cached: false, restart_required: false, source: 'bundled', published_at: null, complete_years: [2025, 2026], listed_years: [2025, 2026, 2027], message: 'bundled' } as never;
@@ -59,7 +63,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'pick_folder':
         return { selected_path: 'C:/Выбранная папка' } as never;
       case 'parse_web_source':
-        return { source_text: 'Счёт № 148 из HTTPS', semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, final_url: 'https://example.com/doc', content_type: 'text/html' } as never;
+        return { source_text: 'Счёт № 148 из HTTPS', semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, final_url: 'https://example.com/doc', content_type: 'text/html', routing, bundle_decision: bundleDecision } as never;
       case 'get_document_template_text':
         return { template_text: 'СЧЁТ {{org.inn}}' } as never;
       case 'get_workflow_plan':
@@ -535,6 +539,29 @@ describe('Полный прогон пользовательских сцена�
       },
     }));
     await waitFor(() => expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(true));
+  });
+
+  it('новый источник заменяет старый комплект точным review-предложением без автогенерации', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { bundleMode: 'review' });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+
+    // Simulate an explicit selection left from the previous case.
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать всё' }));
+    expect((screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'Добавить Сопроводительное письмо в комплект' }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Новый неоднозначный источник' } });
+    await click(/Использовать текст/);
+
+    // Rust proposes only acc_1. The old doc_2 selection must not survive.
+    await waitFor(() => expect((screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }) as HTMLInputElement).checked).toBe(true));
+    expect((screen.getByRole('checkbox', { name: 'Добавить Сопроводительное письмо в комплект' }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole('button', { name: /Проверить и создать \(1\)/ })).toBeTruthy();
+    expect(screen.getByText(/Предложен комплект: Счёт на оплату/)).toBeTruthy();
+    expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(false);
   });
 
   it('не предлагает загрузку, когда OCR уже найден в системе', async () => {

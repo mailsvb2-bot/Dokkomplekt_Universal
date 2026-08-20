@@ -263,9 +263,9 @@ function installContractMock(calls: Call[]) {
       case 'list_template_versions':
         return [{ version_id: 'tpl-v1', document_id: 'doc_1', version_number: 1, template_path: 'template.docx', template_sha256: 'a'.repeat(64), note: 'published', status: 'published', created_at: 'now' }] as never;
       case 'parse_source':
-        return { semantic_case: caseDto, report: { recognized_title: 'Первичный документ', warnings: [] } } as never;
+        return { semantic_case: caseDto, report: { recognized_title: 'Первичный документ', warnings: [] }, routing: { domain: 'Generic', domain_confidence: 0.99, predicted_role: null, cluster_id: 'contract', cluster_confidence: 0.99, recommended_document_ids: ['contract'], matches: [], auto_select: true, review_required: false, reasons: ['exact route'] }, bundle_decision: { document_ids: ['contract'], source: 'deterministic_route', confidence: 0.99, auto_apply: true, review_required: false, question: null, reasons: ['exact route'] } } as never;
       case 'parse_source_file':
-        return { source_text: 'Первичный документ', source_path: '/app-data/intake-work/source.pdf', semantic_case: caseDto, report: { recognized_title: 'Первичный документ', warnings: [] } } as never;
+        return { source_text: 'Первичный документ', source_path: '/app-data/intake-work/source.pdf', source_kind: 'pdf', layout_items: [], semantic_case: caseDto, report: { recognized_title: 'Первичный документ', warnings: [] }, routing: { domain: 'Generic', domain_confidence: 0.99, predicted_role: null, cluster_id: 'contract', cluster_confidence: 0.99, recommended_document_ids: ['contract'], matches: [], auto_select: true, review_required: false, reasons: ['exact route'] }, bundle_decision: { document_ids: ['contract'], source: 'deterministic_route', confidence: 0.99, auto_apply: true, review_required: false, question: null, reasons: ['exact route'] } } as never;
       case 'get_intake_capabilities':
         return [{ format: 'Word', extensions: ['docx', 'docm'], ready: true, mode: 'встроенно', detail: 'ok' }] as never;
       case 'get_sidecar_status':
@@ -281,7 +281,7 @@ function installContractMock(calls: Call[]) {
       case 'pick_folder':
         return { selected_path: 'C:/Desktop/output' } as never;
       case 'parse_web_source':
-        return { source_text: 'HTTPS документ', final_url: 'https://example.com/doc', content_type: 'text/html', semantic_case: caseDto, report: { recognized_title: 'Документ', warnings: [] } } as never;
+        return { source_text: 'HTTPS документ', final_url: 'https://example.com/doc', content_type: 'text/html', semantic_case: caseDto, report: { recognized_title: 'Документ', warnings: [] }, routing: { domain: 'Generic', domain_confidence: 0.99, predicted_role: null, cluster_id: 'contract', cluster_confidence: 0.99, recommended_document_ids: ['contract'], matches: [], auto_select: true, review_required: false, reasons: ['exact route'] }, bundle_decision: { document_ids: ['contract'], source: 'deterministic_route', confidence: 0.99, auto_apply: true, review_required: false, question: null, reasons: ['exact route'] } } as never;
       case 'get_document_template_text':
         return { template_text: 'Документ {{field}}' } as never;
       case 'reset_case':
@@ -617,7 +617,7 @@ describe('Tauri command DTO contracts', () => {
     expect(calls).toMatchObject([
       { command: 'render_preview', payload: { req: { template_text: 'Text {{field}}', strict: false } } },
       { command: 'render_docx', payload: { req: { document_id: 'doc_1', output_path: 'out.docx', strict: true } } },
-      { command: 'render_docx_batch', payload: { req: { document_ids: ['doc_1'], output_root: 'C:/Desktop', folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true, existing_output_policy: 'version' } } },
+      { command: 'render_docx_batch', payload: { req: { document_ids: ['doc_1'], output_root: 'C:/Desktop', folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true, sick_leave_enabled: false, existing_output_policy: 'version' } } },
       { command: 'icd10_suggest', payload: { query: 'F20' } },
       { command: 'validate_product_access', payload: { req: { code: '000000' } } },
       { command: 'verify_rust_license_text', payload: { req: { license_text: 'license' } } },

@@ -37,6 +37,7 @@ describe('useGenerationPreflight', () => {
     });
 
     expect(result.current.generationPreflightOpen).toBe(true);
+    expect(requestWorkflowPlan).toHaveBeenCalledWith(['medical.discharge']);
     expect(setPreflightPlan).toHaveBeenCalledWith(blockedPlan);
     expect(setStatus).toHaveBeenLastCalledWith(
       'Создание заблокировано: Небезопасный placeholder: legacy.unknown_field',
@@ -125,6 +126,9 @@ describe('useGenerationPreflight', () => {
       onConfirmed,
     }));
 
+    await act(async () => {
+      await result.current.openGenerationPreflight();
+    });
     await act(async () => {
       await result.current.confirmGenerationPreflight();
     });

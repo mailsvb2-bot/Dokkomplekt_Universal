@@ -595,31 +595,20 @@ fn perform_created_documents_intake(
         });
     }
 
-    let routing_recommendation = recommend_document_bundle(&source_text, &case, &pack);
-    let learned_kit_decision = {
-        let corpus_entries = repository_for(&default_state_db_path(app)?)?
-            .list_corpus_entries(10_000)
-            .map_err(|error| error.to_string())?;
-        let key = KitRuleKey {
-            domain: model_domain.clone(),
-            cluster_id: routing_recommendation.cluster_id.clone(),
-            pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
-        };
-        decision_for_key(&corpus_entries, &key, KitPromotionPolicy::default())
-    };
-    let bundle_decision = decide_document_bundle(
+    let (routing_recommendation, bundle_decision) = resolve_document_bundle_for_case(
+        app,
+        &source_text,
+        &case,
         &pack,
-        &routing_recommendation,
-        learned_kit_decision.as_ref(),
+        Some(model_domain.clone()),
         &req.confirmed_document_ids,
-    );
+    )?;
     append_audit_event(
         app,
         "document_bundle_decided",
         &source_sha256,
         &serde_json::json!({
             "routing": &routing_recommendation,
-            "learned_decision": &learned_kit_decision,
             "decision": &bundle_decision,
         }),
     )?;

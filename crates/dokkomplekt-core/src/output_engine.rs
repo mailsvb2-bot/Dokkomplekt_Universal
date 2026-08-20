@@ -123,6 +123,12 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             std::collections::BTreeSet::from(["document.number", "subject.name"]),
         );
+        assert_eq!(crate::workflow_publication_blockers(&case, &plan).len(), 2);
+
+        let mut ready_case = case.clone();
+        set_user_value(&mut ready_case, "subject.name", "Иванов Иван Иванович");
+        set_user_value(&mut ready_case, "document.number", "148");
+        assert!(crate::workflow_publication_blockers(&ready_case, &plan).is_empty());
     }
 
     #[test]

@@ -22,6 +22,7 @@ interface UseGenerationPreflightOptions {
  */
 export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const [generationPreflightOpen, setGenerationPreflightOpen] = useState(false);
+  const [generationDocumentIds, setGenerationDocumentIds] = useState<string[]>([]);
 
   async function openGenerationPreflight() {
     if (!options.selectedDocumentIds.length) {
@@ -32,11 +33,17 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       options.setStatus('Подождите: программа ещё проверяет выбранный комплект.');
       return;
     }
-    const workflow = options.preflightPlan ?? await options.requestWorkflowPlan(options.selectedDocumentIds);
+    // The background plan is a preview only. The primary create action must
+    // always ask Rust for a fresh plan bound to the exact document snapshot
+    // that will be rendered. This prevents a previous source/selection from
+    // leaking into the final popup during async React state transitions.
+    const documentIds = [...options.selectedDocumentIds];
+    const workflow = await options.requestWorkflowPlan(documentIds);
     if (!workflow) {
       options.setStatus('Не удалось получить финальный план создания. Комплект не создан.');
       return;
     }
+    setGenerationDocumentIds(documentIds);
     options.setPreflightPlan(workflow);
 
     // A click on the primary generation action must never look like a no-op.
@@ -52,7 +59,8 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
 
   async function confirmGenerationPreflight() {
     const workflow = options.preflightPlan;
-    if (!workflow || options.preflightLoading) return;
+    const documentIds = generationDocumentIds;
+    if (!workflow || !documentIds.length || options.preflightLoading) return;
     if (workflow.blocked) {
       options.setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
       return;
@@ -71,7 +79,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
         value: options.skippedAnswers[prompt.field_id] ? '' : options.answers[prompt.field_id] ?? prompt.current_value ?? '',
         continue_without_value: Boolean(options.skippedAnswers[prompt.field_id]),
       }));
-      const applied = await options.applyAnswers(options.selectedDocumentIds, payload);
+      const applied = await options.applyAnswers(documentIds, payload);
       if (!applied) return;
       if (!applied.accepted) {
         options.setStatus(applied.message || `Не заполнено полей: ${applied.still_missing.length}`);
@@ -80,8 +88,20 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     }
     setGenerationPreflightOpen(false);
     options.setStatus('Данные подтверждены. Формируется комплект…');
-    await options.onConfirmed(options.selectedDocumentIds);
+    await options.onConfirmed(documentIds);
+    setGenerationDocumentIds([]);
   }
 
-  return { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight };
+  function closeGenerationPreflight() {
+    setGenerationPreflightOpen(false);
+    setGenerationDocumentIds([]);
+  }
+
+  return {
+    generationPreflightOpen,
+    generationDocumentIds,
+    closeGenerationPreflight,
+    openGenerationPreflight,
+    confirmGenerationPreflight,
+  };
 }

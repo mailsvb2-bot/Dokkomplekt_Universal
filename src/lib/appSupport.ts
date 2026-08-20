@@ -1,4 +1,4 @@
-import type { CreatedDocumentOutput, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
+import type { BundleDecision, CreatedDocumentOutput, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
 import { newPopupField } from '../components/PopupFieldEditor';
 import type { ScannerFieldSuggestion } from './scannerSuggestions';
 import { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
@@ -12,22 +12,40 @@ export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-con
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
 
-export function shouldSelectDocumentByDefault(document: DocumentTemplateSpec): boolean {
-  if (document.category !== 'Medical') return true;
-  const role = document.role_id.trim().toLowerCase();
-  return !(
-    role === 'discharge'
-    || role.endsWith('.discharge')
-    || role === 'diary'
-    || role === 'diaries'
-    || role.endsWith('.diary')
-    || role.endsWith('.diaries')
-  );
+export function shouldSelectDocumentByDefault(_document: DocumentTemplateSpec): boolean {
+  // Before a real source is understood there is no profession-neutral reason
+  // to guess a generation set. The canonical Rust bundle decision selects an
+  // exact deterministic/learned kit after intake; the user can still make an
+  // explicit specialist selection at any time.
+  return false;
 }
 
 
-export function defaultSelectedDocumentIds(documents: DocumentTemplateSpec[]): string[] {
-  return documents.filter(shouldSelectDocumentByDefault).map((document) => document.id);
+export function defaultSelectedDocumentIds(_documents: DocumentTemplateSpec[]): string[] {
+  return [];
+}
+
+export function bundleSelectionFromDecision(
+  decision: BundleDecision,
+  routing: DocumentRoutingRecommendation,
+  documents: DocumentTemplateSpec[],
+): { documentIds: string[]; summary: string } {
+  const documentIds = [...decision.document_ids];
+  if (documentIds.length) {
+    const labels = documentIds
+      .map((id) => documents.find((document) => document.id === id)?.button_label || id)
+      .join(', ');
+    return {
+      documentIds,
+      summary: decision.auto_apply && !decision.review_required
+        ? ` Комплект определён: ${labels}.`
+        : ` Предложен комплект: ${labels}. Подтвердите состав перед созданием.`,
+    };
+  }
+  if (routing.matches.length) {
+    return { documentIds: [], summary: ` Тип похож на «${routing.matches[0].button_label}», но безопасный комплект не определён. Выберите документы один раз.` };
+  }
+  return { documentIds: [], summary: ' Новый тип не сопоставлен с шаблонами; откройте мастер разметки.' };
 }
 
 export type PendingTemplate = {

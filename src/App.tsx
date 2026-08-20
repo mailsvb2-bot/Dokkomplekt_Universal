@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
@@ -28,13 +28,11 @@ import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplate
 import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
-
-
 export function App() {
   return <AppDialogProvider><AppContent /></AppDialogProvider>;
 }
@@ -333,6 +331,7 @@ function AppContent() {
     setParsed(null);
     setSemantic(null);
     setAnswers({}); setSkippedAnswers({});
+    setSelectedDocIds([]);
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
@@ -341,19 +340,10 @@ function AppContent() {
     setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
   }
 
-  function applyRoutingRecommendation(routing?: DocumentRoutingRecommendation): string {
-    if (!routing) return '';
-    if (routing.auto_select && routing.recommended_document_ids.length) {
-      setSelectedDocIds(routing.recommended_document_ids);
-      const labels = routing.recommended_document_ids
-        .map((id) => documents.find((document) => document.id === id)?.button_label || id)
-        .join(', ');
-      return ` Автоподбор комплекта: ${labels}.`;
-    }
-    if (routing.matches.length) {
-      return ` Предложен тип «${routing.matches[0].button_label}», но перед созданием требуется подтверждение.`;
-    }
-    return ' Новый тип не сопоставлен с шаблонами; откройте мастер разметки.';
+  function applyBundleDecision(decision: BundleDecision, routing: DocumentRoutingRecommendation): string {
+    const selection = bundleSelectionFromDecision(decision, routing, documents);
+    setSelectedDocIds(selection.documentIds);
+    return selection.summary;
   }
 
   async function parseSourceNow() {
@@ -374,7 +364,7 @@ function AppContent() {
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
-    const routingSummary = applyRoutingRecommendation(res.routing);
+    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
@@ -409,7 +399,7 @@ function AppContent() {
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
-    const routingSummary = applyRoutingRecommendation(res.routing);
+    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Файл «${file.name}» прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
@@ -440,7 +430,7 @@ function AppContent() {
     setPlan(null);
     setPreflightPlan(null);
     setPreview(null);
-    const routingSummary = applyRoutingRecommendation(res.routing);
+    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
   }
 
@@ -591,7 +581,7 @@ function AppContent() {
     if (!existingOutputPolicy) return;
     const explicitOutputRoot = outputRoot.trim();
     if (!explicitOutputRoot) return;
-    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy));
+    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy, sickLeave));
     if (!res) return;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
@@ -608,7 +598,13 @@ function AppContent() {
       : getWorkflowPlanBatch(documentIds, sickLeave, folderParts);
   }
 
-  const { generationPreflightOpen, setGenerationPreflightOpen, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
+  const {
+    generationPreflightOpen,
+    generationDocumentIds,
+    closeGenerationPreflight,
+    openGenerationPreflight,
+    confirmGenerationPreflight,
+  } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (ids) => run(ids.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(ids)),
     applyAnswers: (ids, payload) => ids.length === 1
@@ -1233,7 +1229,12 @@ function AppContent() {
   }
   async function loadSession() {
     const res = await run('load_state', () => loadState(STATE_DB));
-    if (res?.pack?.documents) { setDocuments(res.pack.documents); setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents)); setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`); }
+    if (res?.pack?.documents) {
+      setDocuments(res.pack.documents);
+      const existingIds = new Set(res.pack.documents.map((document) => document.id));
+      setSelectedDocIds((previous) => previous.filter((id) => existingIds.has(id)));
+      setStatus(`Рабочий набор загружен: ${res.pack.documents.length} документ(ов).`);
+    }
   }
   async function checkAccess() {
     const res = await run('validate_product_access', () => validateProductAccess(null));
@@ -1494,7 +1495,7 @@ function AppContent() {
         <GenerationPreflightModal
           plan={preflightPlan}
           documents={documents}
-          selectedDocumentIds={selectedDocIds}
+          selectedDocumentIds={generationDocumentIds}
           answers={answers}
           skippedAnswers={skippedAnswers}
           busy={busy}
@@ -1504,7 +1505,7 @@ function AppContent() {
           setAnswers={setAnswers}
           setSkippedAnswers={setSkippedAnswers}
           onSickLeaveChange={setSickLeave}
-          onCancel={() => setGenerationPreflightOpen(false)}
+          onCancel={closeGenerationPreflight}
           onConfirm={() => void confirmGenerationPreflight()}
         />
       )}

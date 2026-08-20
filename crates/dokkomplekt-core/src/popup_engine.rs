@@ -35,6 +35,55 @@ pub fn build_merged_popup_plan(
     plan_workflow(document, case, flags)
 }
 
+/// Final fail-closed check used immediately before publication.
+///
+/// This intentionally consumes the already-built WorkflowPlan instead of
+/// rebuilding profession rules. Required active prompts must either have a
+/// validated value in the SemanticCase or be explicitly skipped when the plan
+/// allows skipping. Linked Yes/No children reuse the same activity predicate as
+/// popup application, so a hidden child can never reappear as a second rule set.
+pub fn workflow_publication_blockers(case: &SemanticCase, plan: &WorkflowPlan) -> Vec<String> {
+    let answers = BTreeMap::<&str, &PopupAnswer>::new();
+    let prompt_ids = plan
+        .prompts
+        .iter()
+        .map(|prompt| prompt.field_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut blockers = plan.block_reasons.clone();
+
+    for prompt in &plan.prompts {
+        if !prompt.required || !prompt_is_active(prompt, plan, &answers, case) {
+            continue;
+        }
+        if prompt.skippable && case.is_skipped(&prompt.field_id) {
+            continue;
+        }
+        let Some(value) = case
+            .get(&prompt.field_id)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            blockers.push(format!("Не заполнено обязательное поле: {}", prompt.title));
+            continue;
+        };
+        if let Err(error) = validate_prompt_value(prompt, value) {
+            blockers.push(error);
+        }
+    }
+
+    for (field_id, error) in validate_case_relations(case) {
+        if prompt_ids.contains(field_id.as_str()) {
+            blockers.push(error);
+        }
+    }
+
+    let mut seen = BTreeSet::new();
+    blockers
+        .into_iter()
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
 /// UI contract: if a required field is empty and not explicitly skipped, popup stays open.
 pub fn apply_popup_answers(
     case: &SemanticCase,
@@ -810,6 +859,88 @@ mod tests {
         assert!(!result.accepted);
         assert_eq!(result.still_missing.len(), 1);
         assert_eq!(result.still_missing[0].field_id, "custom.details");
+    }
+
+    #[test]
+    fn publication_readiness_reuses_conditional_prompt_activity() {
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "custom.need_details", "Нет");
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![
+                PromptSpec {
+                    field_id: "custom.need_details".into(),
+                    title: "Нужны дополнительные сведения?".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: Some("Нет".into()),
+                    validation_hint: None,
+                    input_kind: PromptInputKind::YesNo,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: vec!["Нет".into(), "Да".into()],
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: None,
+                    order: 10,
+                },
+                PromptSpec {
+                    field_id: "custom.details".into(),
+                    title: "Дополнительные сведения".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: None,
+                    validation_hint: None,
+                    input_kind: PromptInputKind::LongText,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: Vec::new(),
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: Some("custom.need_details".into()),
+                    order: 20,
+                },
+            ],
+            blocked: false,
+            block_reasons: vec![],
+        };
+
+        assert!(workflow_publication_blockers(&case, &plan).is_empty());
+
+        set_user_value(&mut case, "custom.need_details", "Да");
+        let blockers = workflow_publication_blockers(&case, &plan);
+        assert_eq!(blockers.len(), 1);
+        assert!(blockers[0].contains("Дополнительные сведения"));
+    }
+
+    #[test]
+    fn publication_readiness_accepts_only_explicitly_skippable_omissions() {
+        let mut case = SemanticCase::default();
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![PromptSpec {
+                field_id: "custom.optional_required".into(),
+                title: "Поле с разрешённым пропуском".into(),
+                required: true,
+                skippable: true,
+                current_value: None,
+                validation_hint: None,
+                input_kind: PromptInputKind::Text,
+                ask_mode: crate::PromptAskMode::IfMissing,
+                options: Vec::new(),
+                allow_custom_option: false,
+                help_text: None,
+                section: None,
+                linked_to: None,
+                order: 10,
+            }],
+            blocked: false,
+            block_reasons: vec![],
+        };
+
+        assert_eq!(workflow_publication_blockers(&case, &plan).len(), 1);
+        case.skip("custom.optional_required");
+        assert!(workflow_publication_blockers(&case, &plan).is_empty());
     }
 
     #[test]

@@ -167,6 +167,7 @@ export async function renderDocxBatch(
   folderParts: FolderNamePartDto[],
   strict = true,
   existingOutputPolicy: ExistingOutputPolicy = 'version',
+  sickLeaveEnabled = false,
 ): Promise<RenderDocxBatchResult> {
   return callRust('render_docx_batch', {
     req: {
@@ -174,6 +175,7 @@ export async function renderDocxBatch(
       output_root: outputRoot,
       folder_parts: folderParts,
       strict,
+      sick_leave_enabled: sickLeaveEnabled,
       existing_output_policy: existingOutputPolicy,
     },
   });

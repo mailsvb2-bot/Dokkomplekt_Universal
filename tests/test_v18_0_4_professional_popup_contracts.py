@@ -25,7 +25,8 @@ class ProfessionalPopupContracts(unittest.TestCase):
         self.assertIn("fn apply_popup_batch", main)
         self.assertIn("useGenerationPreflight({", app)
         self.assertIn("applyPopupBatch(ids, sickLeave, payload, folderParts)", app)
-        self.assertIn("requestWorkflowPlan(options.selectedDocumentIds)", preflight)
+        self.assertIn("const documentIds = [...options.selectedDocumentIds]", preflight)
+        self.assertIn("requestWorkflowPlan(documentIds)", preflight)
         self.assertIn("Проверить и создать", workspace)
 
     def test_invalid_required_value_keeps_preflight_visible(self) -> None:

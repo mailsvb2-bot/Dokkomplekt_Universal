@@ -20,6 +20,8 @@ use zip::ZipArchive;
 mod archive;
 mod msg;
 mod source_snapshot;
+#[cfg(test)]
+mod text_decoder_tests;
 mod web;
 
 use archive::{normalize_external_archive, normalize_zip};
@@ -2550,6 +2552,11 @@ fn decode_quoted_printable(input: &str) -> Vec<u8> {
 }
 
 fn decode_text_bytes(bytes: &[u8]) -> String {
+    if let Some(without_bom) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        if let Ok(text) = std::str::from_utf8(without_bom) {
+            return text.to_string();
+        }
+    }
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let units = bytes[2..]
             .chunks_exact(2)
@@ -2564,8 +2571,13 @@ fn decode_text_bytes(bytes: &[u8]) -> String {
             .collect::<Vec<_>>();
         return String::from_utf16_lossy(&units);
     }
-    String::from_utf8(bytes.to_vec())
-        .unwrap_or_else(|_| bytes.iter().map(|byte| *byte as char).collect())
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+    bytes
+        .iter()
+        .map(|byte| decode_rtf_ansi_byte(*byte, 1251))
+        .collect()
 }
 
 fn normalize_text(text: &str) -> String {

@@ -60,10 +60,25 @@ pub fn apply_popup_answers(
         .iter()
         .map(|answer| (answer.field_id.trim(), answer))
         .collect::<BTreeMap<_, _>>();
+    let explicit_without_labs = by_id.get("medical.labs_without").is_some_and(|answer| {
+        matches!(
+            answer.value.trim().to_lowercase().as_str(),
+            "да" | "yes" | "true"
+        )
+    });
     let mut next = case.clone();
     let mut still_missing = Vec::new();
 
     for prompt in &plan.prompts {
+        if !prompt_is_active(prompt, plan, &by_id, case) {
+            next.skip(&prompt.field_id);
+            continue;
+        }
+        if prompt.field_id == "medical.labs" && explicit_without_labs {
+            next.unskip("medical.labs");
+            set_user_value(&mut next, "medical.labs", "Нет анализов");
+            continue;
+        }
         let Some(answer) = by_id.get(prompt.field_id.as_str()) else {
             if prompt.required {
                 still_missing.push(prompt.clone());
@@ -145,6 +160,41 @@ pub fn apply_popup_answers(
         still_missing,
         errors: validation_errors,
     }
+}
+
+fn yes_no_value_is_affirmative(value: &str) -> bool {
+    matches!(
+        value.trim().to_lowercase().replace('ё', "е").as_str(),
+        "да" | "yes" | "true"
+    )
+}
+
+fn prompt_is_active(
+    prompt: &PromptSpec,
+    plan: &WorkflowPlan,
+    answers: &BTreeMap<&str, &PopupAnswer>,
+    case: &SemanticCase,
+) -> bool {
+    let Some(linked_to) = prompt.linked_to.as_deref() else {
+        return true;
+    };
+    let Some(source) = plan
+        .prompts
+        .iter()
+        .find(|candidate| candidate.field_id == linked_to)
+    else {
+        return true;
+    };
+    if !matches!(source.input_kind, PromptInputKind::YesNo) {
+        return true;
+    }
+    let source_value = answers
+        .get(source.field_id.as_str())
+        .map(|answer| answer.value.as_str())
+        .or_else(|| case.get(&source.field_id))
+        .or(source.current_value.as_deref())
+        .unwrap_or_default();
+    yes_no_value_is_affirmative(source_value)
 }
 
 fn normalize_prompt_value(prompt: &PromptSpec, value: &str) -> Result<String, String> {
@@ -581,6 +631,185 @@ mod tests {
             }],
         );
         assert!(result.accepted);
+    }
+
+    #[test]
+    fn negative_yes_no_answer_deactivates_required_linked_prompt() {
+        let case = SemanticCase::default();
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![
+                PromptSpec {
+                    field_id: "custom.need_details".into(),
+                    title: "Нужны дополнительные сведения?".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: None,
+                    validation_hint: None,
+                    input_kind: PromptInputKind::YesNo,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: vec!["Нет".into(), "Да".into()],
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: None,
+                    order: 10,
+                },
+                PromptSpec {
+                    field_id: "custom.details".into(),
+                    title: "Дополнительные сведения".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: None,
+                    validation_hint: None,
+                    input_kind: PromptInputKind::LongText,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: Vec::new(),
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: Some("custom.need_details".into()),
+                    order: 20,
+                },
+            ],
+            blocked: false,
+            block_reasons: vec![],
+        };
+
+        let result = apply_popup_answers(
+            &case,
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.need_details".into(),
+                value: "Нет".into(),
+                continue_without_value: false,
+            }],
+        );
+
+        assert!(result.accepted);
+        assert!(result.still_missing.is_empty());
+        assert_eq!(result.semantic_case.get("custom.details"), None);
+        assert!(result.semantic_case.is_skipped("custom.details"));
+    }
+
+    #[test]
+    fn negative_yes_no_answer_hides_a_stale_linked_value_from_rendering() {
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "custom.details", "Старое значение");
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![
+                PromptSpec {
+                    field_id: "custom.need_details".into(),
+                    title: "Нужны дополнительные сведения?".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: None,
+                    validation_hint: None,
+                    input_kind: PromptInputKind::YesNo,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: vec!["Нет".into(), "Да".into()],
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: None,
+                    order: 10,
+                },
+                PromptSpec {
+                    field_id: "custom.details".into(),
+                    title: "Дополнительные сведения".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: Some("Старое значение".into()),
+                    validation_hint: None,
+                    input_kind: PromptInputKind::LongText,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: Vec::new(),
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: Some("custom.need_details".into()),
+                    order: 20,
+                },
+            ],
+            blocked: false,
+            block_reasons: vec![],
+        };
+
+        let result = apply_popup_answers(
+            &case,
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.need_details".into(),
+                value: "Нет".into(),
+                continue_without_value: false,
+            }],
+        );
+
+        assert!(result.accepted);
+        assert!(result.semantic_case.is_skipped("custom.details"));
+        let rendered =
+            crate::render_text_template("До {{custom.details}} после", &result.semantic_case, true);
+        assert_eq!(rendered.output_text, "До  после");
+        assert!(rendered.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn affirmative_yes_no_answer_keeps_required_linked_prompt_active() {
+        let case = SemanticCase::default();
+        let plan = WorkflowPlan {
+            document_id: "x".into(),
+            prompts: vec![
+                PromptSpec {
+                    field_id: "custom.need_details".into(),
+                    title: "Нужны дополнительные сведения?".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: None,
+                    validation_hint: None,
+                    input_kind: PromptInputKind::YesNo,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: vec!["Нет".into(), "Да".into()],
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: None,
+                    order: 10,
+                },
+                PromptSpec {
+                    field_id: "custom.details".into(),
+                    title: "Дополнительные сведения".into(),
+                    required: true,
+                    skippable: false,
+                    current_value: None,
+                    validation_hint: None,
+                    input_kind: PromptInputKind::LongText,
+                    ask_mode: crate::PromptAskMode::Always,
+                    options: Vec::new(),
+                    allow_custom_option: false,
+                    help_text: None,
+                    section: None,
+                    linked_to: Some("custom.need_details".into()),
+                    order: 20,
+                },
+            ],
+            blocked: false,
+            block_reasons: vec![],
+        };
+
+        let result = apply_popup_answers(
+            &case,
+            &plan,
+            &[PopupAnswer {
+                field_id: "custom.need_details".into(),
+                value: "Да".into(),
+                continue_without_value: false,
+            }],
+        );
+
+        assert!(!result.accepted);
+        assert_eq!(result.still_missing.len(), 1);
+        assert_eq!(result.still_missing[0].field_id, "custom.details");
     }
 
     #[test]

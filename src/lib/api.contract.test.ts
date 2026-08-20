@@ -484,6 +484,22 @@ describe('Tauri command DTO contracts', () => {
     ]);
   });
 
+  it('passes selected folder naming requirements through the same workflow and popup envelopes', async () => {
+    const calls: Call[] = [];
+    installContractMock(calls);
+    const folderParts = ['FullSubjectName', 'DocumentNumber'] as const;
+    await getWorkflowPlan('doc_1', false, [...folderParts]);
+    await getWorkflowPlanBatch(['doc_1', 'doc_2'], false, [...folderParts]);
+    await applyPopup('doc_1', false, [], [...folderParts]);
+    await applyPopupBatch(['doc_1', 'doc_2'], false, [], [...folderParts]);
+    expect(calls).toMatchObject([
+      { command: 'get_workflow_plan', payload: { req: { document_id: 'doc_1', sick_leave_enabled: false, folder_parts: [...folderParts] } } },
+      { command: 'get_workflow_plan_batch', payload: { req: { document_ids: ['doc_1', 'doc_2'], sick_leave_enabled: false, folder_parts: [...folderParts] } } },
+      { command: 'apply_popup', payload: { req: { document_id: 'doc_1', sick_leave_enabled: false, folder_parts: [...folderParts], answers: [] } } },
+      { command: 'apply_popup_batch', payload: { req: { document_ids: ['doc_1', 'doc_2'], sick_leave_enabled: false, folder_parts: [...folderParts], answers: [] } } },
+    ]);
+  });
+
   it('uses Rust DTO envelopes for privacy, exceptions, metrics and audit', async () => {
     const calls: Call[] = []; installContractMock(calls);
     const preferences = { copy_source_to_output: false, write_trust_report: true, include_values_in_trust_report: false, temp_retention_hours: 12, archive_processed_sources: true, archive_folder_name: '_обработано', service_note_retention_days: 30, processed_marker_retention_days: 7, archived_source_retention_days: 0 };

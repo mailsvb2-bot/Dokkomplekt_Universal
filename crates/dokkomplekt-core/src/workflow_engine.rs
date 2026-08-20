@@ -132,7 +132,7 @@ fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String>
         .then_some(document.popup_fields.iter().map(|field| &field.field_id))
         .into_iter()
         .flatten();
-    document
+    let mut fields = document
         .placeholders
         .iter()
         .chain(document.required_fields.iter())
@@ -140,7 +140,11 @@ fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String>
         .chain(runtime_controls.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
-        .collect()
+        .collect::<BTreeSet<_>>();
+    if matches!(document.category, DomainKind::Medical) && fields.contains("medical.labs") {
+        fields.insert("medical.labs_without".into());
+    }
+    fields
 }
 
 fn suppressed_prompt_fields(
@@ -206,6 +210,9 @@ fn prompt_from_config(
     hard_required_fields: &BTreeSet<String>,
     case: &SemanticCase,
 ) -> Option<PromptSpec> {
+    if config.field_id == "medical.labs_without" && case.get("medical.labs").is_some() {
+        return None;
+    }
     let existing = case.get(&config.field_id).map(str::to_string);
     let include = match config.ask_mode {
         PromptAskMode::IfMissing => existing.is_none(),

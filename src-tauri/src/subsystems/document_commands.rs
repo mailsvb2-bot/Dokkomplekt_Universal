@@ -998,10 +998,14 @@ fn get_document_template_text(
     Ok(DocumentTemplateTextResponse { template_text })
 }
 
+include!("generation_preflight.rs");
+
 #[derive(Debug, Deserialize)]
 struct WorkflowPlanRequest {
     document_id: String,
     sick_leave_enabled: bool,
+    #[serde(default)]
+    folder_parts: Vec<FolderNamePart>,
 }
 
 #[tauri::command]
@@ -1022,12 +1026,13 @@ fn get_workflow_plan(
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
-    let mut plan = plan_workflow(
-        &doc,
+    let mut plan = plan_selection_with_output_folder(
+        std::slice::from_ref(&doc),
         &case,
         &WorkflowFlags {
             sick_leave_enabled: req.sick_leave_enabled,
         },
+        &req.folder_parts,
     );
     apply_profile_prompt_overrides(&app, &mut plan)?;
     serde_json::to_value(plan).map_err(|e| e.to_string())
@@ -1037,6 +1042,8 @@ fn get_workflow_plan(
 struct WorkflowPlanBatchRequest {
     document_ids: Vec<String>,
     sick_leave_enabled: bool,
+    #[serde(default)]
+    folder_parts: Vec<FolderNamePart>,
 }
 
 #[tauri::command]
@@ -1069,12 +1076,13 @@ fn get_workflow_plan_batch(
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
-    let mut plan = plan_workflow_batch(
+    let mut plan = plan_selection_with_output_folder(
         &documents,
         &case,
         &WorkflowFlags {
             sick_leave_enabled: req.sick_leave_enabled,
         },
+        &req.folder_parts,
     );
     apply_profile_prompt_overrides(&app, &mut plan)?;
     serde_json::to_value(plan).map_err(|error| error.to_string())
@@ -1084,6 +1092,8 @@ fn get_workflow_plan_batch(
 struct PopupApplyRequest {
     document_id: String,
     sick_leave_enabled: bool,
+    #[serde(default)]
+    folder_parts: Vec<FolderNamePart>,
     answers: Vec<PopupAnswer>,
 }
 
@@ -1101,12 +1111,13 @@ fn apply_popup(
             .find(|document| document.id == req.document_id)
             .cloned()
             .ok_or_else(|| "document not found".to_string())?;
-        let mut plan = build_merged_popup_plan(
-            &doc,
+        let mut plan = plan_selection_with_output_folder(
+            std::slice::from_ref(&doc),
             &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
+            &req.folder_parts,
         );
         apply_profile_prompt_overrides(&app, &mut plan)?;
         let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);
@@ -1128,6 +1139,8 @@ fn apply_popup(
 struct PopupApplyBatchRequest {
     document_ids: Vec<String>,
     sick_leave_enabled: bool,
+    #[serde(default)]
+    folder_parts: Vec<FolderNamePart>,
     answers: Vec<PopupAnswer>,
 }
 
@@ -1155,12 +1168,13 @@ fn apply_popup_batch(
         if documents.len() != requested.len() {
             return Err("Один или несколько документов комплекта не найдены".into());
         }
-        let mut plan = plan_workflow_batch(
+        let mut plan = plan_selection_with_output_folder(
             &documents,
             &snapshot.semantic_case,
             &WorkflowFlags {
                 sick_leave_enabled: req.sick_leave_enabled,
             },
+            &req.folder_parts,
         );
         apply_profile_prompt_overrides(&app, &mut plan)?;
         let result = apply_popup_answers(&snapshot.semantic_case, &plan, &req.answers);

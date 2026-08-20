@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentTemplateSpec, PromptSpec, WorkflowPlan } from '../lib/types';
+import { activeWorkflowPrompts } from '../lib/workflowPromptVisibility';
 import { WorkflowPromptField } from './Workspace';
 
 const INTERNAL_DIARY_RUNTIME_FIELDS = new Set([
@@ -26,20 +27,12 @@ interface GenerationPreflightModalProps {
 
 export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
   const selected = props.documents.filter((document) => props.selectedDocumentIds.includes(document.id));
-  const prompts = props.plan.prompts;
-  const promptById = new Map(prompts.map((prompt) => [prompt.field_id, prompt]));
-  const affirmative = (value: string) => ['да', 'yes', 'true', '1', '+', 'нужен', 'нужна'].includes(value.trim().toLowerCase().replaceAll('ё', 'е'));
-  const visibleByLink = (prompt: PromptSpec) => {
-    if (!prompt.linked_to) return true;
-    const source = promptById.get(prompt.linked_to);
-    if (source?.input_kind !== 'yes_no') return true;
-    return affirmative(props.answers[source.field_id] ?? source.current_value ?? '');
-  };
+  const prompts = activeWorkflowPrompts(props.plan.prompts, props.answers);
   // These values are backend-owned bounds for the generic repeated-record engine.
   // They remain in the WorkflowPlan and are submitted by useGenerationPreflight,
   // but are not extra user questions. Donor-facing choices stay in the WorkflowPlan; only these
   // technical bounds are hidden from the specialist.
-  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id) && visibleByLink(prompt));
+  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id));
   const sections = visiblePrompts.reduce<Array<{ title: string; prompts: PromptSpec[] }>>((groups, prompt) => {
     const title = prompt.section?.trim() || 'Данные документа';
     const existing = groups.find((group) => group.title === title);

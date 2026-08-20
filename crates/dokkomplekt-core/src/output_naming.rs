@@ -28,6 +28,75 @@ pub enum FolderNamePart {
     DischargeMonth,
 }
 
+pub fn missing_output_folder_fields(case: &SemanticCase, parts: &[FolderNamePart]) -> Vec<String> {
+    let mut missing = std::collections::BTreeSet::<String>::new();
+    let mut require = |present: bool, field_id: &str| {
+        if !present {
+            missing.insert(field_id.to_string());
+        }
+    };
+    for part in parts {
+        match part {
+            FolderNamePart::FullSubjectName
+            | FolderNamePart::ShortInitials
+            | FolderNamePart::SurnameGivenName => require(
+                first(case, &["subject.name", "person.full_name", "patient.fio"]).is_some(),
+                "subject.name",
+            ),
+            FolderNamePart::OrganizationName => require(
+                first(
+                    case,
+                    &["organization.name", "org.name", "subject.organization"],
+                )
+                .is_some(),
+                "org.name",
+            ),
+            FolderNamePart::DocumentNumber => require(
+                first(
+                    case,
+                    &["document.number", "case.number", "medical.case_number"],
+                )
+                .is_some(),
+                "document.number",
+            ),
+            FolderNamePart::DocumentDate => {
+                require(case.get("document.date").is_some(), "document.date")
+            }
+            FolderNamePart::PeriodStartDate
+            | FolderNamePart::PeriodStartMonth
+            | FolderNamePart::ShortPeriodStartDate
+            | FolderNamePart::PeriodStartMonthName
+            | FolderNamePart::AdmissionDate
+            | FolderNamePart::AdmissionMonth => require(
+                first(case, &["period.start_date", "medical.admission_date"]).is_some(),
+                "period.start_date",
+            ),
+            FolderNamePart::PeriodEndDate
+            | FolderNamePart::PeriodEndMonth
+            | FolderNamePart::ShortPeriodEndDate
+            | FolderNamePart::PeriodEndMonthName
+            | FolderNamePart::DischargeDate
+            | FolderNamePart::DischargeMonth => require(
+                first(case, &["period.end_date", "medical.discharge_date"]).is_some(),
+                "period.end_date",
+            ),
+            FolderNamePart::PeriodRange
+            | FolderNamePart::ShortPeriodRange
+            | FolderNamePart::AdmissionAndDischargeDates => {
+                require(
+                    first(case, &["period.start_date", "medical.admission_date"]).is_some(),
+                    "period.start_date",
+                );
+                require(
+                    first(case, &["period.end_date", "medical.discharge_date"]).is_some(),
+                    "period.end_date",
+                );
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
 pub fn build_output_folder_name(case: &SemanticCase, parts: &[FolderNamePart]) -> String {
     let mut chunks = Vec::new();
     for part in parts {
@@ -336,6 +405,41 @@ mod tests {
                 ],
             ),
             "Петров П.П. 01.06.26-12.06.26"
+        );
+    }
+
+    #[test]
+    fn folder_naming_missing_fields_use_the_same_semantic_fallbacks_as_rendering() {
+        let mut case = SemanticCase::default();
+        case.values.insert(
+            "medical.case_number".into(),
+            SemanticValue::new(
+                "medical.case_number",
+                "42/26",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        case.values.insert(
+            "medical.admission_date".into(),
+            SemanticValue::new(
+                "medical.admission_date",
+                "01.06.2026",
+                ValueSource::UserConfirmed,
+                1.0,
+            ),
+        );
+        assert_eq!(
+            missing_output_folder_fields(
+                &case,
+                &[
+                    FolderNamePart::DocumentNumber,
+                    FolderNamePart::AdmissionDate,
+                    FolderNamePart::FullSubjectName,
+                    FolderNamePart::DischargeDate,
+                ],
+            ),
+            vec!["period.end_date".to_string(), "subject.name".to_string()]
         );
     }
 

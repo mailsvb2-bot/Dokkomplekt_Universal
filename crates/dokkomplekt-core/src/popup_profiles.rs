@@ -120,6 +120,29 @@ pub fn effective_popup_fields(document: &DocumentTemplateSpec) -> Vec<PopupField
         apply_profession_defaults(&mut config, &document.category, &document.role_id);
         merged.insert(canonical, config);
     }
+    let document_uses_labs = document
+        .placeholders
+        .iter()
+        .chain(document.required_fields.iter())
+        .any(|field_id| canonical_storage_field_id(field_id) == "medical.labs");
+    if matches!(document.category, DomainKind::Medical)
+        && document_uses_labs
+        && !merged.contains_key("medical.labs_without")
+    {
+        let mut config = popup_config_for_field(
+            "medical.labs_without",
+            false,
+            &document.category,
+            &document.role_id,
+        );
+        apply_profession_defaults(&mut config, &document.category, &document.role_id);
+        config.ask_mode = PromptAskMode::Always;
+        config.help_text = Some(
+            "Выберите «Да», если исследований действительно нет; в документ будет записано «Нет анализов»."
+                .into(),
+        );
+        merged.insert("medical.labs_without".into(), config);
+    }
     let mut fields = merged.into_values().collect::<Vec<_>>();
     fields.sort_by(|a, b| a.order.cmp(&b.order).then(a.field_id.cmp(&b.field_id)));
     fields
@@ -298,6 +321,9 @@ pub fn resolve_popup_default(value: Option<&str>) -> Option<String> {
 
 pub fn infer_input_kind(field_id: &str) -> PromptInputKind {
     let id = canonical_storage_field_id(field_id).to_lowercase();
+    if id == "medical.labs_without" {
+        return PromptInputKind::YesNo;
+    }
     if id.contains("diagnosis") || id.contains("icd10") || id.ends_with(".icd") {
         return PromptInputKind::Icd10;
     }
@@ -684,10 +710,12 @@ pub fn popup_order(field_id: &str) -> usize {
         "org.kpp" | "accounting.kpp" => 100,
         "medical.diagnosis" | "medical.icd10" | "medical.diagnosis_code" => 110,
         "medical.treatment" => 120,
-        DIARY_SCHEDULE_STYLE => 121,
-        DIARY_INTRADAY_RHYTHM => 122,
-        DIARY_DAY_START_TIME => 123,
-        DIARY_DAY_END_TIME => 124,
+        "medical.labs" => 121,
+        "medical.labs_without" => 122,
+        DIARY_SCHEDULE_STYLE => 123,
+        DIARY_INTRADAY_RHYTHM => 124,
+        DIARY_DAY_START_TIME => 125,
+        DIARY_DAY_END_TIME => 126,
         "medical.commission_date"
         | "medical.protocol_date"
         | "medical.sick_leave_commission_date"

@@ -7,9 +7,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    build_output_folder_name, plan_workflow, render_text_template, required_blocks_for,
-    sanitize_folder_name, sanitize_path_component, title_for_field, unmet_blocks,
-    DocumentTemplateSpec, DomainKind, FolderNamePart, SemanticCase, WorkflowFlags,
+    build_output_folder_name, missing_output_folder_fields, plan_workflow, render_text_template,
+    required_blocks_for, sanitize_folder_name, sanitize_path_component, title_for_field,
+    unmet_blocks, DocumentTemplateSpec, DomainKind, FolderNamePart, SemanticCase, WorkflowFlags,
 };
 
 pub const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";
@@ -94,6 +94,9 @@ pub fn plan_created_documents_batch(
     source_file_name: &str,
 ) -> CreatedDocumentsBatch {
     let mut missing = Vec::new();
+    for field_id in missing_output_folder_fields(case, folder_parts) {
+        missing.push(format!("Папка результата: {}", title_for_field(&field_id)));
+    }
     if documents.is_empty() {
         missing.push("не настроен ни один документ для автоматического создания".to_string());
     }
@@ -294,6 +297,27 @@ mod tests {
                 assert!(patient_folder_name.contains("Иванов"));
             }
             other => panic!("expected Ready, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_folder_naming_value_blocks_zero_touch_before_publication() {
+        let case = case_with(&[("document.number", "42")]);
+        let docs = vec![doc("d1", "Справка", "Готовый текст", &[])];
+        let batch = plan_created_documents_batch(
+            &case,
+            &docs,
+            &WorkflowFlags::default(),
+            &[FolderNamePart::FullSubjectName],
+            "Источник",
+            "Источник.docx",
+        );
+        match batch {
+            CreatedDocumentsBatch::Attention { missing, .. } => {
+                assert!(missing.iter().any(|item| item.contains("Папка результата")));
+                assert!(missing.iter().any(|item| item.contains("Имя")));
+            }
+            other => panic!("expected attention, got {other:?}"),
         }
     }
 
@@ -499,7 +523,10 @@ mod tests {
 
     #[test]
     fn angle_brackets_and_shift_operators_are_not_placeholders() {
-        let case = case_with(&[("org.name", "ООО Ромашка")]);
+        let case = case_with(&[
+            ("subject.name", "Тестовый субъект"),
+            ("org.name", "ООО Ромашка"),
+        ]);
         let docs = vec![doc(
             "d1",
             "Технический отчёт",
@@ -526,7 +553,10 @@ mod tests {
 
     #[test]
     fn legitimate_double_braces_in_inserted_value_do_not_block_zero_touch() {
-        let case = case_with(&[("custom.code", "const example = {{ nested_template }};")]);
+        let case = case_with(&[
+            ("subject.name", "Тестовый субъект"),
+            ("custom.code", "const example = {{ nested_template }};"),
+        ]);
         let docs = vec![doc(
             "d1",
             "Технический отчёт",

@@ -28,13 +28,11 @@ import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplate
 import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
-
-
 export function App() {
   return <AppDialogProvider><AppContent /></AppDialogProvider>;
 }
@@ -342,31 +340,10 @@ function AppContent() {
     setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
   }
 
-  function applyBundleDecision(
-    decision: BundleDecision,
-    routing: DocumentRoutingRecommendation,
-  ): string {
-    // A source is a case boundary. Never retain the previous case's document
-    // selection while the new source is being classified.
-    setSelectedDocIds([]);
-    if (decision.document_ids.length) {
-      // In the desktop flow a review proposal may be preselected because it is
-      // not an execution: publication still requires the explicit final
-      // preflight click. Replacing the whole selection is important — no ID
-      // from the previous source may survive into this proposal.
-      setSelectedDocIds(decision.document_ids);
-      const labels = decision.document_ids
-        .map((id) => documents.find((document) => document.id === id)?.button_label || id)
-        .join(', ');
-      if (decision.auto_apply && !decision.review_required) {
-        return ` Комплект определён: ${labels}.`;
-      }
-      return ` Предложен комплект: ${labels}. Подтвердите состав перед созданием.`;
-    }
-    if (routing.matches.length) {
-      return ` Тип похож на «${routing.matches[0].button_label}», но безопасный комплект не определён. Выберите документы один раз.`;
-    }
-    return ' Новый тип не сопоставлен с шаблонами; откройте мастер разметки.';
+  function applyBundleDecision(decision: BundleDecision, routing: DocumentRoutingRecommendation): string {
+    const selection = bundleSelectionFromDecision(decision, routing, documents);
+    setSelectedDocIds(selection.documentIds);
+    return selection.summary;
   }
 
   async function parseSourceNow() {

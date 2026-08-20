@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DocumentTemplateSpec, DomainKind } from './types';
-import { defaultSelectedDocumentIds, loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
+import type { BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind } from './types';
+import { bundleSelectionFromDecision, defaultSelectedDocumentIds, loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
 
 function document(roleId: string, category: DomainKind, label = 'Переименовано пользователем'): DocumentTemplateSpec {
   return {
@@ -61,5 +61,20 @@ describe('default document selection', () => {
     expect(shouldSelectDocumentByDefault(document('discharge', 'Legal'))).toBe(false);
     expect(shouldSelectDocumentByDefault(document('diaries', 'Medical'))).toBe(false);
     expect(shouldSelectDocumentByDefault(document('diaries', 'Education'))).toBe(false);
+  });
+});
+
+describe('bundle decision presentation', () => {
+  const routing: DocumentRoutingRecommendation = {
+    domain: 'Legal', domain_confidence: 0.9, predicted_role: 'contract', cluster_id: 'contract', cluster_confidence: 0.9,
+    recommended_document_ids: ['doc-contract'], matches: [], auto_select: false, review_required: true, reasons: [],
+  };
+
+  it('replaces selection with the exact review proposal without claiming automatic execution', () => {
+    const decision: BundleDecision = { document_ids: ['doc-contract'], source: 'review_proposal', confidence: 0.9, auto_apply: false, review_required: true, question: 'Подтвердите', reasons: [] };
+    expect(bundleSelectionFromDecision(decision, routing, [document('contract', 'Legal', 'Договор')])).toEqual({
+      documentIds: ['doc-contract'],
+      summary: ' Предложен комплект: Договор. Подтвердите состав перед созданием.',
+    });
   });
 });

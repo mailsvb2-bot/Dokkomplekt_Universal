@@ -1,4 +1,4 @@
-import type { CreatedDocumentOutput, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
+import type { BundleDecision, CreatedDocumentOutput, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
 import { newPopupField } from '../components/PopupFieldEditor';
 import type { ScannerFieldSuggestion } from './scannerSuggestions';
 import { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
@@ -23,6 +23,29 @@ export function shouldSelectDocumentByDefault(_document: DocumentTemplateSpec): 
 
 export function defaultSelectedDocumentIds(_documents: DocumentTemplateSpec[]): string[] {
   return [];
+}
+
+export function bundleSelectionFromDecision(
+  decision: BundleDecision,
+  routing: DocumentRoutingRecommendation,
+  documents: DocumentTemplateSpec[],
+): { documentIds: string[]; summary: string } {
+  const documentIds = [...decision.document_ids];
+  if (documentIds.length) {
+    const labels = documentIds
+      .map((id) => documents.find((document) => document.id === id)?.button_label || id)
+      .join(', ');
+    return {
+      documentIds,
+      summary: decision.auto_apply && !decision.review_required
+        ? ` Комплект определён: ${labels}.`
+        : ` Предложен комплект: ${labels}. Подтвердите состав перед созданием.`,
+    };
+  }
+  if (routing.matches.length) {
+    return { documentIds: [], summary: ` Тип похож на «${routing.matches[0].button_label}», но безопасный комплект не определён. Выберите документы один раз.` };
+  }
+  return { documentIds: [], summary: ' Новый тип не сопоставлен с шаблонами; откройте мастер разметки.' };
 }
 
 export type PendingTemplate = {

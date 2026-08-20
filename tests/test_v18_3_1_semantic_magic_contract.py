@@ -30,12 +30,13 @@ def test_ground_truth_metrics_and_calibration_are_present():
 
 def test_kit_learning_is_wired_into_live_zero_touch_runtime():
     runtime = (ROOT / "src-tauri/src/subsystems/automation_runtime.rs").read_text(encoding="utf-8")
+    intake = (ROOT / "src-tauri/src/subsystems/source_intake_commands.rs").read_text(encoding="utf-8")
     main = (ROOT / "src-tauri/src/main.rs").read_text(encoding="utf-8")
     corpus = (ROOT / "crates/dokkomplekt-core/src/corpus_recorder.rs").read_text(encoding="utf-8")
-    assert "decision_for_key(&corpus_entries" in runtime
-    assert "let learned_kit_decision" in runtime
-    assert "decide_document_bundle(" in runtime
-    assert "learned_kit_decision.as_ref()" in runtime
+    assert "resolve_document_bundle_for_case(" in runtime
+    assert "decision_for_key(&corpus_entries" in intake
+    assert "decide_document_bundle(" in intake
+    assert "learned.as_ref()" in intake
     assert "if bundle_decision.review_required" in runtime
     assert "let selected_document_ids = bundle_decision" in runtime
     assert "get_learned_kit_decision" in main

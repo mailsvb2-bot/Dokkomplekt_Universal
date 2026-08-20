@@ -42,10 +42,7 @@ pub fn build_merged_popup_plan(
 /// validated value in the SemanticCase or be explicitly skipped when the plan
 /// allows skipping. Linked Yes/No children reuse the same activity predicate as
 /// popup application, so a hidden child can never reappear as a second rule set.
-pub fn workflow_publication_blockers(
-    case: &SemanticCase,
-    plan: &WorkflowPlan,
-) -> Vec<String> {
+pub fn workflow_publication_blockers(case: &SemanticCase, plan: &WorkflowPlan) -> Vec<String> {
     let answers = BTreeMap::<&str, &PopupAnswer>::new();
     let prompt_ids = plan
         .prompts

@@ -48,16 +48,16 @@ def test_all_runtime_default_state_writes_use_transaction_boundary() -> None:
         "remove_document_button",
         "update_document_popup_fields",
         "set_field",
-        "reset_case",
-        "parse_source",
-        "parse_source_file",
-        "parse_web_source",
         "apply_popup",
         "apply_popup_batch",
         "apply_scanner",
         "verify_rust_license_text",
     ]:
         assert "transact_default_state" in function_slice(document, command)
+
+    intake = read("src-tauri/src/subsystems/source_intake_commands.rs")
+    for command in ["reset_case", "parse_source", "parse_source_file", "parse_web_source"]:
+        assert "transact_default_state" in function_slice(intake, command)
 
     automation = read("src-tauri/src/subsystems/automation_runtime.rs")
     assert "transact_default_state" in function_slice(automation, "semantic_extract")
@@ -66,9 +66,9 @@ def test_all_runtime_default_state_writes_use_transaction_boundary() -> None:
 
 
 def test_source_transients_are_changed_only_after_persisted_candidate_succeeds() -> None:
-    document = read("src-tauri/src/subsystems/document_commands.rs")
+    intake = read("src-tauri/src/subsystems/source_intake_commands.rs")
     for command in ["reset_case", "parse_source", "parse_source_file", "parse_web_source"]:
-        body = function_slice(document, command)
+        body = function_slice(intake, command)
         transaction = body.index("transact_default_state")
         for token in ["retained_uploaded_source", "source_provenance"]:
             position = body.find(token)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INTAKE = ROOT / "src-tauri" / "src" / "universal_intake.rs"
-DOCUMENT_COMMANDS = ROOT / "src-tauri" / "src" / "subsystems" / "document_commands.rs"
+SOURCE_INTAKE_COMMANDS = ROOT / "src-tauri" / "src" / "subsystems" / "source_intake_commands.rs"
 AUTOMATION = ROOT / "src-tauri" / "src" / "subsystems" / "automation_runtime.rs"
 TYPES = ROOT / "src" / "lib" / "types.ts"
 
@@ -28,28 +28,28 @@ def test_ocr_uses_structured_tsv_and_distinguishes_scanned_inputs() -> None:
 
 def test_layout_reaches_semantic_case_and_zero_touch_runtime() -> None:
     intake = read(INTAKE)
-    document_commands = read(DOCUMENT_COMMANDS)
+    source_intake = read(SOURCE_INTAKE_COMMANDS)
     automation = read(AUTOMATION)
     assert '"source.layout_items".into(), records' in intake
     assert '"source.table_row_count".into()' in intake
     assert "attach_layout_evidence" in intake
-    assert "universal_intake::apply_layout_to_case(&source_kind, &layout_items, &mut parsed);" in document_commands
-    assert "universal_intake::attach_layout_evidence(&layout_items, &mut parsed);" in document_commands
+    assert "universal_intake::apply_layout_to_case(&source_kind, &layout_items, &mut parsed);" in source_intake
+    assert "universal_intake::attach_layout_evidence(&layout_items, &mut parsed);" in source_intake
     assert "universal_intake::apply_layout_to_case(" in automation
     assert "universal_intake::attach_layout_evidence(" in automation
 
 
 def test_source_layout_is_exposed_to_frontend_without_network_dependency() -> None:
-    document_commands = read(DOCUMENT_COMMANDS)
+    source_intake = read(SOURCE_INTAKE_COMMANDS)
     typescript = read(TYPES)
-    assert "source_kind: String" in document_commands
-    assert "layout_items: Vec<universal_intake::NormalizedLayoutItem>" in document_commands
+    assert "source_kind: String" in source_intake
+    assert "layout_items: Vec<universal_intake::NormalizedLayoutItem>" in source_intake
     assert "export interface NormalizedLayoutItem" in typescript
     assert "layout_items: NormalizedLayoutItem[]" in typescript
     assert "MAX_LAYOUT_ITEMS" in read(INTAKE)
 
 
 def test_new_case_cannot_reuse_previous_source_layout_metadata() -> None:
-    source = read(DOCUMENT_COMMANDS)
+    source = read(SOURCE_INTAKE_COMMANDS)
     assert 'reusable_blocks.retain(|key, _| !key.starts_with("source."));' in source
     assert 'blocks.retain(|key, _| !key.starts_with("source."));' in source

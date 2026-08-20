@@ -599,8 +599,7 @@ function AppContent() {
   }
 
   function changeGenerationSickLeave(value: boolean) {
-    setSickLeave(value);
-    closeGenerationPreflight();
+    setSickLeave(value); closeGenerationPreflight();
     setStatus('Параметр больничного изменён. Нажмите «Проверить и создать» ещё раз, чтобы пересчитать обязательные вопросы.');
   }
 

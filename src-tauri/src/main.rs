@@ -2382,6 +2382,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             first_run_state,
+            get_default_output_root,
             analyze_template,
             analyze_template_file,
             prepare_template_setup,

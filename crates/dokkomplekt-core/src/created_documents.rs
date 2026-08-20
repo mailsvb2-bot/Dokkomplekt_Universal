@@ -523,7 +523,10 @@ mod tests {
 
     #[test]
     fn angle_brackets_and_shift_operators_are_not_placeholders() {
-        let case = case_with(&[("org.name", "ООО Ромашка")]);
+        let case = case_with(&[
+            ("subject.name", "Тестовый субъект"),
+            ("org.name", "ООО Ромашка"),
+        ]);
         let docs = vec![doc(
             "d1",
             "Технический отчёт",
@@ -550,7 +553,10 @@ mod tests {
 
     #[test]
     fn legitimate_double_braces_in_inserted_value_do_not_block_zero_touch() {
-        let case = case_with(&[("custom.code", "const example = {{ nested_template }};")]);
+        let case = case_with(&[
+            ("subject.name", "Тестовый субъект"),
+            ("custom.code", "const example = {{ nested_template }};"),
+        ]);
         let docs = vec![doc(
             "d1",
             "Технический отчёт",

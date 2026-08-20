@@ -207,6 +207,29 @@ export function replaceAllLiteral(source: string, needle: string, replacement: s
   return needle ? source.split(needle).join(replacement) : source;
 }
 
+export function generationDocumentRevisionTokens(
+  documents: DocumentTemplateSpec[],
+  requestedIds: string[],
+): Record<string, string> {
+  return Object.fromEntries(requestedIds.map((id) => {
+    const document = documents.find((item) => item.id === id);
+    return [id, document ? JSON.stringify([
+      document.button_label, document.template_path, document.category, document.role_id,
+      document.required_fields, document.placeholders, document.popup_fields,
+      document.popup_configured, document.is_static_copy,
+    ]) : 'missing'];
+  }));
+}
+
+export function generationDocumentRevisionsMatch(
+  expected: Record<string, string>,
+  documents: DocumentTemplateSpec[],
+): boolean {
+  const ids = Object.keys(expected);
+  const current = generationDocumentRevisionTokens(documents, ids);
+  return ids.every((id) => current[id] === expected[id]);
+}
+
 export function createdPrintItems(
   created: CreatedDocumentOutput[] | undefined,
   paths: string[],

@@ -24,8 +24,12 @@ def test_preflight_uses_selected_single_or_batch_generation_plan() -> None:
     workspace = text("src/components/Workspace.tsx")
     assert "const [preflightPlan, setPreflightPlan]" in app
     assert "loadWorkflowPlan(selectedDocIds)" in app
-    assert "getWorkflowPlanBatch(documentIds, sickLeave, folderParts)" in app
+    assert "getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts)" in app
     assert "plan={preflightPlan}" in app
+    assert "documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds)" in app
+    assert "generationDocumentRevisionsMatch(snapshot.documentRevisionTokens, documents)" in app
+    assert "snapshot.sickLeaveEnabled" in app
+    assert "snapshot.folderParts" in app
     assert "Сообщение о готовности появится только после расчёта финального generation-plan" in workspace
     assert "Финальный план проверен: обязательных уточнений" in workspace
 

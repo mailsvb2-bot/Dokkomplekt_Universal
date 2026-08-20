@@ -21,14 +21,14 @@ import { ensurePopupField, newPopupField } from './components/PopupFieldEditor';
 import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSuggestions';
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
-import { useGenerationPreflight } from './hooks/useGenerationPreflight';
+import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
@@ -564,52 +564,52 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function chooseExistingOutputPolicy(documentIds: string[]) {
-    const labels = documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
+  async function chooseExistingOutputPolicy(snapshot: GenerationSnapshot) {
+    const labels = snapshot.documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
     return chooseExistingOutputPolicyFlow({
-      outputRoot, folderParts, labels,
+      outputRoot: snapshot.outputRoot, folderParts: snapshot.folderParts, labels,
       getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
       confirm: (options) => dialogs.confirm(options),
       openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
-      onStatus: setStatus,
-      onMissingRoot: () => setFolderNamingConfirmed(false),
+      onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),
     });
   }
 
-  async function performGenerateSelectedDocuments(documentIds: string[]) {
-    const existingOutputPolicy = await chooseExistingOutputPolicy(documentIds);
-    if (!existingOutputPolicy) return;
-    const explicitOutputRoot = outputRoot.trim();
-    if (!explicitOutputRoot) return;
-    const res = await run('render_docx_batch', () => renderDocxBatch(documentIds, explicitOutputRoot, folderParts, true, existingOutputPolicy, sickLeave));
+  async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot) {
+    if (!generationDocumentRevisionsMatch(snapshot.documentRevisionTokens, documents)) {
+      setStatus('Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.'); return;
+    }
+    const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot);
+    if (!existingOutputPolicy || !snapshot.outputRoot) return;
+    const res = await run('render_docx_batch', () => renderDocxBatch(snapshot.documentIds, snapshot.outputRoot, snapshot.folderParts, true, existingOutputPolicy, snapshot.sickLeaveEnabled));
     if (!res) return;
-    const printItems = createdPrintItems(res.created_documents, res.created_files, documents, documentIds);
+    const printItems = createdPrintItems(res.created_documents, res.created_files, documents, snapshot.documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
     const backupNote = res.backup_folder ? ` Предыдущий комплект сохранён: ${res.backup_folder}.` : '';
     setStatus(res.warnings?.length
       ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote} Требует внимания: ${res.warnings.join(' ')}`
       : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote}`);
-    if (autoPrint) await queuePrint(jobsForItems(printItems), true, documentIds, null, res.output_folder);
+    if (autoPrint) await queuePrint(jobsForItems(printItems), true, snapshot.documentIds, null, res.output_folder);
   }
 
-  async function loadWorkflowPlan(documentIds: string[]): Promise<WorkflowPlan> {
+  async function loadWorkflowPlan(documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts): Promise<WorkflowPlan> {
     return documentIds.length === 1
-      ? getWorkflowPlan(documentIds[0], sickLeave, folderParts)
-      : getWorkflowPlanBatch(documentIds, sickLeave, folderParts);
+      ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts)
+      : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   }
 
-  const {
-    generationPreflightOpen,
-    generationDocumentIds,
-    closeGenerationPreflight,
-    openGenerationPreflight,
-    confirmGenerationPreflight,
-  } = useGenerationPreflight({
-    selectedDocumentIds: selectedDocIds, preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
-    requestWorkflowPlan: (ids) => run(ids.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(ids)),
-    applyAnswers: (ids, payload) => ids.length === 1
-      ? run('apply_popup', () => applyPopup(ids[0], sickLeave, payload, folderParts))
-      : run('apply_popup_batch', () => applyPopupBatch(ids, sickLeave, payload, folderParts)),
+  function changeGenerationSickLeave(value: boolean) {
+    setSickLeave(value); closeGenerationPreflight();
+    setStatus('Параметр больничного изменён. Нажмите «Проверить и создать» ещё раз, чтобы пересчитать обязательные вопросы.');
+  }
+
+  const { generationPreflightOpen, generationDocumentIds, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
+    selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds),
+    preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
+    requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
+    applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
+      ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))
+      : run('apply_popup_batch', () => applyPopupBatch(snapshot.documentIds, snapshot.sickLeaveEnabled, payload, snapshot.folderParts)),
     onConfirmed: performGenerateSelectedDocuments,
   });
 
@@ -1352,7 +1352,7 @@ function AppContent() {
             setModelOutput={setModelOutput}
             setAnswers={setAnswers}
             setSkippedAnswers={setSkippedAnswers}
-            onSickLeaveChange={setSickLeave}
+            onSickLeaveChange={changeGenerationSickLeave}
             onRunZeroTouch={runZeroTouch}
             onOpenLastOutput={openLastOutput}
             onPrintLastOutput={printLastOutput}

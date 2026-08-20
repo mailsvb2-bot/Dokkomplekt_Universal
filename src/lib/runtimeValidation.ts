@@ -343,6 +343,7 @@ export const COMMAND_RESPONSE_KIND = {
   'export_files_to_pdf': 'object',
   'export_one_c_counterparties': 'string',
   'first_run_state': 'object',
+  'get_default_output_root': 'string',
   'get_automation_metrics': 'object',
   'get_calibrated_threshold_status': 'array',
   'get_component_statuses': 'array',

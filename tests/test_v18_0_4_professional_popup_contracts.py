@@ -24,10 +24,13 @@ class ProfessionalPopupContracts(unittest.TestCase):
         self.assertIn("fn get_workflow_plan_batch", main)
         self.assertIn("fn apply_popup_batch", main)
         self.assertIn("useGenerationPreflight({", app)
-        self.assertIn("applyPopupBatch(ids, sickLeave, payload, folderParts)", app)
-        self.assertIn("const documentIds = [...options.selectedDocumentIds]", preflight)
-        self.assertIn("requestWorkflowPlan(documentIds)", preflight)
+        self.assertIn("applyPopupBatch(snapshot.documentIds, snapshot.sickLeaveEnabled, payload, snapshot.folderParts)", app)
+        self.assertIn("const snapshot: GenerationSnapshot = {", preflight)
+        self.assertIn("requestWorkflowPlan(snapshot)", preflight)
         self.assertIn("Проверить и создать", workspace)
+        self.assertIn("changeGenerationSickLeave", app)
+        self.assertIn("closeGenerationPreflight();", app)
+        self.assertIn("пересчитать обязательные вопросы", app)
 
     def test_invalid_required_value_keeps_preflight_visible(self) -> None:
         popup = self.read("crates/dokkomplekt-core/src/popup_engine.rs")

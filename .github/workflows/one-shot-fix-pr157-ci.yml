@@ -1,0 +1,62 @@
+name: One-shot fix PR157 CI
+
+on:
+  push:
+    branches: [agent/real-user-parity-20260820]
+    paths:
+      - .github/workflows/one-shot-fix-pr157-ci.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/real-user-parity-20260820
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+      - name: Remove stale import
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/src/main.rs')
+          s = p.read_text(encoding='utf-8')
+          old = 'build_diary_plan, build_extraction_prompt_for_domain_and_language, build_merged_popup_plan,\n'
+          new = 'build_diary_plan, build_extraction_prompt_for_domain_and_language,\n'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one stale import, found {s.count(old)}')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+          PY
+          cargo fmt --all
+      - name: Verify strict Rust gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/prepackage_rust_gate.sh
+      - name: Remove helper and regenerate source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-fix-pr157-ci.yml
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt --json-report /tmp/source-manifest-report.json || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.recheck.txt --json-report /tmp/source-manifest-recheck.json
+      - name: Commit exact final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- src-tauri/src/main.rs SOURCE_MANIFEST_SHA256.txt .github/workflows/one-shot-fix-pr157-ci.yml
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'Fix strict Rust gate and refresh provenance'
+          git push origin HEAD:agent/real-user-parity-20260820

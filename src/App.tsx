@@ -598,6 +598,12 @@ function AppContent() {
       : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   }
 
+  function changeGenerationSickLeave(value: boolean) {
+    setSickLeave(value);
+    closeGenerationPreflight();
+    setStatus('Параметр больничного изменён. Нажмите «Проверить и создать» ещё раз, чтобы пересчитать обязательные вопросы.');
+  }
+
   const { generationPreflightOpen, generationDocumentIds, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds),
     preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
@@ -1347,7 +1353,7 @@ function AppContent() {
             setModelOutput={setModelOutput}
             setAnswers={setAnswers}
             setSkippedAnswers={setSkippedAnswers}
-            onSickLeaveChange={setSickLeave}
+            onSickLeaveChange={changeGenerationSickLeave}
             onRunZeroTouch={runZeroTouch}
             onOpenLastOutput={openLastOutput}
             onPrintLastOutput={printLastOutput}

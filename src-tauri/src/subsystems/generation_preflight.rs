@@ -14,7 +14,7 @@ fn plan_selection_with_output_folder(
         planned_documents.push(output_folder);
     }
     if planned_documents.len() == 1 {
-        plan_workflow(&planned_documents[0], case, flags)
+        build_merged_popup_plan(&planned_documents[0], case, flags)
     } else {
         plan_workflow_batch(&planned_documents, case, flags)
     }

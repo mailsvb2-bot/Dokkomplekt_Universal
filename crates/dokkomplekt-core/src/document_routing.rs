@@ -158,7 +158,7 @@ pub fn recommend_document_bundle(
         if top >= 0.56 {
             recommended.push(primary.document_id.clone());
             if let Some(role) = predicted_role.as_deref() {
-                for companion_role in companion_roles(role) {
+                for companion_role in related_document_roles(role) {
                     if let Some(companion) = matches.iter().find(|candidate| {
                         role_equivalent(companion_role, &normalize(&candidate.role_id))
                             && candidate.score >= 0.32
@@ -302,7 +302,13 @@ fn role_confidence(scores: &[(String, f32)]) -> f32 {
     }
 }
 
-fn companion_roles(role: &str) -> &'static [&'static str] {
+pub fn predict_document_role(source_text: &str) -> Option<(String, f32)> {
+    let scores = score_roles(source_text, &SemanticCase::default());
+    let confidence = role_confidence(&scores);
+    scores.first().map(|(role, _)| (role.clone(), confidence))
+}
+
+pub fn related_document_roles(role: &str) -> &'static [&'static str] {
     match role {
         "employment_contract" => &[
             "employment_order",

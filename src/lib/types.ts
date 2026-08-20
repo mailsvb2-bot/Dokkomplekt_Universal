@@ -22,6 +22,49 @@ export interface WorkspaceProfileInference {
   reasons: string[];
 }
 
+
+export interface WorkspaceFieldUsage {
+  field_id: string;
+  title: string;
+  document_ids: string[];
+}
+
+export interface WorkspaceDocumentRole {
+  document_id: string;
+  title: string;
+  role_id: string;
+  role_label: string;
+  domain: DomainKind;
+  field_ids: string[];
+  local_field_ids: string[];
+  group_id: string;
+}
+
+export interface WorkspaceDocumentGroup {
+  group_id: string;
+  title: string;
+  domain: DomainKind;
+  document_ids: string[];
+}
+
+export interface WorkspaceDocumentRelation {
+  left_document_id: string;
+  right_document_id: string;
+  kind: string;
+  label: string;
+}
+
+export interface WorkspaceWorkflowShape {
+  primary_object: string;
+  common_fields: WorkspaceFieldUsage[];
+  local_fields: Record<string, WorkspaceFieldUsage[]>;
+  documents: WorkspaceDocumentRole[];
+  groups: WorkspaceDocumentGroup[];
+  relations: WorkspaceDocumentRelation[];
+  mixed_workflows: boolean;
+  reasons: string[];
+}
+
 export type PromptInputKind = 'text' | 'long_text' | 'date' | 'number' | 'money' | 'inn' | 'kpp' | 'ogrn' | 'snils' | 'passport' | 'vin' | 'icd10' | 'select' | 'yes_no';
 export type PromptAskMode = 'if_missing' | 'confirm' | 'always';
 
@@ -496,6 +539,7 @@ export interface TemplateCandidateDto {
   template_path: string;
   extracted_text: string;
   preferred_button_label?: string | null;
+  domain_override?: DomainKind | null;
 }
 
 export interface TemplateConfirmationRowDto {
@@ -510,6 +554,7 @@ export interface TemplateConfirmationRowDto {
   popup_fields?: PopupFieldConfig[];
   domain_override?: DomainKind | null;
   workspace_inference?: WorkspaceProfileInference;
+  workspace_shape?: WorkspaceWorkflowShape;
 }
 
 export interface ScannerMarkDto {

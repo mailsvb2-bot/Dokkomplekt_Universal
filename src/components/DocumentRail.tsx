@@ -1,4 +1,5 @@
 import type { DocumentTemplateSpec } from '../lib/types';
+import { groupDocumentsByDomain } from '../lib/documentGrouping';
 
 interface DocumentRailProps {
   documents: DocumentTemplateSpec[];
@@ -24,6 +25,8 @@ interface DocumentRailProps {
 export function DocumentRail(props: DocumentRailProps) {
   const hasDocuments = props.documents.length > 0;
   const selectedCount = props.selectedDocumentIds.length;
+  const documentGroups = groupDocumentsByDomain(props.documents);
+  const showGroups = documentGroups.length > 1;
   return (
     <aside className="packagePanel" aria-label="Документы для создания">
       <div className="packageHeader">
@@ -38,28 +41,26 @@ export function DocumentRail(props: DocumentRailProps) {
         <>
           <p className="packageHint">Отметьте галочками документы, которые должны войти в этот комплект.</p>
           <div className="packageList simpleDocumentButtons">
-            {props.documents.map((document) => {
-              const selected = props.selectedDocumentIds.includes(document.id);
-              const active = props.activeDocumentId === document.id;
-              return (
-                <div key={document.id} className={`packageItem ${selected ? 'selected' : ''} ${active ? 'active' : ''}`}>
-                  <label className="packageCheck">
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      aria-label={`Добавить ${document.button_label} в комплект`}
-                      onChange={() => props.onToggleSelected(document.id)}
-                    />
-                    <span aria-hidden="true"><i className="ti ti-check" /></span>
-                  </label>
-                  <button className="packageOpen" onClick={() => props.onSelect(document)} aria-label={document.button_label}>
-                    <i className="ti ti-file-text" aria-hidden="true" />
-                    <span>{document.button_label}</span>
-                    <small>{selected ? 'в комплекте' : 'не выбран'}</small>
-                  </button>
-                </div>
-              );
-            })}
+            {documentGroups.map((group) => (
+              <div className="documentDomainGroup" key={group.key} data-testid={`document-group-${group.key}`}>
+                {showGroups ? <div className="documentDomainGroupTitle">{group.title}</div> : null}
+                {group.documents.map((document) => {
+                  const selected = props.selectedDocumentIds.includes(document.id);
+                  const active = props.activeDocumentId === document.id;
+                  return (
+                    <div key={document.id} className={`packageItem ${selected ? 'selected' : ''} ${active ? 'active' : ''}`}>
+                      <label className="packageCheck">
+                        <input type="checkbox" checked={selected} aria-label={`Добавить ${document.button_label} в комплект`} onChange={() => props.onToggleSelected(document.id)} />
+                        <span aria-hidden="true"><i className="ti ti-check" /></span>
+                      </label>
+                      <button className="packageOpen" onClick={() => props.onSelect(document)} aria-label={document.button_label}>
+                        <i className="ti ti-file-text" aria-hidden="true" /><span>{document.button_label}</span><small>{selected ? 'в комплекте' : 'не выбран'}</small>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
 
           <div className="packageSelectionActions">

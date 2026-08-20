@@ -78,7 +78,7 @@ function AppContent() {
   const [buttonLabel, setButtonLabel] = useState('');
   const [importedTemplatePath, setImportedTemplatePath] = useState<string | null>(null);
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
-  const { workspaceInference, setWorkspaceInference, refreshWorkspaceInference } = useWorkspaceProfileInference(setStatus);
+  const { workspaceInference, workspaceShape, setWorkspaceInference, refreshWorkspaceInference } = useWorkspaceProfileInference(setStatus, pendingTemplates);
   const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
   const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(true);
@@ -1470,7 +1470,7 @@ function AppContent() {
           draftPopupFields={draftPopupFields}
           draftDomainOverride={draftDomainOverride}
           autoInferStaticTemplates={autoInferStaticTemplates}
-          workspaceInference={workspaceInference}
+          workspaceInference={workspaceInference} workspaceShape={workspaceShape}
           onTemplateTextChange={setTemplateText}
           onButtonLabelChange={setButtonLabel}
           onDraftPopupFieldsChange={setDraftPopupFields}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference } from '../lib/types';
+import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
 import { PopupFieldEditor, ensurePopupField } from './PopupFieldEditor';
 
 interface PendingTemplateView {
@@ -21,6 +21,7 @@ interface TemplateSetupModalProps {
   draftDomainOverride?: DomainKind | null;
   autoInferStaticTemplates?: boolean;
   workspaceInference?: WorkspaceProfileInference | null;
+  workspaceShape?: WorkspaceWorkflowShape | null;
   onTemplateTextChange(value: string): void;
   onButtonLabelChange(value: string): void;
   onDraftPopupFieldsChange(fields: PopupFieldConfig[]): void;
@@ -177,6 +178,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                 onApply={(domain) => props.onApplyWorkspaceDomain?.(domain)}
               />
             ) : null}
+            {props.workspaceShape?.documents.length ? <WorkspaceShapeSummary shape={props.workspaceShape} /> : null}
             <div className="templateBatch" aria-label="Подготовленные шаблоны">
               <div className="templateBatchHead">Проверьте названия кнопок</div>
               {props.pendingTemplates.map((item) => (
@@ -267,6 +269,36 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
           <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>{confirmLabel}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceShapeSummary(props: { shape: WorkspaceWorkflowShape }) {
+  const commonPreview = props.shape.common_fields.slice(0, 5);
+  return (
+    <div className="readyMessage templateReadyMessage workspaceInferenceCard" data-testid="workspace-shape-summary">
+      <i className="ti ti-route" aria-hidden="true" />
+      <div>
+        <strong>Программа поняла рабочий процесс</strong>
+        <span>Основной объект: {props.shape.primary_object}. Документов: {props.shape.documents.length}; общих полей: {props.shape.common_fields.length}; связей: {props.shape.relations.length}.</span>
+        {commonPreview.length ? <small>Общие данные: {commonPreview.map((field) => field.title).join(' · ')}</small> : null}
+        <details className="manualScannerDetails workspaceShapeDetails">
+          <summary>{props.shape.mixed_workflows ? 'Показать рабочие контуры' : 'Показать карту документов'}</summary>
+          <div className="workspaceShapeGrid">
+            {props.shape.groups.map((group) => (
+              <div key={group.group_id} className="workspaceShapeGroup">
+                <strong>{group.title}</strong>
+                <small>{group.document_ids.length} документ(ов)</small>
+              </div>
+            ))}
+            {props.shape.documents.slice(0, 10).map((document) => (
+              <div key={document.document_id} className="workspaceShapeDocument">
+                <span>{document.title}</span><small>{document.role_label}</small>
+              </div>
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );

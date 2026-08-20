@@ -1,8 +1,9 @@
 use crate::{
-    analyze_template_text, analyze_template_text_with_domain_hint, create_document_spec,
-    default_popup_fields_for_document, infer_workspace_profile, normalize_popup_fields,
-    DocumentPack, DocumentTemplateSpec, DomainKind, PopupFieldConfig, TemplateAnalysis,
-    WorkspaceProfileInference,
+    analyze_template_text_with_context, best_domain, create_document_spec,
+    default_popup_fields_for_document, infer_legacy_template_fields, infer_workspace_profile,
+    infer_workspace_workflow_shape, normalize_popup_fields, DocumentPack, DocumentTemplateSpec,
+    DomainKind, PopupFieldConfig, TemplateAnalysis, WorkspaceProfileInference,
+    WorkspaceShapeDocumentInput, WorkspaceWorkflowShape,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -13,6 +14,8 @@ pub struct TemplateCandidate {
     pub template_path: String,
     pub extracted_text: String,
     pub preferred_button_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_override: Option<DomainKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,6 +34,8 @@ pub struct TemplateConfirmationRow {
     pub domain_override: Option<DomainKind>,
     #[serde(default)]
     pub workspace_inference: WorkspaceProfileInference,
+    #[serde(default)]
+    pub workspace_shape: WorkspaceWorkflowShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,7 +114,16 @@ pub fn prepare_template_confirmations(
 ) -> Vec<TemplateConfirmationRow> {
     let analyzed = candidates
         .iter()
-        .map(|candidate| (candidate, analyze_template_text(&candidate.extracted_text)))
+        .map(|candidate| {
+            (
+                candidate,
+                analyze_template_text_with_context(
+                    &candidate.extracted_text,
+                    candidate.domain_override.as_ref(),
+                    candidate.preferred_button_label.as_deref(),
+                ),
+            )
+        })
         .collect::<Vec<_>>();
     let workspace_inputs = analyzed
         .iter()
@@ -122,13 +136,21 @@ pub fn prepare_template_confirmations(
         .flatten();
 
     let mut used = BTreeSet::new();
-    analyzed
+    let mut rows = analyzed
         .into_iter()
         .map(|(candidate, initial_analysis)| {
-            let analysis = automatic_domain
+            let effective_domain = candidate
+                .domain_override
+                .clone()
+                .or_else(|| automatic_domain.clone());
+            let analysis = effective_domain
                 .as_ref()
                 .map(|domain| {
-                    analyze_template_text_with_domain_hint(&candidate.extracted_text, Some(domain))
+                    analyze_template_text_with_context(
+                        &candidate.extracted_text,
+                        Some(domain),
+                        candidate.preferred_button_label.as_deref(),
+                    )
                 })
                 .unwrap_or(initial_analysis);
             let base = candidate
@@ -153,12 +175,50 @@ pub fn prepare_template_confirmations(
                 role_id: analysis.role_id.clone(),
                 is_static_copy: analysis.is_static,
                 popup_fields: preview_document.popup_fields,
-                domain_override: automatic_domain.clone(),
+                domain_override: effective_domain,
                 workspace_inference: workspace_inference.clone(),
+                workspace_shape: WorkspaceWorkflowShape::default(),
                 analysis,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    let shape_inputs = rows
+        .iter()
+        .filter_map(|row| {
+            let candidate = candidates
+                .iter()
+                .find(|candidate| candidate.document_id == row.document_id)?;
+            let domain = row
+                .domain_override
+                .clone()
+                .unwrap_or_else(|| best_domain(&row.analysis));
+            let mut field_ids = row.analysis.placeholders.clone();
+            if field_ids.is_empty() {
+                field_ids.extend(
+                    infer_legacy_template_fields(
+                        &candidate.extracted_text,
+                        Some(&domain),
+                        Some(&row.role_id),
+                    )
+                    .into_iter()
+                    .map(|candidate| candidate.field_id),
+                );
+            }
+            Some(WorkspaceShapeDocumentInput {
+                document_id: row.document_id.clone(),
+                title: row.editable_button_label.clone(),
+                role_id: row.role_id.clone(),
+                domain,
+                field_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    let workspace_shape = infer_workspace_workflow_shape(&shape_inputs);
+    for row in &mut rows {
+        row.workspace_shape = workspace_shape.clone();
+    }
+    rows
 }
 
 pub fn create_pack_from_confirmations(
@@ -333,12 +393,14 @@ mod tests {
                 template_path: "a.docx".into(),
                 extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
             TemplateCandidate {
                 document_id: "b".into(),
                 template_path: "b.docx".into(),
                 extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
         ]);
         assert_eq!(rows[0].editable_button_label, "Выписной эпикриз");
@@ -354,18 +416,21 @@ mod tests {
                 extracted_text: "Первичный осмотр\nДиагноз\nЛечение\nМКБ-10\nИстория болезни"
                     .into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
             TemplateCandidate {
                 document_id: "discharge".into(),
                 template_path: "discharge.docx".into(),
                 extracted_text: "Выписной эпикриз\nДиагноз\nЛечение\nДата выписки".into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
             TemplateCandidate {
                 document_id: "consent".into(),
                 template_path: "consent.docx".into(),
                 extracted_text: "Согласие пациента\n{{subject.name}}\n{{Должность}}".into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
         ]);
 
@@ -402,6 +467,7 @@ mod tests {
             template_path: "act.docx".into(),
             extracted_text: "Акт\nНомер {{document.number}}".into(),
             preferred_button_label: None,
+            domain_override: None,
         }]);
 
         assert_eq!(rows[0].domain_override, None);
@@ -419,6 +485,7 @@ mod tests {
             template_path: "custom-report.docx".into(),
             extracted_text: "Report\n{{custom.project}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         rows[0].domain_override = Some(DomainKind::Custom("  architecture  ".into()));
 
@@ -437,6 +504,7 @@ mod tests {
             template_path: "custom-report.docx".into(),
             extracted_text: "Report\n{{custom.project}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         let detected = create_pack_from_confirmations("detected", "Pack", &rows)
             .pack
@@ -461,6 +529,7 @@ mod tests {
             template_path: "profiled.docx".into(),
             extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         assert!(rows[0]
             .popup_fields
@@ -494,6 +563,7 @@ mod tests {
             template_path: "profiled.docx".into(),
             extracted_text: "Выписной эпикриз\n{{medical.diagnosis}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         rows[0].domain_override = Some(DomainKind::Custom("architecture".into()));
 
@@ -514,6 +584,7 @@ mod tests {
             template_path: "profiled.docx".into(),
             extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         rows[0]
             .popup_fields

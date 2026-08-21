@@ -162,8 +162,13 @@ struct PrepareTemplatesRequest {
 #[tauri::command]
 fn prepare_template_setup(
     req: PrepareTemplatesRequest,
+    state: State<'_, AppState>,
 ) -> Result<Vec<TemplateConfirmationRow>, String> {
-    Ok(prepare_template_confirmations(&req.candidates))
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    Ok(prepare_template_confirmations_with_existing_pack(
+        &req.candidates,
+        Some(&pack),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

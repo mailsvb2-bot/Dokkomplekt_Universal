@@ -1,9 +1,10 @@
 use crate::{
     analyze_template_text_with_context, best_domain, create_document_spec,
     default_popup_fields_for_document, infer_legacy_template_fields, infer_workspace_profile,
-    infer_workspace_workflow_shape, normalize_popup_fields, DocumentPack, DocumentTemplateSpec,
-    DomainKind, PopupFieldConfig, TemplateAnalysis, WorkspaceProfileInference,
-    WorkspaceShapeDocumentInput, WorkspaceWorkflowShape,
+    infer_workspace_workflow_shape, normalize_popup_fields,
+    reinforce_workspace_inference_with_pack, DocumentPack, DocumentTemplateSpec, DomainKind,
+    PopupFieldConfig, TemplateAnalysis, WorkspaceProfileInference, WorkspaceShapeDocumentInput,
+    WorkspaceWorkflowShape,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -112,6 +113,13 @@ pub fn empty_first_run_pack(pack_id: impl Into<String>, name: impl Into<String>)
 pub fn prepare_template_confirmations(
     candidates: &[TemplateCandidate],
 ) -> Vec<TemplateConfirmationRow> {
+    prepare_template_confirmations_with_existing_pack(candidates, None)
+}
+
+pub fn prepare_template_confirmations_with_existing_pack(
+    candidates: &[TemplateCandidate],
+    existing_pack: Option<&DocumentPack>,
+) -> Vec<TemplateConfirmationRow> {
     let analyzed = candidates
         .iter()
         .map(|candidate| {
@@ -129,7 +137,10 @@ pub fn prepare_template_confirmations(
         .iter()
         .map(|(candidate, analysis)| (candidate.document_id.clone(), analysis.clone()))
         .collect::<Vec<_>>();
-    let workspace_inference = infer_workspace_profile(&workspace_inputs);
+    let mut workspace_inference = infer_workspace_profile(&workspace_inputs);
+    if let Some(pack) = existing_pack {
+        workspace_inference = reinforce_workspace_inference_with_pack(workspace_inference, pack);
+    }
     let automatic_domain = workspace_inference
         .auto_apply
         .then(|| workspace_inference.suggested_domain.clone())
@@ -183,37 +194,60 @@ pub fn prepare_template_confirmations(
         })
         .collect::<Vec<_>>();
 
-    let shape_inputs = rows
+    let new_document_ids = rows
         .iter()
-        .filter_map(|row| {
-            let candidate = candidates
-                .iter()
-                .find(|candidate| candidate.document_id == row.document_id)?;
-            let domain = row
-                .domain_override
-                .clone()
-                .unwrap_or_else(|| best_domain(&row.analysis));
-            let mut field_ids = row.analysis.placeholders.clone();
-            if field_ids.is_empty() {
-                field_ids.extend(
-                    infer_legacy_template_fields(
-                        &candidate.extracted_text,
-                        Some(&domain),
-                        Some(&row.role_id),
-                    )
-                    .into_iter()
-                    .map(|candidate| candidate.field_id),
-                );
-            }
-            Some(WorkspaceShapeDocumentInput {
-                document_id: row.document_id.clone(),
-                title: row.editable_button_label.clone(),
-                role_id: row.role_id.clone(),
-                domain,
+        .map(|row| row.document_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut shape_inputs = existing_pack
+        .into_iter()
+        .flat_map(|pack| pack.documents.iter())
+        .filter(|document| !new_document_ids.contains(document.id.as_str()))
+        .map(|document| {
+            let mut field_ids = document.placeholders.clone();
+            field_ids.extend(document.required_fields.iter().cloned());
+            field_ids.extend(
+                document
+                    .popup_fields
+                    .iter()
+                    .map(|field| field.field_id.clone()),
+            );
+            WorkspaceShapeDocumentInput {
+                document_id: document.id.clone(),
+                title: document.button_label.clone(),
+                role_id: document.role_id.clone(),
+                domain: document.category.clone(),
                 field_ids,
-            })
+            }
         })
         .collect::<Vec<_>>();
+    shape_inputs.extend(rows.iter().filter_map(|row| {
+        let candidate = candidates
+            .iter()
+            .find(|candidate| candidate.document_id == row.document_id)?;
+        let domain = row
+            .domain_override
+            .clone()
+            .unwrap_or_else(|| best_domain(&row.analysis));
+        let mut field_ids = row.analysis.placeholders.clone();
+        if field_ids.is_empty() {
+            field_ids.extend(
+                infer_legacy_template_fields(
+                    &candidate.extracted_text,
+                    Some(&domain),
+                    Some(&row.role_id),
+                )
+                .into_iter()
+                .map(|candidate| candidate.field_id),
+            );
+        }
+        Some(WorkspaceShapeDocumentInput {
+            document_id: row.document_id.clone(),
+            title: row.editable_button_label.clone(),
+            role_id: row.role_id.clone(),
+            domain,
+            field_ids,
+        })
+    }));
     let workspace_shape = infer_workspace_workflow_shape(&shape_inputs);
     for row in &mut rows {
         row.workspace_shape = workspace_shape.clone();
@@ -607,6 +641,116 @@ mod tests {
             .required_fields
             .iter()
             .all(|field| !field.starts_with("medical.")));
+    }
+
+    fn persisted_document(id: &str, domain: DomainKind, role_id: &str) -> DocumentTemplateSpec {
+        DocumentTemplateSpec {
+            id: id.into(),
+            button_label: format!("Persisted {id}"),
+            template_path: format!("{id}.docx"),
+            category: domain,
+            role_id: role_id.into(),
+            required_fields: vec!["subject.name".into()],
+            placeholders: vec!["subject.name".into()],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        }
+    }
+
+    #[test]
+    fn persisted_workspace_correction_guides_ambiguous_future_template_and_full_shape() {
+        let existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("claim", DomainKind::Legal, "claim")],
+        };
+        let rows = prepare_template_confirmations_with_existing_pack(
+            &[TemplateCandidate {
+                document_id: "act".into(),
+                template_path: "act.docx".into(),
+                extracted_text: "Акт\nНомер {{document.number}}".into(),
+                preferred_button_label: Some("Акт".into()),
+                domain_override: None,
+            }],
+            Some(&existing),
+        );
+
+        assert_eq!(rows[0].domain_override, Some(DomainKind::Legal));
+        assert!(rows[0].workspace_inference.auto_apply);
+        assert_eq!(rows[0].workspace_shape.documents.len(), 2);
+        assert!(rows[0]
+            .workspace_shape
+            .documents
+            .iter()
+            .any(
+                |document| document.document_id == "claim" && document.domain == DomainKind::Legal
+            ));
+        assert!(rows[0]
+            .workspace_shape
+            .documents
+            .iter()
+            .any(|document| document.document_id == "act" && document.domain == DomainKind::Legal));
+    }
+
+    #[test]
+    fn strong_new_profession_signal_starts_second_contour_instead_of_inheriting_old_domain() {
+        let existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("claim", DomainKind::Legal, "claim")],
+        };
+        let rows = prepare_template_confirmations_with_existing_pack(
+            &[TemplateCandidate {
+                document_id: "hire".into(),
+                template_path: "hire.docx".into(),
+                extracted_text: "Приказ о приёме сотрудника\nРаботодатель\nРаботник\nДолжность\nОтдел\nКадровая служба".into(),
+                preferred_button_label: Some("Приказ о приёме".into()),
+                domain_override: None,
+            }],
+            Some(&existing),
+        );
+
+        assert_ne!(rows[0].domain_override, Some(DomainKind::Legal));
+        assert_eq!(best_domain(&rows[0].analysis), DomainKind::Hr);
+        assert!(rows[0].workspace_shape.mixed_workflows);
+        assert!(rows[0]
+            .workspace_shape
+            .groups
+            .iter()
+            .any(|group| group.domain == DomainKind::Legal));
+        assert!(rows[0]
+            .workspace_shape
+            .groups
+            .iter()
+            .any(|group| group.domain == DomainKind::Hr));
+    }
+
+    #[test]
+    fn mixed_existing_workspace_does_not_force_ambiguous_new_template() {
+        let existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![
+                persisted_document("claim", DomainKind::Legal, "claim"),
+                persisted_document("hire", DomainKind::Hr, "employment_order"),
+            ],
+        };
+        let rows = prepare_template_confirmations_with_existing_pack(
+            &[TemplateCandidate {
+                document_id: "note".into(),
+                template_path: "note.docx".into(),
+                extracted_text: "Документ\nНомер {{document.number}}".into(),
+                preferred_button_label: Some("Документ".into()),
+                domain_override: None,
+            }],
+            Some(&existing),
+        );
+
+        assert_eq!(rows[0].domain_override, None);
+        assert!(!rows[0].workspace_inference.auto_apply);
+        assert_eq!(rows[0].workspace_shape.documents.len(), 3);
+        assert!(rows[0].workspace_shape.mixed_workflows);
     }
 
     #[test]

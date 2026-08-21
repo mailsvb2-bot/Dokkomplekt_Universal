@@ -1,4 +1,4 @@
-use crate::{DomainKind, TemplateAnalysis};
+use crate::{DocumentPack, DomainKind, TemplateAnalysis};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -214,6 +214,105 @@ pub fn infer_workspace_profile(
     }
 }
 
+/// Returns a reusable workspace domain only when the persisted pack has exactly
+/// one non-generic structural profile. Generic documents are neutral; a mixed
+/// pack never becomes a global hint.
+pub fn stable_workspace_domain_from_pack(pack: &DocumentPack) -> Option<DomainKind> {
+    let domains = pack
+        .documents
+        .iter()
+        .filter_map(|document| normalized_reusable_domain(&document.category))
+        .collect::<std::collections::BTreeSet<_>>();
+    (domains.len() == 1)
+        .then(|| domains.into_iter().next())
+        .flatten()
+}
+
+/// Reuse confirmed/persisted workspace structure only as a conservative context
+/// for weak new-template evidence. A clear conflicting signal is deliberately
+/// preserved so a second professional contour can be created in the same pack.
+pub fn reinforce_workspace_inference_with_pack(
+    mut inference: WorkspaceProfileInference,
+    pack: &DocumentPack,
+) -> WorkspaceProfileInference {
+    let Some(existing_domain) = stable_workspace_domain_from_pack(pack) else {
+        return inference;
+    };
+    if inference.mixed_domains {
+        return inference;
+    }
+    if inference.auto_apply {
+        return inference;
+    }
+    if let Some(suggested) = inference.suggested_domain.as_ref() {
+        if suggested != &existing_domain {
+            return inference;
+        }
+    }
+    if has_clear_conflict_with_existing_domain(&inference, &existing_domain) {
+        return inference;
+    }
+
+    inference.suggested_domain = Some(existing_domain.clone());
+    inference.level = WorkspaceInferenceLevel::High;
+    inference.auto_apply = true;
+    inference.confidence = inference.confidence.max(0.82);
+    inference.reasons.insert(
+        0,
+        format!(
+            "Неоднозначные новые шаблоны используют уже подтверждённый профиль рабочего комплекта: {}. Явно противоречащий документ всегда остаётся отдельным контуром.",
+            domain_key_for_display(&existing_domain)
+        ),
+    );
+    inference
+}
+
+fn normalized_reusable_domain(domain: &DomainKind) -> Option<DomainKind> {
+    match domain {
+        DomainKind::Generic => None,
+        DomainKind::Custom(value) if value.trim().is_empty() => None,
+        DomainKind::Custom(value) => Some(DomainKind::Custom(value.trim().to_string())),
+        value => Some(value.clone()),
+    }
+}
+
+fn has_clear_conflict_with_existing_domain(
+    inference: &WorkspaceProfileInference,
+    existing_domain: &DomainKind,
+) -> bool {
+    let mut ranked = inference
+        .domain_scores
+        .iter()
+        .filter(|(key, _)| {
+            SPECIFIC_DOMAINS
+                .iter()
+                .any(|(candidate, _)| candidate == &key.as_str())
+        })
+        .map(|(key, score)| (key.as_str(), *score))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    let Some((top_key, top_score)) = ranked.first().copied() else {
+        return false;
+    };
+    let runner_score = ranked.get(1).map(|(_, score)| *score).unwrap_or_default();
+    if top_score < 2 || top_score <= runner_score {
+        return false;
+    }
+    domain_for_key(top_key).as_ref() != Some(existing_domain)
+}
+
+fn domain_key_for_display(domain: &DomainKind) -> &'static str {
+    match domain {
+        DomainKind::Medical => "медицина",
+        DomainKind::Legal => "юридическая работа",
+        DomainKind::Hr => "кадровая работа",
+        DomainKind::Accounting => "бухгалтерия",
+        DomainKind::Education => "образование",
+        DomainKind::Custom(_) => "пользовательский профиль",
+        DomainKind::Generic => "универсальный документооборот",
+    }
+}
+
 fn domain_for_key(key: &str) -> Option<DomainKind> {
     SPECIFIC_DOMAINS
         .iter()
@@ -293,5 +392,77 @@ mod tests {
         assert_eq!(inference.suggested_domain, Some(DomainKind::Medical));
         assert_eq!(inference.level, WorkspaceInferenceLevel::High);
         assert!(inference.auto_apply);
+    }
+
+    fn pack_with_domains(domains: &[DomainKind]) -> DocumentPack {
+        DocumentPack {
+            pack_id: "workspace".into(),
+            name: "workspace".into(),
+            documents: domains
+                .iter()
+                .enumerate()
+                .map(|(index, domain)| crate::DocumentTemplateSpec {
+                    id: format!("existing-{index}"),
+                    button_label: format!("Existing {index}"),
+                    template_path: format!("existing-{index}.docx"),
+                    category: domain.clone(),
+                    role_id: "unknown".into(),
+                    required_fields: Vec::new(),
+                    placeholders: Vec::new(),
+                    is_static_copy: false,
+                    popup_fields: Vec::new(),
+                    popup_configured: false,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn ambiguous_new_template_reuses_one_persisted_workspace_domain() {
+        let inferred = infer_workspace_profile(&[item("act", "Акт\nНомер {{document.number}}")]);
+        assert_eq!(inferred.level, WorkspaceInferenceLevel::Low);
+        let reinforced = reinforce_workspace_inference_with_pack(
+            inferred,
+            &pack_with_domains(&[DomainKind::Legal, DomainKind::Generic]),
+        );
+        assert_eq!(reinforced.suggested_domain, Some(DomainKind::Legal));
+        assert_eq!(reinforced.level, WorkspaceInferenceLevel::High);
+        assert!(reinforced.auto_apply);
+        assert!(reinforced.reasons[0].contains("подтверждённый профиль"));
+    }
+
+    #[test]
+    fn mixed_persisted_workspace_never_becomes_global_context() {
+        let inferred = infer_workspace_profile(&[item("act", "Акт\nНомер {{document.number}}")]);
+        let reinforced = reinforce_workspace_inference_with_pack(
+            inferred.clone(),
+            &pack_with_domains(&[DomainKind::Legal, DomainKind::Hr]),
+        );
+        assert_eq!(reinforced, inferred);
+    }
+
+    #[test]
+    fn clear_new_conflict_is_never_dragged_into_old_workspace_domain() {
+        let inferred = WorkspaceProfileInference {
+            suggested_domain: None,
+            confidence: 0.4,
+            level: WorkspaceInferenceLevel::Low,
+            auto_apply: false,
+            mixed_domains: false,
+            domain_scores: BTreeMap::from([
+                ("legal".into(), 3),
+                ("hr".into(), 0),
+                ("medical".into(), 0),
+                ("accounting".into(), 0),
+                ("education".into(), 0),
+            ]),
+            evidence: Vec::new(),
+            reasons: Vec::new(),
+        };
+        let reinforced = reinforce_workspace_inference_with_pack(
+            inferred.clone(),
+            &pack_with_domains(&[DomainKind::Hr]),
+        );
+        assert_eq!(reinforced, inferred);
     }
 }

@@ -371,9 +371,11 @@ pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) 
         .map(|document| document.button_label.clone())
         .collect::<BTreeSet<_>>();
     for mut document in incoming.documents {
-        if existing.documents.iter().any(|current| {
-            current.id == document.id || current.template_path == document.template_path
-        }) {
+        if existing
+            .documents
+            .iter()
+            .any(|current| same_template_identity(current, &document))
+        {
             warnings.push(format!("Шаблон уже добавлен: {}", document.template_path));
             continue;
         }
@@ -381,6 +383,32 @@ pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) 
         existing.documents.push(document);
     }
     warnings
+}
+
+fn same_template_identity(left: &DocumentTemplateSpec, right: &DocumentTemplateSpec) -> bool {
+    left.id == right.id
+        || left.template_path == right.template_path
+        || match (
+            content_addressed_template_sha256(&left.template_path),
+            content_addressed_template_sha256(&right.template_path),
+        ) {
+            (Some(left_sha), Some(right_sha)) => left_sha == right_sha,
+            _ => false,
+        }
+}
+
+fn content_addressed_template_sha256(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    if !normalized
+        .split('/')
+        .any(|segment| segment.eq_ignore_ascii_case("template-versions"))
+    {
+        return None;
+    }
+    let file_name = normalized.rsplit('/').next()?;
+    let stem = file_name.rsplit_once('.').map(|(stem, _)| stem)?;
+    (stem.len() == 64 && stem.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| stem.to_ascii_lowercase())
 }
 
 fn unique_label(base: &str, used: &mut BTreeSet<String>) -> String {
@@ -751,6 +779,57 @@ mod tests {
         assert!(!rows[0].workspace_inference.auto_apply);
         assert_eq!(rows[0].workspace_shape.documents.len(), 3);
         assert!(rows[0].workspace_shape.mixed_workflows);
+    }
+
+    #[test]
+    fn merge_rejects_same_content_addressed_template_under_new_document_id() {
+        let sha = "a".repeat(64);
+        let mut existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("old", DomainKind::Legal, "claim")],
+        };
+        existing.documents[0].template_path = format!("C:/app/template-versions/old/{sha}.docx");
+        let mut duplicate = persisted_document("new", DomainKind::Legal, "claim");
+        duplicate.template_path = format!("C:/app/template-versions/new/{sha}.docx");
+
+        let warnings = merge_document_pack(
+            &mut existing,
+            DocumentPack {
+                pack_id: "incoming".into(),
+                name: "incoming".into(),
+                documents: vec![duplicate],
+            },
+        );
+
+        assert_eq!(existing.documents.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Шаблон уже добавлен"));
+    }
+
+    #[test]
+    fn merge_never_guesses_sha_identity_from_normal_user_paths() {
+        let sha = "b".repeat(64);
+        let mut existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("old", DomainKind::Legal, "claim")],
+        };
+        existing.documents[0].template_path = format!("C:/user/{sha}.docx");
+        let mut incoming_document = persisted_document("new", DomainKind::Legal, "claim");
+        incoming_document.template_path = format!("D:/other/{sha}.docx");
+
+        let warnings = merge_document_pack(
+            &mut existing,
+            DocumentPack {
+                pack_id: "incoming".into(),
+                name: "incoming".into(),
+                documents: vec![incoming_document],
+            },
+        );
+
+        assert!(warnings.is_empty());
+        assert_eq!(existing.documents.len(), 2);
     }
 
     #[test]

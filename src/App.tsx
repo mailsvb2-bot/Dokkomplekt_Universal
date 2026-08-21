@@ -24,7 +24,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
-import { buildTemplateConfirmationRows } from './lib/templateSetupSupport';
+import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
 import {
@@ -1119,7 +1119,6 @@ function AppContent() {
         preferred_button_label: previewLabel,
       });
     }
-
     const rows = await run('prepare_template_setup', () => prepareTemplateSetup(candidates));
     if (!rows) return;
     const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);
@@ -1129,8 +1128,10 @@ function AppContent() {
         ? `Безопасная авторазметка включена для ${staticRows.length} статического шаблона(ов): изменяться будут только производные копии с однозначными пустыми зонами.`
         : `Кнопки будут созданы сразу. Неразмеченные шаблоны останутся точными статическими копиями: ${staticRows.map((row) => row.detected_title).join(', ')}.`);
     }
+    const previousDocumentIds = new Set(documents.map((document) => document.id));
     const pack = await run('confirm_template_setup', () => confirmTemplateSetup(confirmedRows, autoInferStaticTemplates));
     if (!pack) return;
+    const createdCount = pack.documents.filter((document) => !previousDocumentIds.has(document.id)).length;
     setDocuments(pack.documents);
     setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
     setActiveTemplateText(templateText);
@@ -1140,9 +1141,8 @@ function AppContent() {
     setDraftDomainOverride(null);
     setAutoInferStaticTemplates(true);
     setSetupOpen(false);
-    setStatus(`Кнопки созданы: ${confirmedRows.length}. Теперь добавьте исходный документ.`);
+    setStatus(templateSetupCompletionMessage(confirmedRows.length, createdCount));
   }
-
   async function chooseIcd(hit: Icd10Suggestion) {
     await run('set_field', async () => {
       await setField('medical.icd10', hit.code);

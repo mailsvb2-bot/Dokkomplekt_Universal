@@ -908,6 +908,16 @@ impl LocalRepository {
             if draft.document_id.trim().is_empty() {
                 return Err(StorageError::Crypto("document_id cannot be empty".into()));
             }
+            if !pack
+                .documents
+                .iter()
+                .any(|document| document.id == draft.document_id)
+            {
+                return Err(StorageError::Crypto(format!(
+                    "template version document_id {} is absent from candidate pack",
+                    draft.document_id
+                )));
+            }
             if draft.template_sha256.len() != 64
                 || !draft
                     .template_sha256
@@ -2311,6 +2321,48 @@ mod tests {
             .expect("workspace profile after rejected publication");
         assert_eq!(after_profile, old_profile);
         assert!(repo.list_template_versions("invoice").unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn template_version_cannot_publish_without_document_in_candidate_pack() {
+        let path = temp_db("template-orphan-reject");
+        let mut repo = LocalRepository::open_with_key(&path, [23u8; 32]).unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "candidate".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let orphan = TemplateVersionDraft {
+            document_id: "ghost".into(),
+            template_path: "C:/archive/ghost.docx".into(),
+            template_sha256: "f".repeat(64),
+            note: "must be rejected".into(),
+        };
+
+        let error = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[orphan],
+            })
+            .expect_err("orphan template version must fail closed");
+
+        assert!(error.to_string().contains("absent from candidate pack"));
+        assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
+        assert!(repo.list_template_versions("ghost").unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }
 

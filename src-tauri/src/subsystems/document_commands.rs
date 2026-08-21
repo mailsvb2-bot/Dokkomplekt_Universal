@@ -376,6 +376,21 @@ where
         .persistence_gate
         .lock()
         .map_err(|_| "persistence gate lock failed")?;
+    publish_pack_with_template_versions_locked(app, state, drafts, mutate)
+}
+
+/// Publishes while the caller owns `state.persistence_gate`. Keeping the gate
+/// around duplicate preflight + archive preparation closes the race where a
+/// second command could publish the same template between those two steps.
+fn publish_pack_with_template_versions_locked<F>(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    drafts: &[TemplateVersionDraft],
+    mutate: F,
+) -> Result<(DocumentPack, Vec<TemplateVersionRecord>), String>
+where
+    F: FnOnce(&mut DocumentPack) -> Result<(), String>,
+{
     let case = state
         .semantic_case
         .lock()
@@ -389,6 +404,16 @@ where
     let mut pack_guard = state.pack.lock().map_err(|_| "state lock failed")?;
     let mut candidate = pack_guard.clone();
     mutate(&mut candidate)?;
+    let candidate_document_ids = candidate
+        .documents
+        .iter()
+        .map(|document| document.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let effective_drafts = drafts
+        .iter()
+        .filter(|draft| candidate_document_ids.contains(draft.document_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     let path = default_state_db_path(app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -402,7 +427,7 @@ where
             pack: &candidate,
             state_key: "license_document",
             state_value: &license,
-            versions: drafts,
+            versions: &effective_drafts,
         })
         .map_err(|error| error.to_string())?;
     *pack_guard = candidate.clone();
@@ -584,6 +609,13 @@ fn confirm_template_setup(
     {
         return Err("У каждого шаблона должно быть название кнопки.".into());
     }
+    let mut request_document_ids = BTreeSet::new();
+    if req.rows.iter().any(|row| {
+        let id = row.document_id.trim();
+        id.is_empty() || !request_document_ids.insert(id.to_string())
+    }) {
+        return Err("Шаблоны должны иметь непустые уникальные идентификаторы документов.".into());
+    }
 
     let requested_rows = req.rows;
     let (mut rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
@@ -596,8 +628,7 @@ fn confirm_template_setup(
         )
     };
     reanalyze_confirmation_rows_with_domain_hints(&app, &mut rows)?;
-    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
-    let template_snapshots = rows
+    let mut template_snapshots = rows
         .iter()
         .map(|row| {
             template_snapshot::TemplateSnapshot::capture(
@@ -608,6 +639,43 @@ fn confirm_template_setup(
             .map(|snapshot| (row.document_id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+    ensure_persistence_available(&state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let existing_pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    let existing_document_ids = existing_pack
+        .documents
+        .iter()
+        .map(|document| document.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_sha256 = BTreeSet::new();
+    let mut accepted_document_ids = BTreeSet::new();
+    for row in &rows {
+        let snapshot = template_snapshots
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+        let duplicate_in_batch = !seen_sha256.insert(snapshot.sha256().to_string());
+        let duplicate_in_workspace = existing_document_ids.contains(row.document_id.as_str())
+            || document_pack_contains_template_source(
+                &existing_pack,
+                &snapshot.live_path().display().to_string(),
+                snapshot.sha256(),
+            );
+        if !duplicate_in_batch && !duplicate_in_workspace {
+            accepted_document_ids.insert(row.document_id.clone());
+        }
+    }
+
+    if accepted_document_ids.is_empty() {
+        return Ok(existing_pack);
+    }
+    rows.retain(|row| accepted_document_ids.contains(&row.document_id));
+    template_snapshots.retain(|document_id, _| accepted_document_ids.contains(document_id));
+
+    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
     let mut drafts = Vec::with_capacity(rows.len());
     for row in &rows {
         let snapshot = template_snapshots
@@ -635,9 +703,16 @@ fn confirm_template_setup(
             })?;
         document.template_path = draft.template_path.clone();
     }
-    let (result, _) = publish_pack_with_template_versions(&app, &state, &drafts, |pack| {
-        merge_document_pack(pack, incoming);
-        Ok(())
+    let (result, _) = publish_pack_with_template_versions_locked(&app, &state, &drafts, |pack| {
+        let warnings = merge_document_pack(pack, incoming);
+        if warnings.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Публикация остановлена: повторный шаблон обнаружен после проверки: {}",
+                warnings.join("; ")
+            ))
+        }
     })?;
     Ok(result)
 }

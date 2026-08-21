@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTemplateConfirmationRows } from './templateSetupSupport';
+import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './templateSetupSupport';
 import type { TemplateConfirmationRowDto } from './types';
 
 describe('buildTemplateConfirmationRows workspace inference', () => {
@@ -41,5 +41,26 @@ describe('buildTemplateConfirmationRows workspace inference', () => {
     }], '', [], null);
 
     expect(result[0].domain_override).toEqual({ Custom: 'архитектор' });
+  });
+});
+
+
+describe('templateSetupCompletionMessage', () => {
+  it('keeps the existing success message when every selected template was created', () => {
+    expect(templateSetupCompletionMessage(2, 2)).toBe(
+      'Кнопки созданы: 2. Теперь добавьте исходный документ.',
+    );
+  });
+
+  it('reports mixed batches instead of claiming every button was created', () => {
+    expect(templateSetupCompletionMessage(3, 2)).toContain(
+      'Повторяющихся шаблонов пропущено: 1',
+    );
+  });
+
+  it('reports an all-duplicate batch as a no-op', () => {
+    expect(templateSetupCompletionMessage(2, 0)).toBe(
+      'Новых кнопок не создано. Повторяющихся шаблонов пропущено: 2.',
+    );
   });
 });

@@ -25,3 +25,17 @@ export function buildTemplateConfirmationRows(
     };
   });
 }
+
+export function templateSetupCompletionMessage(requestedCount: number, createdCount: number): string {
+  const requested = Math.max(0, requestedCount);
+  const created = Math.max(0, Math.min(createdCount, requested));
+  const skipped = requested - created;
+
+  if (created === 0 && skipped > 0) {
+    return `Новых кнопок не создано. Повторяющихся шаблонов пропущено: ${skipped}.`;
+  }
+  if (skipped > 0) {
+    return `Создано кнопок: ${created}. Повторяющихся шаблонов пропущено: ${skipped}. Теперь добавьте исходный документ.`;
+  }
+  return `Кнопки созданы: ${created}. Теперь добавьте исходный документ.`;
+}

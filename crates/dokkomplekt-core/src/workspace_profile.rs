@@ -95,7 +95,12 @@ pub fn infer_workspace_profile(
         };
     }
 
-    let top_domain = domain_for_key(top_key).expect("specific workspace domain");
+    let Some(top_domain) = domain_for_key(top_key) else {
+        return WorkspaceProfileInference {
+            domain_scores: totals,
+            ..WorkspaceProfileInference::default()
+        };
+    };
     let mut support_count = 0usize;
     let mut contradictory_count = 0usize;
     let mut evidence = Vec::new();

@@ -397,6 +397,28 @@ fn same_template_identity(left: &DocumentTemplateSpec, right: &DocumentTemplateS
         }
 }
 
+/// Returns whether a newly captured template is already represented by the pack.
+///
+/// Exact live paths are safe to compare directly. Content hashes are only compared
+/// against Dokkomplekt's own content-addressed `template-versions` paths so a random
+/// user filename that merely looks like a SHA-256 never becomes a false duplicate.
+pub fn document_pack_contains_template_source(
+    pack: &DocumentPack,
+    template_path: &str,
+    template_sha256: &str,
+) -> bool {
+    let normalized_sha = template_sha256.trim().to_ascii_lowercase();
+    let valid_sha =
+        normalized_sha.len() == 64 && normalized_sha.bytes().all(|byte| byte.is_ascii_hexdigit());
+
+    pack.documents.iter().any(|document| {
+        document.template_path == template_path
+            || (valid_sha
+                && content_addressed_template_sha256(&document.template_path)
+                    .is_some_and(|published_sha| published_sha == normalized_sha))
+    })
+}
+
 fn content_addressed_template_sha256(path: &str) -> Option<String> {
     let normalized = path.replace('\\', "/");
     if !normalized
@@ -805,6 +827,59 @@ mod tests {
         assert_eq!(existing.documents.len(), 1);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Шаблон уже добавлен"));
+    }
+
+    #[test]
+    fn captured_template_source_matches_published_content_hash() {
+        let sha = "c".repeat(64);
+        let mut published = persisted_document("old", DomainKind::Legal, "claim");
+        published.template_path = format!("C:/app/template-versions/old/{sha}.docx");
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![published],
+        };
+
+        assert!(document_pack_contains_template_source(
+            &pack,
+            "D:/incoming/claim.docx",
+            &sha,
+        ));
+    }
+
+    #[test]
+    fn captured_template_source_keeps_exact_live_path_identity() {
+        let mut published = persisted_document("old", DomainKind::Legal, "claim");
+        published.template_path = "D:/incoming/claim.docx".into();
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![published],
+        };
+
+        assert!(document_pack_contains_template_source(
+            &pack,
+            "D:/incoming/claim.docx",
+            &"d".repeat(64),
+        ));
+    }
+
+    #[test]
+    fn captured_template_source_does_not_hash_match_normal_user_paths() {
+        let sha = "e".repeat(64);
+        let mut published = persisted_document("old", DomainKind::Legal, "claim");
+        published.template_path = format!("C:/user/{sha}.docx");
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![published],
+        };
+
+        assert!(!document_pack_contains_template_source(
+            &pack,
+            "D:/incoming/claim.docx",
+            &sha,
+        ));
     }
 
     #[test]

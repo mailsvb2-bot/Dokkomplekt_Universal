@@ -61,6 +61,7 @@ pub mod validators;
 pub mod workflow_engine;
 pub mod workflow_scenario_engine;
 pub mod workspace_profile;
+pub mod workspace_profile_state;
 pub mod workspace_workflow_shape;
 
 pub use approval_blocks::*;
@@ -150,6 +151,7 @@ pub use workflow_scenario_engine::{
     WorkflowFieldRequirementV2, WorkflowFlagSetV2,
 };
 pub use workspace_profile::*;
+pub use workspace_profile_state::*;
 pub use workspace_workflow_shape::*;
 
 pub use corpus_recorder::*;

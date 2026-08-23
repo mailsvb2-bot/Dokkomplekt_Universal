@@ -375,14 +375,30 @@ function DomainOverrideEditor(props: {
   const customValue = typeof props.value === 'object' && props.value !== null && 'Custom' in props.value
     ? props.value.Custom
     : null;
+  const selectedValue = customValue !== null
+    ? 'custom'
+    : typeof props.value === 'string'
+      ? props.value
+      : 'auto';
   return (
     <div className="inlineInput">
       <select
         aria-label={`Профиль для ${props.label}`}
-        value={customValue === null ? 'auto' : 'custom'}
-        onChange={(event) => props.onChange(event.target.value === 'custom' ? { Custom: customValue ?? '' } : null)}
+        value={selectedValue}
+        onChange={(event) => {
+          const value = event.target.value;
+          if (value === 'auto') props.onChange(null);
+          else if (value === 'custom') props.onChange({ Custom: customValue ?? '' });
+          else props.onChange(value as DomainKind);
+        }}
       >
         <option value="auto">Профиль: автоматически</option>
+        <option value="Generic">Универсальный документооборот</option>
+        <option value="Medical">Медицина</option>
+        <option value="Legal">Юридическая работа</option>
+        <option value="Hr">Кадровая работа</option>
+        <option value="Accounting">Бухгалтерия</option>
+        <option value="Education">Образование</option>
         <option value="custom">Своя профессия / профиль</option>
       </select>
       {customValue !== null ? (

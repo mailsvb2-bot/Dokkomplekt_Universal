@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { prepareTemplateSetup } from '../lib/api';
 import { errorMessage, type PendingTemplate } from '../lib/appSupport';
 import type { DomainKind, TemplateCandidateDto, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
+
+const EMPTY_PENDING_TEMPLATES: PendingTemplate[] = [];
 
 export function pendingTemplateCandidates(items: PendingTemplate[]): TemplateCandidateDto[] {
   return items.map((item) => ({
@@ -17,11 +19,16 @@ export function applyWorkspaceDomainToPending(items: PendingTemplate[], domain: 
   return items.map((item) => ({ ...item, domain_override: domain }));
 }
 
-export function useWorkspaceProfileInference(setStatus: (value: string) => void, items: PendingTemplate[] = []) {
+export function useWorkspaceProfileInference(
+  setStatus: (value: string) => void,
+  items: PendingTemplate[] = EMPTY_PENDING_TEMPLATES,
+) {
   const [workspaceInference, setWorkspaceInference] = useState<WorkspaceProfileInference | null>(null);
   const [workspaceShape, setWorkspaceShape] = useState<WorkspaceWorkflowShape | null>(null);
+  const requestSequence = useRef(0);
 
   const refreshWorkspaceInference = useCallback(async (templates: PendingTemplate[]) => {
+    const requestId = ++requestSequence.current;
     if (!templates.length) {
       setWorkspaceInference(null);
       setWorkspaceShape(null);
@@ -29,11 +36,13 @@ export function useWorkspaceProfileInference(setStatus: (value: string) => void,
     }
     try {
       const rows = await prepareTemplateSetup(pendingTemplateCandidates(templates));
+      if (requestId !== requestSequence.current) return null;
       const inference = rows[0]?.workspace_inference ?? null;
       setWorkspaceInference(inference);
       setWorkspaceShape(rows[0]?.workspace_shape ?? null);
       return inference;
     } catch (error) {
+      if (requestId !== requestSequence.current) return null;
       setWorkspaceInference(null);
       setWorkspaceShape(null);
       setStatus(`Не удалось определить рабочий профиль: ${errorMessage(error)}. Кнопки можно создать без выбора профессии.`);
@@ -42,9 +51,20 @@ export function useWorkspaceProfileInference(setStatus: (value: string) => void,
   }, [setStatus]);
 
   useEffect(() => {
-    if (!items.length) { setWorkspaceInference(null); setWorkspaceShape(null); return; }
-    const timer = window.setTimeout(() => { void refreshWorkspaceInference(items); }, 250);
-    return () => window.clearTimeout(timer);
+    // Invalidate an in-flight request as soon as the selected templates change,
+    // including the debounce window before the replacement request starts.
+    requestSequence.current += 1;
+    let timer: number | undefined;
+    if (!items.length) {
+      setWorkspaceInference(null);
+      setWorkspaceShape(null);
+    } else {
+      timer = window.setTimeout(() => { void refreshWorkspaceInference(items); }, 250);
+    }
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      requestSequence.current += 1;
+    };
   }, [items, refreshWorkspaceInference]);
 
   return { workspaceInference, workspaceShape, setWorkspaceInference, setWorkspaceShape, refreshWorkspaceInference };

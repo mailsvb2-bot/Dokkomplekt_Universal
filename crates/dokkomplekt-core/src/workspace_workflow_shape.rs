@@ -239,7 +239,7 @@ fn infer_relations(inputs: &[WorkspaceShapeDocumentInput]) -> Vec<WorkspaceDocum
             continue;
         }
         for expected in related_document_roles(&left.role_id) {
-            if let Some(right) = inputs.iter().find(|candidate| {
+            for right in inputs.iter().filter(|candidate| {
                 candidate.document_id != left.document_id && candidate.role_id == *expected
             }) {
                 let mut ids = [left.document_id.clone(), right.document_id.clone()];
@@ -337,7 +337,17 @@ fn domain_key(domain: &DomainKind) -> String {
         DomainKind::Hr => "hr".into(),
         DomainKind::Education => "education".into(),
         DomainKind::Accounting => "accounting".into(),
-        DomainKind::Custom(name) => format!("custom-{}", slug(name)),
+        DomainKind::Custom(name) => {
+            let normalized = name.trim().to_lowercase();
+            format!(
+                "custom:{}",
+                if normalized.is_empty() {
+                    "profile"
+                } else {
+                    normalized.as_str()
+                }
+            )
+        }
     }
 }
 
@@ -350,29 +360,6 @@ fn domain_label(domain: &DomainKind) -> String {
         DomainKind::Education => "Образование".into(),
         DomainKind::Accounting => "Бухгалтерия".into(),
         DomainKind::Custom(name) => name.trim().to_string(),
-    }
-}
-
-fn slug(value: &str) -> String {
-    let slug = value
-        .to_lowercase()
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    if slug.is_empty() {
-        "profile".into()
-    } else {
-        slug
     }
 }
 
@@ -495,5 +482,61 @@ mod tests {
         assert_eq!(shape.primary_object, "Человек / субъект");
         assert_eq!(shape.groups.len(), 1);
         assert!(shape.relations.is_empty());
+    }
+
+    #[test]
+    fn every_matching_document_role_gets_a_relation() {
+        let shape = infer_workspace_workflow_shape(&[
+            document("contract", "Договор", "contract", DomainKind::Legal, &[]),
+            document(
+                "acceptance-a",
+                "Акт приёмки A",
+                "acceptance_act",
+                DomainKind::Legal,
+                &[],
+            ),
+            document(
+                "acceptance-b",
+                "Акт приёмки B",
+                "acceptance_act",
+                DomainKind::Legal,
+                &[],
+            ),
+        ]);
+
+        let related_ids = shape
+            .relations
+            .iter()
+            .filter(|relation| relation.left_document_id == "contract")
+            .map(|relation| relation.right_document_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            related_ids,
+            BTreeSet::from(["acceptance-a", "acceptance-b"])
+        );
+    }
+
+    #[test]
+    fn punctuation_does_not_merge_distinct_custom_profiles() {
+        let shape = infer_workspace_workflow_shape(&[
+            document(
+                "cpp",
+                "C++ документ",
+                "unknown",
+                DomainKind::Custom("C++".into()),
+                &[],
+            ),
+            document(
+                "csharp",
+                "C# документ",
+                "unknown",
+                DomainKind::Custom("C#".into()),
+                &[],
+            ),
+        ]);
+
+        assert!(shape.mixed_workflows);
+        assert_eq!(shape.groups.len(), 2);
+        assert_ne!(shape.groups[0].group_id, shape.groups[1].group_id);
     }
 }

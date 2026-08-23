@@ -159,9 +159,10 @@ pub fn infer_workspace_profile(
     let confidence =
         (dominance * 0.32 + margin * 0.28 + coverage * 0.30 + strength * 0.10).clamp(0.0, 0.99);
 
-    let mixed_domains = contradictory_count > 0
-        && runner_score >= 3
-        && runner_score.saturating_mul(100) >= top_score.saturating_mul(55);
+    // A single template with a clear, conflicting signal is enough to prove
+    // that this is not one homogeneous workspace. Aggregate dominance must not
+    // drag that document into the majority domain during automatic setup.
+    let mixed_domains = contradictory_count > 0;
     let minimum_high_score = if analyses.len() == 1 {
         5
     } else {
@@ -385,6 +386,37 @@ mod tests {
 
         assert!(!inference.auto_apply);
         assert!(inference.mixed_domains || inference.level != WorkspaceInferenceLevel::High);
+    }
+
+    #[test]
+    fn strong_minority_domain_is_never_overridden_by_a_large_majority() {
+        let inference = infer_workspace_profile(&[
+            item(
+                "primary",
+                "Первичный осмотр\nДиагноз\nЛечение\nАнамнез\nИстория болезни\nМКБ-10",
+            ),
+            item(
+                "discharge",
+                "Выписной эпикриз\nДиагноз\nЛечение\nДата выписки\nИстория болезни",
+            ),
+            item(
+                "diary",
+                "Дневник наблюдения\nДиагноз\nЛечение\nЛечащий врач",
+            ),
+            item(
+                "consultation",
+                "Медицинская консультация\nПациент\nДиагноз\nЛечение\nМКБ-10",
+            ),
+            item(
+                "claim",
+                "Исковое заявление\nИстец\nОтветчик\nСуд\nДело\nГоспошлина",
+            ),
+        ]);
+
+        assert!(inference.mixed_domains);
+        assert!(!inference.auto_apply);
+        assert_eq!(inference.suggested_domain, None);
+        assert_eq!(inference.level, WorkspaceInferenceLevel::Low);
     }
 
     #[test]

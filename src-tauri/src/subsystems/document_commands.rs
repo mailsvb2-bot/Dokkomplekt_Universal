@@ -404,16 +404,6 @@ where
     let mut pack_guard = state.pack.lock().map_err(|_| "state lock failed")?;
     let mut candidate = pack_guard.clone();
     mutate(&mut candidate)?;
-    let candidate_document_ids = candidate
-        .documents
-        .iter()
-        .map(|document| document.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let effective_drafts = drafts
-        .iter()
-        .filter(|draft| candidate_document_ids.contains(draft.document_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
     let path = default_state_db_path(app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -427,7 +417,7 @@ where
             pack: &candidate,
             state_key: "license_document",
             state_value: &license,
-            versions: &effective_drafts,
+            versions: drafts,
         })
         .map_err(|error| error.to_string())?;
     *pack_guard = candidate.clone();
@@ -561,22 +551,25 @@ fn register_learned_template(
     Ok(result)
 }
 
-fn reanalyze_confirmation_rows_with_domain_hints(
-    app: &tauri::AppHandle,
+fn reanalyze_confirmation_rows_from_snapshots(
     rows: &mut [TemplateConfirmationRow],
+    snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
 ) -> Result<(), String> {
     for row in rows {
-        let Some(domain) = row.domain_override.as_ref() else {
-            continue;
-        };
-        let template_path = resolve_user_path(app, &row.template_path)?;
-        let template_text = extract_docx_text(&template_path).map_err(|error| {
+        let snapshot = snapshots
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+        let template_text = extract_docx_text(snapshot.path()).map_err(|error| {
             format!(
-                "Не удалось повторно проверить шаблон «{}» с рабочим профилем: {error}",
+                "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
                 row.editable_button_label
             )
         })?;
-        let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
+        let analysis = analyze_template_text_with_context(
+            &template_text,
+            row.domain_override.as_ref(),
+            Some(row.editable_button_label.as_str()),
+        );
         row.detected_title = analysis.title.clone();
         row.suggested_button_label = analysis.suggested_button_label.clone();
         row.role_id = analysis.role_id.clone();
@@ -627,7 +620,11 @@ fn confirm_template_setup(
             LegacyTemplateInferenceSummary::default(),
         )
     };
-    reanalyze_confirmation_rows_with_domain_hints(&app, &mut rows)?;
+    ensure_persistence_available(&state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     let mut template_snapshots = rows
         .iter()
         .map(|row| {
@@ -639,12 +636,7 @@ fn confirm_template_setup(
             .map(|snapshot| (row.document_id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-    ensure_persistence_available(&state)?;
-    let _persistence_guard = state
-        .persistence_gate
-        .lock()
-        .map_err(|_| "persistence gate lock failed")?;
+    reanalyze_confirmation_rows_from_snapshots(&mut rows, &template_snapshots)?;
     let existing_pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let existing_document_ids = existing_pack
         .documents

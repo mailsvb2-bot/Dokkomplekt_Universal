@@ -35,10 +35,23 @@ class TemplateDuplicatePublicationContractTests(unittest.TestCase):
             "fn verify_published_template_version_file",
         )
 
-        self.assertIn("candidate_document_ids", locked)
-        self.assertIn("effective_drafts", locked)
-        self.assertIn("versions: &effective_drafts", locked)
+        self.assertNotIn("effective_drafts", locked)
+        self.assertIn("versions: drafts", locked)
         self.assertIn("is absent from candidate pack", storage)
+
+    def test_confirm_reanalyzes_the_exact_snapshot_that_is_published(self) -> None:
+        runtime = text("src-tauri/src/subsystems/document_commands.rs")
+        command = command_block(runtime, "fn confirm_template_setup(", "struct RenameDocumentButtonRequest")
+        helper = command_block(
+            runtime,
+            "fn reanalyze_confirmation_rows_from_snapshots",
+            "struct ConfirmTemplatesRequest",
+        )
+
+        self.assertIn("snapshot.path()", helper)
+        self.assertNotIn("resolve_user_path", helper)
+        self.assertLess(command.index("TemplateSnapshot::capture"), command.index("reanalyze_confirmation_rows_from_snapshots"))
+        self.assertLess(command.index("reanalyze_confirmation_rows_from_snapshots"), command.index("create_pack_from_confirmations"))
 
     def test_frontend_reports_duplicates_instead_of_claiming_full_success(self) -> None:
         app = text("src/App.tsx")

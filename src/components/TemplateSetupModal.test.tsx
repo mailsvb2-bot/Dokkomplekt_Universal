@@ -152,4 +152,26 @@ describe('TemplateSetupModal', () => {
     expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('allows correcting one template to any built-in profile', () => {
+    const onPendingTemplateDomainChange = vi.fn();
+    render(<TemplateSetupModal
+      {...base}
+      onPendingTemplateDomainChange={onPendingTemplateDomainChange}
+      pendingTemplates={[{
+        document_id: 'd1',
+        file_name: 'Договор.docx',
+        button_label: 'Договор',
+        extracted_text: 'Договор',
+        popup_fields: [],
+        domain_override: null,
+      }]}
+    />);
+
+    fireEvent.change(screen.getByLabelText('Профиль для Договор.docx'), {
+      target: { value: 'Legal' },
+    });
+
+    expect(onPendingTemplateDomainChange).toHaveBeenCalledWith('d1', 'Legal');
+  });
+
 });

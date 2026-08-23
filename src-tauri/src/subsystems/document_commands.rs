@@ -55,7 +55,7 @@ fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, 
     } else if has_user_buttons {
         "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
     } else {
-        "Первоначальная настройка: выберите процесс, загрузите пустой шаблон и 3–10 заполненных примеров, проверьте предложенную карту и включите автоматизацию.".into()
+        "Первоначальная настройка: нажмите «Создать свои кнопки» и выберите реальные рабочие шаблоны. Программа сама определит рабочий профиль по всему набору; профессию выбирать не нужно.".into()
     };
     Ok(FirstRunStateResponse {
         has_user_buttons,
@@ -162,8 +162,13 @@ struct PrepareTemplatesRequest {
 #[tauri::command]
 fn prepare_template_setup(
     req: PrepareTemplatesRequest,
+    state: State<'_, AppState>,
 ) -> Result<Vec<TemplateConfirmationRow>, String> {
-    Ok(prepare_template_confirmations(&req.candidates))
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    Ok(prepare_template_confirmations_with_existing_pack(
+        &req.candidates,
+        Some(&pack),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,6 +376,21 @@ where
         .persistence_gate
         .lock()
         .map_err(|_| "persistence gate lock failed")?;
+    publish_pack_with_template_versions_locked(app, state, drafts, mutate)
+}
+
+/// Publishes while the caller owns `state.persistence_gate`. Keeping the gate
+/// around duplicate preflight + archive preparation closes the race where a
+/// second command could publish the same template between those two steps.
+fn publish_pack_with_template_versions_locked<F>(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    drafts: &[TemplateVersionDraft],
+    mutate: F,
+) -> Result<(DocumentPack, Vec<TemplateVersionRecord>), String>
+where
+    F: FnOnce(&mut DocumentPack) -> Result<(), String>,
+{
     let case = state
         .semantic_case
         .lock()
@@ -531,6 +551,69 @@ fn register_learned_template(
     Ok(result)
 }
 
+fn reanalyze_confirmation_rows_from_snapshots(
+    rows: &mut [TemplateConfirmationRow],
+    snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+    existing_pack: &DocumentPack,
+) -> Result<(), String> {
+    let candidates = rows
+        .iter()
+        .map(|row| {
+            if row.domain_override_is_explicit && row.domain_override.is_none() {
+                return Err(format!(
+                    "Для шаблона «{}» отмечен явный профиль, но профиль не указан.",
+                    row.editable_button_label
+                ));
+            }
+            let snapshot = snapshots
+                .get(&row.document_id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
+                format!(
+                    "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
+                    row.editable_button_label
+                )
+            })?;
+            Ok(TemplateCandidate {
+                document_id: row.document_id.clone(),
+                template_path: row.template_path.clone(),
+                extracted_text,
+                preferred_button_label: Some(row.editable_button_label.clone()),
+                domain_override: row
+                    .domain_override
+                    .clone()
+                    .filter(|_| row.domain_override_is_explicit),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let refreshed_by_id = prepare_template_confirmations_with_existing_pack(
+        &candidates,
+        Some(existing_pack),
+    )
+    .into_iter()
+    .map(|row| (row.document_id.clone(), row))
+    .collect::<BTreeMap<_, _>>();
+
+    for row in rows {
+        let refreshed = refreshed_by_id
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не удалось повторно проанализировать шаблон {}.", row.document_id))?;
+        if !row.popup_fields_edited {
+            row.popup_fields = refreshed.popup_fields.clone();
+        }
+        row.detected_title = refreshed.detected_title.clone();
+        row.suggested_button_label = refreshed.suggested_button_label.clone();
+        row.role_id = refreshed.role_id.clone();
+        row.is_static_copy = refreshed.is_static_copy;
+        row.domain_override = refreshed.domain_override.clone();
+        row.domain_override_is_explicit = refreshed.domain_override_is_explicit;
+        row.workspace_inference = refreshed.workspace_inference.clone();
+        row.workspace_shape = refreshed.workspace_shape.clone();
+        row.analysis = refreshed.analysis.clone();
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct ConfirmTemplatesRequest {
     rows: Vec<TemplateConfirmationRow>,
@@ -554,9 +637,16 @@ fn confirm_template_setup(
     {
         return Err("У каждого шаблона должно быть название кнопки.".into());
     }
+    let mut request_document_ids = BTreeSet::new();
+    if req.rows.iter().any(|row| {
+        let id = row.document_id.trim();
+        id.is_empty() || !request_document_ids.insert(id.to_string())
+    }) {
+        return Err("Шаблоны должны иметь непустые уникальные идентификаторы документов.".into());
+    }
 
     let requested_rows = req.rows;
-    let (rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
+    let (mut rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
         infer_static_template_rows(&app, &requested_rows)?
     } else {
         (
@@ -565,8 +655,12 @@ fn confirm_template_setup(
             LegacyTemplateInferenceSummary::default(),
         )
     };
-    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
-    let template_snapshots = rows
+    ensure_persistence_available(&state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let mut template_snapshots = rows
         .iter()
         .map(|row| {
             template_snapshot::TemplateSnapshot::capture(
@@ -577,6 +671,42 @@ fn confirm_template_setup(
             .map(|snapshot| (row.document_id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let existing_pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    reanalyze_confirmation_rows_from_snapshots(
+        &mut rows,
+        &template_snapshots,
+        &existing_pack,
+    )?;
+    let existing_document_ids = existing_pack
+        .documents
+        .iter()
+        .map(|document| document.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_sha256 = BTreeSet::new();
+    let mut accepted_document_ids = BTreeSet::new();
+    for row in &rows {
+        let snapshot = template_snapshots
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+        let duplicate_in_batch = !seen_sha256.insert(snapshot.sha256().to_string());
+        let duplicate_in_workspace = existing_document_ids.contains(row.document_id.as_str())
+            || document_pack_contains_template_source(
+                &existing_pack,
+                &snapshot.live_path().display().to_string(),
+                snapshot.sha256(),
+            );
+        if !duplicate_in_batch && !duplicate_in_workspace {
+            accepted_document_ids.insert(row.document_id.clone());
+        }
+    }
+
+    if accepted_document_ids.is_empty() {
+        return Ok(existing_pack);
+    }
+    rows.retain(|row| accepted_document_ids.contains(&row.document_id));
+    template_snapshots.retain(|document_id, _| accepted_document_ids.contains(document_id));
+
+    let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
     let mut drafts = Vec::with_capacity(rows.len());
     for row in &rows {
         let snapshot = template_snapshots
@@ -604,9 +734,16 @@ fn confirm_template_setup(
             })?;
         document.template_path = draft.template_path.clone();
     }
-    let (result, _) = publish_pack_with_template_versions(&app, &state, &drafts, |pack| {
-        merge_document_pack(pack, incoming);
-        Ok(())
+    let (result, _) = publish_pack_with_template_versions_locked(&app, &state, &drafts, |pack| {
+        let warnings = merge_document_pack(pack, incoming);
+        if warnings.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Публикация остановлена: повторный шаблон обнаружен после проверки: {}",
+                warnings.join("; ")
+            ))
+        }
     })?;
     Ok(result)
 }

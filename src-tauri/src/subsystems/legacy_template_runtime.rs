@@ -121,7 +121,10 @@ fn infer_static_template_rows(
                 row.editable_button_label
             )
         })?;
-        let derived_analysis = analyze_template_text(&derived_text);
+        let derived_analysis = analyze_template_text_with_domain_hint(
+            &derived_text,
+            row.domain_override.as_ref(),
+        );
         if derived_analysis.is_static {
             return Err(format!(
                 "Проверка размеченной копии «{}» не обнаружила placeholder-поля; публикация остановлена.",

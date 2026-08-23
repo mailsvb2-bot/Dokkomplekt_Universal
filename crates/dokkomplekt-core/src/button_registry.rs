@@ -1,7 +1,10 @@
 use crate::{
-    analyze_template_text, create_document_spec, default_popup_fields_for_document,
-    normalize_popup_fields, DocumentPack, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
-    TemplateAnalysis,
+    analyze_template_text_with_context, best_domain, create_document_spec,
+    default_popup_fields_for_document, infer_legacy_template_fields, infer_workspace_profile,
+    infer_workspace_workflow_shape, normalize_popup_fields,
+    reinforce_workspace_inference_with_pack, DocumentPack, DocumentTemplateSpec, DomainKind,
+    PopupFieldConfig, TemplateAnalysis, WorkspaceProfileInference, WorkspaceShapeDocumentInput,
+    WorkspaceWorkflowShape,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -12,6 +15,8 @@ pub struct TemplateCandidate {
     pub template_path: String,
     pub extracted_text: String,
     pub preferred_button_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_override: Option<DomainKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,8 +31,16 @@ pub struct TemplateConfirmationRow {
     pub analysis: TemplateAnalysis,
     #[serde(default)]
     pub popup_fields: Vec<PopupFieldConfig>,
+    #[serde(default)]
+    pub popup_fields_edited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_override: Option<DomainKind>,
+    #[serde(default)]
+    pub domain_override_is_explicit: bool,
+    #[serde(default)]
+    pub workspace_inference: WorkspaceProfileInference,
+    #[serde(default)]
+    pub workspace_shape: WorkspaceWorkflowShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -104,11 +117,57 @@ pub fn empty_first_run_pack(pack_id: impl Into<String>, name: impl Into<String>)
 pub fn prepare_template_confirmations(
     candidates: &[TemplateCandidate],
 ) -> Vec<TemplateConfirmationRow> {
-    let mut used = BTreeSet::new();
-    candidates
+    prepare_template_confirmations_with_existing_pack(candidates, None)
+}
+
+pub fn prepare_template_confirmations_with_existing_pack(
+    candidates: &[TemplateCandidate],
+    existing_pack: Option<&DocumentPack>,
+) -> Vec<TemplateConfirmationRow> {
+    let analyzed = candidates
         .iter()
         .map(|candidate| {
-            let analysis = analyze_template_text(&candidate.extracted_text);
+            (
+                candidate,
+                analyze_template_text_with_context(
+                    &candidate.extracted_text,
+                    candidate.domain_override.as_ref(),
+                    candidate.preferred_button_label.as_deref(),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let workspace_inputs = analyzed
+        .iter()
+        .map(|(candidate, analysis)| (candidate.document_id.clone(), analysis.clone()))
+        .collect::<Vec<_>>();
+    let mut workspace_inference = infer_workspace_profile(&workspace_inputs);
+    if let Some(pack) = existing_pack {
+        workspace_inference = reinforce_workspace_inference_with_pack(workspace_inference, pack);
+    }
+    let automatic_domain = workspace_inference
+        .auto_apply
+        .then(|| workspace_inference.suggested_domain.clone())
+        .flatten();
+
+    let mut used = BTreeSet::new();
+    let mut rows = analyzed
+        .into_iter()
+        .map(|(candidate, initial_analysis)| {
+            let effective_domain = candidate
+                .domain_override
+                .clone()
+                .or_else(|| automatic_domain.clone());
+            let analysis = effective_domain
+                .as_ref()
+                .map(|domain| {
+                    analyze_template_text_with_context(
+                        &candidate.extracted_text,
+                        Some(domain),
+                        candidate.preferred_button_label.as_deref(),
+                    )
+                })
+                .unwrap_or(initial_analysis);
             let base = candidate
                 .preferred_button_label
                 .as_deref()
@@ -131,11 +190,75 @@ pub fn prepare_template_confirmations(
                 role_id: analysis.role_id.clone(),
                 is_static_copy: analysis.is_static,
                 popup_fields: preview_document.popup_fields,
-                domain_override: None,
+                popup_fields_edited: false,
+                domain_override: effective_domain,
+                domain_override_is_explicit: candidate.domain_override.is_some(),
+                workspace_inference: workspace_inference.clone(),
+                workspace_shape: WorkspaceWorkflowShape::default(),
                 analysis,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    let new_document_ids = rows
+        .iter()
+        .map(|row| row.document_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut shape_inputs = existing_pack
+        .into_iter()
+        .flat_map(|pack| pack.documents.iter())
+        .filter(|document| !new_document_ids.contains(document.id.as_str()))
+        .map(|document| {
+            let mut field_ids = document.placeholders.clone();
+            field_ids.extend(document.required_fields.iter().cloned());
+            field_ids.extend(
+                document
+                    .popup_fields
+                    .iter()
+                    .map(|field| field.field_id.clone()),
+            );
+            WorkspaceShapeDocumentInput {
+                document_id: document.id.clone(),
+                title: document.button_label.clone(),
+                role_id: document.role_id.clone(),
+                domain: document.category.clone(),
+                field_ids,
+            }
+        })
+        .collect::<Vec<_>>();
+    shape_inputs.extend(rows.iter().filter_map(|row| {
+        let candidate = candidates
+            .iter()
+            .find(|candidate| candidate.document_id == row.document_id)?;
+        let domain = row
+            .domain_override
+            .clone()
+            .unwrap_or_else(|| best_domain(&row.analysis));
+        let mut field_ids = row.analysis.placeholders.clone();
+        if field_ids.is_empty() {
+            field_ids.extend(
+                infer_legacy_template_fields(
+                    &candidate.extracted_text,
+                    Some(&domain),
+                    Some(&row.role_id),
+                )
+                .into_iter()
+                .map(|candidate| candidate.field_id),
+            );
+        }
+        Some(WorkspaceShapeDocumentInput {
+            document_id: row.document_id.clone(),
+            title: row.editable_button_label.clone(),
+            role_id: row.role_id.clone(),
+            domain,
+            field_ids,
+        })
+    }));
+    let workspace_shape = infer_workspace_workflow_shape(&shape_inputs);
+    for row in &mut rows {
+        row.workspace_shape = workspace_shape.clone();
+    }
+    rows
 }
 
 pub fn create_pack_from_confirmations(
@@ -254,9 +377,11 @@ pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) 
         .map(|document| document.button_label.clone())
         .collect::<BTreeSet<_>>();
     for mut document in incoming.documents {
-        if existing.documents.iter().any(|current| {
-            current.id == document.id || current.template_path == document.template_path
-        }) {
+        if existing
+            .documents
+            .iter()
+            .any(|current| same_template_identity(current, &document))
+        {
             warnings.push(format!("Шаблон уже добавлен: {}", document.template_path));
             continue;
         }
@@ -264,6 +389,54 @@ pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) 
         existing.documents.push(document);
     }
     warnings
+}
+
+fn same_template_identity(left: &DocumentTemplateSpec, right: &DocumentTemplateSpec) -> bool {
+    left.id == right.id
+        || left.template_path == right.template_path
+        || match (
+            content_addressed_template_sha256(&left.template_path),
+            content_addressed_template_sha256(&right.template_path),
+        ) {
+            (Some(left_sha), Some(right_sha)) => left_sha == right_sha,
+            _ => false,
+        }
+}
+
+/// Returns whether a newly captured template is already represented by the pack.
+///
+/// Exact live paths are safe to compare directly. Content hashes are only compared
+/// against Dokkomplekt's own content-addressed `template-versions` paths so a random
+/// user filename that merely looks like a SHA-256 never becomes a false duplicate.
+pub fn document_pack_contains_template_source(
+    pack: &DocumentPack,
+    template_path: &str,
+    template_sha256: &str,
+) -> bool {
+    let normalized_sha = template_sha256.trim().to_ascii_lowercase();
+    let valid_sha =
+        normalized_sha.len() == 64 && normalized_sha.bytes().all(|byte| byte.is_ascii_hexdigit());
+
+    pack.documents.iter().any(|document| {
+        document.template_path == template_path
+            || (valid_sha
+                && content_addressed_template_sha256(&document.template_path)
+                    .is_some_and(|published_sha| published_sha == normalized_sha))
+    })
+}
+
+fn content_addressed_template_sha256(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    if !normalized
+        .split('/')
+        .any(|segment| segment.eq_ignore_ascii_case("template-versions"))
+    {
+        return None;
+    }
+    let file_name = normalized.rsplit('/').next()?;
+    let stem = file_name.rsplit_once('.').map(|(stem, _)| stem)?;
+    (stem.len() == 64 && stem.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| stem.to_ascii_lowercase())
 }
 
 fn unique_label(base: &str, used: &mut BTreeSet<String>) -> String {
@@ -310,16 +483,104 @@ mod tests {
                 template_path: "a.docx".into(),
                 extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
             TemplateCandidate {
                 document_id: "b".into(),
                 template_path: "b.docx".into(),
                 extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
                 preferred_button_label: None,
+                domain_override: None,
             },
         ]);
         assert_eq!(rows[0].editable_button_label, "Выписной эпикриз");
         assert_eq!(rows[1].editable_button_label, "Выписной эпикриз 2");
+    }
+
+    #[test]
+    fn coherent_workspace_profile_is_applied_to_every_created_button() {
+        let rows = prepare_template_confirmations(&[
+            TemplateCandidate {
+                document_id: "primary".into(),
+                template_path: "primary.docx".into(),
+                extracted_text: "Первичный осмотр\nДиагноз\nЛечение\nМКБ-10\nИстория болезни"
+                    .into(),
+                preferred_button_label: None,
+                domain_override: None,
+            },
+            TemplateCandidate {
+                document_id: "discharge".into(),
+                template_path: "discharge.docx".into(),
+                extracted_text: "Выписной эпикриз\nДиагноз\nЛечение\nДата выписки".into(),
+                preferred_button_label: None,
+                domain_override: None,
+            },
+            TemplateCandidate {
+                document_id: "consent".into(),
+                template_path: "consent.docx".into(),
+                extracted_text: "Согласие пациента\n{{subject.name}}\n{{Должность}}".into(),
+                preferred_button_label: None,
+                domain_override: None,
+            },
+        ]);
+
+        assert_eq!(rows.len(), 3);
+        assert!(rows
+            .iter()
+            .all(|row| row.domain_override == Some(DomainKind::Medical)));
+        assert!(rows.iter().all(|row| !row.domain_override_is_explicit));
+        assert!(rows.iter().all(|row| row.workspace_inference.auto_apply));
+        let consent = rows
+            .iter()
+            .find(|row| row.document_id == "consent")
+            .unwrap();
+        assert!(consent
+            .analysis
+            .placeholders
+            .contains(&"medical.position".to_string()));
+        assert!(!consent
+            .analysis
+            .placeholders
+            .contains(&"employee.position".to_string()));
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        assert!(result
+            .pack
+            .documents
+            .iter()
+            .all(|document| document.category == DomainKind::Medical));
+    }
+
+    #[test]
+    fn ambiguous_single_template_keeps_automatic_profile_unset() {
+        let rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "act".into(),
+            template_path: "act.docx".into(),
+            extracted_text: "Акт\nНомер {{document.number}}".into(),
+            preferred_button_label: None,
+            domain_override: None,
+        }]);
+
+        assert_eq!(rows[0].domain_override, None);
+        assert!(!rows[0].workspace_inference.auto_apply);
+        assert_eq!(
+            rows[0].workspace_inference.level,
+            crate::WorkspaceInferenceLevel::Low
+        );
+    }
+
+    #[test]
+    fn explicit_candidate_domain_is_distinguished_from_workspace_inference() {
+        let rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "report".into(),
+            template_path: "report.docx".into(),
+            extracted_text: "Отчёт\n{{Должность}}".into(),
+            preferred_button_label: Some("Отчёт".into()),
+            domain_override: Some(DomainKind::Hr),
+        }]);
+
+        assert_eq!(rows[0].domain_override, Some(DomainKind::Hr));
+        assert!(rows[0].domain_override_is_explicit);
     }
 
     #[test]
@@ -329,6 +590,7 @@ mod tests {
             template_path: "custom-report.docx".into(),
             extracted_text: "Report\n{{custom.project}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         rows[0].domain_override = Some(DomainKind::Custom("  architecture  ".into()));
 
@@ -347,6 +609,7 @@ mod tests {
             template_path: "custom-report.docx".into(),
             extracted_text: "Report\n{{custom.project}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         let detected = create_pack_from_confirmations("detected", "Pack", &rows)
             .pack
@@ -371,6 +634,7 @@ mod tests {
             template_path: "profiled.docx".into(),
             extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         assert!(rows[0]
             .popup_fields
@@ -404,6 +668,7 @@ mod tests {
             template_path: "profiled.docx".into(),
             extracted_text: "Выписной эпикриз\n{{medical.diagnosis}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         rows[0].domain_override = Some(DomainKind::Custom("architecture".into()));
 
@@ -424,6 +689,7 @@ mod tests {
             template_path: "profiled.docx".into(),
             extracted_text: "Выписной эпикриз\n{{subject.name}}".into(),
             preferred_button_label: Some("Report".into()),
+            domain_override: None,
         }]);
         rows[0]
             .popup_fields
@@ -446,6 +712,221 @@ mod tests {
             .required_fields
             .iter()
             .all(|field| !field.starts_with("medical.")));
+    }
+
+    fn persisted_document(id: &str, domain: DomainKind, role_id: &str) -> DocumentTemplateSpec {
+        DocumentTemplateSpec {
+            id: id.into(),
+            button_label: format!("Persisted {id}"),
+            template_path: format!("{id}.docx"),
+            category: domain,
+            role_id: role_id.into(),
+            required_fields: vec!["subject.name".into()],
+            placeholders: vec!["subject.name".into()],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        }
+    }
+
+    #[test]
+    fn persisted_workspace_correction_guides_ambiguous_future_template_and_full_shape() {
+        let existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("claim", DomainKind::Legal, "claim")],
+        };
+        let rows = prepare_template_confirmations_with_existing_pack(
+            &[TemplateCandidate {
+                document_id: "act".into(),
+                template_path: "act.docx".into(),
+                extracted_text: "Акт\nНомер {{document.number}}".into(),
+                preferred_button_label: Some("Акт".into()),
+                domain_override: None,
+            }],
+            Some(&existing),
+        );
+
+        assert_eq!(rows[0].domain_override, Some(DomainKind::Legal));
+        assert!(!rows[0].domain_override_is_explicit);
+        assert!(rows[0].workspace_inference.auto_apply);
+        assert_eq!(rows[0].workspace_shape.documents.len(), 2);
+        assert!(rows[0]
+            .workspace_shape
+            .documents
+            .iter()
+            .any(
+                |document| document.document_id == "claim" && document.domain == DomainKind::Legal
+            ));
+        assert!(rows[0]
+            .workspace_shape
+            .documents
+            .iter()
+            .any(|document| document.document_id == "act" && document.domain == DomainKind::Legal));
+    }
+
+    #[test]
+    fn strong_new_profession_signal_starts_second_contour_instead_of_inheriting_old_domain() {
+        let existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("claim", DomainKind::Legal, "claim")],
+        };
+        let rows = prepare_template_confirmations_with_existing_pack(
+            &[TemplateCandidate {
+                document_id: "hire".into(),
+                template_path: "hire.docx".into(),
+                extracted_text: "Приказ о приёме сотрудника\nРаботодатель\nРаботник\nДолжность\nОтдел\nКадровая служба".into(),
+                preferred_button_label: Some("Приказ о приёме".into()),
+                domain_override: None,
+            }],
+            Some(&existing),
+        );
+
+        assert_ne!(rows[0].domain_override, Some(DomainKind::Legal));
+        assert_eq!(best_domain(&rows[0].analysis), DomainKind::Hr);
+        assert!(rows[0].workspace_shape.mixed_workflows);
+        assert!(rows[0]
+            .workspace_shape
+            .groups
+            .iter()
+            .any(|group| group.domain == DomainKind::Legal));
+        assert!(rows[0]
+            .workspace_shape
+            .groups
+            .iter()
+            .any(|group| group.domain == DomainKind::Hr));
+    }
+
+    #[test]
+    fn mixed_existing_workspace_does_not_force_ambiguous_new_template() {
+        let existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![
+                persisted_document("claim", DomainKind::Legal, "claim"),
+                persisted_document("hire", DomainKind::Hr, "employment_order"),
+            ],
+        };
+        let rows = prepare_template_confirmations_with_existing_pack(
+            &[TemplateCandidate {
+                document_id: "note".into(),
+                template_path: "note.docx".into(),
+                extracted_text: "Документ\nНомер {{document.number}}".into(),
+                preferred_button_label: Some("Документ".into()),
+                domain_override: None,
+            }],
+            Some(&existing),
+        );
+
+        assert_eq!(rows[0].domain_override, None);
+        assert!(!rows[0].workspace_inference.auto_apply);
+        assert_eq!(rows[0].workspace_shape.documents.len(), 3);
+        assert!(rows[0].workspace_shape.mixed_workflows);
+    }
+
+    #[test]
+    fn merge_rejects_same_content_addressed_template_under_new_document_id() {
+        let sha = "a".repeat(64);
+        let mut existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("old", DomainKind::Legal, "claim")],
+        };
+        existing.documents[0].template_path = format!("C:/app/template-versions/old/{sha}.docx");
+        let mut duplicate = persisted_document("new", DomainKind::Legal, "claim");
+        duplicate.template_path = format!("C:/app/template-versions/new/{sha}.docx");
+
+        let warnings = merge_document_pack(
+            &mut existing,
+            DocumentPack {
+                pack_id: "incoming".into(),
+                name: "incoming".into(),
+                documents: vec![duplicate],
+            },
+        );
+
+        assert_eq!(existing.documents.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Шаблон уже добавлен"));
+    }
+
+    #[test]
+    fn captured_template_source_matches_published_content_hash() {
+        let sha = "c".repeat(64);
+        let mut published = persisted_document("old", DomainKind::Legal, "claim");
+        published.template_path = format!("C:/app/template-versions/old/{sha}.docx");
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![published],
+        };
+
+        assert!(document_pack_contains_template_source(
+            &pack,
+            "D:/incoming/claim.docx",
+            &sha,
+        ));
+    }
+
+    #[test]
+    fn captured_template_source_keeps_exact_live_path_identity() {
+        let mut published = persisted_document("old", DomainKind::Legal, "claim");
+        published.template_path = "D:/incoming/claim.docx".into();
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![published],
+        };
+
+        assert!(document_pack_contains_template_source(
+            &pack,
+            "D:/incoming/claim.docx",
+            &"d".repeat(64),
+        ));
+    }
+
+    #[test]
+    fn captured_template_source_does_not_hash_match_normal_user_paths() {
+        let sha = "e".repeat(64);
+        let mut published = persisted_document("old", DomainKind::Legal, "claim");
+        published.template_path = format!("C:/user/{sha}.docx");
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![published],
+        };
+
+        assert!(!document_pack_contains_template_source(
+            &pack,
+            "D:/incoming/claim.docx",
+            &sha,
+        ));
+    }
+
+    #[test]
+    fn merge_never_guesses_sha_identity_from_normal_user_paths() {
+        let sha = "b".repeat(64);
+        let mut existing = DocumentPack {
+            pack_id: "default".into(),
+            name: "workspace".into(),
+            documents: vec![persisted_document("old", DomainKind::Legal, "claim")],
+        };
+        existing.documents[0].template_path = format!("C:/user/{sha}.docx");
+        let mut incoming_document = persisted_document("new", DomainKind::Legal, "claim");
+        incoming_document.template_path = format!("D:/other/{sha}.docx");
+
+        let warnings = merge_document_pack(
+            &mut existing,
+            DocumentPack {
+                pack_id: "incoming".into(),
+                name: "incoming".into(),
+                documents: vec![incoming_document],
+            },
+        );
+
+        assert!(warnings.is_empty());
+        assert_eq!(existing.documents.len(), 2);
     }
 
     #[test]

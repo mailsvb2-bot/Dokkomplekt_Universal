@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
-import type { DomainKind, PopupFieldConfig } from '../lib/types';
+import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
 import { PopupFieldEditor, ensurePopupField } from './PopupFieldEditor';
 
 interface PendingTemplateView {
@@ -9,6 +9,7 @@ interface PendingTemplateView {
   button_label: string;
   extracted_text: string;
   popup_fields: PopupFieldConfig[];
+  popup_fields_edited?: boolean;
   domain_override?: DomainKind | null;
 }
 
@@ -20,6 +21,8 @@ interface TemplateSetupModalProps {
   draftPopupFields: PopupFieldConfig[];
   draftDomainOverride?: DomainKind | null;
   autoInferStaticTemplates?: boolean;
+  workspaceInference?: WorkspaceProfileInference | null;
+  workspaceShape?: WorkspaceWorkflowShape | null;
   onTemplateTextChange(value: string): void;
   onButtonLabelChange(value: string): void;
   onDraftPopupFieldsChange(fields: PopupFieldConfig[]): void;
@@ -27,6 +30,7 @@ interface TemplateSetupModalProps {
   onAutoInferStaticTemplatesChange?(value: boolean): void;
   onPendingTemplateLabelChange(documentId: string, value: string): void;
   onPendingTemplateDomainChange?(documentId: string, value: DomainKind | null): void;
+  onApplyWorkspaceDomain?(value: DomainKind): void;
   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
   onLearnPendingTemplate(documentId: string, files: File[]): Promise<void>;
@@ -169,6 +173,13 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
           </div>
         ) : (
           <>
+            {props.workspaceInference ? (
+              <WorkspaceInferenceSummary
+                inference={props.workspaceInference}
+                onApply={(domain) => props.onApplyWorkspaceDomain?.(domain)}
+              />
+            ) : null}
+            {props.workspaceShape?.documents.length ? <WorkspaceShapeSummary shape={props.workspaceShape} /> : null}
             <div className="templateBatch" aria-label="Подготовленные шаблоны">
               <div className="templateBatchHead">Проверьте названия кнопок</div>
               {props.pendingTemplates.map((item) => (
@@ -177,11 +188,6 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                     {item.file_name}
                   </button>
                   <input aria-label={`Название документа для ${item.file_name}`} value={item.button_label} onChange={(event) => props.onPendingTemplateLabelChange(item.document_id, event.target.value)} />
-                  <DomainOverrideEditor
-                    label={item.file_name}
-                    value={item.domain_override ?? null}
-                    onChange={(value) => props.onPendingTemplateDomainChange?.(item.document_id, value)}
-                  />
                 </div>
               ))}
             </div>
@@ -201,6 +207,14 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             {activePending ? (
               <details className="manualScannerDetails templateAdvancedSetup">
                 <summary>Необязательно: настроить автоматическое заполнение</summary>
+                <div className="pendingProfileCorrection">
+                  <span className="hint">Если программа неверно поняла этот конкретный шаблон, профиль можно исправить вручную.</span>
+                  <DomainOverrideEditor
+                    label={activePending.file_name}
+                    value={activePending.domain_override ?? null}
+                    onChange={(value) => props.onPendingTemplateDomainChange?.(activePending.document_id, value)}
+                  />
+                </div>
                 <div className="pendingCursorScanner">
                   <div className="guidedTemplateLaunch">
                     <div><strong>Показать место для автоматического заполнения</strong><small>Этот шаг не нужен для создания кнопки. Его можно выполнить позже.</small></div>
@@ -261,6 +275,95 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   );
 }
 
+function WorkspaceShapeSummary(props: { shape: WorkspaceWorkflowShape }) {
+  const commonPreview = props.shape.common_fields.slice(0, 5);
+  return (
+    <div className="readyMessage templateReadyMessage workspaceInferenceCard" data-testid="workspace-shape-summary">
+      <i className="ti ti-route" aria-hidden="true" />
+      <div>
+        <strong>Программа поняла рабочий процесс</strong>
+        <span>Основной объект: {props.shape.primary_object}. Документов: {props.shape.documents.length}; общих полей: {props.shape.common_fields.length}; связей: {props.shape.relations.length}.</span>
+        {commonPreview.length ? <small>Общие данные: {commonPreview.map((field) => field.title).join(' · ')}</small> : null}
+        <details className="manualScannerDetails workspaceShapeDetails">
+          <summary>{props.shape.mixed_workflows ? 'Показать рабочие контуры' : 'Показать карту документов'}</summary>
+          <div className="workspaceShapeGrid">
+            {props.shape.groups.map((group) => (
+              <div key={group.group_id} className="workspaceShapeGroup">
+                <strong>{group.title}</strong>
+                <small>{group.document_ids.length} документ(ов)</small>
+              </div>
+            ))}
+            {props.shape.documents.slice(0, 10).map((document) => (
+              <div key={document.document_id} className="workspaceShapeDocument">
+                <span>{document.title}</span><small>{document.role_label}</small>
+              </div>
+            ))}
+          </div>
+        </details>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceInferenceSummary(props: {
+  inference: WorkspaceProfileInference;
+  onApply(domain: DomainKind): void;
+}) {
+  const domain = props.inference.suggested_domain ?? null;
+  const label = domainLabel(domain);
+  const percent = Math.round(props.inference.confidence * 100);
+  const topEvidence = props.inference.evidence.slice(0, 4);
+
+  if (props.inference.level === 'high' && domain) {
+    return (
+      <div className="readyMessage templateReadyMessage workspaceInferenceCard" data-testid="workspace-inference-high">
+        <i className="ti ti-sparkles" aria-hidden="true" />
+        <div>
+          <strong>Программа поняла рабочий профиль: {label}</strong>
+          <span>Уверенность {percent}%. Профиль определён по всему набору документов и применится автоматически ко всем создаваемым кнопкам.</span>
+          {topEvidence.length ? <small>Признаки: {topEvidence.map((item) => item.title).join(' · ')}</small> : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (props.inference.level === 'medium' && domain) {
+    return (
+      <div className="readyMessage templateReadyMessage warning workspaceInferenceCard" data-testid="workspace-inference-medium">
+        <i className="ti ti-bulb" aria-hidden="true" />
+        <div>
+          <strong>Похоже, рабочий профиль: {label}</strong>
+          <span>Уверенность {percent}%. Программа не будет навязывать профиль при такой уверенности.</span>
+          <button className="softBtn" type="button" onClick={() => props.onApply(domain)}>Да, применить ко всем кнопкам</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="readyMessage templateReadyMessage workspaceInferenceCard" data-testid="workspace-inference-low">
+      <i className="ti ti-file-search" aria-hidden="true" />
+      <div>
+        <strong>Профессию выбирать не нужно</strong>
+        <span>По этим документам профиль пока неоднозначен. Кнопки всё равно будут созданы; программа продолжит понимать ваш рабочий процесс по реальным документам.</span>
+      </div>
+    </div>
+  );
+}
+
+function domainLabel(domain: DomainKind | null): string {
+  if (!domain) return 'не определён';
+  if (typeof domain === 'object' && 'Custom' in domain) return domain.Custom || 'свой профиль';
+  return ({
+    Medical: 'медицина',
+    Legal: 'юридическая работа',
+    Hr: 'кадровая работа',
+    Accounting: 'бухгалтерия',
+    Education: 'образование',
+    Generic: 'универсальный документооборот',
+  } as Record<string, string>)[domain] ?? String(domain);
+}
+
 function hasInvalidCustomDomain(value: DomainKind | null | undefined): boolean {
   return typeof value === 'object' && value !== null && 'Custom' in value && !value.Custom.trim();
 }
@@ -273,14 +376,30 @@ function DomainOverrideEditor(props: {
   const customValue = typeof props.value === 'object' && props.value !== null && 'Custom' in props.value
     ? props.value.Custom
     : null;
+  const selectedValue = customValue !== null
+    ? 'custom'
+    : typeof props.value === 'string'
+      ? props.value
+      : 'auto';
   return (
     <div className="inlineInput">
       <select
         aria-label={`Профиль для ${props.label}`}
-        value={customValue === null ? 'auto' : 'custom'}
-        onChange={(event) => props.onChange(event.target.value === 'custom' ? { Custom: customValue ?? '' } : null)}
+        value={selectedValue}
+        onChange={(event) => {
+          const value = event.target.value;
+          if (value === 'auto') props.onChange(null);
+          else if (value === 'custom') props.onChange({ Custom: customValue ?? '' });
+          else props.onChange(value as DomainKind);
+        }}
       >
         <option value="auto">Профиль: автоматически</option>
+        <option value="Generic">Универсальный документооборот</option>
+        <option value="Medical">Медицина</option>
+        <option value="Legal">Юридическая работа</option>
+        <option value="Hr">Кадровая работа</option>
+        <option value="Accounting">Бухгалтерия</option>
+        <option value="Education">Образование</option>
         <option value="custom">Своя профессия / профиль</option>
       </select>
       {customValue !== null ? (

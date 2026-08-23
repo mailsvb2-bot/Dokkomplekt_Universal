@@ -9,7 +9,10 @@ use aes::Aes256;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
-use dokkomplekt_core::{CorpusEntry, DocumentPack, SemanticCase};
+use dokkomplekt_core::{
+    workspace_profile_from_pack, CorpusEntry, DocumentPack, SemanticCase,
+    WORKSPACE_PROFILE_STATE_KEY,
+};
 use hmac::{Hmac, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -387,12 +390,26 @@ impl LocalRepository {
         Ok(())
     }
 
+    fn encoded_workspace_profile(&self, pack: &DocumentPack) -> StorageResult<String> {
+        let profile = workspace_profile_from_pack(pack);
+        let json = serde_json::to_string(&profile)?;
+        self.encode_sensitive(&json)
+    }
+
     pub fn save_pack(&self, pack: &DocumentPack) -> StorageResult<()> {
         let json = serde_json::to_string_pretty(pack)?;
-        self.conn.execute(
+        let pack_stored = self.encode_sensitive(&json)?;
+        let profile_stored = self.encoded_workspace_profile(pack)?;
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
             "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
-            params![pack.pack_id.as_str(), json],
+            params![pack.pack_id.as_str(), pack_stored],
         )?;
+        transaction.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![WORKSPACE_PROFILE_STATE_KEY, profile_stored],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -528,6 +545,7 @@ impl LocalRepository {
         let case_stored = self.encode_sensitive(&case_json)?;
         let pack_json = serde_json::to_string_pretty(pack)?;
         let pack_stored = self.encode_sensitive(&pack_json)?;
+        let profile_stored = self.encoded_workspace_profile(pack)?;
         let transaction = self.conn.unchecked_transaction()?;
         transaction.execute(
             "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
@@ -536,6 +554,10 @@ impl LocalRepository {
         transaction.execute(
             "INSERT INTO document_packs(pack_id, json) VALUES (?1, ?2) ON CONFLICT(pack_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
             params![pack_id, pack_stored],
+        )?;
+        transaction.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![WORKSPACE_PROFILE_STATE_KEY, profile_stored],
         )?;
         transaction.commit()?;
         Ok(())
@@ -559,6 +581,7 @@ impl LocalRepository {
         let pack_stored = self.encode_sensitive(&pack_json)?;
         let state_json = serde_json::to_string(state_value)?;
         let state_stored = self.encode_sensitive(&state_json)?;
+        let profile_stored = self.encoded_workspace_profile(pack)?;
         let transaction = self.conn.unchecked_transaction()?;
         transaction.execute(
             "INSERT INTO semantic_cases(case_id, json) VALUES (?1, ?2) ON CONFLICT(case_id) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
@@ -571,6 +594,10 @@ impl LocalRepository {
         transaction.execute(
             "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
             params![state_key, state_stored],
+        )?;
+        transaction.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![WORKSPACE_PROFILE_STATE_KEY, profile_stored],
         )?;
         transaction.commit()?;
         Ok(())
@@ -874,11 +901,22 @@ impl LocalRepository {
         let pack_stored = self.encode_sensitive(&pack_json)?;
         let state_json = serde_json::to_string(state_value)?;
         let state_stored = self.encode_sensitive(&state_json)?;
+        let profile_stored = self.encoded_workspace_profile(pack)?;
 
         let mut prepared = Vec::with_capacity(versions.len());
         for draft in versions {
             if draft.document_id.trim().is_empty() {
                 return Err(StorageError::Crypto("document_id cannot be empty".into()));
+            }
+            if !pack
+                .documents
+                .iter()
+                .any(|document| document.id == draft.document_id)
+            {
+                return Err(StorageError::Crypto(format!(
+                    "template version document_id {} is absent from candidate pack",
+                    draft.document_id
+                )));
             }
             if draft.template_sha256.len() != 64
                 || !draft
@@ -912,6 +950,10 @@ impl LocalRepository {
         tx.execute(
             "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
             params![state_key, state_stored],
+        )?;
+        tx.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![WORKSPACE_PROFILE_STATE_KEY, profile_stored],
         )?;
 
         let mut published_ids = Vec::with_capacity(prepared.len());
@@ -1941,6 +1983,25 @@ mod tests {
         ))
     }
 
+    fn workspace_document(
+        id: &str,
+        role_id: &str,
+        field_id: &str,
+    ) -> dokkomplekt_core::DocumentTemplateSpec {
+        dokkomplekt_core::DocumentTemplateSpec {
+            id: id.into(),
+            button_label: format!("Button {id}"),
+            template_path: format!("C:/templates/{id}.docx"),
+            category: dokkomplekt_core::DomainKind::Legal,
+            role_id: role_id.into(),
+            required_fields: vec![field_id.into()],
+            placeholders: vec![field_id.into()],
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        }
+    }
+
     fn confidential_case() -> SemanticCase {
         SemanticCase {
             values: BTreeMap::from([(
@@ -2176,7 +2237,7 @@ mod tests {
         let candidate = DocumentPack {
             pack_id: "default".into(),
             name: "candidate".into(),
-            documents: Vec::new(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
         };
         let draft = TemplateVersionDraft {
             document_id: "invoice".into(),
@@ -2195,7 +2256,16 @@ mod tests {
                 versions: &[draft],
             })
             .unwrap();
-        assert_eq!(repo.load_pack("default").unwrap(), Some(candidate));
+        assert_eq!(repo.load_pack("default").unwrap(), Some(candidate.clone()));
+        let profile = repo
+            .load_state_value::<dokkomplekt_core::PersistedWorkspaceProfile>(
+                WORKSPACE_PROFILE_STATE_KEY,
+            )
+            .unwrap()
+            .expect("workspace profile");
+        assert!(dokkomplekt_core::workspace_profile_matches_pack(
+            &profile, &candidate
+        ));
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].status, "published");
         assert_eq!(repo.list_template_versions("invoice").unwrap().len(), 1);
@@ -2214,10 +2284,16 @@ mod tests {
         };
         repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
             .unwrap();
+        let old_profile = repo
+            .load_state_value::<dokkomplekt_core::PersistedWorkspaceProfile>(
+                WORKSPACE_PROFILE_STATE_KEY,
+            )
+            .unwrap()
+            .expect("old workspace profile");
         let candidate = DocumentPack {
             pack_id: "default".into(),
             name: "must-not-publish".into(),
-            documents: Vec::new(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
         };
         let invalid = TemplateVersionDraft {
             document_id: "invoice".into(),
@@ -2237,7 +2313,56 @@ mod tests {
             })
             .is_err());
         assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
+        let after_profile = repo
+            .load_state_value::<dokkomplekt_core::PersistedWorkspaceProfile>(
+                WORKSPACE_PROFILE_STATE_KEY,
+            )
+            .unwrap()
+            .expect("workspace profile after rejected publication");
+        assert_eq!(after_profile, old_profile);
         assert!(repo.list_template_versions("invoice").unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn template_version_cannot_publish_without_document_in_candidate_pack() {
+        let path = temp_db("template-orphan-reject");
+        let mut repo = LocalRepository::open_with_key(&path, [23u8; 32]).unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "candidate".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let orphan = TemplateVersionDraft {
+            document_id: "ghost".into(),
+            template_path: "C:/archive/ghost.docx".into(),
+            template_sha256: "f".repeat(64),
+            note: "must be rejected".into(),
+        };
+
+        let error = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[orphan],
+            })
+            .expect_err("orphan template version must fail closed");
+
+        assert!(error.to_string().contains("absent from candidate pack"));
+        assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
+        assert!(repo.list_template_versions("ghost").unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }
 
@@ -2518,6 +2643,51 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
     #[test]
+    fn save_pack_atomically_refreshes_encrypted_workspace_profile() {
+        let path = temp_db("workspace-profile-pack");
+        let repo = LocalRepository::open_with_key(&path, [30u8; 32]).unwrap();
+        let pack = DocumentPack {
+            pack_id: "workspace-pack".into(),
+            name: "Private workspace".into(),
+            documents: vec![workspace_document("claim", "claim", "subject.name")],
+        };
+
+        repo.save_pack(&pack).unwrap();
+
+        let profile = repo
+            .load_state_value::<dokkomplekt_core::PersistedWorkspaceProfile>(
+                WORKSPACE_PROFILE_STATE_KEY,
+            )
+            .unwrap()
+            .expect("workspace profile");
+        assert!(dokkomplekt_core::workspace_profile_matches_pack(
+            &profile, &pack
+        ));
+        let raw: String = repo
+            .conn
+            .query_row(
+                "SELECT json FROM app_state WHERE state_key=?1",
+                params![WORKSPACE_PROFILE_STATE_KEY],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("subject.name"));
+        assert!(!raw.contains("claim"));
+        let raw_pack: String = repo
+            .conn
+            .query_row(
+                "SELECT json FROM document_packs WHERE pack_id=?1",
+                params![pack.pack_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw_pack.contains("Private workspace"));
+        assert!(!raw_pack.contains("C:/templates"));
+        assert!(!raw_pack.contains("subject.name"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn desktop_snapshot_round_trips_case_pack_and_commercial_state_atomically() {
         let path = temp_db("desktop-snapshot");
         let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
@@ -2548,12 +2718,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(repo.load_case("current").unwrap(), Some(case));
-        assert_eq!(repo.load_pack("default").unwrap(), Some(pack));
+        assert_eq!(repo.load_pack("default").unwrap(), Some(pack.clone()));
         assert_eq!(
             repo.load_state_value::<serde_json::Value>("license_document")
                 .unwrap(),
             Some(commercial)
         );
+        let workspace_profile = repo
+            .load_state_value::<dokkomplekt_core::PersistedWorkspaceProfile>(
+                WORKSPACE_PROFILE_STATE_KEY,
+            )
+            .unwrap()
+            .expect("workspace profile");
+        assert!(dokkomplekt_core::workspace_profile_matches_pack(
+            &workspace_profile,
+            &pack
+        ));
         assert!(repo.quick_integrity_check().is_ok());
         let _ = std::fs::remove_file(path);
     }

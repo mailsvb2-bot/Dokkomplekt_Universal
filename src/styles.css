@@ -596,3 +596,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 @media (max-width: 720px) {
   .folderNamingPresets, .folderNamingParts { grid-template-columns: 1fr; }
 }
+.documentDomainGroup { display: grid; gap: 8px; min-width: 0; }
+.documentDomainGroupTitle { padding: 5px 3px 1px; color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.workspaceShapeGrid { display: grid; gap: 6px; margin-top: 8px; }
+.workspaceShapeGroup, .workspaceShapeDocument { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.workspaceShapeGroup small, .workspaceShapeDocument small { color: var(--muted); }

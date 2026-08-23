@@ -39,6 +39,7 @@ fn uploaded_template_becomes_button_from_top_title() {
         template_path: "templates/Выписной.docx".into(),
         extracted_text: "12.01.2026 Выписной эпикриз\nПациент {{subject.name}}".into(),
         preferred_button_label: None,
+        domain_override: None,
     }]);
     assert_eq!(rows[0].detected_title, "Выписной эпикриз");
     assert_eq!(rows[0].editable_button_label, "Выписной эпикриз");

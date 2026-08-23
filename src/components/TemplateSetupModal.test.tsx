@@ -87,4 +87,91 @@ describe('TemplateSetupModal', () => {
     expect(onAutoInferStaticTemplatesChange).toHaveBeenCalledWith(true);
   });
 
+  it('shows a high-confidence workspace profile without asking for profession selection', () => {
+    render(<TemplateSetupModal {...base} workspaceInference={{
+      suggested_domain: 'Medical',
+      confidence: 0.93,
+      level: 'high',
+      auto_apply: true,
+      mixed_domains: false,
+      domain_scores: { medical: 18, legal: 1, hr: 1, accounting: 0, education: 0 },
+      evidence: [{ document_id: 'd1', title: 'Выписной эпикриз', role_id: 'discharge', attributed_domain: 'Medical', score: 8, field_ids: ['medical.diagnosis'] }],
+      reasons: [],
+    }} pendingTemplates={[{
+      document_id: 'd1',
+      file_name: 'Выписной эпикриз.docx',
+      button_label: 'Выписной эпикриз',
+      extracted_text: 'Диагноз Лечение МКБ-10',
+      popup_fields: [],
+      domain_override: null,
+    }]} />);
+
+    expect(screen.getByTestId('workspace-inference-high').textContent).toContain('Программа поняла рабочий профиль: медицина');
+    expect(screen.getByTestId('workspace-inference-high').textContent).toContain('93%');
+    const manualProfile = screen.getByLabelText('Профиль для Выписной эпикриз.docx');
+    const advanced = manualProfile.closest('details');
+    expect(advanced).toBeTruthy();
+    expect((advanced as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it('offers one-click confirmation when workspace inference is only medium confidence', () => {
+    const onApplyWorkspaceDomain = vi.fn();
+    render(<TemplateSetupModal {...base} onApplyWorkspaceDomain={onApplyWorkspaceDomain} workspaceInference={{
+      suggested_domain: 'Legal',
+      confidence: 0.64,
+      level: 'medium',
+      auto_apply: false,
+      mixed_domains: false,
+      domain_scores: { medical: 0, legal: 7, hr: 2, accounting: 0, education: 0 },
+      evidence: [],
+      reasons: [],
+    }} pendingTemplates={[{
+      document_id: 'd1', file_name: 'Договор.docx', button_label: 'Договор', extracted_text: 'Договор', popup_fields: [], domain_override: null,
+    }]} />);
+
+    expect(screen.getByTestId('workspace-inference-medium').textContent).toContain('Похоже, рабочий профиль: юридическая работа');
+    fireEvent.click(screen.getByRole('button', { name: 'Да, применить ко всем кнопкам' }));
+    expect(onApplyWorkspaceDomain).toHaveBeenCalledWith('Legal');
+  });
+
+  it('keeps ambiguous workspaces usable without forcing a profession choice', () => {
+    render(<TemplateSetupModal {...base} workspaceInference={{
+      suggested_domain: null,
+      confidence: 0.22,
+      level: 'low',
+      auto_apply: false,
+      mixed_domains: false,
+      domain_scores: { medical: 0, legal: 1, hr: 0, accounting: 0, education: 0 },
+      evidence: [],
+      reasons: [],
+    }} pendingTemplates={[{
+      document_id: 'd1', file_name: 'Акт.docx', button_label: 'Акт', extracted_text: 'Акт', popup_fields: [], domain_override: null,
+    }]} />);
+
+    expect(screen.getByTestId('workspace-inference-low').textContent).toContain('Профессию выбирать не нужно');
+    expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('allows correcting one template to any built-in profile', () => {
+    const onPendingTemplateDomainChange = vi.fn();
+    render(<TemplateSetupModal
+      {...base}
+      onPendingTemplateDomainChange={onPendingTemplateDomainChange}
+      pendingTemplates={[{
+        document_id: 'd1',
+        file_name: 'Договор.docx',
+        button_label: 'Договор',
+        extracted_text: 'Договор',
+        popup_fields: [],
+        domain_override: null,
+      }]}
+    />);
+
+    fireEvent.change(screen.getByLabelText('Профиль для Договор.docx'), {
+      target: { value: 'Legal' },
+    });
+
+    expect(onPendingTemplateDomainChange).toHaveBeenCalledWith('d1', 'Legal');
+  });
+
 });

@@ -55,7 +55,7 @@ class V1830HardeningContracts(unittest.TestCase):
         for invariant in [
             "recommend_document_bundle",
             "stable_cluster_id",
-            "companion_roles",
+            "related_document_roles",
             "clear_margin",
             "review_required",
         ]:

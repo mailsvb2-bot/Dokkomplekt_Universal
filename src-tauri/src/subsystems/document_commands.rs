@@ -554,27 +554,62 @@ fn register_learned_template(
 fn reanalyze_confirmation_rows_from_snapshots(
     rows: &mut [TemplateConfirmationRow],
     snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+    existing_pack: &DocumentPack,
 ) -> Result<(), String> {
+    let candidates = rows
+        .iter()
+        .map(|row| {
+            if row.domain_override_is_explicit && row.domain_override.is_none() {
+                return Err(format!(
+                    "Для шаблона «{}» отмечен явный профиль, но профиль не указан.",
+                    row.editable_button_label
+                ));
+            }
+            let snapshot = snapshots
+                .get(&row.document_id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
+                format!(
+                    "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
+                    row.editable_button_label
+                )
+            })?;
+            Ok(TemplateCandidate {
+                document_id: row.document_id.clone(),
+                template_path: row.template_path.clone(),
+                extracted_text,
+                preferred_button_label: Some(row.editable_button_label.clone()),
+                domain_override: row
+                    .domain_override
+                    .clone()
+                    .filter(|_| row.domain_override_is_explicit),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let refreshed_by_id = prepare_template_confirmations_with_existing_pack(
+        &candidates,
+        Some(existing_pack),
+    )
+    .into_iter()
+    .map(|row| (row.document_id.clone(), row))
+    .collect::<BTreeMap<_, _>>();
+
     for row in rows {
-        let snapshot = snapshots
+        let refreshed = refreshed_by_id
             .get(&row.document_id)
-            .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
-        let template_text = extract_docx_text(snapshot.path()).map_err(|error| {
-            format!(
-                "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
-                row.editable_button_label
-            )
-        })?;
-        let analysis = analyze_template_text_with_context(
-            &template_text,
-            row.domain_override.as_ref(),
-            Some(row.editable_button_label.as_str()),
-        );
-        row.detected_title = analysis.title.clone();
-        row.suggested_button_label = analysis.suggested_button_label.clone();
-        row.role_id = analysis.role_id.clone();
-        row.is_static_copy = analysis.is_static;
-        row.analysis = analysis;
+            .ok_or_else(|| format!("Не удалось повторно проанализировать шаблон {}.", row.document_id))?;
+        if !row.popup_fields_edited {
+            row.popup_fields = refreshed.popup_fields.clone();
+        }
+        row.detected_title = refreshed.detected_title.clone();
+        row.suggested_button_label = refreshed.suggested_button_label.clone();
+        row.role_id = refreshed.role_id.clone();
+        row.is_static_copy = refreshed.is_static_copy;
+        row.domain_override = refreshed.domain_override.clone();
+        row.domain_override_is_explicit = refreshed.domain_override_is_explicit;
+        row.workspace_inference = refreshed.workspace_inference.clone();
+        row.workspace_shape = refreshed.workspace_shape.clone();
+        row.analysis = refreshed.analysis.clone();
     }
     Ok(())
 }
@@ -636,8 +671,12 @@ fn confirm_template_setup(
             .map(|snapshot| (row.document_id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    reanalyze_confirmation_rows_from_snapshots(&mut rows, &template_snapshots)?;
     let existing_pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    reanalyze_confirmation_rows_from_snapshots(
+        &mut rows,
+        &template_snapshots,
+        &existing_pack,
+    )?;
     let existing_document_ids = existing_pack
         .documents
         .iter()

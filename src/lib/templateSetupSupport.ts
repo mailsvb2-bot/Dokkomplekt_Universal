@@ -7,21 +7,37 @@ export function buildTemplateConfirmationRows(
   buttonLabel: string,
   draftPopupFields: PopupFieldConfig[],
   draftDomainOverride: DomainKind | null,
-): Array<TemplateConfirmationRowDto & { domain_override: DomainKind | null }> {
+  draftPopupFieldsEdited = false,
+): Array<TemplateConfirmationRowDto & {
+  domain_override: DomainKind | null;
+  domain_override_is_explicit: boolean;
+  popup_fields_edited: boolean;
+}> {
   const pendingById = new Map(pendingTemplates.map((item) => [item.document_id, item]));
   return rows.map((row) => {
     const pending = pendingById.get(row.document_id);
+    const popupFieldsEdited = pending
+      ? Boolean(pending.popup_fields_edited)
+      : rows.length === 1 && draftPopupFieldsEdited;
+    const userDomainOverride = pending
+      ? pending.domain_override
+      : rows.length === 1
+        ? draftDomainOverride
+        : null;
     return {
       ...row,
       editable_button_label: pending?.button_label.trim()
         || (rows.length === 1 ? buttonLabel.trim() : '')
         || row.editable_button_label,
-      popup_fields: pending?.popup_fields
-        ?? (rows.length === 1 ? draftPopupFields : row.popup_fields ?? []),
-      domain_override: pending?.domain_override
-        ?? (rows.length === 1 ? draftDomainOverride : null)
+      popup_fields: popupFieldsEdited
+        ? (pending?.popup_fields ?? draftPopupFields)
+        : (row.popup_fields ?? []),
+      popup_fields_edited: popupFieldsEdited,
+      domain_override: userDomainOverride
         ?? row.domain_override
         ?? null,
+      domain_override_is_explicit: userDomainOverride !== null
+        || Boolean(row.domain_override_is_explicit),
     };
   });
 }

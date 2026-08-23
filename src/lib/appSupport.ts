@@ -55,6 +55,7 @@ export type PendingTemplate = {
   file_name: string;
   button_label: string;
   popup_fields: PopupFieldConfig[];
+  popup_fields_edited?: boolean;
   domain_override: DomainKind | null;
 };
 

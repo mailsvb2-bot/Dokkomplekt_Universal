@@ -31,8 +31,12 @@ pub struct TemplateConfirmationRow {
     pub analysis: TemplateAnalysis,
     #[serde(default)]
     pub popup_fields: Vec<PopupFieldConfig>,
+    #[serde(default)]
+    pub popup_fields_edited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_override: Option<DomainKind>,
+    #[serde(default)]
+    pub domain_override_is_explicit: bool,
     #[serde(default)]
     pub workspace_inference: WorkspaceProfileInference,
     #[serde(default)]
@@ -186,7 +190,9 @@ pub fn prepare_template_confirmations_with_existing_pack(
                 role_id: analysis.role_id.clone(),
                 is_static_copy: analysis.is_static,
                 popup_fields: preview_document.popup_fields,
+                popup_fields_edited: false,
                 domain_override: effective_domain,
+                domain_override_is_explicit: candidate.domain_override.is_some(),
                 workspace_inference: workspace_inference.clone(),
                 workspace_shape: WorkspaceWorkflowShape::default(),
                 analysis,
@@ -522,6 +528,7 @@ mod tests {
         assert!(rows
             .iter()
             .all(|row| row.domain_override == Some(DomainKind::Medical)));
+        assert!(rows.iter().all(|row| !row.domain_override_is_explicit));
         assert!(rows.iter().all(|row| row.workspace_inference.auto_apply));
         let consent = rows
             .iter()
@@ -560,6 +567,20 @@ mod tests {
             rows[0].workspace_inference.level,
             crate::WorkspaceInferenceLevel::Low
         );
+    }
+
+    #[test]
+    fn explicit_candidate_domain_is_distinguished_from_workspace_inference() {
+        let rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "report".into(),
+            template_path: "report.docx".into(),
+            extracted_text: "Отчёт\n{{Должность}}".into(),
+            preferred_button_label: Some("Отчёт".into()),
+            domain_override: Some(DomainKind::Hr),
+        }]);
+
+        assert_eq!(rows[0].domain_override, Some(DomainKind::Hr));
+        assert!(rows[0].domain_override_is_explicit);
     }
 
     #[test]
@@ -727,6 +748,7 @@ mod tests {
         );
 
         assert_eq!(rows[0].domain_override, Some(DomainKind::Legal));
+        assert!(!rows[0].domain_override_is_explicit);
         assert!(rows[0].workspace_inference.auto_apply);
         assert_eq!(rows[0].workspace_shape.documents.len(), 2);
         assert!(rows[0]

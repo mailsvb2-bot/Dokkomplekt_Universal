@@ -79,7 +79,7 @@ function AppContent() {
   const [importedTemplatePath, setImportedTemplatePath] = useState<string | null>(null);
   const [pendingTemplates, setPendingTemplates] = useState<PendingTemplate[]>([]);
   const { workspaceInference, workspaceShape, setWorkspaceInference, refreshWorkspaceInference } = useWorkspaceProfileInference(setStatus, pendingTemplates);
-  const [draftPopupFields, setDraftPopupFields] = useState<PopupFieldConfig[]>([]);
+  const [draftPopupState, setDraftPopupState] = useState<{ fields: PopupFieldConfig[]; edited: boolean }>({ fields: [], edited: false });
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
   const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(true);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
@@ -769,8 +769,7 @@ function AppContent() {
     setButtonLabel('');
     setImportedTemplatePath(null);
     setPendingTemplates([]);
-    setDraftPopupFields([]);
-    setDraftDomainOverride(null);
+    setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
     setSetupOpen(false);
     setStatus('Выберите шаблоны Word в системном окне…');
 
@@ -817,8 +816,7 @@ function AppContent() {
     setButtonLabel('');
     setImportedTemplatePath(null);
     setPendingTemplates([]);
-    setDraftPopupFields([]);
-    setDraftDomainOverride(null);
+    setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
     setSetupOpen(true);
     setStatus('Вставьте текст документа, проверьте название кнопки и создайте шаблон.');
   }
@@ -871,7 +869,7 @@ function AppContent() {
 
   function updatePendingPopupFields(documentId: string, fields: PopupFieldConfig[]) {
     setPendingTemplates((previous) => previous.map((item) => (
-      item.document_id === documentId ? { ...item, popup_fields: fields } : item
+      item.document_id === documentId ? { ...item, popup_fields: fields, popup_fields_edited: true } : item
     )));
   }
 
@@ -1063,6 +1061,7 @@ function AppContent() {
             popup_fields: current.addQuestion
               ? ensureSuggestedPopupField(item.popup_fields, fieldId, title, inputKind)
               : item.popup_fields,
+            popup_fields_edited: item.popup_fields_edited || current.addQuestion,
           }
         : item));
       setImportedTemplatePath((previous) => previous === current.session.original_path ? marked.output_path : previous);
@@ -1121,7 +1120,7 @@ function AppContent() {
     }
     const rows = await run('prepare_template_setup', () => prepareTemplateSetup(candidates));
     if (!rows) return;
-    const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupFields, draftDomainOverride);
+    const confirmedRows = buildTemplateConfirmationRows(rows, pendingTemplates, buttonLabel, draftPopupState.fields, draftDomainOverride, draftPopupState.edited);
     const staticRows = confirmedRows.filter((row) => row.is_static_copy);
     if (staticRows.length) {
       setStatus(autoInferStaticTemplates
@@ -1137,12 +1136,12 @@ function AppContent() {
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]); setWorkspaceInference(null);
-    setDraftPopupFields([]);
-    setDraftDomainOverride(null);
+    setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
     setAutoInferStaticTemplates(true);
     setSetupOpen(false);
     setStatus(templateSetupCompletionMessage(confirmedRows.length, createdCount));
   }
+
   async function chooseIcd(hit: Icd10Suggestion) {
     await run('set_field', async () => {
       await setField('medical.icd10', hit.code);
@@ -1467,13 +1466,13 @@ function AppContent() {
           buttonLabel={buttonLabel}
           previewTitle={previewTitle}
           pendingTemplates={pendingTemplates}
-          draftPopupFields={draftPopupFields}
+          draftPopupFields={draftPopupState.fields}
           draftDomainOverride={draftDomainOverride}
           autoInferStaticTemplates={autoInferStaticTemplates}
           workspaceInference={workspaceInference} workspaceShape={workspaceShape}
           onTemplateTextChange={setTemplateText}
           onButtonLabelChange={setButtonLabel}
-          onDraftPopupFieldsChange={setDraftPopupFields}
+          onDraftPopupFieldsChange={(fields) => setDraftPopupState({ fields, edited: true })}
           onDraftDomainOverrideChange={setDraftDomainOverride}
           onAutoInferStaticTemplatesChange={setAutoInferStaticTemplates}
           onPendingTemplateLabelChange={updatePendingTemplateLabel}

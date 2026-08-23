@@ -552,7 +552,9 @@ export interface TemplateConfirmationRowDto {
   is_static_copy: boolean;
   analysis: unknown;
   popup_fields?: PopupFieldConfig[];
+  popup_fields_edited?: boolean;
   domain_override?: DomainKind | null;
+  domain_override_is_explicit?: boolean;
   workspace_inference?: WorkspaceProfileInference;
   workspace_shape?: WorkspaceWorkflowShape;
 }

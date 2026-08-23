@@ -50,7 +50,11 @@ class TemplateDuplicatePublicationContractTests(unittest.TestCase):
 
         self.assertIn("snapshot.path()", helper)
         self.assertNotIn("resolve_user_path", helper)
+        self.assertIn("domain_override_is_explicit", helper)
+        self.assertIn("prepare_template_confirmations_with_existing_pack", helper)
+        self.assertIn("if !row.popup_fields_edited", helper)
         self.assertLess(command.index("TemplateSnapshot::capture"), command.index("reanalyze_confirmation_rows_from_snapshots"))
+        self.assertLess(command.index("let existing_pack"), command.index("reanalyze_confirmation_rows_from_snapshots"))
         self.assertLess(command.index("reanalyze_confirmation_rows_from_snapshots"), command.index("create_pack_from_confirmations"))
 
     def test_frontend_reports_duplicates_instead_of_claiming_full_success(self) -> None:

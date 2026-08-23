@@ -9,6 +9,7 @@ interface PendingTemplateView {
   button_label: string;
   extracted_text: string;
   popup_fields: PopupFieldConfig[];
+  popup_fields_edited?: boolean;
   domain_override?: DomainKind | null;
 }
 

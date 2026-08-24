@@ -59,6 +59,8 @@ For every donor behavior, the result must be one of:
 - Doctor-confirmed values have highest priority.
 - Diagnosis fields use the medical ICD-10 capability regardless of the dynamic field spelling/role.
 - Role-scoped commission/protocol/work-position fields remain separate instead of collapsing into generic aliases.
+- Render-only fields declare their source dependencies through the profession profile. A legacy button that contains a computed field such as `medical.expert_anamnesis` or `medical.work_position` asks for workplace, position and the active run's conditional facts instead of asking the user to type generated prose.
+- The sick-leave decision is bound to the exact manual or watched-folder run even when the merged popup has no visible questions; a previous case/run cannot control the new expert paragraph.
 
 ### Diaries
 
@@ -111,7 +113,7 @@ Polish-only activation is now locked end to end in the same canonical parser: Po
 - Original-source retention/archiving remains a separate privacy/lifecycle policy after successful patient-folder publication.
 - Generated documents preserve the user's Word template structure instead of flattening to plain text.
 - Optional trust/diagnostic reports are service artifacts and are routed outside the patient staging/final folder; failure to write an optional report cannot discard an otherwise valid document set.
-- Successful generation does not require an informational success popup; opening/surfacing the output can remain the completion UX.
+- Successful generation does not require an informational success popup. The final folder is opened silently after publication, while the persistent result card keeps an explicit retry button if the operating-system shell action fails.
 - Printing remains a publication action, not part of semantic extraction.
 
 ### Watched-folder lifecycle and updates
@@ -146,6 +148,8 @@ Their useful behavior is preserved in the canonical Universal owner instead.
 `tests/test_donor_patient_folder_watcher_parity.py` locks the user-visible desktop chain: primary source is part of patient publication, service reports stay outside the patient folder, background drop opens/activates the normal UI without a shell, and update handoff is SHA-bound, drain-first and backward-compatible. Rust tests additionally execute the trust-report routing and watcher-owner decision primitives.
 
 The compatibility schedule parser is aligned with the same donor menu/custom interval semantics rather than having a second interpretation.
+
+The 2026-08-24 completion pass additionally locks old saved medical buttons whose template contract names a render-derived field. Core tests prove source-fact prompting and complete discharge rendering, including the current sick-leave number and inclusive treatment duration. TypeScript scenarios prove exact output-folder auto-open with a non-destructive manual retry, and Python contracts pin both the manual and background run snapshots to their current sick-leave choice.
 
 ## Remaining acceptance work for this branch
 

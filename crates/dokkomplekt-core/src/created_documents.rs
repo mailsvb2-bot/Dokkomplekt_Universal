@@ -110,6 +110,12 @@ pub fn plan_created_documents_batch(
                 missing.push(format!("{label}: {reason}"));
             }
         }
+        let workflow_blockers = crate::workflow_publication_blockers(case, &plan);
+        if !workflow_blockers.is_empty() {
+            for blocker in workflow_blockers {
+                missing.push(format!("{label}: {blocker}"));
+            }
+        }
 
         // MSE and sick-leave VK can coexist in one case with independent protocol
         // requisites. Old user templates still contain generic medical.protocol_*
@@ -144,7 +150,7 @@ pub fn plan_created_documents_batch(
         }
 
         let blocks = required_blocks_for(&configured.spec, &configured.template_text);
-        let unmet = unmet_blocks(&blocks, case, &result.output_text);
+        let unmet = unmet_blocks(&blocks, &render_case, &result.output_text);
         if !unmet.is_empty() {
             for block_title in unmet {
                 missing.push(format!(
@@ -439,6 +445,58 @@ mod tests {
             "Первичный.docx",
         );
         assert!(matches!(batch, CreatedDocumentsBatch::Ready { .. }));
+    }
+
+    #[test]
+    fn legacy_derived_expert_field_renders_from_current_run_sources() {
+        let mut case = case_with(&[
+            ("subject.name", "Иванов Иван"),
+            ("medical.case_number", "12345"),
+            ("medical.diagnosis", "J06.9"),
+            ("medical.treatment", "Терапия"),
+            ("medical.admission_date", "01.06.2026"),
+            ("medical.discharge_date", "12.06.2026"),
+            ("medical.workplace", "ООО Ромашка"),
+            ("medical.position", "инженер"),
+            ("medical.sick_leave_number", "ЛН-77"),
+        ]);
+        set_medical_sick_leave_choice(&mut case, true);
+        let docs = vec![medical_doc(
+            "legacy-discharge",
+            "Выписной эпикриз",
+            "discharge",
+            concat!(
+                "Пациент {{subject.name}}\n",
+                "История болезни {{medical.case_number}}\n",
+                "Диагноз {{medical.diagnosis}}\n",
+                "Лечение {{medical.treatment}}\n",
+                "Дата поступления {{medical.admission_date}}\n",
+                "Дата выписки {{medical.discharge_date}}\n",
+                "Экспертный анамнез {{medical.expert_anamnesis}}\n",
+                "Зав. отд. Петров П.П.\n",
+                "Врач-психиатр Иванов И.И."
+            ),
+            vec![MEDICAL_EXPERT_ANAMNESIS.into()],
+        )];
+        let batch = plan_created_documents_batch(
+            &case,
+            &docs,
+            &WorkflowFlags {
+                sick_leave_enabled: true,
+            },
+            &[FolderNamePart::FullSubjectName],
+            "Первичный",
+            "Первичный.docx",
+        );
+        let CreatedDocumentsBatch::Ready { outputs, .. } = batch else {
+            panic!("expected the legacy derived field to render from source facts, got {batch:?}");
+        };
+        assert_eq!(outputs.len(), 1);
+        let text = &outputs[0].rendered_text;
+        assert!(text.contains("Работает в ООО Ромашка, в должности инженер."));
+        assert!(text.contains("Больничный лист № ЛН-77."));
+        assert!(text.contains("Срок лечения с 01.06.2026 по 12.06.2026, 12 дней."));
+        assert!(!text.contains("{{medical.expert_anamnesis}}"));
     }
 
     #[test]

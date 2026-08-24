@@ -304,6 +304,8 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(parsePayload(calls, 'render_docx_batch')).toMatchObject({
       req: { document_ids: ['acc_1', 'doc_2'], output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'], strict: true },
     }));
+    await waitFor(() => expect(calls.some((call) => call.command === 'open_in_file_manager'
+      && (call.payload as { req?: { path?: string } } | undefined)?.req?.path === 'output/148_2026-02-01')).toBe(true));
 
     // specialist can configure the document-specific popup without changing the template.
     await click(/Настроить уточнения/);
@@ -476,7 +478,8 @@ describe('Полный прогон пользовательских сцена�
     await click(/Создать пакет обмена/);
     await waitFor(() => expect(calls.some((c) => c.command === 'create_kedo_package')).toBe(true));
     await click(/^Печать$/);
-    await waitFor(() => expect(parsePayload(calls, 'open_in_file_manager')).toMatchObject({ req: { path: 'C:/Созданные документы/Иванов' } }));
+    await waitFor(() => expect(calls.some((call) => call.command === 'open_in_file_manager'
+      && (call.payload as { req?: { path?: string } } | undefined)?.req?.path === 'C:/Созданные документы/Иванов')).toBe(true));
     await waitFor(() => expect(parsePayload(calls, 'print_files')).toMatchObject({ req: { jobs: [{ path: 'C:/Созданные документы/Иванов/Договор.docx', copies: 3 }] } }));
 
     // Explicit recognition refresh remains available in advanced tools.

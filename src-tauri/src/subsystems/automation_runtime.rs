@@ -708,6 +708,18 @@ fn perform_created_documents_intake(
     let flags = WorkflowFlags {
         sick_leave_enabled: req.sick_leave_enabled,
     };
+    if configured
+        .iter()
+        .any(|document| document.spec.category == dokkomplekt_core::DomainKind::Medical)
+    {
+        // The background route has no popup application step. Apply the watcher
+        // setting in this run's semantic snapshot so derived medical output uses
+        // the same explicit decision as manual generation.
+        dokkomplekt_core::domains::medical_semantics::set_medical_sick_leave_choice(
+            &mut case,
+            req.sick_leave_enabled,
+        );
+    }
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
@@ -730,12 +742,7 @@ fn perform_created_documents_intake(
     let required_for_automation = configured
         .iter()
         .flat_map(|configured_document| {
-            configured_document
-                .spec
-                .required_fields
-                .iter()
-                .chain(configured_document.spec.placeholders.iter())
-                .cloned()
+            dokkomplekt_core::document_required_input_fields(&configured_document.spec, &flags)
         })
         .collect::<BTreeSet<_>>();
     let quality = evaluate_automation_quality(

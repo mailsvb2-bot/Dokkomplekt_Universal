@@ -15,6 +15,20 @@ type ConfirmOptions = {
   danger?: boolean;
 };
 
+export async function openCreatedOutputFolderSilently(
+  outputFolder: string,
+  openFolder: (path: string) => Promise<unknown>,
+): Promise<void> {
+  const target = outputFolder.trim();
+  if (!target) return;
+  try {
+    await openFolder(target);
+  } catch {
+    // Donor completion UX is deliberately silent: the created-result card keeps
+    // the exact path and an explicit retry button if the OS shell cannot open it.
+  }
+}
+
 export async function chooseExistingOutputPolicyFlow(params: {
   outputRoot: string;
   folderParts: FolderNamePartDto[];

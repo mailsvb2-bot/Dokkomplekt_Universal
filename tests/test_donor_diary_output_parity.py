@@ -25,6 +25,9 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     assert "<strong>Папка:</strong>" in workspace
     assert "Созданные файлы" in workspace
     assert "Открыть папку с документами" in workspace
+    assert "openCreatedOutputFolderSilently(res.output_folder, openInFileManager)" in app
+    assert "await openFolder(target)" in output_flow
+    assert "Donor completion UX is deliberately silent" in output_flow
 
 
 def test_diary_popup_is_fail_closed_and_donor_style_is_present():

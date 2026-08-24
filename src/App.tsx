@@ -26,7 +26,7 @@ import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceP
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
-import { chooseExistingOutputPolicyFlow } from './lib/outputFlow';
+import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
@@ -591,6 +591,7 @@ function AppContent() {
     setStatus(res.warnings?.length
       ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote} Требует внимания: ${res.warnings.join(' ')}`
       : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote}`);
+    await openCreatedOutputFolderSilently(res.output_folder, openInFileManager);
     if (autoPrint) await queuePrint(jobsForItems(printItems), true, snapshot.documentIds, null, res.output_folder);
   }
 

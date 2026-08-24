@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { chooseExistingOutputPolicyFlow } from './outputFlow';
+import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './outputFlow';
 
 const parts = ['DocumentNumber'] as const;
 
@@ -54,5 +54,25 @@ describe('chooseExistingOutputPolicyFlow', () => {
     });
     expect(result).toBeNull();
     expect(confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('openCreatedOutputFolderSilently', () => {
+  it('opens the exact published patient folder without another success popup', async () => {
+    const openFolder = vi.fn().mockResolvedValue(undefined);
+    await expect(openCreatedOutputFolderSilently('  D:/Ready/Иванов И.И.  ', openFolder)).resolves.toBeUndefined();
+    expect(openFolder).toHaveBeenCalledWith('D:/Ready/Иванов И.И.');
+  });
+
+  it('keeps a successful creation successful when the OS shell cannot open the folder', async () => {
+    const openFolder = vi.fn().mockRejectedValue(new Error('shell unavailable'));
+    await expect(openCreatedOutputFolderSilently('D:/Ready/42', openFolder)).resolves.toBeUndefined();
+    expect(openFolder).toHaveBeenCalledOnce();
+  });
+
+  it('does not call the shell for an empty result path', async () => {
+    const openFolder = vi.fn();
+    await openCreatedOutputFolderSilently('   ', openFolder);
+    expect(openFolder).not.toHaveBeenCalled();
   });
 });

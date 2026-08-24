@@ -1321,11 +1321,23 @@ fn render_docx_batch(
                 .ok_or_else(|| format!("Документ не найден: {document_id}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let base_case = state
+    let mut base_case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
+    if documents
+        .iter()
+        .any(|document| document.category == dokkomplekt_core::DomainKind::Medical)
+    {
+        // Bind the exact run snapshot even when the merged popup has no visible
+        // questions. Otherwise a previous run's choice (or an old sick-leave
+        // number) could leak into a newly rendered expert anamnesis.
+        dokkomplekt_core::domains::medical_semantics::set_medical_sick_leave_choice(
+            &mut base_case,
+            req.sick_leave_enabled,
+        );
+    }
 
     // The UI preflight is not a trust boundary. Rebuild the same canonical plan
     // from the exact document set immediately before any filesystem or license

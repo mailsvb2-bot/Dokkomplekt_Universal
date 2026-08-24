@@ -39,3 +39,32 @@ def test_watcher_update_handoff_is_sha_bound_drain_first_and_backward_compatible
     assert "active == 0" in watcher
     assert "release_watcher_instance_lock" in watcher
     assert "handoff_watcher_to_successor" in watcher
+
+
+def test_manual_and_watched_medical_runs_bind_the_exact_sick_leave_choice() -> None:
+    manual = (ROOT / "src-tauri/src/subsystems/document_commands.rs").read_text("utf-8")
+    automation = (ROOT / "src-tauri/src/subsystems/automation_runtime.rs").read_text("utf-8")
+    marker = "set_medical_sick_leave_choice("
+
+    batch = manual[manual.index("fn render_docx_batch(") : manual.index("fn apply_scanner(")]
+    assert marker in batch
+    assert "&mut base_case" in batch
+    assert "req.sick_leave_enabled" in batch
+
+    intake = automation[
+        automation.index("let flags = WorkflowFlags") : automation.index("let batch = plan_created_documents_batch")
+    ]
+    assert marker in intake
+    assert "&mut case" in intake
+    assert "document_required_input_fields" in intake
+
+
+def test_derived_medical_outputs_are_replaced_by_real_input_facts() -> None:
+    workflow = (ROOT / "crates/dokkomplekt-core/src/workflow_engine.rs").read_text("utf-8")
+    profiles = (ROOT / "crates/dokkomplekt-core/src/popup_profiles.rs").read_text("utf-8")
+
+    assert "profession_derived_field_sources" in workflow
+    assert "document_required_input_fields" in workflow
+    assert "MEDICAL_EXPERT_ANAMNESIS" in profiles
+    assert "MEDICAL_WORK_POSITION" in profiles
+    assert '"medical.sick_leave_number"' in profiles

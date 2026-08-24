@@ -1,9 +1,10 @@
 use crate::core::{SourceDocument, TargetTemplate};
 use crate::{
     canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
-    profession_runtime_control_fields, resolve_popup_default, run_universal_constructor_pipeline,
-    DocumentTemplateSpec, DomainKind, PopupFieldConfig, PromptAskMode, PromptSpec, SemanticCase,
-    UniversalDomain, UniversalPipelineFlags, UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
+    profession_derived_field_sources, profession_runtime_control_fields, resolve_popup_default,
+    run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
+    PromptAskMode, PromptSpec, SemanticCase, UniversalDomain, UniversalPipelineFlags,
+    UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,12 +48,15 @@ pub fn plan_workflow(
     // suggest fields in the popup designer, but they must not force unrelated questions into a
     // document that does not physically use those fields. Explicitly configured popup fields are
     // part of the selected document contract and therefore remain eligible.
-    let relevant = selected_document_fields(document);
+    let relevant = selected_document_fields(document, flags);
+    let derived_inputs = derived_input_fields(document, flags);
+    let derived_hard_required = derived_hard_required_input_fields(document, flags);
     let required = pipeline
         .workflow
         .requires
         .iter()
         .chain(document.required_fields.iter())
+        .chain(derived_inputs.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
         .filter(|field_id| relevant.contains(field_id))
@@ -61,6 +65,7 @@ pub fn plan_workflow(
     let hard_required = document
         .required_fields
         .iter()
+        .chain(derived_hard_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
         .filter(|field_id| relevant.contains(field_id))
@@ -125,7 +130,10 @@ pub fn plan_workflow(
     }
 }
 
-fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String> {
+fn selected_document_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<String> {
     let runtime_controls = profession_runtime_control_fields(&document.category, &document.role_id);
     let explicit_popup_fields = document
         .popup_configured
@@ -141,10 +149,89 @@ fn selected_document_fields(document: &DocumentTemplateSpec) -> BTreeSet<String>
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
         .collect::<BTreeSet<_>>();
+    replace_derived_fields_with_sources(document, flags, &mut fields);
     if matches!(document.category, DomainKind::Medical) && fields.contains("medical.labs") {
         fields.insert("medical.labs_without".into());
     }
     fields
+}
+
+fn derived_input_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<String> {
+    document
+        .placeholders
+        .iter()
+        .chain(document.required_fields.iter())
+        .flat_map(|field_id| {
+            profession_derived_field_sources(
+                &document.category,
+                &document.role_id,
+                field_id,
+                flags.sick_leave_enabled,
+            )
+        })
+        .collect()
+}
+
+fn derived_hard_required_input_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<String> {
+    document
+        .required_fields
+        .iter()
+        .flat_map(|field_id| {
+            profession_derived_field_sources(
+                &document.category,
+                &document.role_id,
+                field_id,
+                flags.sick_leave_enabled,
+            )
+        })
+        .collect()
+}
+
+/// Return the actual source facts that an automatic run must possess. Render-only
+/// fields are replaced with their profession-declared inputs, so risk checks never
+/// demand an impossible precomputed paragraph from the source document.
+pub fn document_required_input_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<String> {
+    let mut fields = document
+        .required_fields
+        .iter()
+        .chain(document.placeholders.iter())
+        .filter(|field_id| is_valid_field_id(field_id))
+        .map(|field_id| canonical_storage_field_id(field_id))
+        .collect::<BTreeSet<_>>();
+    replace_derived_fields_with_sources(document, flags, &mut fields);
+    fields
+}
+
+fn replace_derived_fields_with_sources(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+    fields: &mut BTreeSet<String>,
+) {
+    let replacements = fields
+        .iter()
+        .filter_map(|field_id| {
+            let sources = profession_derived_field_sources(
+                &document.category,
+                &document.role_id,
+                field_id,
+                flags.sick_leave_enabled,
+            );
+            (!sources.is_empty()).then(|| (field_id.clone(), sources))
+        })
+        .collect::<Vec<_>>();
+    for (derived, sources) in replacements {
+        fields.remove(&derived);
+        fields.extend(sources);
+    }
 }
 
 fn suppressed_prompt_fields(
@@ -377,6 +464,7 @@ fn semantic_case_snapshot_text(case: &SemanticCase) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
     use crate::{DomainKind, PopupFieldConfig, PromptAskMode};
 
     fn document(id: &str, field: &str) -> DocumentTemplateSpec {
@@ -525,6 +613,98 @@ mod tests {
             .prompts
             .iter()
             .any(|prompt| prompt.field_id == "document.number"));
+    }
+
+    #[test]
+    fn derived_medical_paragraph_asks_for_sources_not_computed_output() {
+        let mut doc = document("discharge", MEDICAL_EXPERT_ANAMNESIS);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "discharge".into();
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let prompts = plan
+            .prompts
+            .iter()
+            .map(|prompt| (prompt.field_id.as_str(), prompt.skippable))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            prompts,
+            BTreeSet::from([("medical.position", false), ("medical.workplace", false),])
+        );
+        assert!(!plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == MEDICAL_EXPERT_ANAMNESIS));
+    }
+
+    #[test]
+    fn optional_derived_medical_paragraph_keeps_source_prompts_skippable() {
+        let mut doc = document("primary", MEDICAL_EXPERT_ANAMNESIS);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "primary".into();
+        doc.required_fields.clear();
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let prompts = plan
+            .prompts
+            .iter()
+            .filter(|prompt| {
+                matches!(
+                    prompt.field_id.as_str(),
+                    "medical.workplace" | "medical.position"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts
+            .iter()
+            .all(|prompt| prompt.required && prompt.skippable));
+    }
+
+    #[test]
+    fn derived_discharge_paragraph_uses_exact_sick_leave_run_inputs() {
+        let mut doc = document("discharge", MEDICAL_EXPERT_ANAMNESIS);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "discharge".into();
+        let flags = WorkflowFlags {
+            sick_leave_enabled: true,
+        };
+
+        let inputs = document_required_input_fields(&doc, &flags);
+        assert_eq!(
+            inputs,
+            BTreeSet::from([
+                "medical.admission_date".into(),
+                "medical.discharge_date".into(),
+                "medical.position".into(),
+                "medical.sick_leave_number".into(),
+                "medical.workplace".into(),
+            ])
+        );
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &flags);
+        assert_eq!(
+            plan.prompts
+                .iter()
+                .map(|prompt| prompt.field_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            inputs.iter().map(String::as_str).collect()
+        );
+    }
+
+    #[test]
+    fn combined_work_position_uses_role_scoped_sources_in_old_saved_buttons() {
+        let mut doc = document("mse", crate::MEDICAL_WORK_POSITION);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "vk_mse".into();
+        let inputs = document_required_input_fields(&doc, &WorkflowFlags::default());
+        assert_eq!(
+            inputs,
+            BTreeSet::from([
+                crate::domains::medical_semantics::VK_MSE_POSITION.into(),
+                crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
+            ])
+        );
+        assert!(!inputs.contains(crate::MEDICAL_WORK_POSITION));
     }
 
     #[test]

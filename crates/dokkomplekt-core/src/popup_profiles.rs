@@ -1,15 +1,16 @@
 use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
 use crate::domains::medical_semantics::{
-    SICK_LEAVE_VK_COMMISSION_DATE, SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_PROTOCOL_DATE,
-    SICK_LEAVE_VK_PROTOCOL_NUMBER, SICK_LEAVE_VK_WORKPLACE, VK_MSE_COMMISSION_DATE,
-    VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE, VK_MSE_PROTOCOL_NUMBER, VK_MSE_WORKPLACE,
+    scope_legacy_field_for_role, MEDICAL_EXPERT_ANAMNESIS, SICK_LEAVE_VK_COMMISSION_DATE,
+    SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_PROTOCOL_DATE, SICK_LEAVE_VK_PROTOCOL_NUMBER,
+    SICK_LEAVE_VK_WORKPLACE, VK_MSE_COMMISSION_DATE, VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE,
+    VK_MSE_PROTOCOL_NUMBER, VK_MSE_WORKPLACE,
 };
 use crate::professional_records::{
     DIARY_DAY_END_TIME, DIARY_DAY_START_TIME, DIARY_INTRADAY_RHYTHM, DIARY_SCHEDULE_STYLE,
 };
 use crate::{
     canonical_storage_field_id, is_valid_field_id, title_for_field, DocumentTemplateSpec,
-    DomainKind, PopupFieldConfig, PromptAskMode, PromptInputKind,
+    DomainKind, PopupFieldConfig, PromptAskMode, PromptInputKind, MEDICAL_WORK_POSITION,
 };
 use chrono::Local;
 use std::collections::{BTreeMap, BTreeSet};
@@ -592,6 +593,60 @@ pub fn profession_runtime_control_fields(category: &DomainKind, role_id: &str) -
         ]);
     }
     fields
+}
+
+/// Describe the user-entered sources for a render-only semantic field.
+///
+/// The universal workflow engine owns the generic replacement mechanism; a
+/// profession profile only declares its dependencies here. This prevents the
+/// popup from asking a specialist to type a paragraph that the renderer will
+/// immediately recompute, while keeping the generated field out of persistent
+/// source data.
+pub fn profession_derived_field_sources(
+    category: &DomainKind,
+    role_id: &str,
+    field_id: &str,
+    sick_leave_enabled: bool,
+) -> BTreeSet<String> {
+    if !matches!(category, DomainKind::Medical) {
+        return BTreeSet::new();
+    }
+    let canonical = canonical_storage_field_id(field_id);
+    if canonical == MEDICAL_WORK_POSITION {
+        return ["medical.workplace", "medical.position"]
+            .into_iter()
+            .map(|field| scope_legacy_field_for_role(role_id, field))
+            .collect();
+    }
+    if canonical != MEDICAL_EXPERT_ANAMNESIS {
+        return BTreeSet::new();
+    }
+
+    match MedicalDocumentRole::from_role_id(role_id) {
+        MedicalDocumentRole::PrimaryInspection => ["medical.workplace", "medical.position"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        MedicalDocumentRole::DischargeEpicrisis => {
+            let mut fields = ["medical.workplace", "medical.position"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            if sick_leave_enabled {
+                fields.extend(
+                    [
+                        "medical.admission_date",
+                        "medical.discharge_date",
+                        "medical.sick_leave_number",
+                    ]
+                    .into_iter()
+                    .map(str::to_string),
+                );
+            }
+            fields
+        }
+        _ => BTreeSet::new(),
+    }
 }
 
 fn validation_hint_for(field_id: &str, kind: PromptInputKind) -> Option<String> {

@@ -12,7 +12,7 @@ def text(path: str) -> str:
 
 def test_final_workflow_plan_is_bounded_by_selected_template_fields() -> None:
     source = text("crates/dokkomplekt-core/src/workflow_engine.rs")
-    assert "selected_document_fields(document)" in source
+    assert "selected_document_fields(document, flags)" in source
     assert ".filter(|field_id| relevant.contains(field_id))" in source
     assert ".filter(|config| relevant.contains(&config.field_id))" in source
     assert "accounting_profile_does_not_force_fields_absent_from_selected_template" in source

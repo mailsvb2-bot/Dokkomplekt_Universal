@@ -1,3 +1,0 @@
-Cargo.lock package versions were synchronized to 18.4.3 in this source repair.
-
-Before any release, Rust 1.97.1 must execute the mandatory locked workspace gate and independently regenerate/compare Cargo.lock. The current repair environment did not contain Cargo, so this file deliberately prevents historical Rust evidence from being treated as current.

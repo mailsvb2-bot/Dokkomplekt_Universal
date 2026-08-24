@@ -49,13 +49,14 @@ pub fn plan_workflow(
     // document that does not physically use those fields. Explicitly configured popup fields are
     // part of the selected document contract and therefore remain eligible.
     let relevant = selected_document_fields(document, flags);
-    let derived_required = derived_required_input_fields(document, flags);
+    let derived_inputs = derived_input_fields(document, flags);
+    let derived_hard_required = derived_hard_required_input_fields(document, flags);
     let required = pipeline
         .workflow
         .requires
         .iter()
         .chain(document.required_fields.iter())
-        .chain(derived_required.iter())
+        .chain(derived_inputs.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
         .filter(|field_id| relevant.contains(field_id))
@@ -64,7 +65,7 @@ pub fn plan_workflow(
     let hard_required = document
         .required_fields
         .iter()
-        .chain(derived_required.iter())
+        .chain(derived_hard_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| canonical_storage_field_id(field_id))
         .filter(|field_id| relevant.contains(field_id))
@@ -155,7 +156,7 @@ fn selected_document_fields(
     fields
 }
 
-fn derived_required_input_fields(
+fn derived_input_fields(
     document: &DocumentTemplateSpec,
     flags: &WorkflowFlags,
 ) -> BTreeSet<String> {
@@ -163,6 +164,24 @@ fn derived_required_input_fields(
         .placeholders
         .iter()
         .chain(document.required_fields.iter())
+        .flat_map(|field_id| {
+            profession_derived_field_sources(
+                &document.category,
+                &document.role_id,
+                field_id,
+                flags.sick_leave_enabled,
+            )
+        })
+        .collect()
+}
+
+fn derived_hard_required_input_fields(
+    document: &DocumentTemplateSpec,
+    flags: &WorkflowFlags,
+) -> BTreeSet<String> {
+    document
+        .required_fields
+        .iter()
         .flat_map(|field_id| {
             profession_derived_field_sources(
                 &document.category,
@@ -616,6 +635,30 @@ mod tests {
             .prompts
             .iter()
             .any(|prompt| prompt.field_id == MEDICAL_EXPERT_ANAMNESIS));
+    }
+
+    #[test]
+    fn optional_derived_medical_paragraph_keeps_source_prompts_skippable() {
+        let mut doc = document("primary", MEDICAL_EXPERT_ANAMNESIS);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "primary".into();
+        doc.required_fields.clear();
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let prompts = plan
+            .prompts
+            .iter()
+            .filter(|prompt| {
+                matches!(
+                    prompt.field_id.as_str(),
+                    "medical.workplace" | "medical.position"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts
+            .iter()
+            .all(|prompt| prompt.required && prompt.skippable));
     }
 
     #[test]

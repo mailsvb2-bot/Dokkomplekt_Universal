@@ -77,6 +77,7 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
     // Build it only in this render clone from the current role-scoped facts; never
     // persist it as another source of truth.
     if let Some(combined) = combined_work_position(&scoped_case) {
+        scoped_case.unskip(crate::MEDICAL_WORK_POSITION);
         scoped_case.values.insert(
             crate::MEDICAL_WORK_POSITION.to_string(),
             SemanticValue::new(
@@ -88,6 +89,12 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
         );
     } else {
         scoped_case.values.remove(crate::MEDICAL_WORK_POSITION);
+        if ["medical.workplace", "medical.position"]
+            .iter()
+            .all(|field_id| scoped_case.is_skipped(field_id))
+        {
+            scoped_case.skip(crate::MEDICAL_WORK_POSITION);
+        }
     }
 
     let canonical_role = crate::domains::medical::canonical_medical_role(role_id);
@@ -95,8 +102,13 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
         // Never reuse a stale expert paragraph from the source document. Build an
         // ephemeral render-only value from the current case and the current role.
         scoped_case.values.remove(MEDICAL_EXPERT_ANAMNESIS);
-        scoped_case.skipped_fields.remove(MEDICAL_EXPERT_ANAMNESIS);
-        if let Some(expert) = build_expert_anamnesis(&scoped_case, &canonical_role) {
+        let all_sources_skipped = expert_source_fields(&scoped_case, &canonical_role)
+            .iter()
+            .all(|field_id| scoped_case.is_skipped(field_id));
+        if all_sources_skipped {
+            scoped_case.skip(MEDICAL_EXPERT_ANAMNESIS);
+        } else if let Some(expert) = build_expert_anamnesis(&scoped_case, &canonical_role) {
+            scoped_case.unskip(MEDICAL_EXPERT_ANAMNESIS);
             scoped_case.values.insert(
                 MEDICAL_EXPERT_ANAMNESIS.to_string(),
                 SemanticValue::new(
@@ -109,6 +121,24 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
         }
     }
     scoped_case
+}
+
+fn expert_source_fields(case: &SemanticCase, role_id: &str) -> Vec<&'static str> {
+    let mut fields = vec!["medical.workplace", "medical.position"];
+    let sick_leave_enabled = role_id == "discharge"
+        && case
+            .get(MEDICAL_SICK_LEAVE_NEEDED)
+            .and_then(normalize_yes_no)
+            .or_else(|| case.get("medical.sick_leave_number").map(|_| true))
+            .unwrap_or(false);
+    if sick_leave_enabled {
+        fields.extend([
+            "medical.admission_date",
+            "medical.discharge_date",
+            "medical.sick_leave_number",
+        ]);
+    }
+    fields
 }
 
 fn combined_work_position(case: &SemanticCase) -> Option<String> {
@@ -339,5 +369,24 @@ mod tests {
             scope_legacy_field_for_role("vk_mse", "medical.diagnosis"),
             "medical.diagnosis"
         );
+    }
+
+    #[test]
+    fn explicitly_skipped_optional_expert_sources_omit_the_derived_placeholder() {
+        let mut case = SemanticCase::default();
+        case.skip("medical.workplace");
+        case.skip("medical.position");
+
+        let prepared = case_for_medical_document_render(&case, "primary");
+        assert!(prepared.is_skipped(MEDICAL_EXPERT_ANAMNESIS));
+        let rendered = crate::render_text_template(
+            "Первичный осмотр\n{{medical.expert_anamnesis}}",
+            &case,
+            true,
+        );
+        assert!(rendered.missing_fields.is_empty());
+        assert!(!rendered
+            .output_text
+            .contains("{{medical.expert_anamnesis}}"));
     }
 }

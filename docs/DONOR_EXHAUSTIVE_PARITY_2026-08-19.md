@@ -59,7 +59,7 @@ For every donor behavior, the result must be one of:
 - Doctor-confirmed values have highest priority.
 - Diagnosis fields use the medical ICD-10 capability regardless of the dynamic field spelling/role.
 - Role-scoped commission/protocol/work-position fields remain separate instead of collapsing into generic aliases.
-- Render-only fields declare their source dependencies through the profession profile. A legacy button that contains a computed field such as `medical.expert_anamnesis` or `medical.work_position` asks for workplace, position and the active run's conditional facts instead of asking the user to type generated prose.
+- Render-only fields declare their source dependencies through the profession profile. A legacy button that contains a computed field such as `medical.expert_anamnesis` or `medical.work_position` asks for workplace, position and the active run's conditional facts instead of asking the user to type generated prose, while preserving whether the original placeholder was mandatory or explicitly skippable.
 - The sick-leave decision is bound to the exact manual or watched-folder run even when the merged popup has no visible questions; a previous case/run cannot control the new expert paragraph.
 
 ### Diaries

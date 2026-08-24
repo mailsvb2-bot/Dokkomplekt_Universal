@@ -142,16 +142,8 @@ fn expert_source_fields(case: &SemanticCase, role_id: &str) -> Vec<&'static str>
 }
 
 fn combined_work_position(case: &SemanticCase) -> Option<String> {
-    let workplace = case
-        .get("medical.workplace")
-        .or_else(|| case.get("subject.organization"))
-        .map(clean_expert_component)
-        .filter(|value| !value.is_empty());
-    let position = case
-        .get("medical.position")
-        .or_else(|| case.get("subject.position"))
-        .map(clean_expert_component)
-        .filter(|value| !value.is_empty());
+    let workplace = work_component(case, "medical.workplace", "subject.organization");
+    let position = work_component(case, "medical.position", "subject.position");
     match (workplace, position) {
         (Some(workplace), Some(position)) => Some(format!("{workplace} / {position}")),
         (Some(workplace), None) => Some(workplace),
@@ -196,16 +188,8 @@ fn build_expert_anamnesis(case: &SemanticCase, role_id: &str) -> Option<String> 
 }
 
 fn expert_work_sentence(case: &SemanticCase) -> Option<String> {
-    let workplace = case
-        .get("medical.workplace")
-        .or_else(|| case.get("subject.organization"))
-        .map(clean_expert_component)
-        .filter(|value| !value.is_empty());
-    let position = case
-        .get("medical.position")
-        .or_else(|| case.get("subject.position"))
-        .map(clean_expert_component)
-        .filter(|value| !value.is_empty());
+    let workplace = work_component(case, "medical.workplace", "subject.organization");
+    let position = work_component(case, "medical.position", "subject.position");
     match (workplace, position) {
         (Some(workplace), Some(position)) => {
             Some(format!("Работает в {workplace}, в должности {position}."))
@@ -214,6 +198,16 @@ fn expert_work_sentence(case: &SemanticCase) -> Option<String> {
         (None, Some(position)) => Some(format!("Работает, должность: {position}.")),
         (None, None) => None,
     }
+}
+
+fn work_component(case: &SemanticCase, field_id: &str, fallback_id: &str) -> Option<String> {
+    if case.is_skipped(field_id) {
+        return None;
+    }
+    case.get(field_id)
+        .or_else(|| case.get(fallback_id))
+        .map(clean_expert_component)
+        .filter(|value| !value.is_empty())
 }
 
 fn discharge_sick_leave_sentence(case: &SemanticCase) -> String {
@@ -226,11 +220,14 @@ fn discharge_sick_leave_sentence(case: &SemanticCase) -> String {
         None => "Больничный лист.".to_string(),
     };
 
-    let start = case
-        .get("medical.admission_date")
-        .or_else(|| case.get("medical.sick_leave_from"))
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let start = if case.is_skipped("medical.admission_date") {
+        None
+    } else {
+        case.get("medical.admission_date")
+            .or_else(|| case.get("medical.sick_leave_from"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
     let finish = case
         .get("medical.discharge_date")
         .map(str::trim)
@@ -251,11 +248,7 @@ fn discharge_sick_leave_sentence(case: &SemanticCase) -> String {
         } else {
             line.push_str(&format!(" Срок лечения с {start} по {finish}."));
         }
-    } else if let Some(start) = case
-        .get("medical.sick_leave_from")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    } else if let Some(start) = start {
         line.push_str(&format!(" Больничный лист открыт с {start}."));
     }
 
@@ -388,5 +381,43 @@ mod tests {
         assert!(!rendered
             .output_text
             .contains("{{medical.expert_anamnesis}}"));
+    }
+
+    #[test]
+    fn individually_skipped_work_source_never_reappears_through_profile_fallback() {
+        let mut case = SemanticCase::default();
+        put(&mut case, "subject.organization", "Скрытая организация");
+        put(&mut case, "medical.position", "инженер");
+        case.skip("medical.workplace");
+
+        let prepared = case_for_medical_document_render(&case, "primary");
+        assert_eq!(
+            prepared.get(MEDICAL_EXPERT_ANAMNESIS),
+            Some("Работает, должность: инженер.")
+        );
+        assert_eq!(prepared.get(crate::MEDICAL_WORK_POSITION), Some("инженер"));
+        assert!(!prepared
+            .get(MEDICAL_EXPERT_ANAMNESIS)
+            .unwrap_or_default()
+            .contains("Скрытая организация"));
+    }
+
+    #[test]
+    fn skipped_admission_never_reappears_as_sick_leave_start_fallback() {
+        let mut case = SemanticCase::default();
+        put(&mut case, "medical.workplace", "ООО Пример");
+        put(&mut case, "medical.position", "инженер");
+        put(&mut case, "medical.sick_leave_number", "ЛН-7");
+        put(&mut case, "medical.sick_leave_from", "20.05.2026");
+        put(&mut case, "medical.discharge_date", "12.06.2026");
+        set_medical_sick_leave_choice(&mut case, true);
+        case.skip("medical.admission_date");
+
+        let prepared = case_for_medical_document_render(&case, "discharge");
+        let expert = prepared
+            .get(MEDICAL_EXPERT_ANAMNESIS)
+            .expect("remaining expert facts should still render");
+        assert!(expert.contains("Больничный лист № ЛН-7."));
+        assert!(!expert.contains("20.05.2026"));
     }
 }

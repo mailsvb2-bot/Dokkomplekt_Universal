@@ -125,18 +125,24 @@ pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> S
 
 fn expert_source_fields(case: &SemanticCase, role_id: &str) -> Vec<&'static str> {
     let mut fields = vec!["medical.workplace", "medical.position"];
-    let sick_leave_enabled = role_id == "discharge"
-        && case
+    if role_id == "discharge" {
+        let sick_leave_choice = case
             .get(MEDICAL_SICK_LEAVE_NEEDED)
-            .and_then(normalize_yes_no)
-            .or_else(|| case.get("medical.sick_leave_number").map(|_| true))
-            .unwrap_or(false);
-    if sick_leave_enabled {
-        fields.extend([
-            "medical.admission_date",
-            "medical.discharge_date",
-            "medical.sick_leave_number",
-        ]);
+            .and_then(normalize_yes_no);
+        if sick_leave_choice == Some(false) {
+            // The explicit negative choice is itself meaningful evidence and
+            // produces the sentence that no sick leave is required. Do not
+            // discard that sentence merely because both work fields were
+            // intentionally skipped.
+            fields.push(MEDICAL_SICK_LEAVE_NEEDED);
+        } else if sick_leave_choice == Some(true) || case.get("medical.sick_leave_number").is_some()
+        {
+            fields.extend([
+                "medical.admission_date",
+                "medical.discharge_date",
+                "medical.sick_leave_number",
+            ]);
+        }
     }
     fields
 }
@@ -400,6 +406,21 @@ mod tests {
             .get(MEDICAL_EXPERT_ANAMNESIS)
             .unwrap_or_default()
             .contains("Скрытая организация"));
+    }
+
+    #[test]
+    fn negative_sick_leave_choice_survives_skipped_work_sources() {
+        let mut case = SemanticCase::default();
+        case.skip("medical.workplace");
+        case.skip("medical.position");
+        set_medical_sick_leave_choice(&mut case, false);
+
+        let prepared = case_for_medical_document_render(&case, "discharge");
+        assert!(!prepared.is_skipped(MEDICAL_EXPERT_ANAMNESIS));
+        assert_eq!(
+            prepared.get(MEDICAL_EXPERT_ANAMNESIS),
+            Some("В выдаче ЛН не нуждается.")
+        );
     }
 
     #[test]

@@ -110,7 +110,7 @@ const TRUSTED_LICENSE_PUBKEY_B64: &str = match option_env!("DOKKOMPLEKT_LICENSE_
     None => "Wxq3/5yQAVAUwQu+y+h3mQCYxypmOvMrWb81ms+Mqs8=",
 };
 const LICENSE_TRUST_ANCHOR_IS_CONFIGURED: bool =
-    matches!(option_env!("DOKKOMPLEKT_LICENSE_PUBKEY_B64"), Some(_));
+    option_env!("DOKKOMPLEKT_LICENSE_PUBKEY_B64").is_some();
 
 /// A separate trust anchor is used for software updates. It is deliberately not
 /// shared with licensing and is never accepted as a command argument from the UI.

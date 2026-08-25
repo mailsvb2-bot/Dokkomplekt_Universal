@@ -12,9 +12,9 @@ export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-con
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
 
-export function printJobsForItems(items: GeneratedPrintItem[], copiesByDocument: Record<string, number>): PrintJobDto[] {
+export function jobsForItems(items: GeneratedPrintItem[], printCopies: Record<string, number>): PrintJobDto[] {
   return items
-    .map((item) => ({ path: item.path, copies: copiesByDocument[item.document_id] ?? 1 }))
+    .map((item) => ({ path: item.path, copies: printCopies[item.document_id] ?? 1 }))
     .filter((job) => job.copies > 0);
 }
 

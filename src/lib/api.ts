@@ -202,16 +202,6 @@ export async function getWorkflowPlan(
   return callRust('get_workflow_plan', { req });
 }
 
-export async function getWorkflowPlanForDocuments(
-  documentIds: string[],
-  sickLeaveEnabled: boolean,
-  folderParts: FolderNamePartDto[] = [],
-): Promise<WorkflowPlan> {
-  return documentIds.length === 1
-    ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, folderParts)
-    : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, folderParts);
-}
-
 export async function getWorkflowPlanBatch(
   documentIds: string[],
   sickLeaveEnabled: boolean,

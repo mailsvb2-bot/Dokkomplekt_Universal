@@ -588,6 +588,11 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .medicalAdditionalSources { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 10px; }
 .medicalSourceChoice { flex: 1 1 240px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
 .medicalSourceChoice .fileBtn { width: fit-content; }
+.medicalDiarySelection { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.medicalDiaryFileList { margin: 0; padding-left: 22px; display: grid; gap: 5px; }
+.medicalDiaryFileList li { min-width: 0; }
+.medicalDiaryFileList span { display: block; overflow-wrap: anywhere; }
+.medicalDiaryFileList small { margin-top: 1px; }
 .medicalProfileOptions { border-top: 1px solid var(--line); padding-top: 10px; }
 .profileOptionsEditor { display: grid; gap: 6px; margin: 10px 0; }
 .profileOptionsEditor textarea { min-height: 84px; }

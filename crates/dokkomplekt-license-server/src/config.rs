@@ -51,9 +51,10 @@ impl ServerConfig {
             normalize_payment_provider(&payment_provider_raw).ok_or_else(|| {
                 anyhow::anyhow!("unsupported payment provider: {payment_provider_raw}")
             })?;
-        if strict_runtime && payment_provider != "yookassa" {
+        let uses_yookassa_api = matches!(payment_provider.as_str(), "yookassa" | "sbp");
+        if strict_runtime && !uses_yookassa_api {
             anyhow::bail!(
-                "production license server currently supports only the verified yookassa provider"
+                "production license server supports only verified YooKassa and SBP-through-YooKassa providers"
             );
         }
         let database_url = non_empty_env("DATABASE_URL");
@@ -77,7 +78,7 @@ impl ServerConfig {
         let yookassa_api_base_url = validate_yookassa_api_base_url(
             &std::env::var("DOKKOMPLEKT_YOOKASSA_API_BASE_URL")
                 .unwrap_or_else(|_| "https://api.yookassa.ru".to_string()),
-            strict_runtime && payment_provider == "yookassa",
+            strict_runtime && uses_yookassa_api,
         )?;
         let global_concurrency_limit =
             bounded_usize_env("DOKKOMPLEKT_GLOBAL_CONCURRENCY_LIMIT", 128, 8, 1_024);
@@ -103,11 +104,9 @@ impl ServerConfig {
         let trusted_proxies =
             TrustedProxyConfig::parse(trusted_proxy_cidrs.as_deref(), require_forwarded_for)
                 .map_err(anyhow::Error::msg)?;
-        if payment_provider == "yookassa"
-            && (yookassa_shop_id.is_none() || yookassa_secret_key.is_none())
-        {
+        if uses_yookassa_api && (yookassa_shop_id.is_none() || yookassa_secret_key.is_none()) {
             anyhow::bail!(
-                "DOKKOMPLEKT_YOOKASSA_SHOP_ID and DOKKOMPLEKT_YOOKASSA_SECRET_KEY are required for YooKassa"
+                "DOKKOMPLEKT_YOOKASSA_SHOP_ID and DOKKOMPLEKT_YOOKASSA_SECRET_KEY are required for YooKassa and SBP"
             );
         }
         if strict_runtime && issuer_key_b64.is_none() {

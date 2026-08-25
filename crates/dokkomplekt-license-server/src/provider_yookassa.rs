@@ -33,6 +33,8 @@ struct CreateYooKassaPayment<'a> {
     amount: CreateYooKassaAmount<'a>,
     capture: bool,
     confirmation: CreateYooKassaConfirmation<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payment_method_data: Option<CreateYooKassaPaymentMethodData<'a>>,
     description: &'a str,
     metadata: CreateYooKassaMetadata,
 }
@@ -48,6 +50,12 @@ struct CreateYooKassaConfirmation<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
     return_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateYooKassaPaymentMethodData<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,7 +88,15 @@ struct YooKassaPayment {
     status: String,
     amount: YooKassaAmount,
     #[serde(default)]
+    payment_method: Option<YooKassaPaymentMethod>,
+    #[serde(default)]
     metadata: YooKassaMetadata,
+}
+
+#[derive(Debug, Deserialize)]
+struct YooKassaPaymentMethod {
+    #[serde(rename = "type")]
+    kind: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +148,17 @@ fn payment_status(value: &str) -> Result<ProviderPaymentStatus, ProviderError> {
     }
 }
 
+fn provider_kind_for_payment(payment: &YooKassaPayment) -> ProviderKind {
+    match payment
+        .payment_method
+        .as_ref()
+        .map(|method| method.kind.as_str())
+    {
+        Some("sbp") => ProviderKind::Sbp,
+        _ => ProviderKind::YooKassa,
+    }
+}
+
 const MAX_PROVIDER_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 impl YooKassaProvider {
@@ -154,6 +181,82 @@ impl YooKassaProvider {
             .https_only(base_url.starts_with("https://"))
             .build()
             .map_err(|error| ProviderError::Transport(error.to_string()))
+    }
+
+    pub(crate) fn create_sbp_payment(
+        &self,
+        request: CreatePaymentRequest,
+    ) -> Result<CreatePaymentResponse, ProviderError> {
+        self.create_payment_for_method(request, Some("sbp"), ProviderKind::Sbp)
+    }
+
+    fn create_payment_for_method(
+        &self,
+        request: CreatePaymentRequest,
+        payment_method: Option<&str>,
+        provider_kind: ProviderKind,
+    ) -> Result<CreatePaymentResponse, ProviderError> {
+        let return_url = request.return_url.clone().unwrap_or_else(|| {
+            format!(
+                "{}/payment/return/{}",
+                self.public_base_url.trim_end_matches('/'),
+                request.order_id
+            )
+        });
+        let body = CreateYooKassaPayment {
+            amount: CreateYooKassaAmount {
+                value: format!("{}.00", request.amount_rub),
+                currency: "RUB",
+            },
+            capture: true,
+            confirmation: CreateYooKassaConfirmation {
+                kind: "redirect",
+                return_url,
+            },
+            payment_method_data: payment_method
+                .map(|kind| CreateYooKassaPaymentMethodData { kind }),
+            description: request.description.trim(),
+            metadata: CreateYooKassaMetadata {
+                order_id: request.order_id.to_string(),
+            },
+        };
+        let endpoint = format!("{}/v3/payments", self.validated_api_base_url()?);
+        let idempotence_key = payment_method
+            .map(|kind| format!("{}:{kind}", request.order_id))
+            .unwrap_or_else(|| request.order_id.to_string());
+        let response = self
+            .authenticated_client()?
+            .post(endpoint)
+            .basic_auth(self.shop_id.trim(), Some(self.secret_key.trim()))
+            .header("Idempotence-Key", idempotence_key)
+            .json(&body)
+            .send()
+            .map_err(|error| ProviderError::Transport(error.to_string()))?;
+        let status = response.status();
+        let bytes = read_response_limited(response)?;
+        if !status.is_success() {
+            let body = String::from_utf8_lossy(&bytes);
+            return Err(ProviderError::Transport(format!(
+                "YooKassa returned HTTP {status}: {}",
+                body.chars().take(512).collect::<String>()
+            )));
+        }
+        let created: CreatedYooKassaPayment = serde_json::from_slice(&bytes).map_err(|error| {
+            ProviderError::BadRequest(format!("bad YooKassa response: {error}"))
+        })?;
+        let confirmation_url = created
+            .confirmation
+            .and_then(|confirmation| confirmation.confirmation_url)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                ProviderError::BadRequest("YooKassa response has no confirmation_url".into())
+            })?;
+        Ok(CreatePaymentResponse {
+            provider: provider_kind,
+            provider_payment_id: created.id,
+            confirmation_url,
+            qr_url: None,
+        })
     }
 
     /// Authenticate an official webhook by resolving its payment through the
@@ -223,8 +326,9 @@ impl YooKassaProvider {
             ));
         }
         let status = payment_status(&verified.status)?;
+        let provider = provider_kind_for_payment(&verified);
         Ok(ProviderEvent {
-            provider: ProviderKind::YooKassa,
+            provider,
             provider_event_id: format!("verified:{}:{}", verified.id, verified.status),
             provider_payment_id: Some(verified.id),
             order_id,
@@ -261,62 +365,7 @@ impl PaymentProvider for YooKassaProvider {
         &self,
         request: CreatePaymentRequest,
     ) -> Result<CreatePaymentResponse, ProviderError> {
-        let return_url = request.return_url.clone().unwrap_or_else(|| {
-            format!(
-                "{}/payment/return/{}",
-                self.public_base_url.trim_end_matches('/'),
-                request.order_id
-            )
-        });
-        let body = CreateYooKassaPayment {
-            amount: CreateYooKassaAmount {
-                value: format!("{}.00", request.amount_rub),
-                currency: "RUB",
-            },
-            capture: true,
-            confirmation: CreateYooKassaConfirmation {
-                kind: "redirect",
-                return_url,
-            },
-            description: request.description.trim(),
-            metadata: CreateYooKassaMetadata {
-                order_id: request.order_id.to_string(),
-            },
-        };
-        let endpoint = format!("{}/v3/payments", self.validated_api_base_url()?);
-        let response = self
-            .authenticated_client()?
-            .post(endpoint)
-            .basic_auth(self.shop_id.trim(), Some(self.secret_key.trim()))
-            .header("Idempotence-Key", request.order_id.to_string())
-            .json(&body)
-            .send()
-            .map_err(|error| ProviderError::Transport(error.to_string()))?;
-        let status = response.status();
-        let bytes = read_response_limited(response)?;
-        if !status.is_success() {
-            let body = String::from_utf8_lossy(&bytes);
-            return Err(ProviderError::Transport(format!(
-                "YooKassa returned HTTP {status}: {}",
-                body.chars().take(512).collect::<String>()
-            )));
-        }
-        let created: CreatedYooKassaPayment = serde_json::from_slice(&bytes).map_err(|error| {
-            ProviderError::BadRequest(format!("bad YooKassa response: {error}"))
-        })?;
-        let confirmation_url = created
-            .confirmation
-            .and_then(|confirmation| confirmation.confirmation_url)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                ProviderError::BadRequest("YooKassa response has no confirmation_url".into())
-            })?;
-        Ok(CreatePaymentResponse {
-            provider: ProviderKind::YooKassa,
-            provider_payment_id: created.id,
-            confirmation_url,
-            qr_url: None,
-        })
+        self.create_payment_for_method(request, None, ProviderKind::YooKassa)
     }
 
     fn parse_callback(&self, raw_body: &[u8]) -> Result<ProviderEvent, ProviderError> {
@@ -508,6 +557,94 @@ mod tests {
             "https://pay.example/confirm/payment-123"
         );
         server.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn create_sbp_payment_uses_yookassa_sbp_method_and_distinct_idempotence_key() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let address = listener.local_addr().expect("address");
+        let order_id = Uuid::parse_str("11111111-2222-3333-4444-555555555555").expect("test UUID");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(headers_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..headers_end + 4]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= headers_end + 4 + content_length {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8(request).expect("UTF-8 HTTP request");
+            let expected_auth = format!("Authorization: Basic {}", STANDARD.encode("shop:secret"));
+            assert!(request_text
+                .to_ascii_lowercase()
+                .contains(&expected_auth.to_ascii_lowercase()));
+            assert!(request_text.contains("11111111-2222-3333-4444-555555555555:sbp"));
+            assert!(request_text.contains("\"payment_method_data\":{\"type\":\"sbp\"}"));
+            assert!(request_text.contains("\"confirmation\":{\"type\":\"redirect\""));
+            assert!(request_text.contains("\"capture\":true"));
+
+            let body = r#"{"id":"payment-sbp","confirmation":{"confirmation_url":"https://yoomoney.ru/checkout/payments/sbp?id=payment-sbp"}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+        });
+
+        let provider = YooKassaProvider {
+            public_base_url: "https://product.example".into(),
+            api_base_url: format!("http://{address}"),
+            shop_id: "shop".into(),
+            secret_key: "secret".into(),
+        };
+        let created = provider
+            .create_sbp_payment(CreatePaymentRequest {
+                order_id,
+                amount_rub: 1490,
+                description: "Universal document plan".into(),
+                return_url: None,
+            })
+            .expect("SBP payment must be created through YooKassa");
+        assert_eq!(created.provider, ProviderKind::Sbp);
+        assert_eq!(created.provider_payment_id, "payment-sbp");
+        server.join().expect("mock server thread");
+    }
+
+    #[test]
+    fn authenticated_payment_method_classifies_sbp_provider() {
+        let payment: YooKassaPayment = serde_json::from_str(
+            r#"{"id":"payment-sbp","status":"succeeded","amount":{"value":"1490.00","currency":"RUB"},"payment_method":{"type":"sbp"},"metadata":{"order_id":"11111111-2222-3333-4444-555555555555"}}"#,
+        )
+        .expect("verified SBP payment fixture");
+        assert_eq!(provider_kind_for_payment(&payment), ProviderKind::Sbp);
     }
 
     #[test]

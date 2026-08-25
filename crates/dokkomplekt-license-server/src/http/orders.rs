@@ -1,5 +1,6 @@
 use crate::order_access::{authorize_order, generate_order_access_token};
 use crate::provider_manual::ManualProvider;
+use crate::provider_sbp::SbpProvider;
 use crate::provider_yookassa::YooKassaProvider;
 use crate::providers::{CreatePaymentRequest, CreatePaymentResponse, PaymentProvider};
 use crate::state::{AppState, OrderRecord, OrderStatus};
@@ -203,9 +204,26 @@ async fn create_provider_payment(
         }
         .create_payment(request)
         .map_err(|error| ProviderCallError::Provider(error.to_string())),
-        "sbp" => Err(ProviderCallError::Provider(
-            "SBP provider is not implemented and cannot create payments".to_string(),
-        )),
+        "sbp" => {
+            let permit = state
+                .provider_gate
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| ProviderCallError::Busy)?;
+            let provider = SbpProvider {
+                public_base_url: state.config.public_base_url.clone(),
+                api_base_url: state.config.yookassa_api_base_url.clone(),
+                shop_id: state.config.yookassa_shop_id.clone().unwrap_or_default(),
+                secret_key: state.config.yookassa_secret_key.clone().unwrap_or_default(),
+            };
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                provider.create_payment(request)
+            })
+            .await
+            .map_err(|error| ProviderCallError::Provider(format!("SBP task failed: {error}")))?
+            .map_err(|error| ProviderCallError::Provider(error.to_string()))
+        }
         "yookassa" => {
             let permit = state
                 .provider_gate

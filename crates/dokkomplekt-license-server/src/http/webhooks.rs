@@ -1,5 +1,5 @@
 use crate::provider_yookassa::YooKassaProvider;
-use crate::providers::ProviderPaymentStatus;
+use crate::providers::{ProviderKind, ProviderPaymentStatus};
 use crate::state::AppState;
 use crate::storage::{
     PaymentEventRecord, PaymentEventStatus, PaymentEventWriteOutcome, PaymentProvider, StoreError,
@@ -117,10 +117,15 @@ async fn yookassa_callback(
         ProviderPaymentStatus::Cancelled => PaymentEventStatus::Cancelled,
         ProviderPaymentStatus::Rejected => PaymentEventStatus::Rejected,
     };
+    let provider = match event.provider {
+        ProviderKind::YooKassa => PaymentProvider::YooKassa,
+        ProviderKind::Sbp => PaymentProvider::Sbp,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
     record_verified_event(
         &state,
         event.order_id,
-        PaymentProvider::YooKassa,
+        provider,
         event.provider_event_id,
         event.provider_payment_id,
         status,

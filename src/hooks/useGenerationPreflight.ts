@@ -24,7 +24,7 @@ interface UseGenerationPreflightOptions {
   setStatus(message: string): void;
   requestWorkflowPlan(snapshot: GenerationSnapshot): Promise<WorkflowPlan | null | undefined>;
   applyAnswers(snapshot: GenerationSnapshot, answers: PopupAnswerDto[]): Promise<PopupApplyResult | null | undefined>;
-  onConfirmed(snapshot: GenerationSnapshot): Promise<void>;
+  onConfirmed(snapshot: GenerationSnapshot): Promise<string | null>;
 }
 
 /**
@@ -39,6 +39,7 @@ interface UseGenerationPreflightOptions {
 export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const [generationPreflightOpen, setGenerationPreflightOpen] = useState(false);
   const [generationSnapshot, setGenerationSnapshot] = useState<GenerationSnapshot | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const confirmationInFlight = useRef(false);
 
   async function openGenerationPreflight() {
@@ -50,6 +51,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       options.setStatus('Подождите: программа ещё проверяет выбранный комплект.');
       return;
     }
+    setGenerationError(null);
     const snapshot: GenerationSnapshot = {
       documentIds: [...options.selectedDocumentIds],
       sickLeaveEnabled: options.sickLeaveEnabled,
@@ -103,9 +105,15 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
           return;
         }
       }
-      setGenerationPreflightOpen(false);
+      setGenerationError(null);
       options.setStatus('Данные подтверждены. Формируется комплект…');
-      await options.onConfirmed(snapshot);
+      const generationFailure = await options.onConfirmed(snapshot);
+      if (generationFailure) {
+        setGenerationError(generationFailure);
+        options.setStatus(generationFailure);
+        return;
+      }
+      setGenerationPreflightOpen(false);
       setGenerationSnapshot(null);
     } finally {
       confirmationInFlight.current = false;
@@ -116,12 +124,14 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     if (confirmationInFlight.current) return;
     setGenerationPreflightOpen(false);
     setGenerationSnapshot(null);
+    setGenerationError(null);
   }
 
   return {
     generationPreflightOpen,
     generationDocumentIds: generationSnapshot?.documentIds ?? [],
     generationSnapshot,
+    generationError,
     closeGenerationPreflight,
     openGenerationPreflight,
     confirmGenerationPreflight,

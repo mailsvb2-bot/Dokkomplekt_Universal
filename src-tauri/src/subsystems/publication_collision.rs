@@ -299,6 +299,33 @@ mod manual_batch_publication_proof_tests {
     }
 
     #[test]
+    fn publishing_batch_creates_missing_output_root_and_keeps_readable_docx() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-create-output-root-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let stage = root.join(".dokkomplekt-manual-stage-test");
+        let output_root = root.join("Выписанные пациенты");
+        let desired = output_root.join("Иванов Иван Иванович");
+        std::fs::create_dir_all(&stage).unwrap();
+        let staged = stage.join("Выписной эпикриз.docx");
+        create_docx_from_text(&staged, "Физически созданный документ").unwrap();
+        assert!(!output_root.exists());
+
+        let published = publish_stage_to_unique_directory(&stage, &desired).unwrap();
+
+        assert_eq!(published, desired);
+        assert!(output_root.is_dir());
+        assert!(published.is_dir());
+        let verified = verify_published_batch_files(&published, &[staged], 1).unwrap();
+        let expected = published.join("Выписной эпикриз.docx");
+        assert_eq!(verified, vec![expected.display().to_string()]);
+        assert_eq!(extract_docx_text(&expected).unwrap(), "Физически созданный документ");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn published_batch_verification_rejects_wrong_document_count() {
         let root = std::env::temp_dir().join(format!(
             "dokkomplekt-manual-publication-count-{}-{}",

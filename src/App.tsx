@@ -566,25 +566,35 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function chooseExistingOutputPolicy(snapshot: GenerationSnapshot) {
+  async function chooseExistingOutputPolicy(snapshot: GenerationSnapshot, onError?: (detail: string) => void) {
     const labels = snapshot.documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
     return chooseExistingOutputPolicyFlow({
       outputRoot: snapshot.outputRoot, folderParts: snapshot.folderParts, labels,
-      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
+      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names), onError),
       confirm: (options) => dialogs.confirm(options),
       openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
       onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),
     });
   }
 
-  async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot) {
+  async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot): Promise<string | null> {
     if (!generationDocumentRevisionsMatch(snapshot.documentRevisionTokens, documents)) {
-      setStatus('Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.'); return;
+      return 'Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.';
     }
-    const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot);
-    if (!existingOutputPolicy || !snapshot.outputRoot) return;
-    const res = await run('render_docx_batch', () => renderDocxBatch(snapshot.documentIds, snapshot.outputRoot, snapshot.folderParts, true, existingOutputPolicy, snapshot.sickLeaveEnabled));
-    if (!res) return;
+    if (!snapshot.outputRoot.trim()) {
+      setFolderNamingConfirmed(false);
+      return 'Папка готовых документов не определена. Выберите папку и повторите создание.';
+    }
+    let policyError: string | null = null;
+    const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot, (detail) => { policyError = detail; });
+    if (!existingOutputPolicy) return policyError ? `Не удалось подготовить папку результата: ${policyError}` : null;
+    let renderError: string | null = null;
+    const res = await run(
+      'render_docx_batch',
+      () => renderDocxBatch(snapshot.documentIds, snapshot.outputRoot, snapshot.folderParts, true, existingOutputPolicy, snapshot.sickLeaveEnabled),
+      (detail) => { renderError = detail; },
+    );
+    if (!res) return `Не удалось создать документы: ${renderError ?? 'backend не вернул результат генерации.'}`;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, snapshot.documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
     const backupNote = res.backup_folder ? ` Предыдущий комплект сохранён: ${res.backup_folder}.` : '';
@@ -593,6 +603,7 @@ function AppContent() {
       : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote}`);
     await openCreatedOutputFolderSilently(res.output_folder, openInFileManager);
     if (autoPrint) await queuePrint(jobsForItems(printItems), true, snapshot.documentIds, null, res.output_folder);
+    return null;
   }
 
   async function loadWorkflowPlan(documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts): Promise<WorkflowPlan> {
@@ -606,7 +617,7 @@ function AppContent() {
     setStatus('Параметр больничного изменён. Нажмите «Проверить и создать» ещё раз, чтобы пересчитать обязательные вопросы.');
   }
 
-  const { generationPreflightOpen, generationDocumentIds, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
+  const { generationPreflightOpen, generationDocumentIds, generationError, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds),
     preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
@@ -1500,6 +1511,7 @@ function AppContent() {
           skippedAnswers={skippedAnswers}
           busy={busy}
           loading={preflightLoading}
+          generationError={generationError}
           showSickLeaveOption={showSickLeaveOption}
           sickLeaveEnabled={sickLeave}
           setAnswers={setAnswers}

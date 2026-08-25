@@ -16,6 +16,7 @@ interface GenerationPreflightModalProps {
   skippedAnswers: Record<string, boolean>;
   busy: boolean;
   loading: boolean;
+  generationError: string | null;
   showSickLeaveOption: boolean;
   sickLeaveEnabled: boolean;
   setAnswers: Dispatch<SetStateAction<Record<string, string>>>;
@@ -78,6 +79,13 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
           <div className="readyMessage notReady" role="alert">
             <i className="ti ti-alert-triangle" aria-hidden="true" />
             <div><strong>Создание заблокировано</strong><span>{props.plan.block_reasons.join('; ')}</span></div>
+          </div>
+        ) : null}
+
+        {props.generationError ? (
+          <div className="readyMessage notReady" role="alert" data-testid="generation-error">
+            <i className="ti ti-alert-triangle" aria-hidden="true" />
+            <div><strong>Документы не созданы</strong><span>{props.generationError}</span></div>
           </div>
         ) : null}
 

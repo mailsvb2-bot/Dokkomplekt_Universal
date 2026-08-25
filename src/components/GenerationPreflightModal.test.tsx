@@ -40,6 +40,7 @@ function Harness() {
       skippedAnswers={skippedAnswers}
       busy={false}
       loading={false}
+      generationError={null}
       showSickLeaveOption={false}
       sickLeaveEnabled={false}
       setAnswers={setAnswers}

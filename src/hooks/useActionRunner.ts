@@ -30,13 +30,19 @@ export function useActionRunner(
   const [busy, setBusy] = useState(false);
   const pendingCount = useRef(0);
 
-  const run = useCallback(async <T,>(label: string, action: () => Promise<T>): Promise<T | undefined> => {
+  const run = useCallback(async <T,>(
+    label: string,
+    action: () => Promise<T>,
+    onError?: (detail: string) => void,
+  ): Promise<T | undefined> => {
     pendingCount.current += 1;
     if (pendingCount.current === 1) setBusy(true);
     try {
       return await action();
     } catch (error) {
-      onStatus(formatError(label, actionErrorMessage(error)));
+      const detail = actionErrorMessage(error);
+      onStatus(formatError(label, detail));
+      onError?.(detail);
       return undefined;
     } finally {
       pendingCount.current = Math.max(0, pendingCount.current - 1);

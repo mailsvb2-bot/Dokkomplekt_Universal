@@ -723,16 +723,17 @@ impl LocalRepository {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let (created, _) = monthly.unwrap_or((0, 0));
+        let (created, monthly_trial) = monthly.unwrap_or((0, 0));
+        let monthly_used = if trial { monthly_trial } else { created };
         let trial_total: i64 = tx.query_row(
             "SELECT COALESCE(SUM(trial_documents),0) FROM commercial_usage",
             [],
             |row| row.get(0),
         )?;
         let requested = i64::from(documents);
-        if created.saturating_add(requested) > i64::from(monthly_limit) {
+        if monthly_used.saturating_add(requested) > i64::from(monthly_limit) {
             return Err(StorageError::Crypto(format!(
-                "monthly document limit exceeded: {created}+{documents}>{monthly_limit}"
+                "monthly document limit exceeded: {monthly_used}+{documents}>{monthly_limit}"
             )));
         }
         if trial && trial_total.saturating_add(requested) > i64::from(trial_total_limit) {
@@ -2097,6 +2098,18 @@ mod tests {
         assert!(repo.rollback_usage(&reservation).unwrap());
         assert!(!repo.rollback_usage(&reservation).unwrap());
         assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn paid_usage_does_not_consume_trial_monthly_budget() {
+        let path = temp_db("usage-paid-then-trial");
+        let mut repo = LocalRepository::open(&path).unwrap();
+        repo.reserve_usage("2026-07", 30, false, 100, 30).unwrap();
+        repo.reserve_usage("2026-07", 1, true, 30, 30).unwrap();
+        let snapshot = repo.usage_snapshot("2026-07").unwrap();
+        assert_eq!(snapshot.created_documents, 31);
+        assert_eq!(snapshot.trial_documents_total, 1);
         let _ = std::fs::remove_file(path);
     }
 

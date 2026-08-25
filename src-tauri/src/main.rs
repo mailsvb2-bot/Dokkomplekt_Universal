@@ -109,6 +109,8 @@ const TRUSTED_LICENSE_PUBKEY_B64: &str = match option_env!("DOKKOMPLEKT_LICENSE_
     Some(key) => key,
     None => "Wxq3/5yQAVAUwQu+y+h3mQCYxypmOvMrWb81ms+Mqs8=",
 };
+const LICENSE_TRUST_ANCHOR_IS_CONFIGURED: bool =
+    matches!(option_env!("DOKKOMPLEKT_LICENSE_PUBKEY_B64"), Some(_));
 
 /// A separate trust anchor is used for software updates. It is deliberately not
 /// shared with licensing and is never accepted as a command argument from the UI.
@@ -1349,53 +1351,74 @@ fn inspect_desktop_access(
         .map_err(|_| "license state lock failed")?
         .clone();
     if let Some(document) = license {
-        verify_license_document_now(&document, &trusted_license_key()?)
-            .map_err(|error| format!("license verification failed: {error}"))?;
-        let payload = &document.license.payload;
-        let pack = state.pack.lock().map_err(|_| "state lock failed")?;
-        let case = state
-            .semantic_case
-            .lock()
-            .map_err(|_| "state lock failed")?;
-        let request = SignedAccessRequest {
-            now_utc: now,
-            month_key: month_key.clone(),
-            machine: machine_fingerprint(app)?,
-            requested_documents,
-            template_count: Some(pack.documents.len().try_into().unwrap_or(u32::MAX)),
-            profile_count: Some(case.active_domains.len().try_into().unwrap_or(u32::MAX)),
-        };
-        let mut usage = UsageLedger::default();
-        usage.record_documents(&month_key, usage_snapshot.created_documents);
-        usage.trial_created_total = usage_snapshot.trial_documents_total;
-        usage.last_seen_utc = Some(now.to_string());
-        let decision =
-            evaluate_signed_access(payload, &usage, &request).map_err(|error| error.to_string())?;
-        let accepted = !matches!(decision.status, SignedAccessStatus::Denied);
-        return Ok(DesktopAccessDecision {
-            accepted,
-            mode: match decision.status {
-                SignedAccessStatus::Allowed => "paid",
-                SignedAccessStatus::Warning => "warning",
-                SignedAccessStatus::Denied => "blocked",
+        match verify_license_document_now(&document, &trusted_license_key()?) {
+            Ok(()) => {
+                let payload = &document.license.payload;
+                let pack = state.pack.lock().map_err(|_| "state lock failed")?;
+                let case = state
+                    .semantic_case
+                    .lock()
+                    .map_err(|_| "state lock failed")?;
+                let request = SignedAccessRequest {
+                    now_utc: now,
+                    month_key: month_key.clone(),
+                    machine: machine_fingerprint(app)?,
+                    requested_documents,
+                    template_count: Some(pack.documents.len().try_into().unwrap_or(u32::MAX)),
+                    profile_count: Some(case.active_domains.len().try_into().unwrap_or(u32::MAX)),
+                };
+                let mut usage = UsageLedger::default();
+                usage.record_documents(&month_key, usage_snapshot.created_documents);
+                usage.trial_created_total = usage_snapshot.trial_documents_total;
+                usage.last_seen_utc = Some(now.to_string());
+                let decision = evaluate_signed_access(payload, &usage, &request)
+                    .map_err(|error| error.to_string())?;
+                let accepted = !matches!(decision.status, SignedAccessStatus::Denied);
+                return Ok(DesktopAccessDecision {
+                    accepted,
+                    mode: match decision.status {
+                        SignedAccessStatus::Allowed => "paid",
+                        SignedAccessStatus::Warning => "warning",
+                        SignedAccessStatus::Denied => "blocked",
+                    }
+                    .into(),
+                    plan: plan_label(&decision.plan).into(),
+                    reason: decision.code,
+                    watermark: watermark_text(&payload.watermark_mode),
+                    document_limit_month: payload.document_limit_month,
+                    max_documents_per_run: signed_run_limit(&payload.plan),
+                    documents_used_month: used,
+                    documents_left_month: decision.documents_left_month,
+                });
             }
-            .into(),
-            plan: plan_label(&decision.plan).into(),
-            reason: decision.code,
-            watermark: watermark_text(&payload.watermark_mode),
-            document_limit_month: payload.document_limit_month,
-            max_documents_per_run: signed_run_limit(&payload.plan),
-            documents_used_month: used,
-            documents_left_month: decision.documents_left_month,
-        });
+            Err(error) if LICENSE_TRUST_ANCHOR_IS_CONFIGURED => {
+                return Err(format!("license verification failed: {error}"));
+            }
+            Err(_) => {
+                // Free unsigned preview builds intentionally have no production trust
+                // anchor. A persisted production license is therefore unverifiable in
+                // that diagnostic build and must not disable the independent local trial.
+                // Production builds always inject the key and stay fail-closed above.
+            }
+        }
     }
 
-    let projected = used.saturating_add(requested_documents);
+    Ok(local_trial_access_decision(
+        usage_snapshot.trial_documents_total,
+        requested_documents,
+    ))
+}
+
+fn local_trial_access_decision(trial_used: u32, requested_documents: u32) -> DesktopAccessDecision {
+    // Trial entitlement is lifetime-trial usage, not all documents created this month.
+    // Paid/previously licensed generation must never consume the fallback trial budget
+    // after an upgrade or when an unsigned preview is used for diagnostics.
+    let projected = trial_used.saturating_add(requested_documents);
     let per_run_ok = requested_documents <= TRIAL_MAX_DOCUMENTS_PER_RUN;
-    let monthly_ok = projected <= TRIAL_DOCUMENT_LIMIT_MONTH;
-    Ok(DesktopAccessDecision {
-        accepted: per_run_ok && monthly_ok,
-        mode: if per_run_ok && monthly_ok {
+    let trial_total_ok = projected <= TRIAL_DOCUMENT_LIMIT_MONTH;
+    DesktopAccessDecision {
+        accepted: per_run_ok && trial_total_ok,
+        mode: if per_run_ok && trial_total_ok {
             "trial"
         } else {
             "blocked"
@@ -1404,8 +1427,8 @@ fn inspect_desktop_access(
         plan: "trial".into(),
         reason: if !per_run_ok {
             "per_run_limit"
-        } else if !monthly_ok {
-            "monthly_limit"
+        } else if !trial_total_ok {
+            "trial_total_limit"
         } else {
             "local_trial"
         }
@@ -1413,9 +1436,9 @@ fn inspect_desktop_access(
         watermark: Some(TRIAL_WATERMARK_TEXT.to_string()),
         document_limit_month: TRIAL_DOCUMENT_LIMIT_MONTH,
         max_documents_per_run: TRIAL_MAX_DOCUMENTS_PER_RUN,
-        documents_used_month: used,
+        documents_used_month: trial_used,
         documents_left_month: TRIAL_DOCUMENT_LIMIT_MONTH.saturating_sub(projected),
-    })
+    }
 }
 
 fn reserve_generation_access(
@@ -2691,6 +2714,25 @@ mod tests {
         std::fs::write(root.join("state.sqlite.key"), b"short").expect("bad key");
         assert!(load_or_create_local_data_key(&db).is_err());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_trial_budget_counts_only_trial_documents() {
+        let untouched = local_trial_access_decision(0, 1);
+        assert!(untouched.accepted);
+        assert_eq!(untouched.documents_used_month, 0);
+        assert_eq!(
+            untouched.documents_left_month,
+            TRIAL_DOCUMENT_LIMIT_MONTH - 1
+        );
+
+        let last_allowed = local_trial_access_decision(TRIAL_DOCUMENT_LIMIT_MONTH - 1, 1);
+        assert!(last_allowed.accepted);
+        assert_eq!(last_allowed.documents_left_month, 0);
+
+        let exhausted = local_trial_access_decision(TRIAL_DOCUMENT_LIMIT_MONTH, 1);
+        assert!(!exhausted.accepted);
+        assert_eq!(exhausted.reason, "trial_total_limit");
     }
 
     #[test]

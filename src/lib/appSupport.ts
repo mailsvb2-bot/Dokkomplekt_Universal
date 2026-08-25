@@ -1,4 +1,4 @@
-import type { BundleDecision, CreatedDocumentOutput, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
+import type { BundleDecision, CreatedDocumentOutput, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, PrintJobDto, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
 import { newPopupField } from '../components/PopupFieldEditor';
 import type { ScannerFieldSuggestion } from './scannerSuggestions';
 import { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
@@ -11,6 +11,12 @@ export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';
 export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-confirmed.v1';
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
+
+export function printJobsForItems(items: GeneratedPrintItem[], copiesByDocument: Record<string, number>): PrintJobDto[] {
+  return items
+    .map((item) => ({ path: item.path, copies: copiesByDocument[item.document_id] ?? 1 }))
+    .filter((job) => job.copies > 0);
+}
 
 export function shouldSelectDocumentByDefault(_document: DocumentTemplateSpec): boolean {
   // Before a real source is understood there is no profession-neutral reason

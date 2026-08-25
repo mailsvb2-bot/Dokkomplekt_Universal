@@ -1,9 +1,9 @@
 {
   "schema": "dokkomplekt.rustsec-advisory-db-pin.v1",
   "repository": "https://github.com/RustSec/advisory-db.git",
-  "commit": "2f08fbb85332687b721f2f22706d07448369451b",
-  "committed_at_utc": "2026-08-18T08:23:07Z",
+  "commit": "a7bfe16948bf6f3ee25bdee4822209f87da21b80",
+  "committed_at_utc": "2026-08-25T02:42:17Z",
   "max_age_hours": 168,
   "blocked_upstream_commit": "e11d6b330dd033a9ed7476de71029cfb8f2d1095",
-  "reason": "The previously blocked upstream revision contained an inconsistent gettext-rs advisory. RustSec advisory-db main has advanced to 2f08fbb85332687b721f2f22706d07448369451b, which includes the assigned RUSTSEC-2026-0258 h2 advisory; this exact revision is validated against the locked Dokkomplekt dependency graph with cargo-audit --deny warnings before commit and remains short-lived with the existing fail-closed expiry."
+  "reason": "The previous short-lived validated pin expired while RustSec advisory-db main advanced. Revision a7bfe16948bf6f3ee25bdee4822209f87da21b80 was independently checked against the locked Dokkomplekt dependency graph with cargo-audit 0.22.2 --deny warnings and produced zero vulnerabilities and zero warnings; the known-bad inconsistent upstream revision remains blocked."
 }

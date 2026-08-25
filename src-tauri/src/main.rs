@@ -2533,10 +2533,11 @@ fn main() {
 mod tests {
     use super::{
         canonical_json_bytes, current_year_utc, is_forbidden_public_download_host,
-        is_forbidden_public_download_ip, load_or_create_local_data_key, normalized_picker_output,
-        parse_semver, pdf_print_settings, plan_label, reject_parent_traversal,
-        safe_update_file_name, signed_plan_to_product_plan, validate_printable_file,
-        validate_update_url, write_trust_report, SourceProvenance, TrustReportContext,
+        is_forbidden_public_download_ip, load_or_create_local_data_key,
+        local_trial_access_decision, normalized_picker_output, parse_semver, pdf_print_settings,
+        plan_label, reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
+        validate_printable_file, validate_update_url, write_trust_report, SourceProvenance,
+        TrustReportContext, TRIAL_DOCUMENT_LIMIT_MONTH,
     };
     use base64::Engine as _;
 

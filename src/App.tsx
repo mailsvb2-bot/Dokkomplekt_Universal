@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, getWorkflowPlanForDocuments, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
@@ -29,7 +29,7 @@ import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplate
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, printJobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
@@ -227,7 +227,7 @@ function AppContent() {
     }
 
     setPreflightLoading(true);
-    void loadWorkflowPlan(selectedDocIds)
+    void getWorkflowPlanForDocuments(selectedDocIds, sickLeave, folderParts)
       .then((workflow) => {
         if (cancelled) return;
         setPreflightPlan(workflow);
@@ -485,12 +485,6 @@ function AppContent() {
     });
   }
 
-  function jobsForItems(items: GeneratedPrintItem[]): PrintJobDto[] {
-    return items
-      .map((item) => ({ path: item.path, copies: printCopies[item.document_id] ?? 1 }))
-      .filter((job) => job.copies > 0);
-  }
-
   async function queuePrint(
     jobs: PrintJobDto[],
     automatic = false,
@@ -542,7 +536,7 @@ function AppContent() {
     const items = lastOutput.print_items?.length
       ? lastOutput.print_items
       : lastOutput.files.map((path, index) => ({ document_id: `generated:${index}`, label: fileLabel(path), path }));
-    await queuePrint(jobsForItems(items));
+    await queuePrint(printJobsForItems(items, printCopies));
   }
 
   async function exportLastOutput(pdfa1: boolean) {
@@ -602,14 +596,8 @@ function AppContent() {
       ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote} Требует внимания: ${res.warnings.join(' ')}`
       : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote}`);
     await openCreatedOutputFolderSilently(res.output_folder, openInFileManager);
-    if (autoPrint) await queuePrint(jobsForItems(printItems), true, snapshot.documentIds, null, res.output_folder);
+    if (autoPrint) await queuePrint(printJobsForItems(printItems, printCopies), true, snapshot.documentIds, null, res.output_folder);
     return null;
-  }
-
-  async function loadWorkflowPlan(documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts): Promise<WorkflowPlan> {
-    return documentIds.length === 1
-      ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts)
-      : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   }
 
   function changeGenerationSickLeave(value: boolean) {
@@ -620,7 +608,7 @@ function AppContent() {
   const { generationPreflightOpen, generationDocumentIds, generationError, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds),
     preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
-    requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
+    requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => getWorkflowPlanForDocuments(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
       ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))
       : run('apply_popup_batch', () => applyPopupBatch(snapshot.documentIds, snapshot.sickLeaveEnabled, payload, snapshot.folderParts)),
@@ -732,7 +720,7 @@ function AppContent() {
       setAnswers({}); setSkippedAnswers({});
       return;
     }
-    const workflow = await loadWorkflowPlan(documentIds);
+    const workflow = await getWorkflowPlanForDocuments(documentIds, sickLeave, folderParts);
     setPreflightPlan(workflow);
     setAnswers(Object.fromEntries(workflow.prompts.map((prompt) => [prompt.field_id, prompt.current_value ?? ''])));
     setSkippedAnswers((previous) => Object.fromEntries(workflow.prompts.filter((prompt) => previous[prompt.field_id]).map((prompt) => [prompt.field_id, true])));
@@ -1286,7 +1274,7 @@ function AppContent() {
     if (res.status === 'processed' && res.created_files.length) {
       const printItems = createdPrintItems(res.created_documents, res.created_files, documents);
       setLastOutput({ folder: res.patient_folder, files: res.created_files, source: 'zero_touch', print_items: printItems });
-      if (autoPrint) await queuePrint(jobsForItems(printItems), true, printItems.map((item) => item.document_id), res.print_triage ?? null, res.patient_folder);
+      if (autoPrint) await queuePrint(printJobsForItems(printItems, printCopies), true, printItems.map((item) => item.document_id), res.print_triage ?? null, res.patient_folder);
     }
   }
 

@@ -122,10 +122,7 @@ pub fn canonical_role_for_domain(domain: &UniversalDomain, raw_role: &str) -> St
     }
 }
 
-pub fn canonical_role_for_category(
-    category: &crate::DomainKind,
-    raw_role: &str,
-) -> Option<String> {
+pub fn canonical_role_for_category(category: &crate::DomainKind, raw_role: &str) -> Option<String> {
     let domain = match category {
         crate::DomainKind::Medical => UniversalDomain::Medical,
         crate::DomainKind::Legal => UniversalDomain::Legal,
@@ -144,14 +141,19 @@ mod canonical_category_role_tests {
     #[test]
     fn persisted_categories_reuse_the_universal_role_router() {
         assert_eq!(
-            canonical_role_for_category(&crate::DomainKind::Medical, "dischargeEpicrisis").as_deref(),
+            canonical_role_for_category(&crate::DomainKind::Medical, "dischargeEpicrisis")
+                .as_deref(),
             Some("discharge")
         );
         assert_eq!(
-            canonical_role_for_category(&crate::DomainKind::Accounting, "Счёт на оплату").as_deref(),
+            canonical_role_for_category(&crate::DomainKind::Accounting, "Счёт на оплату")
+                .as_deref(),
             Some("invoice")
         );
-        assert_eq!(canonical_role_for_category(&crate::DomainKind::Generic, "MyRole"), None);
+        assert_eq!(
+            canonical_role_for_category(&crate::DomainKind::Generic, "MyRole"),
+            None
+        );
         assert_eq!(
             canonical_role_for_category(&crate::DomainKind::Custom("clinic-x".into()), "MyRole"),
             None

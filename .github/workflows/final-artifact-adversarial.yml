@@ -2,6 +2,8 @@ name: Final Windows Artifact Adversarial
 
 on:
   workflow_dispatch:
+  push:
+    branches: ['agent/final-adversarial-windows-hardening']
 
 permissions:
   contents: read

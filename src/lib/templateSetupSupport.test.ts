@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildTemplateConfirmationRows, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './templateSetupSupport';
+import { describe, expect, it, vi } from 'vitest';
+import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './templateSetupSupport';
 import type { PopupFieldConfig, TemplateConfirmationRowDto } from './types';
 
 function popupField(fieldId: string): PopupFieldConfig {
@@ -127,5 +127,38 @@ describe('template picker partial failures', () => {
   it('reports partial failure without hiding successful imports', () => {
     expect(templatePickerCompletionMessage(1, [broken])).toContain('Шаблоны выбраны: 1.');
     expect(templatePickerCompletionMessage(1, [broken])).toContain('Пропущено проблемных шаблонов: 1');
+  });
+});
+
+
+describe('importBrowserTemplateFiles', () => {
+  it('keeps valid browser-selected templates when another DOCX cannot be imported', async () => {
+    const files = [new File(['ok'], 'Хороший.docx'), new File(['bad'], 'Повреждённый.docx')];
+    const importTemplateFile = vi.fn(async (_id: string, source: { fileName: string }) => {
+      if (source.fileName.startsWith('Повреждённый')) throw new Error('Файл повреждён');
+      return { template_path: 'safe/good.docx', extracted_text: 'АКТ ВЫПОЛНЕННЫХ РАБОТ' };
+    });
+    const result = await importBrowserTemplateFiles(files, {
+      readFileBytes: async () => new ArrayBuffer(2),
+      importTemplateFile,
+      analyzeTemplateFile: async () => ({ document: { popup_fields: [] } }),
+    });
+    expect(result.importedRows).toHaveLength(1);
+    expect(result.importedRows[0].file_name).toBe('Хороший.docx');
+    expect(result.rejectedTemplates).toEqual([
+      expect.objectContaining({ file_name: 'Повреждённый.docx', import_error: 'Файл повреждён' }),
+    ]);
+  });
+
+  it('reports unsupported files without sending them to the Rust importer', async () => {
+    const importTemplateFile = vi.fn();
+    const result = await importBrowserTemplateFiles([new File(['pdf'], 'шаблон.pdf')], {
+      readFileBytes: async () => new ArrayBuffer(1),
+      importTemplateFile,
+      analyzeTemplateFile: vi.fn(),
+    });
+    expect(result.importedRows).toHaveLength(0);
+    expect(result.rejectedTemplates[0].import_error).toMatch(/DOCX или DOCM/);
+    expect(importTemplateFile).not.toHaveBeenCalled();
   });
 });

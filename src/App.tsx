@@ -25,7 +25,7 @@ import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGene
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
-import { buildTemplateConfirmationRows, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
+import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
@@ -807,39 +807,24 @@ function AppContent() {
   }
 
   async function processTemplateFiles(files: File[]) {
-    const accepted = files.filter((file) => /\.doc[xm]$/i.test(file.name));
-    if (!accepted.length) {
-      setStatus('Шаблоны должны быть в формате DOCX или DOCM.');
+    const imported = await run('import_template_files', () => importBrowserTemplateFiles(files, {
+      readFileBytes, importTemplateFile, analyzeTemplateFile,
+    }));
+    if (!imported) return;
+    const { importedRows, rejectedTemplates } = imported;
+    if (!importedRows.length) {
+      setStatus(rejectedTemplates.length
+        ? `Не удалось подготовить выбранные шаблоны. ${rejectedTemplates.map(file => `${file.file_name}: ${file.import_error}`).join('; ')}`
+        : 'Шаблоны должны быть в формате DOCX или DOCM.');
       return;
     }
-    const importedRows: PendingTemplate[] = [];
-    for (const file of accepted) {
-      const id = newDocumentId();
-      const buffer = await readFileBytes(file);
-      const imported = await run('import_template_file', () =>
-        importTemplateFile(id, { fileName: file.name, bytesBase64: arrayBufferToBase64(buffer) }));
-      if (!imported) continue;
-      const detectedLabel = detectTitle(imported.extracted_text) || file.name.replace(/\.doc[xm]$/i, '');
-      const analyzed = await run('analyze_template_file', () => analyzeTemplateFile(imported.template_path, id, detectedLabel));
-      if (!analyzed) continue;
-      importedRows.push({
-        document_id: id,
-        template_path: imported.template_path,
-        extracted_text: imported.extracted_text,
-        file_name: file.name,
-        button_label: detectedLabel,
-        popup_fields: analyzed.document.popup_fields ?? [],
-        domain_override: null,
-      });
-    }
-    if (!importedRows.length) return;
     const combinedTemplates = [...pendingTemplates, ...importedRows];
     setPendingTemplates(combinedTemplates); await refreshWorkspaceInference(combinedTemplates);
     const last = importedRows.at(-1)!;
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
-    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
+    setStatus(templatePickerCompletionMessage(importedRows.length, rejectedTemplates));
   }
 
   async function processTemplateFile(file: File) {

@@ -1,5 +1,5 @@
 import type { DomainKind, PopupFieldConfig, TemplateConfirmationRowDto } from './types';
-import type { PendingTemplate } from './appSupport';
+import { arrayBufferToBase64, detectTitle, errorMessage, newDocumentId, type PendingTemplate } from './appSupport';
 
 export function buildTemplateConfirmationRows(
   rows: TemplateConfirmationRowDto[],
@@ -75,4 +75,48 @@ export function templatePickerCompletionMessage(createdCount: number, rejected: 
     ? ` Пропущено проблемных шаблонов: ${rejected.length} — ${rejected.map(file => `${file.file_name}: ${file.import_error}`).join('; ')}.`
     : '';
   return `Шаблоны выбраны: ${createdCount}.${rejectedSummary} Проверьте названия и нажмите «Создать кнопки».`;
+}
+
+
+export type BrowserTemplateImportFailure = {
+  file_name: string;
+  template_path: string;
+  import_error: string;
+};
+
+export async function importBrowserTemplateFiles(
+  files: File[],
+  deps: {
+    readFileBytes(file: File): Promise<ArrayBuffer>;
+    importTemplateFile(documentId: string, source: { fileName: string; bytesBase64: string }): Promise<{ template_path: string; extracted_text: string }>;
+    analyzeTemplateFile(templatePath: string, documentId: string, buttonLabel: string): Promise<{ document: { popup_fields?: PopupFieldConfig[] } }>;
+  },
+): Promise<{ importedRows: PendingTemplate[]; rejectedTemplates: BrowserTemplateImportFailure[] }> {
+  const importedRows: PendingTemplate[] = [];
+  const rejectedTemplates: BrowserTemplateImportFailure[] = [];
+  for (const file of files) {
+    if (!/\.doc[xm]$/i.test(file.name)) {
+      rejectedTemplates.push({ file_name: file.name, template_path: '', import_error: 'Неподдерживаемый формат: нужен DOCX или DOCM' });
+      continue;
+    }
+    try {
+      const id = newDocumentId();
+      const buffer = await deps.readFileBytes(file);
+      const imported = await deps.importTemplateFile(id, { fileName: file.name, bytesBase64: arrayBufferToBase64(buffer) });
+      const detectedLabel = detectTitle(imported.extracted_text) || file.name.replace(/\.doc[xm]$/i, '');
+      const analyzed = await deps.analyzeTemplateFile(imported.template_path, id, detectedLabel);
+      importedRows.push({
+        document_id: id,
+        template_path: imported.template_path,
+        extracted_text: imported.extracted_text,
+        file_name: file.name,
+        button_label: detectedLabel,
+        popup_fields: analyzed.document.popup_fields ?? [],
+        domain_override: null,
+      });
+    } catch (error) {
+      rejectedTemplates.push({ file_name: file.name, template_path: '', import_error: errorMessage(error) });
+    }
+  }
+  return { importedRows, rejectedTemplates };
 }

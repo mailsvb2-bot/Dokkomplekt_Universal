@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
-  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
+  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
@@ -22,6 +22,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './lib/templateSetupSupport';
@@ -37,7 +38,6 @@ import {
 export function App() {
   return <AppDialogProvider><AppContent /></AppDialogProvider>;
 }
-
 function AppContent() {
   const dialogs = useAppDialog();
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
@@ -46,8 +46,9 @@ function AppContent() {
   const [documents, setDocuments] = useState<DocumentTemplateSpec[]>([]);
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
-  const [status, setStatus] = useState('Добавьте исходный файл — остальное программа подготовит сама.');
+  const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
+  const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
 
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
@@ -63,7 +64,6 @@ function AppContent() {
     layoutRows?: number;
     tableRows?: number;
   } | null>(null);
-
   const [plan, setPlan] = useState<WorkflowPlan | null>(null);
   const [preflightPlan, setPreflightPlan] = useState<WorkflowPlan | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -122,26 +122,6 @@ function AppContent() {
 
   useEffect(() => {
     let alive = true;
-    (async () => {
-      try {
-        const res = await firstRunState();
-        if (!alive) return;
-        if (res?.pack?.documents?.length) {
-          setDocuments(res.pack.documents);
-          setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
-          setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
-        } else if (res?.has_user_buttons === false) {
-          setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');
-        } else if (res?.message) {
-          setStatus(res.message);
-        }
-      } catch { /* no backend in browser/tests — start empty */ }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
     void getIntakeCapabilities()
       .then((items) => { if (alive) setIntakeCapabilities(items); })
       .catch(() => { /* browser/tests */ });
@@ -168,6 +148,7 @@ function AppContent() {
     listen<unknown>('document-batch-ready', (event) => {
       try {
         const result = normalizeCreatedDocumentsIntakeResult(event.payload);
+        setLastOutput(null);
         setIntakeResult(result);
         setStatus(result.message);
         if (result.status === 'processed' && result.created_files.length) {
@@ -323,6 +304,20 @@ function AppContent() {
     return true;
   }
 
+  function clearSourceScopedUiState() {
+    setSemantic(null);
+    setAnswers({});
+    setSkippedAnswers({});
+    setPlan(null);
+    setPreflightPlan(null);
+    setPreview(null);
+    setScannerField('');
+    setScannerText('');
+    setModelOutput('');
+    setIntakeResult(null);
+    setLastOutput(null);
+  }
+
   async function resetCurrentCase() {
     const cleared = await run('reset_case', () => resetCase());
     if (!cleared) return;
@@ -331,15 +326,10 @@ function AppContent() {
     setSourceFilePath(null);
     setWebSourceUrl('');
     setParsed(null);
-    setSemantic(null);
-    setAnswers({}); setSkippedAnswers({});
+    clearSourceScopedUiState();
     setSelectedDocIds([]);
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
-    setScannerField('');
-    setScannerText('');
-    setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
+    setSickLeave(false);
+    setStatus('Новый комплект начат. Данные и результаты предыдущего комплекта очищены.');
   }
 
   function applyBundleDecision(decision: BundleDecision, routing: DocumentRoutingRecommendation): string {
@@ -351,7 +341,11 @@ function AppContent() {
   async function parseSourceNow() {
     const res = await run('parse_source', () => parseSource(sourceText, DEFAULT_YEAR));
     if (!res) return;
-    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    setSourceFileName(null);
+    setSourceFilePath(null);
+    setWebSourceUrl('');
+    clearSourceScopedUiState();
+    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -362,10 +356,6 @@ function AppContent() {
       layoutRows: 0,
       tableRows: 0,
     });
-    setAnswers({}); setSkippedAnswers({});
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
     const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
@@ -382,10 +372,12 @@ function AppContent() {
     const res = await run('parse_source_file', () =>
       parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
     if (!res) return;
+    clearSourceScopedUiState();
     setSourceFileName(file.name);
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    setWebSourceUrl('');
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     const layoutItems = res.layout_items ?? [];
@@ -397,10 +389,6 @@ function AppContent() {
       layoutRows: layoutItems.length,
       tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
     });
-    setAnswers({}); setSkippedAnswers({});
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
     const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Файл «${file.name}» прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
@@ -414,10 +402,11 @@ function AppContent() {
     }
     const res = await run('parse_web_source', () => parseWebSource(url, DEFAULT_YEAR));
     if (!res) return;
+    clearSourceScopedUiState();
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
     setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -428,10 +417,6 @@ function AppContent() {
       layoutRows: 0,
       tableRows: 0,
     });
-    setAnswers({}); setSkippedAnswers({});
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
     const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
   }
@@ -1266,6 +1251,8 @@ function AppContent() {
       setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
       return;
     }
+    setIntakeResult(null);
+    setLastOutput(null);
     const res = await run('run_created_documents_intake', () =>
       runCreatedDocumentsIntake(intakeSource.trim(), watchFolder.trim() || 'Созданные документы', folderParts, DEFAULT_YEAR, sickLeave));
     if (!res) return;
@@ -1288,6 +1275,8 @@ function AppContent() {
   }
 
 
+  const interactionBusy = busy || workspaceStateLoading || !workspaceStateReady;
+
   return (
     <div className="appRoot">
       <div className="window">
@@ -1307,9 +1296,20 @@ function AppContent() {
           </div>
         </header>
 
+        {workspaceStateError && (
+          <section className="startupRecovery" role="alert" aria-label="Не удалось загрузить рабочий набор">
+            <div>
+              <strong>Рабочий набор не загружен</strong>
+              <span>Чтобы не потерять сохранённые кнопки и настройки, создание нового комплекта заблокировано до успешного чтения состояния.</span>
+              <small>{workspaceStateError}</small>
+            </div>
+            <button className="primaryBtn" type="button" onClick={() => { void retryWorkspaceStateLoad(); }} disabled={workspaceStateLoading}>Повторить загрузку</button>
+          </section>
+        )}
+
         <div className="grid clientGrid">
           <Workspace
-            busy={busy}
+            busy={interactionBusy}
             documents={documents}
             selectedDocumentIds={selectedDocIds}
             watchFolder={watchFolder}
@@ -1375,7 +1375,7 @@ function AppContent() {
             documents={visibleDocs}
             activeDocumentId={activeDoc}
             selectedDocumentIds={selectedDocIds}
-            busy={busy}
+            busy={interactionBusy}
             printCopies={printCopies}
             onSelect={selectDocument}
             onToggleSelected={toggleDocumentSelected}

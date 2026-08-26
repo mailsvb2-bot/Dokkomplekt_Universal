@@ -12,8 +12,9 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none' } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number } = {}) {
   const bundleMode = options.bundleMode ?? 'auto';
+  let firstRunFailures = options.firstRunFailures ?? 0;
   const bundleDocumentIds = bundleMode === 'none' ? [] : bundleMode === 'review' ? ['acc_1'] : ['acc_1', 'doc_2'];
   const routing = { domain: 'Accounting', domain_confidence: 0.99, predicted_role: 'invoice', cluster_id: 'invoice', cluster_confidence: 0.99, recommended_document_ids: bundleDocumentIds, matches: [{ document_id: 'acc_1', button_label: 'Счёт на оплату', role_id: 'invoice', score: 0.99, evidence: ['title'] }], auto_select: bundleMode === 'auto', review_required: bundleMode !== 'auto', reasons: ['route'] };
   const bundleDecision = { document_ids: bundleDocumentIds, source: bundleMode === 'auto' ? 'deterministic_route' : bundleMode === 'review' ? 'review_proposal' : 'no_safe_proposal', confidence: 0.99, auto_apply: bundleMode === 'auto', review_required: bundleMode !== 'auto', question: bundleMode === 'auto' ? null : 'Подтвердите состав', reasons: ['route'] };
@@ -25,6 +26,11 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
     calls.push({ command, payload });
     switch (command) {
       case 'first_run_state':
+        if (firstRunFailures > 0) {
+          firstRunFailures -= 1;
+          throw new Error('state database unavailable');
+        }
+        return { pack, has_user_buttons: true, message: 'ok' } as never;
       case 'load_state':
         return { pack, has_user_buttons: true, message: 'ok' } as never;
       case 'parse_source':
@@ -199,7 +205,7 @@ async function click(name: RegExp | string) {
 describe('Полный прогон пользовательских сценариев и тем', () => {
   beforeEach(() => {
     localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Test/Готовые документы');
-    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, '1');
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
   });
   afterEach(() => { localStorage.clear(); __resetInvokeForTests(); vi.restoreAllMocks(); });
 
@@ -515,6 +521,59 @@ describe('Полный прогон пользовательских сцена�
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);
+
+  it('fail-closed блокирует работу при ошибке чтения сохранённого набора и даёт безопасный повтор', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { firstRunFailures: 1 });
+    render(<App />);
+
+    const alert = await screen.findByRole('alert', { name: 'Не удалось загрузить рабочий набор' });
+    expect(within(alert).getByText('Рабочий набор не загружен')).toBeTruthy();
+    const createButtons = screen.getByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;
+    expect(createButtons.disabled).toBe(true);
+    expect((screen.getByTestId('source-file-input') as HTMLInputElement).disabled).toBe(true);
+
+    const retry = within(alert).getByRole('button', { name: 'Повторить загрузку' }) as HTMLButtonElement;
+    await waitFor(() => expect(retry.disabled).toBe(false));
+    fireEvent.click(retry);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Не удалось загрузить рабочий набор' })).toBeNull());
+    expect((screen.getByTestId('source-file-input') as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('замена источника и новый комплект не оставляют имя, сканер или готовые файлы предыдущего дела', async () => {
+    const calls: Call[] = [];
+    installMock(calls);
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+
+    const oldSource = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Старый пациент.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    fireEvent.drop(document.querySelector('.sourceStage') as Element, { dataTransfer: { files: [oldSource] } });
+    await screen.findByText('Старый пациент.docx');
+
+    await click(/Проверить и создать \(2\)/);
+    let preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
+    await screen.findByRole('status', { name: 'Комплект готов' });
+
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Новый пациент, счёт № 148' } });
+    await click(/Использовать текст/);
+    await waitFor(() => expect(screen.queryByText('Старый пациент.docx')).toBeNull());
+    expect(screen.queryByRole('status', { name: 'Комплект готов' })).toBeNull();
+
+    fireEvent.click(screen.getByText('Расширенные инструменты'));
+    expect((screen.getByRole('button', { name: 'Показать значение в Word' }) as HTMLButtonElement).disabled).toBe(true);
+
+    await click(/Проверить и создать \(2\)/);
+    preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
+    await screen.findByRole('status', { name: 'Комплект готов' });
+    await click(/Новый комплект/);
+    await waitFor(() => expect(calls.filter((call) => call.command === 'reset_case').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('status', { name: 'Комплект готов' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Добавьте исходный файл' })).toBeTruthy();
+  });
 
   it('явное продолжение без обязательного значения передаётся в Rust и не блокирует генерацию', async () => {
     const calls: Call[] = [];

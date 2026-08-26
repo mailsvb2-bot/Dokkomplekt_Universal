@@ -208,6 +208,7 @@ export function Workspace(props: WorkspaceProps) {
         onDragOver={(event: DragEvent<HTMLElement>) => event.preventDefault()}
         onDrop={(event: DragEvent<HTMLElement>) => {
           event.preventDefault();
+          if (props.busy) return;
           const file = event.dataTransfer.files?.[0];
           if (file) props.onDropSourceFile(file);
         }}
@@ -227,7 +228,7 @@ export function Workspace(props: WorkspaceProps) {
             <span>Word, PDF, изображение, таблица, письмо, архив и другие поддерживаемые форматы</span>
             <label className="primaryBtn fileBtn largeAction">
               Выбрать файл
-              <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
+              <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" disabled={props.busy} style={{ display: 'none' }} />
             </label>
           </div>
         ) : (
@@ -241,7 +242,7 @@ export function Workspace(props: WorkspaceProps) {
             <div className="sourceActions">
               <label className="softBtn fileBtn">
                 Заменить файл
-                <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
+                <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} disabled={props.busy} style={{ display: 'none' }} />
               </label>
               <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Начать заново</button>
             </div>

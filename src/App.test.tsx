@@ -48,7 +48,9 @@ function installTemplateMock(staticCopy: boolean) {
 }
 
 async function selectTemplateAndCreateButton() {
-  fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
+  const create = await screen.findByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;
+  await waitFor(() => expect(create.disabled).toBe(false));
+  fireEvent.click(create);
   await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
   fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
 }

@@ -56,7 +56,39 @@ describe('AdditionalMaterialsPanel', () => {
     expect(within(selection).getByText('Дневники F20.0.txt')).toBeTruthy();
     expect(within(selection).getByText('Дневники F32.1.txt')).toBeTruthy();
     await waitFor(() => expect(within(selection).getAllByText('Сохранён')).toHaveLength(2));
-    expect(screen.getByRole('status').textContent).toContain('2 из 2 файл');
+    expect(screen.getByRole('status').textContent).toContain('сохранено 2 из 2');
+  });
+
+  it('keeps good diary files when a folder also contains junk or one broken document', async () => {
+    const savedBlocks: string[] = [];
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'import_learning_example_file') {
+        const name = (payload as { req?: { file_name?: string } })?.req?.file_name ?? '';
+        if (name === 'broken.docx') throw new Error('DOCX повреждён');
+        return { source_path: `/app-data/${name}`, source_kind: 'txt', extracted_text: `Текст ${name}`, warnings: [] } as T;
+      }
+      if (command === 'save_clause_block') {
+        const blockId = (payload as { req?: { block_id?: string } })?.req?.block_id ?? '';
+        savedBlocks.push(blockId);
+        return [] as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
+
+    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const good = new File(['статус'], 'Дневники F20.0.txt', { type: 'text/plain' });
+    const broken = new File(['bad'], 'broken.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const junk = new File(['system'], 'desktop.ini', { type: 'text/plain' });
+    fireEvent.change(input, { target: { files: [good, broken, junk] } });
+
+    const selection = await screen.findByRole('region', { name: 'Выбранные файлы дневников' });
+    await waitFor(() => expect(within(selection).getByText('Сохранён')).toBeTruthy());
+    expect(within(selection).getByText(/Ошибка импорта: DOCX повреждён/)).toBeTruthy();
+    expect(within(selection).getByText('Пропущен: неподдерживаемый формат')).toBeTruthy();
+    expect(savedBlocks).toEqual(['professional.medical.diary.regular.f200']);
+    expect(screen.getByRole('status').textContent).toContain('сохранено 1 из 3; пропущено 1; ошибок 1');
   });
 
   it('keeps the Texts control wired as a folder picker', () => {

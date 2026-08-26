@@ -24,7 +24,7 @@ interface MaterialIndexEntry {
 interface DiaryFileSelection {
   name: string;
   displayPath: string;
-  status: 'Импортируется' | 'Сохранён' | 'Пропущен: текст не найден' | 'Пропущен: имя не распознано' | 'Ошибка импорта';
+  status: string;
 }
 
 interface DroppedFileEntry {
@@ -86,6 +86,18 @@ function isRvkRole(roleId: string): boolean {
 function isFinalDiaryText(fileName: string): boolean {
   const name = fileName.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
   return /(?:финал|итог|выписк|заключитель)/u.test(name);
+}
+
+const MEDICAL_DIARY_TEXT_EXTENSIONS = new Set(['docx', 'docm', 'doc', 'txt', 'rtf', 'odt', 'pdf']);
+
+function isSupportedDiaryTextFile(fileName: string): boolean {
+  const extension = fileName.split('.').at(-1)?.toLocaleLowerCase('ru-RU') ?? '';
+  return MEDICAL_DIARY_TEXT_EXTENSIONS.has(extension);
+}
+
+function shortImportError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim().slice(0, 180) || 'неизвестная ошибка';
 }
 
 function uniqueTexts(values: string[]): string[] {
@@ -195,32 +207,53 @@ export function AdditionalMaterialsPanel(props: {
     try {
       const existing = await listClauseBlocks();
       const existingById = new Map(existing.map(block => [block.block_id, block.content]));
-      const grouped = new Map<string, string[]>();
-      const accepted = new Set<number>();
+      const grouped = new Map<string, { values: string[]; indexes: number[] }>();
+
       for (const [index, file] of files.entries()) {
-        const imported = await extractMaterial(file);
+        if (!isSupportedDiaryTextFile(file.name)) {
+          selections[index].status = 'Пропущен: неподдерживаемый формат';
+          continue;
+        }
+        let imported;
+        try {
+          imported = await extractMaterial(file);
+        } catch (error) {
+          selections[index].status = `Ошибка импорта: ${shortImportError(error)}`;
+          continue;
+        }
         const content = imported.extracted_text.trim();
         if (!content) { selections[index].status = 'Пропущен: текст не найден'; continue; }
         const key = safeKey(file.name);
         if (!key) { selections[index].status = 'Пропущен: имя не распознано'; continue; }
         const prefix = isFinalDiaryText(file.name) ? MEDICAL_DIARY_FINAL_PREFIX : MEDICAL_DIARY_REGULAR_PREFIX;
         const blockId = `${prefix}${key}`;
-        const bucket = grouped.get(blockId) ?? [];
-        bucket.push(content);
+        const bucket = grouped.get(blockId) ?? { values: [], indexes: [] };
+        bucket.values.push(content);
+        bucket.indexes.push(index);
         grouped.set(blockId, bucket);
-        accepted.add(index);
       }
-      for (const [blockId, values] of grouped) {
+
+      for (const [blockId, bucket] of grouped) {
         const previous = existingById.get(blockId);
-        const merged = uniqueTexts([...(previous ? [previous] : []), ...values]).join('\n\n');
-        await saveClauseBlock(blockId, `Медицинские дневники: ${blockId.split('.').pop()}`, merged);
+        const merged = uniqueTexts([...(previous ? [previous] : []), ...bucket.values]).join('\n\n');
+        try {
+          await saveClauseBlock(blockId, `Медицинские дневники: ${blockId.split('.').pop()}`, merged);
+          for (const index of bucket.indexes) selections[index].status = 'Сохранён';
+        } catch (error) {
+          const detail = shortImportError(error);
+          for (const index of bucket.indexes) selections[index].status = `Ошибка сохранения: ${detail}`;
+        }
       }
-      for (const index of accepted) selections[index].status = 'Сохранён';
+
       setDiaryFiles([...selections]);
-      setStatus(`«Тексты» сохранены: ${accepted.size} из ${files.length} файл(ов), групп: ${grouped.size}. Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
+      const saved = selections.filter(item => item.status === 'Сохранён').length;
+      const skipped = selections.filter(item => item.status.startsWith('Пропущен:')).length;
+      const failed = selections.filter(item => item.status.startsWith('Ошибка')).length;
+      setStatus(`«Тексты»: сохранено ${saved} из ${files.length}; пропущено ${skipped}; ошибок ${failed}. Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
     } catch (error) {
-      setDiaryFiles(selections.map(item => item.status === 'Импортируется' ? { ...item, status: 'Ошибка импорта' } : item));
-      setStatus(error instanceof Error ? error.message : String(error));
+      const detail = shortImportError(error);
+      setDiaryFiles(selections.map(item => item.status === 'Импортируется' ? { ...item, status: `Ошибка импорта: ${detail}` } : item));
+      setStatus(`Не удалось открыть библиотеку дневников: ${detail}`);
     } finally {
       setWorking(false);
     }

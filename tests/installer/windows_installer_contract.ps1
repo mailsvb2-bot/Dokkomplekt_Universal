@@ -266,6 +266,14 @@ $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   )
   $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
+# Confirm the first-run output naming rule before exercising generation. The
+# default rule is deterministic: document number + document date.
+$saveFolderRule = Find-ButtonByNames -Root $appWindow -Names @('Сохранить папку и правило')
+if ($null -ne $saveFolderRule) {
+  Invoke-UiElement -Element $saveFolderRule
+  Write-Host 'Default output folder and subfolder naming rule confirmed.'
+}
+
 $createButton = Wait-UiElement -Description 'Создать свои кнопки button' -Probe {
   $name = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::NameProperty,
@@ -312,6 +320,66 @@ $createdDocumentButton = Wait-UiElement -Description 'created static template bu
 }
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
 Write-Host 'Create button from a real unmarked DOCX OK.'
+
+# End-to-end installed generation proof: select the real created button, open the
+# real preflight, fill the two deterministic folder fields, click Create, then
+# require a physical readable DOCX in the Desktop output subfolder.
+$selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Выбрать всё')
+}
+Invoke-UiElement -Element $selectAllButton
+
+$preflightButton = Wait-UiElement -Description 'Проверить и создать (1) button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)')
+}
+Invoke-UiElement -Element $preflightButton
+
+$numberInput = Wait-UiElement -Description 'document number preflight field' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-number'
+  )
+  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+$dateInput = Wait-UiElement -Description 'document date preflight field' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-date'
+  )
+  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+$smokeNumber = "WIN-SMOKE-$PID"
+Set-UiValue -Element $numberInput -Value $smokeNumber
+Set-UiValue -Element $dateInput -Value '26.08.2026'
+
+$generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Создать документы')
+}
+Invoke-UiElement -Element $generateButton
+
+$createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
+$createdDoc = $null
+do {
+  if ($process.HasExited) { throw 'Installed application exited during real document generation smoke.' }
+  $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -eq $createdDoc) { Start-Sleep -Milliseconds 500 }
+} while ($null -eq $createdDoc -and [DateTime]::UtcNow -lt $createdDeadline)
+if ($null -eq $createdDoc) {
+  throw "Installed application did not physically create Проверочная кнопка.docx under $defaultOutputRoot"
+}
+if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
+$createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
+try {
+  $documentEntry = $createdArchive.GetEntry('word/document.xml')
+  if ($null -eq $documentEntry) { throw "Created file is not a readable Word DOCX: $($createdDoc.FullName)" }
+  $reader = [System.IO.StreamReader]::new($documentEntry.Open(), [System.Text.Encoding]::UTF8)
+  try { $createdXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+  if ($createdXml -notmatch 'Проверочная кнопка') { throw 'Created DOCX lost the template content.' }
+} finally {
+  $createdArchive.Dispose()
+}
+Write-Host "Installed end-to-end document generation OK: $($createdDoc.FullName)"
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()

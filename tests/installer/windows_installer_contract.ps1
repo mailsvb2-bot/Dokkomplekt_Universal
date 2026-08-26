@@ -223,6 +223,29 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
+function Wait-FileDialog {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  return Wait-UiElement -Description $Description -TimeoutSeconds 30 -Probe {
+    $fileNameCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $windows = $desktop.FindAll(
+      [System.Windows.Automation.TreeScope]::Children,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    foreach ($candidate in $windows) {
+      $fileNameControl = $candidate.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        $fileNameCondition
+      )
+      if ($null -ne $fileNameControl) { return $candidate }
+    }
+    return $null
+  }
+}
+
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
 
@@ -321,36 +344,67 @@ $createdDocumentButton = Wait-UiElement -Description 'created static template bu
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
 Write-Host 'Create button from a real unmarked DOCX OK.'
 
+# A template is not a case source. Exercise the installed source picker separately
+# so the generation stage is reached through the same order as a real user.
+$sourceButton = Wait-UiElement -Description 'Выбрать исходный файл button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Выбрать исходный файл')
+}
+Invoke-UiElement -Element $sourceButton
+$sourceDialog = Wait-FileDialog -Description 'native source file picker'
+$sourceFileNameEdit = Wait-UiElement -Description 'source OpenFileDialog file name field' -Probe {
+  $automationId = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+  $sourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
+}
+Set-UiValue -Element $sourceFileNameEdit -Value $plainTemplate
+Submit-OpenFileDialog -Dialog $sourceDialog
+$sourceAccepted = Wait-UiElement -Description 'Источник принят after native source selection' -TimeoutSeconds 40 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Источник принят'
+  )
+  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+if ($null -eq $sourceAccepted) { throw 'Installed application did not accept the real source DOCX.' }
+Write-Host 'Real source DOCX accepted by installed application.'
+
 # End-to-end installed generation proof: select the real created button, open the
-# real preflight, fill the two deterministic folder fields, click Create, then
-# require a physical readable DOCX in the Desktop output subfolder.
+# real preflight, fill deterministic folder fields when the backend asks for them,
+# click Create, then require a physical readable DOCX in the Desktop output subfolder.
 $selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
   Find-ButtonByNames -Root $appWindow -Names @('Выбрать всё')
 }
 Invoke-UiElement -Element $selectAllButton
 
-$preflightButton = Wait-UiElement -Description 'Проверить и создать (1) button' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)')
+$preflightButton = Wait-UiElement -Description 'generation action for one selected document' -TimeoutSeconds 40 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
 }
 Invoke-UiElement -Element $preflightButton
 
-$numberInput = Wait-UiElement -Description 'document number preflight field' -TimeoutSeconds 30 -Probe {
+$preflightTitle = Wait-UiElement -Description 'Проверка перед созданием dialog' -TimeoutSeconds 30 -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-    'workflow-document-number'
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Проверка перед созданием'
   )
   $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
-$dateInput = Wait-UiElement -Description 'document date preflight field' -TimeoutSeconds 30 -Probe {
-  $condition = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-    'workflow-document-date'
-  )
-  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-}
+if ($null -eq $preflightTitle) { throw 'Generation action did not open the real preflight.' }
+
 $smokeNumber = "WIN-SMOKE-$PID"
-Set-UiValue -Element $numberInput -Value $smokeNumber
-Set-UiValue -Element $dateInput -Value '26.08.2026'
+$numberCondition = [System.Windows.Automation.PropertyCondition]::new(
+  [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+  'workflow-document-number'
+)
+$dateCondition = [System.Windows.Automation.PropertyCondition]::new(
+  [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+  'workflow-document-date'
+)
+$numberInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $numberCondition)
+$dateInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $dateCondition)
+if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNumber }
+if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
 $generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
   Find-ButtonByNames -Root $appWindow -Names @('Создать документы')

@@ -226,7 +226,7 @@ export function Workspace(props: WorkspaceProps) {
             <div className="dropIcon"><i className="ti ti-file-upload" aria-hidden="true" /></div>
             <strong>Перетащите документ в эту область</strong>
             <span>Word, PDF, изображение, таблица, письмо, архив и другие поддерживаемые форматы</span>
-            <label className="primaryBtn fileBtn largeAction">
+            <label className="primaryBtn fileBtn largeAction" role="button" aria-label="Выбрать исходный файл">
               Выбрать файл
               <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" disabled={props.busy} style={{ display: 'none' }} />
             </label>
@@ -240,7 +240,7 @@ export function Workspace(props: WorkspaceProps) {
               {props.parsed?.warnings.length ? <em>Нужно проверить замечаний: {props.parsed.warnings.length}</em> : <em className="okText">Источник прочитан без критических замечаний</em>}
             </div>
             <div className="sourceActions">
-              <label className="softBtn fileBtn">
+              <label className="softBtn fileBtn" role="button" aria-label="Заменить исходный файл">
                 Заменить файл
                 <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} disabled={props.busy} style={{ display: 'none' }} />
               </label>

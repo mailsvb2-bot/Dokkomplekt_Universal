@@ -2,7 +2,7 @@ use super::{
     build_app,
     config::ServerConfig,
     state::{AppState, OrderRecord, OrderStatus},
-    storage::PostgresStore,
+    storage::{PaymentProvider, PostgresStore, StoreBackend},
 };
 use axum::{
     body::{to_bytes, Body},
@@ -15,7 +15,11 @@ use axum::{
 };
 use postgres::{Client, NoTls};
 use serde_json::{json, Value};
-use std::net::SocketAddr;
+use std::{
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    time::Duration,
+};
 use time::OffsetDateTime;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -50,6 +54,48 @@ fn base_config(database_url: Option<String>) -> ServerConfig {
         order_recovery_limit_per_minute: 1000,
         trusted_proxies: crate::traffic_guard::TrustedProxyConfig::default(),
     }
+}
+
+fn read_mock_http_request(stream: &mut TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("mock read timeout");
+    let mut request = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer).expect("read mock request");
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        let Some(headers_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&request[..headers_end + 4]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        if request.len() >= headers_end + 4 + content_length {
+            break;
+        }
+    }
+    String::from_utf8(request).expect("UTF-8 mock request")
+}
+
+fn write_mock_json_response(stream: &mut TcpStream, body: &str) {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .expect("write mock response");
 }
 
 async fn call(
@@ -313,6 +359,163 @@ async fn trusted_proxy_rate_limits_are_keyed_by_resolved_client_address() {
         call_from_proxy(app, peer, None, order).await,
         StatusCode::BAD_REQUEST
     );
+}
+
+#[tokio::test]
+async fn sbp_order_creation_uses_verified_yookassa_transport_and_returns_ready_payment() {
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock YooKassa");
+    let address = listener.local_addr().expect("mock address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept payment request");
+        let request_text = read_mock_http_request(&mut stream);
+        assert!(request_text.contains("\"payment_method_data\":{\"type\":\"sbp\"}"));
+        assert!(request_text.contains("\"value\":\"3900.00\""));
+        let body = r#"{"id":"payment-sbp-http","confirmation":{"confirmation_url":"https://yoomoney.ru/checkout/payments/sbp?id=payment-sbp-http"}}"#;
+        write_mock_json_response(&mut stream, body);
+    });
+
+    let mut config = base_config(None);
+    config.payment_provider = "sbp".to_string();
+    config.yookassa_api_base_url = format!("http://{address}");
+    config.yookassa_shop_id = Some("shop".to_string());
+    config.yookassa_secret_key = Some("secret".to_string());
+    let app = build_app(AppState::try_new(config).unwrap());
+    let (status, order) = call(
+        app,
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({
+            "plan": "doctor_pro",
+            "amount_rub": 3900,
+            "machine_hash": "machine-sbp-ready"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(order["provider"], "sbp");
+    assert_eq!(order["payment_state"], "ready");
+    assert_eq!(
+        order["payment_url"],
+        "https://yoomoney.ru/checkout/payments/sbp?id=payment-sbp-http"
+    );
+    assert_ne!(order["order_access_token"], "");
+    server.join().expect("mock YooKassa server");
+}
+
+#[tokio::test]
+async fn sbp_callback_is_authenticated_reclassified_and_marks_order_paid() {
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock YooKassa");
+    let address = listener.local_addr().expect("mock address");
+    let server = thread::spawn(move || {
+        let (mut create_stream, _) = listener.accept().expect("accept create request");
+        let create_request = read_mock_http_request(&mut create_stream);
+        assert!(create_request.starts_with("POST /v3/payments HTTP/1.1"));
+        assert!(create_request.contains("\"payment_method_data\":{\"type\":\"sbp\"}"));
+        let body = create_request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("create body");
+        let payload: Value = serde_json::from_str(body).expect("create JSON");
+        let order_id = payload["metadata"]["order_id"]
+            .as_str()
+            .expect("metadata.order_id")
+            .to_string();
+        let created = r#"{"id":"payment-sbp-e2e","confirmation":{"confirmation_url":"https://yoomoney.ru/checkout/payments/sbp?id=payment-sbp-e2e"}}"#;
+        write_mock_json_response(&mut create_stream, created);
+
+        let (mut verify_stream, _) = listener.accept().expect("accept verification request");
+        let verify_request = read_mock_http_request(&mut verify_stream);
+        assert!(verify_request.starts_with("GET /v3/payments/payment-sbp-e2e HTTP/1.1"));
+        let verified = json!({
+            "id": "payment-sbp-e2e",
+            "status": "succeeded",
+            "amount": { "value": "3900.00", "currency": "RUB" },
+            "payment_method": { "type": "sbp" },
+            "metadata": { "order_id": order_id }
+        });
+        write_mock_json_response(&mut verify_stream, &verified.to_string());
+    });
+
+    let mut config = base_config(None);
+    config.payment_provider = "sbp".to_string();
+    config.yookassa_api_base_url = format!("http://{address}");
+    config.yookassa_shop_id = Some("shop".to_string());
+    config.yookassa_secret_key = Some("secret".to_string());
+    let state = AppState::try_new(config).unwrap();
+    let store = state.store.clone();
+    let app = build_app(state);
+
+    let (status, order) = call(
+        app.clone(),
+        Method::POST,
+        "/api/orders".to_string(),
+        Some(json!({
+            "plan": "doctor_pro",
+            "amount_rub": 3900,
+            "machine_hash": "machine-sbp-callback"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let order_id = order["order_id"].as_str().expect("order id").to_string();
+    let access_token = order["order_access_token"]
+        .as_str()
+        .expect("order access token")
+        .to_string();
+
+    let callback = json!({
+        "type": "notification",
+        "event": "payment.succeeded",
+        "object": {
+            "id": "payment-sbp-e2e",
+            "status": "succeeded",
+            "amount": { "value": "3900.00", "currency": "RUB" },
+            "payment_method": { "type": "sbp" },
+            "metadata": { "order_id": order_id }
+        }
+    });
+    let (status, response) = call(
+        app.clone(),
+        Method::POST,
+        "/api/provider/yookassa/callback".to_string(),
+        Some(callback),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["accepted"], true);
+    assert_eq!(response["duplicate"], false);
+
+    let (status, order_status) = call_authorized(
+        app,
+        Method::GET,
+        format!("/api/orders/{order_id}/status"),
+        None,
+        &access_token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(order_status["status"], "paid");
+
+    let StoreBackend::Memory(memory) = store else {
+        panic!("test requires memory store");
+    };
+    let memory = memory.read().expect("memory store lock");
+    let event = memory
+        .payment_events
+        .values()
+        .find(|event| event.provider_payment_id.as_deref() == Some("payment-sbp-e2e"))
+        .expect("verified SBP payment event");
+    assert!(matches!(event.provider, PaymentProvider::Sbp));
+    assert_eq!(
+        event.provider_event_id,
+        "verified:payment-sbp-e2e:succeeded"
+    );
+
+    server.join().expect("mock YooKassa server");
 }
 
 #[tokio::test]

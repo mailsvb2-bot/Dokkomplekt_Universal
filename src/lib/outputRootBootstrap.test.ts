@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OUTPUT_ROOT_KEY } from './appSupport';
-import { ensureDefaultOutputRoot, outputRootNeedsBootstrap } from './outputRootBootstrap';
+import { ensureDefaultOutputRoot, getOutputRootBootstrapError, outputRootNeedsBootstrap } from './outputRootBootstrap';
 
 class MemoryStorage {
   private readonly values = new Map<string, string>();
@@ -24,6 +24,7 @@ describe('default output root bootstrap', () => {
     expect(resolved).toBe('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
     expect(storage.getItem(OUTPUT_ROOT_KEY)).toBe(resolved);
     expect(resolver).toHaveBeenCalledTimes(1);
+    expect(getOutputRootBootstrapError()).toBeNull();
   });
 
   it('migrates the old process-relative fallback to the Desktop destination', async () => {
@@ -50,12 +51,64 @@ describe('default output root bootstrap', () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
-  it('falls back safely to the existing folder picker when Desktop resolution fails', async () => {
+  it('physically ensures an already-saved destination without replacing the user choice', async () => {
+    const storage = new MemoryStorage();
+    storage.setItem(OUTPUT_ROOT_KEY, 'C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    const resolver = vi.fn(async () => 'D:\\Other\\Выписанные пациенты');
+    const ensurer = vi.fn(async (path: string) => path);
+
+    const resolved = await ensureDefaultOutputRoot(storage, resolver, ensurer);
+
+    expect(resolved).toBe('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    expect(ensurer).toHaveBeenCalledWith('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    expect(resolver).not.toHaveBeenCalled();
+    expect(storage.getItem(OUTPUT_ROOT_KEY)).toBe(resolved);
+  });
+
+  it('ensures the new Desktop destination before saving it', async () => {
+    const storage = new MemoryStorage();
+    const resolver = vi.fn(async () => 'C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    const ensurer = vi.fn(async (path: string) => path);
+
+    const resolved = await ensureDefaultOutputRoot(storage, resolver, ensurer);
+
+    expect(ensurer).toHaveBeenCalledWith('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    expect(storage.getItem(OUTPUT_ROOT_KEY)).toBe(resolved);
+  });
+
+  it('surfaces Desktop resolution failures instead of swallowing them', async () => {
     const storage = new MemoryStorage();
     const resolver = vi.fn(async () => { throw new Error('desktop unavailable'); });
 
     await expect(ensureDefaultOutputRoot(storage, resolver)).resolves.toBeNull();
     expect(storage.getItem(OUTPUT_ROOT_KEY)).toBeNull();
+    expect(getOutputRootBootstrapError()).toContain('desktop unavailable');
+  });
+
+  it('preserves a saved destination and surfaces a filesystem refusal', async () => {
+    const storage = new MemoryStorage();
+    const saved = 'C:\\Users\\Doctor\\Desktop\\Выписанные пациенты';
+    storage.setItem(OUTPUT_ROOT_KEY, saved);
+    const ensurer = vi.fn(async () => { throw new Error('access denied'); });
+
+    await expect(ensureDefaultOutputRoot(storage, async () => 'unused', ensurer)).resolves.toBeNull();
+    expect(storage.getItem(OUTPUT_ROOT_KEY)).toBe(saved);
+    expect(getOutputRootBootstrapError()).toContain('access denied');
+  });
+
+  it('clears an earlier bootstrap error after the next successful preparation', async () => {
+    const storage = new MemoryStorage();
+    await ensureDefaultOutputRoot(storage, async () => { throw new Error('temporary failure'); });
+    expect(getOutputRootBootstrapError()).toContain('temporary failure');
+
+    const resolved = await ensureDefaultOutputRoot(
+      storage,
+      async () => 'C:\\Users\\Doctor\\Desktop\\Выписанные пациенты',
+      async (path) => path,
+    );
+
+    expect(resolved).toContain('Выписанные пациенты');
+    expect(getOutputRootBootstrapError()).toBeNull();
   });
 
   it('recognizes empty and legacy roots but not an explicit path', () => {

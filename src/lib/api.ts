@@ -41,6 +41,10 @@ export async function getDefaultOutputRoot(): Promise<string> {
   return callRust('get_default_output_root');
 }
 
+export async function ensureOutputRoot(outputRoot: string): Promise<string> {
+  return callRust('ensure_output_root', { req: { output_root: outputRoot } });
+}
+
 export async function getProcessBlueprints(): Promise<ProcessBlueprintState> {
   return callRust('get_process_blueprints');
 }
@@ -121,6 +125,19 @@ export async function resetCase(): Promise<SemanticCase> {
 
 export async function parseSource(sourceText: string, defaultYear: number): Promise<ParseSourceResponse> {
   return callRust('parse_source', { req: { source_text: sourceText, default_year: defaultYear } });
+}
+
+export interface PickedSourceFile {
+  file_name: string;
+  selected_path: string;
+}
+
+export async function pickSourceFile(initialPath?: string | null): Promise<PickedSourceFile | null> {
+  return callRust('pick_source_file', { req: { initial_path: initialPath ?? null } });
+}
+
+export async function parseSourcePath(selectedPath: string, defaultYear: number): Promise<ParseSourceFileResponse> {
+  return callRust('parse_source_path', { req: { selected_path: selectedPath, default_year: defaultYear } });
 }
 
 export async function parseSourceFile(fileName: string, bytesBase64: string, defaultYear: number): Promise<ParseSourceFileResponse> {
@@ -500,6 +517,7 @@ export interface PickedTemplateFile {
   file_name: string;
   template_path: string;
   extracted_text: string;
+  import_error?: string | null;
 }
 
 export async function pickTemplateFiles(initialPath?: string | null): Promise<PickedTemplateFile[]> {
@@ -652,6 +670,7 @@ export async function renderMailMerge(documentIds: string[], delimitedText: stri
 export const rustCommandNames = [
   'first_run_state',
   'get_default_output_root',
+  'ensure_output_root',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',
@@ -666,6 +685,8 @@ export const rustCommandNames = [
   'reset_case',
   'set_field',
   'parse_source',
+  'pick_source_file',
+  'parse_source_path',
   'parse_source_file',
   'get_intake_capabilities',
   'get_sidecar_status',

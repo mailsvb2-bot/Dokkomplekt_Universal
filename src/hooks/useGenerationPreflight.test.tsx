@@ -24,7 +24,7 @@ describe('useGenerationPreflight', () => {
     const setStatus = vi.fn();
     const requestWorkflowPlan = vi.fn(async (_snapshot: GenerationSnapshot) => blockedPlan);
     const applyAnswers = vi.fn(async (_snapshot: GenerationSnapshot, _answers: PopupAnswerDto[]) => null as PopupApplyResult | null);
-    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => undefined);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
     const { result } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['medical.discharge'], ...context('medical.discharge'), preflightPlan: blockedPlan,
       preflightLoading: false, answers: {}, skippedAnswers: {}, setPreflightPlan, setStatus,
@@ -50,7 +50,7 @@ describe('useGenerationPreflight', () => {
     const { result } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['medical.discharge'], ...context('medical.discharge'), preflightPlan: null,
       preflightLoading: false, answers: {}, skippedAnswers: {}, setPreflightPlan, setStatus,
-      requestWorkflowPlan, applyAnswers: vi.fn(async () => null), onConfirmed: vi.fn(async () => undefined),
+      requestWorkflowPlan, applyAnswers: vi.fn(async () => null), onConfirmed: vi.fn(async () => null),
     }));
     await act(async () => { await result.current.openGenerationPreflight(); });
     expect(result.current.generationPreflightOpen).toBe(false);
@@ -67,7 +67,7 @@ describe('useGenerationPreflight', () => {
     };
     const applied: PopupApplyResult = { accepted: true, semantic_case: { values: {}, collections: {}, blocks: {}, skipped_fields: [] }, still_missing: [], message: 'ok' };
     const applyAnswers = vi.fn(async (_snapshot: GenerationSnapshot, _answers: PopupAnswerDto[]) => applied);
-    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => undefined);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
     const { result } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['generic.contract'], ...context('generic.contract'), preflightPlan: conditionalPlan,
       preflightLoading: false, answers: { 'custom.need_details': 'Нет' }, skippedAnswers: {},
@@ -87,7 +87,7 @@ describe('useGenerationPreflight', () => {
     let outputRoot = 'C:/Desktop/Выписанные пациенты';
     let sickLeaveEnabled = false;
     const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
-    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => undefined);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
     const { result, rerender } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['contract'], sickLeaveEnabled, folderParts: ['DocumentNumber'], outputRoot,
       documentRevisionTokens: { contract: 'revision-1' }, preflightPlan: readyPlan, preflightLoading: false,
@@ -103,10 +103,61 @@ describe('useGenerationPreflight', () => {
     }));
   });
 
+  it('keeps the preflight open and exposes a generation failure instead of looking like a dead button', async () => {
+    const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
+    const failure = 'Не удалось создать документы: лимит или файловая публикация не прошли.';
+    const setStatus = vi.fn();
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false,
+      answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
+      setStatus, requestWorkflowPlan: vi.fn(async () => readyPlan), applyAnswers: vi.fn(async () => null),
+      onConfirmed: vi.fn(async () => failure),
+    }));
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+    expect(result.current.generationPreflightOpen).toBe(true);
+    expect(result.current.generationError).toBe(failure);
+    expect(setStatus).toHaveBeenLastCalledWith(failure);
+  });
+
+  it('shows the exact missing required field instead of making Create documents look dead', async () => {
+    const requiredPlan: WorkflowPlan = {
+      document_id: 'medical.vk_mse',
+      prompts: [{
+        field_id: 'medical.vk_mse_protocol_number',
+        title: 'Номер протокола ВК на МСЭ',
+        required: true,
+        input_kind: 'text',
+        ask_mode: 'always',
+      }],
+      blocked: false,
+      block_reasons: [],
+    };
+    const setStatus = vi.fn();
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    const applyAnswers = vi.fn(async () => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['medical.vk_mse'], ...context('medical.vk_mse'), preflightPlan: requiredPlan,
+      preflightLoading: false, answers: {}, skippedAnswers: {},
+      setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>, setStatus,
+      requestWorkflowPlan: vi.fn(async () => requiredPlan), applyAnswers, onConfirmed,
+    }));
+
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+
+    expect(result.current.generationPreflightOpen).toBe(true);
+    expect(result.current.generationError).toBe('Не заполнено обязательное поле: Номер протокола ВК на МСЭ.');
+    expect(result.current.generationValidationFieldId).toBe('medical.vk_mse_protocol_number');
+    expect(setStatus).toHaveBeenLastCalledWith('Не заполнено обязательное поле: Номер протокола ВК на МСЭ.');
+    expect(applyAnswers).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
   it('ignores a duplicate confirm while one generation is already in flight', async () => {
     const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
     let release!: () => void;
-    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const pending = new Promise<string | null>((resolve) => { release = () => resolve(null); });
     const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => pending);
     const { result } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false,

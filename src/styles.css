@@ -334,6 +334,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .clientHeader .bnote { font-size: 12px; color: var(--text-2); }
 .headerSettings { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border: 1px solid var(--btn-line); border-radius: 10px; background: var(--panel2); color: var(--text-2); font-size: 12px; }
 .headerSettings:hover { border-color: var(--accent-line); color: var(--accent-tx); background: var(--accent-bg); }
+.startupRecovery { margin: 12px 22px 0; border: 1px solid var(--danger, #b42318); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; background: var(--panel2); }
+.startupRecovery > div { min-width: 0; display: grid; gap: 4px; }
+.startupRecovery strong, .startupRecovery span, .startupRecovery small { display: block; }
+.startupRecovery small { color: var(--text-2); overflow-wrap: anywhere; }
 .clientGrid { display: grid; grid-template-columns: minmax(0, 1fr) 310px; min-height: 680px; background: var(--bg); }
 .clientWorkspace { min-width: 0; padding: 26px; display: flex; flex-direction: column; gap: 18px; }
 
@@ -588,6 +592,11 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .medicalAdditionalSources { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 10px; }
 .medicalSourceChoice { flex: 1 1 240px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
 .medicalSourceChoice .fileBtn { width: fit-content; }
+.medicalDiarySelection { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.medicalDiaryFileList { margin: 0; padding-left: 22px; display: grid; gap: 5px; }
+.medicalDiaryFileList li { min-width: 0; }
+.medicalDiaryFileList span { display: block; overflow-wrap: anywhere; }
+.medicalDiaryFileList small { margin-top: 1px; }
 .medicalProfileOptions { border-top: 1px solid var(--line); padding-top: 10px; }
 .profileOptionsEditor { display: grid; gap: 6px; margin: 10px 0; }
 .profileOptionsEditor textarea { min-height: 84px; }

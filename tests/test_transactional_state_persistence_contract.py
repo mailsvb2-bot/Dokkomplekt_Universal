@@ -56,8 +56,26 @@ def test_all_runtime_default_state_writes_use_transaction_boundary() -> None:
         assert "transact_default_state" in function_slice(document, command)
 
     intake = read("src-tauri/src/subsystems/source_intake_commands.rs")
-    for command in ["reset_case", "parse_source", "parse_source_file", "parse_web_source"]:
+    for command in ["reset_case", "parse_source", "parse_web_source"]:
         assert "transact_default_state" in function_slice(intake, command)
+
+    # Both desktop source-file entry points intentionally share one canonical
+    # byte-intake helper. The wrappers themselves do no state mutation; the
+    # helper owns the same durable transaction boundary for both paths.
+    shared_file_intake = function_slice(intake, "parse_source_file_bytes")
+    assert "transact_default_state" in shared_file_intake
+    wrappers = {
+        "parse_source_file": intake[
+            intake.index("fn parse_source_file(") : intake.index("#[tauri::command]\nasync fn pick_source_file")
+        ],
+        "parse_source_path": intake[
+            intake.index("fn parse_source_path(") : intake.index("fn validate_source_path(")
+        ],
+    }
+    for command, body in wrappers.items():
+        assert "parse_source_file_bytes" in body, command
+        assert "retained_uploaded_source" not in body, command
+        assert "source_provenance" not in body, command
 
     automation = read("src-tauri/src/subsystems/automation_runtime.rs")
     assert "transact_default_state" in function_slice(automation, "semantic_extract")
@@ -67,13 +85,26 @@ def test_all_runtime_default_state_writes_use_transaction_boundary() -> None:
 
 def test_source_transients_are_changed_only_after_persisted_candidate_succeeds() -> None:
     intake = read("src-tauri/src/subsystems/source_intake_commands.rs")
-    for command in ["reset_case", "parse_source", "parse_source_file", "parse_web_source"]:
+    for command in ["reset_case", "parse_source", "parse_web_source", "parse_source_file_bytes"]:
         body = function_slice(intake, command)
         transaction = body.index("transact_default_state")
         for token in ["retained_uploaded_source", "source_provenance"]:
             position = body.find(token)
             if position >= 0:
                 assert position > transaction
+
+    wrappers = {
+        "parse_source_file": intake[
+            intake.index("fn parse_source_file(") : intake.index("#[tauri::command]\nasync fn pick_source_file")
+        ],
+        "parse_source_path": intake[
+            intake.index("fn parse_source_path(") : intake.index("fn validate_source_path(")
+        ],
+    }
+    for command, body in wrappers.items():
+        assert "parse_source_file_bytes" in body, command
+        assert "retained_uploaded_source" not in body, command
+        assert "source_provenance" not in body, command
 
 
 def test_injected_persistence_failure_success_and_noop_have_rust_regressions() -> None:

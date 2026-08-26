@@ -80,6 +80,129 @@ fn publish_stage_replacing_with_backup(
     result
 }
 
+fn rollback_unverified_publication(
+    output_folder: &Path,
+    backup_folder: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let parent = output_folder.parent().unwrap_or_else(|| Path::new("."));
+    let mut quarantined = None;
+    if output_folder.exists() {
+        let failed_root = parent.join(".dokkomplekt-failed");
+        std::fs::create_dir_all(&failed_root)
+            .map_err(|error| format!("Не удалось создать карантин для непроверенного комплекта: {error}"))?;
+        let stem = sanitize_path_component(
+            output_folder
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Комплект"),
+        );
+        let failed = failed_root.join(format!(
+            "{stem}.failed-{}-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+            Uuid::new_v4()
+        ));
+        std::fs::rename(output_folder, &failed).map_err(|error| {
+            format!(
+                "Не удалось убрать непроверенный комплект из пользовательской папки: {error}"
+            )
+        })?;
+        quarantined = Some(failed);
+    }
+
+    if let Some(backup) = backup_folder {
+        if !backup.is_dir() {
+            return Err(format!(
+                "Резервная копия предыдущего комплекта недоступна для восстановления: {}",
+                backup.display()
+            ));
+        }
+        if output_folder.exists() {
+            return Err(format!(
+                "Нельзя восстановить предыдущий комплект: пользовательский путь всё ещё занят: {}",
+                output_folder.display()
+            ));
+        }
+        std::fs::rename(backup, output_folder).map_err(|error| {
+            format!(
+                "Непроверенный комплект убран, но предыдущую версию не удалось восстановить из {}: {error}",
+                backup.display()
+            )
+        })?;
+    }
+    Ok(quarantined)
+}
+
+
+fn recover_unverified_batch_publication(
+    app: &tauri::AppHandle,
+    permit: &GenerationPermit,
+    output_folder: &Path,
+    backup_folder: Option<&Path>,
+    verification_error: String,
+) -> String {
+    // Files can be restored for the user after a failed read-back, but generated
+    // artifacts have already crossed the accounting/counter boundary. Never
+    // refund usage or counter reservations after this point: the quarantined
+    // documents still exist and their numbers must not be issued again.
+    let rollback = rollback_unverified_publication(output_folder, backup_folder);
+    let accounting = commit_generation_access(app, permit);
+    let receipt_cleanup = if accounting.is_ok() {
+        Some(generation_publication::abort_prepared_publication(app, permit))
+    } else {
+        None
+    };
+    let quarantine_path = rollback
+        .as_ref()
+        .ok()
+        .and_then(|value| value.as_ref())
+        .map(|path| path.display().to_string());
+    let rollback_error = rollback.as_ref().err().cloned();
+    let accounting_error = accounting.as_ref().err().cloned();
+    let receipt_cleanup_error = receipt_cleanup
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .cloned();
+    let _ = append_audit_event(
+        app,
+        "unverified_publication_quarantined",
+        "",
+        &serde_json::json!({
+            "verification_error": verification_error,
+            "quarantine_path": quarantine_path,
+            "filesystem_rollback_error": rollback_error,
+            "accounting_error": accounting_error,
+            "receipt_cleanup_error": receipt_cleanup_error,
+            "usage_refunded": false,
+            "counters_refunded": false,
+        }),
+    );
+
+    let rollback_note = match rollback.as_ref() {
+        Ok(Some(path)) => format!(
+            "Непроверенный комплект убран из пользовательской папки в карантин {}. Предыдущая версия восстановлена, если существовала.",
+            path.display()
+        ),
+        Ok(None) => "Непроверенный пользовательский комплект удалять не пришлось; предыдущая версия восстановлена, если существовала.".to_string(),
+        Err(error) => format!("КРИТИЧЕСКАЯ ОШИБКА файлового восстановления: {error}"),
+    };
+    let accounting_note = match accounting.as_ref() {
+        Ok(()) => "Расход генерации и зарезервированные номера сохранены, чтобы исключить бесплатный или повторный выпуск.".to_string(),
+        Err(error) => format!(
+            "Учёт расхода не удалось дофинализировать ({error}); защищённая pre-publication квитанция сохранена для восстановления, возврат лимита не выполнялся."
+        ),
+    };
+    let receipt_note = receipt_cleanup
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .map(|error| format!(
+            " Pre-publication квитанцию после фиксации расхода удалить не удалось ({error}); она оставлена как дополнительный recovery guard."
+        ))
+        .unwrap_or_default();
+    format!(
+        "{verification_error} Публикация не признана успешной. {rollback_note} {accounting_note}{receipt_note}"
+    )
+}
+
 #[cfg(test)]
 mod publication_collision_tests {
     use super::*;
@@ -125,6 +248,43 @@ mod publication_collision_tests {
         assert_eq!(std::fs::read_to_string(desired.join("new.txt")).unwrap(), "new");
         let _ = std::fs::remove_dir_all(root);
     }
+    #[test]
+    fn failed_new_version_is_quarantined_outside_user_visible_folder() {
+        let root = temp_root("rollback-unverified-version");
+        let desired = root.join("Комплект");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::write(desired.join("broken.docx"), b"broken").unwrap();
+
+        let quarantined = rollback_unverified_publication(&desired, None)
+            .unwrap()
+            .expect("failed publication must be quarantined");
+        assert!(!desired.exists());
+        assert!(quarantined.is_dir());
+        assert_eq!(std::fs::read(quarantined.join("broken.docx")).unwrap(), b"broken");
+        assert_eq!(quarantined.parent().unwrap(), root.join(".dokkomplekt-failed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_replacement_restores_previous_directory_from_backup() {
+        let root = temp_root("rollback-unverified-replace");
+        let desired = root.join("Комплект");
+        let backup = root.join(".dokkomplekt-backups").join("Комплект.backup-test");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(desired.join("new-broken.docx"), b"broken").unwrap();
+        std::fs::write(backup.join("old-good.docx"), b"old").unwrap();
+
+        let quarantined = rollback_unverified_publication(&desired, Some(&backup))
+            .unwrap()
+            .expect("failed replacement must be quarantined");
+        assert!(desired.is_dir());
+        assert_eq!(std::fs::read(desired.join("old-good.docx")).unwrap(), b"old");
+        assert!(!backup.exists());
+        assert_eq!(std::fs::read(quarantined.join("new-broken.docx")).unwrap(), b"broken");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
 }
 
 // Manual generation publication proof.
@@ -295,6 +455,76 @@ mod manual_batch_publication_proof_tests {
 
         std::fs::write(&final_path, b"").unwrap();
         assert!(verify_published_batch_files(&published, &[staged], 1).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn publishing_batch_creates_desktop_root_patient_subfolder_and_all_real_docx() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-create-output-root-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let desktop = root.join("Desktop");
+        let stage = desktop.join(".dokkomplekt-manual-stage-test");
+        let output_root = canonical_default_output_root_under(&desktop);
+        std::fs::create_dir_all(&stage).unwrap();
+
+        let mut case = SemanticCase::default();
+        dokkomplekt_core::set_user_value(&mut case, "subject.name", "Иванов Иван Иванович");
+        dokkomplekt_core::set_user_value(&mut case, "medical.admission_date", "10.05.2026");
+        dokkomplekt_core::set_user_value(&mut case, "medical.discharge_date", "13.05.2026");
+        let output_plan = dokkomplekt_core::plan_output_paths(
+            &output_root,
+            &case,
+            &[
+                dokkomplekt_core::FolderNamePart::FullSubjectName,
+                dokkomplekt_core::FolderNamePart::AdmissionAndDischargeDates,
+            ],
+            &["Первичный осмотр".into(), "Выписной эпикриз".into()],
+        );
+        let desired = output_plan.patient_folder;
+        assert_eq!(
+            desired,
+            output_root.join("Иванов Иван Иванович 10.05.2026 - 13.05.2026")
+        );
+
+        let primary = stage.join("Первичный осмотр.docx");
+        let discharge = stage.join("Выписной эпикриз.docx");
+        create_docx_from_text(
+            &primary,
+            "Первичный осмотр\nИванов Иван Иванович\n10.05.2026",
+        )
+        .unwrap();
+        create_docx_from_text(
+            &discharge,
+            "Выписной эпикриз\nИванов Иван Иванович\n13.05.2026",
+        )
+        .unwrap();
+        assert!(!output_root.exists());
+
+        let published = publish_stage_to_unique_directory(&stage, &desired).unwrap();
+
+        assert_eq!(published, desired);
+        assert!(output_root.is_dir());
+        assert!(published.is_dir());
+        let staged = vec![primary, discharge];
+        let verified = verify_published_batch_files(&published, &staged, 2).unwrap();
+        let expected_primary = published.join("Первичный осмотр.docx");
+        let expected_discharge = published.join("Выписной эпикриз.docx");
+        assert_eq!(
+            verified,
+            vec![
+                expected_primary.display().to_string(),
+                expected_discharge.display().to_string(),
+            ]
+        );
+        assert!(extract_docx_text(&expected_primary)
+            .unwrap()
+            .contains("10.05.2026"));
+        assert!(extract_docx_text(&expected_discharge)
+            .unwrap()
+            .contains("13.05.2026"));
         let _ = std::fs::remove_dir_all(root);
     }
 

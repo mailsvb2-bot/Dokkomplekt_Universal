@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from 'react';
+import { useState, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from 'react';
 import type {
   CreatedDocumentsIntakeResult,
   DocumentTemplateSpec,
@@ -74,7 +74,7 @@ interface WorkspaceProps {
   onExportLastOutputPdf(): void;
   onExportLastOutputPdfa(): void;
   onExportLastOutputKedo(): void;
-  onPickSourceFile(event: ChangeEvent<HTMLInputElement>): void;
+  onPickSourceFile(): void;
   onDropSourceFile(file: File): void;
   onLoadWebSource(): void;
   onResetCase(): void;
@@ -208,6 +208,7 @@ export function Workspace(props: WorkspaceProps) {
         onDragOver={(event: DragEvent<HTMLElement>) => event.preventDefault()}
         onDrop={(event: DragEvent<HTMLElement>) => {
           event.preventDefault();
+          if (props.busy) return;
           const file = event.dataTransfer.files?.[0];
           if (file) props.onDropSourceFile(file);
         }}
@@ -225,10 +226,9 @@ export function Workspace(props: WorkspaceProps) {
             <div className="dropIcon"><i className="ti ti-file-upload" aria-hidden="true" /></div>
             <strong>Перетащите документ в эту область</strong>
             <span>Word, PDF, изображение, таблица, письмо, архив и другие поддерживаемые форматы</span>
-            <label className="primaryBtn fileBtn largeAction">
+            <button className="primaryBtn fileBtn largeAction" type="button" aria-label="Выбрать исходный файл" onClick={props.onPickSourceFile} disabled={props.busy}>
               Выбрать файл
-              <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} data-testid="source-file-input" style={{ display: 'none' }} />
-            </label>
+            </button>
           </div>
         ) : (
           <div className="sourceAccepted">
@@ -239,10 +239,9 @@ export function Workspace(props: WorkspaceProps) {
               {props.parsed?.warnings.length ? <em>Нужно проверить замечаний: {props.parsed.warnings.length}</em> : <em className="okText">Источник прочитан без критических замечаний</em>}
             </div>
             <div className="sourceActions">
-              <label className="softBtn fileBtn">
+              <button className="softBtn fileBtn" type="button" aria-label="Заменить исходный файл" onClick={props.onPickSourceFile} disabled={props.busy}>
                 Заменить файл
-                <input type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={props.onPickSourceFile} style={{ display: 'none' }} />
-              </label>
+              </button>
               <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Начать заново</button>
             </div>
           </div>

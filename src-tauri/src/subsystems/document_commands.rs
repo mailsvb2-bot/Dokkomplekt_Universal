@@ -1,36 +1,3 @@
-const DEFAULT_OUTPUT_FOLDER_NAME: &str = "Выписанные пациенты";
-
-fn canonical_default_output_root_under(desktop: &Path) -> PathBuf {
-    desktop.join(DEFAULT_OUTPUT_FOLDER_NAME)
-}
-
-fn canonical_default_output_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let desktop = app
-        .path()
-        .desktop_dir()
-        .map_err(|error| format!("Не удалось определить папку рабочего стола: {error}"))?;
-    Ok(canonical_default_output_root_under(&desktop))
-}
-
-#[tauri::command]
-fn get_default_output_root(app: tauri::AppHandle) -> Result<String, String> {
-    Ok(canonical_default_output_root(&app)?.display().to_string())
-}
-
-#[cfg(test)]
-mod default_output_root_contract_tests {
-    use super::*;
-
-    #[test]
-    fn canonical_default_output_root_is_desktop_child_without_side_effects() {
-        let desktop = Path::new("C:/Users/Operator/Desktop");
-        assert_eq!(
-            canonical_default_output_root_under(desktop),
-            desktop.join("Выписанные пациенты")
-        );
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct FirstRunStateResponse {
     pack: DocumentPack,
@@ -40,19 +7,20 @@ struct FirstRunStateResponse {
 
 #[tauri::command]
 fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, String> {
-    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let has_user_buttons = !pack.documents.is_empty();
-    let message = if state.persistence_blocked.load(Ordering::SeqCst) {
+    if state.persistence_blocked.load(Ordering::SeqCst) {
         let reason = state
             .persistence_error
             .lock()
             .ok()
             .and_then(|value| value.clone())
             .unwrap_or_else(|| "неизвестная ошибка базы состояния".into());
-        format!(
+        return Err(format!(
             "Восстановление состояния заблокировано для защиты данных: {reason}. Загрузите исправную резервную базу; текущие данные не будут перезаписаны."
-        )
-    } else if has_user_buttons {
+        ));
+    }
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    let has_user_buttons = !pack.documents.is_empty();
+    let message = if has_user_buttons {
         "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
     } else {
         "Первоначальная настройка: нажмите «Создать свои кнопки» и выберите реальные рабочие шаблоны. Программа сама определит рабочий профиль по всему набору; профессию выбирать не нужно.".into()
@@ -1563,6 +1531,51 @@ fn render_docx_batch(
             ));
         }
     };
+    // The directory rename is only the filesystem boundary. User-visible success
+    // is granted after every published file can be read back from that exact
+    // destination. This preserves the donor applications' rule that a broken
+    // replacement must never displace the last known-good user folder.
+    let verification = (|| -> Result<Vec<String>, String> {
+        let created_files = verify_published_batch_files(
+            &output_folder,
+            &staged_paths,
+            documents.len(),
+        )?;
+        if let Some(staged_source) = staged_source_copy.as_ref() {
+            let source_name = staged_source.file_name().ok_or_else(|| {
+                "Публикация комплекта не подтверждена: копия исходника не имеет имени файла."
+                    .to_string()
+            })?;
+            let published_source = output_folder.join(source_name);
+            let metadata = std::fs::metadata(&published_source).map_err(|error| {
+                format!(
+                    "Публикация комплекта не подтверждена: исходный документ отсутствует {}: {error}",
+                    published_source.display()
+                )
+            })?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err(format!(
+                    "Публикация комплекта не подтверждена: копия исходного документа пуста или отсутствует: {}",
+                    published_source.display()
+                ));
+            }
+        }
+        Ok(created_files)
+    })();
+
+    let created_files = match verification {
+        Ok(files) => files,
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &output_folder,
+                backup_folder.as_deref(),
+                error,
+            ));
+        }
+    };
+
     let mut warnings = Vec::new();
     warnings.extend(ancillary_warnings);
     if let Some(backup) = backup_folder.as_ref() {
@@ -1575,7 +1588,7 @@ fn render_docx_batch(
         generation_publication::confirm_publication(&app, &permit, &output_folder)
     {
         warnings.push(format!(
-            "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
+            "Комплект проверен и опубликован, но durable-квитанция не перешла в состояние published: {error}"
         ));
     }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
@@ -1592,33 +1605,6 @@ fn render_docx_batch(
     warnings.extend(generation_publication::finalize_published_generation(
         &app, &permit, false,
     ));
-    // Never fabricate success from staging file names. The response is emitted
-    // only after every requested final file is physically present, non-empty and
-    // readable as a Word document at the published path.
-    let created_files = verify_published_batch_files(
-        &output_folder,
-        &staged_paths,
-        documents.len(),
-    )?;
-    if let Some(staged_source) = staged_source_copy.as_ref() {
-        let source_name = staged_source.file_name().ok_or_else(|| {
-            "Публикация комплекта не подтверждена: копия исходника не имеет имени файла."
-                .to_string()
-        })?;
-        let published_source = output_folder.join(source_name);
-        let metadata = std::fs::metadata(&published_source).map_err(|error| {
-            format!(
-                "Публикация комплекта не подтверждена: исходный документ отсутствует {}: {error}",
-                published_source.display()
-            )
-        })?;
-        if !metadata.is_file() || metadata.len() == 0 {
-            return Err(format!(
-                "Публикация комплекта не подтверждена: копия исходного документа пуста или отсутствует: {}",
-                published_source.display()
-            ));
-        }
-    }
     let created_documents = documents
         .iter()
         .zip(created_files.iter())
@@ -2703,6 +2689,63 @@ struct LoadStateRequest {
     db_path: String,
 }
 
+fn canonicalize_loaded_pack_roles(pack: &mut DocumentPack) -> usize {
+    let mut changed = 0usize;
+    for document in &mut pack.documents {
+        let canonical = dokkomplekt_core::universal_pipeline::canonical_role_for_category(
+            &document.category,
+            &document.role_id,
+        )
+        .unwrap_or_else(|| document.role_id.clone());
+        if canonical != document.role_id {
+            document.role_id = canonical;
+            changed += 1;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+mod loaded_pack_role_canonicalization_tests {
+    use super::*;
+
+    fn document(id: &str, category: DomainKind, role_id: &str) -> DocumentTemplateSpec {
+        DocumentTemplateSpec {
+            id: id.into(),
+            button_label: id.into(),
+            template_path: format!("{id}.docx"),
+            category,
+            role_id: role_id.into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        }
+    }
+
+    #[test]
+    fn legacy_roles_are_canonical_before_the_pack_reaches_the_ui() {
+        let mut pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "legacy".into(),
+            documents: vec![
+                document("discharge", DomainKind::Medical, "dischargeEpicrisis"),
+                document("diary", DomainKind::Medical, "medicalDiary"),
+                document("invoice", DomainKind::Accounting, "Счёт на оплату"),
+                document("custom", DomainKind::Custom("x".into()), "my-special-role"),
+            ],
+        };
+
+        assert_eq!(canonicalize_loaded_pack_roles(&mut pack), 3);
+        assert_eq!(pack.documents[0].role_id, "discharge");
+        assert_eq!(pack.documents[1].role_id, "diaries");
+        assert_eq!(pack.documents[2].role_id, "invoice");
+        assert_eq!(pack.documents[3].role_id, "my-special-role");
+        assert_eq!(canonicalize_loaded_pack_roles(&mut pack), 0, "migration must be idempotent");
+    }
+}
+
 fn load_state_from(
     app: &tauri::AppHandle,
     db_path: &Path,
@@ -2728,7 +2771,8 @@ fn load_state_from(
     }
     let loaded_pack = if let Some(mut pack) = loaded_pack {
         let rebound = bind_loaded_pack_to_published_template_versions(app, &repo, &mut pack)?;
-        if rebound > 0 && load_commercial_state {
+        let canonicalized_roles = canonicalize_loaded_pack_roles(&mut pack);
+        if (rebound > 0 || canonicalized_roles > 0) && load_commercial_state {
             repo.save_pack(&pack).map_err(|error| error.to_string())?;
         }
         Some(pack)

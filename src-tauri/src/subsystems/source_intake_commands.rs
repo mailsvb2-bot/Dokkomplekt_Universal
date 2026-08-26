@@ -147,6 +147,24 @@ struct ParseSourceFileRequest {
     default_year: i32,
 }
 
+#[derive(Debug, Deserialize)]
+struct PickSourceFileRequest {
+    #[serde(default)]
+    initial_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PickedSourceFileResponse {
+    file_name: String,
+    selected_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ParseSourcePathRequest {
+    selected_path: String,
+    default_year: i32,
+}
+
 #[derive(Debug, Serialize)]
 struct ParseSourceFileResponse {
     source_text: String,
@@ -165,23 +183,101 @@ fn parse_source_file(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ParseSourceFileResponse, String> {
-    let mut bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
+    let bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
+    parse_source_file_bytes(req.file_name, bytes, req.default_year, state, app)
+}
+
+#[tauri::command]
+async fn pick_source_file(
+    req: PickSourceFileRequest,
+) -> Result<Option<PickedSourceFileResponse>, String> {
+    let selected_path = tauri::async_runtime::spawn_blocking(move || {
+        pick_source_file_blocking(req.initial_path)
+    })
+    .await
+    .map_err(|error| format!("Не удалось открыть выбор исходного документа: {error}"))??;
+    let Some(selected_path) = selected_path else {
+        return Ok(None);
+    };
+    let (canonical, file_name) = validate_source_path(&selected_path)?;
+    Ok(Some(PickedSourceFileResponse {
+        file_name,
+        selected_path: canonical.display().to_string(),
+    }))
+}
+
+#[tauri::command]
+fn parse_source_path(
+    req: ParseSourcePathRequest,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ParseSourceFileResponse, String> {
+    let (canonical, file_name) = validate_source_path(Path::new(&req.selected_path))?;
+    let bytes = std::fs::read(&canonical).map_err(|error| {
+        format!(
+            "Не удалось прочитать выбранный исходник «{}»: {error}",
+            canonical.display()
+        )
+    })?;
+    parse_source_file_bytes(file_name, bytes, req.default_year, state, app)
+}
+
+fn validate_source_path(path: &Path) -> Result<(PathBuf, String), String> {
+    let canonical = path.canonicalize().map_err(|error| {
+        format!(
+            "Не удалось открыть выбранный исходник «{}»: {error}",
+            path.display()
+        )
+    })?;
+    let metadata = std::fs::metadata(&canonical).map_err(|error| {
+        format!(
+            "Не удалось прочитать выбранный исходник «{}»: {error}",
+            canonical.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Выбранный путь не является файлом: {}",
+            canonical.display()
+        ));
+    }
+    if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
+        return Err(format!(
+            "Исходный файл слишком большой: максимум {} МБ.",
+            universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
+        ));
+    }
+    let file_name = canonical
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Имя выбранного исходника не поддерживается системой.".to_string())?
+        .to_string();
+    Ok((canonical, file_name))
+}
+
+fn parse_source_file_bytes(
+    file_name: String,
+    mut bytes: Vec<u8>,
+    default_year: i32,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ParseSourceFileResponse, String> {
     let workspace = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("intake-work");
     let mut upload_session =
-        universal_intake::normalize_uploaded_bytes(&req.file_name, &bytes, &workspace)?;
+        universal_intake::normalize_uploaded_bytes(&file_name, &bytes, &workspace)?;
     let normalized = upload_session.take_source()?;
-    let provenance = SourceProvenance::from_bytes(&req.file_name, &bytes);
-    let retained_source = universal_intake::RetainedUploadedSource::new(&req.file_name, &bytes)?;
+    let provenance = SourceProvenance::from_bytes(&file_name, &bytes);
+    let retained_source = universal_intake::RetainedUploadedSource::new(&file_name, &bytes)?;
     bytes.fill(0);
     let source_path = retained_source.virtual_path();
     let source_text = normalized.text;
     let source_kind = normalized.source_kind;
     let layout_items = normalized.layout_items;
-    let (mut parsed, mut report) = parse_source_text(&source_text, req.default_year);
+    let (mut parsed, mut report) = parse_source_text(&source_text, default_year);
     report.warnings.extend(normalized.warnings);
     universal_intake::apply_layout_to_case(&source_kind, &layout_items, &mut parsed);
     let learned = apply_learned_scanner_rules(&app, &source_text, &mut parsed)?;

@@ -43,6 +43,16 @@ def test_desktop_state_is_loaded_then_applied_and_saved_as_one_snapshot() -> Non
     assert "persistence_blocked.store(true" in main
 
 
+def test_first_run_fails_closed_when_persisted_state_cannot_be_restored() -> None:
+    commands = text("src-tauri/src/subsystems/document_commands.rs")
+    first_run = commands[commands.index("fn first_run_state(") : commands.index("struct AnalyzeTemplateRequest") ]
+    blocked = first_run.index("persistence_blocked.load")
+    returned_error = first_run.index("return Err(format!", blocked)
+    pack_read = first_run.index("state.pack.lock", returned_error)
+    assert blocked < returned_error < pack_read
+    assert "текущие данные не будут перезаписаны" in first_run
+
+
 def test_archive_cleanup_and_xlsx_parser_have_resource_boundaries() -> None:
     hygiene = text("src-tauri/src/workspace_hygiene.rs")
     assert "symlink_metadata" in hygiene

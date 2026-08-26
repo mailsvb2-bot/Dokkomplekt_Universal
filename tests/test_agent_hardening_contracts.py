@@ -11,8 +11,19 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_trial_allows_one_complete_monthly_kit() -> None:
     source = (ROOT / "src-tauri/src/main.rs").read_text("utf-8")
     assert "const TRIAL_MAX_DOCUMENTS_PER_RUN: u32 = TRIAL_DOCUMENT_LIMIT_MONTH;" in source
+    assert "usage_snapshot.trial_documents_total" in source
+    assert "local_trial_access_decision" in source
+    assert "LICENSE_TRUST_ANCHOR_IS_CONFIGURED" in source
+    assert "Err(error) if LICENSE_TRUST_ANCHOR_IS_CONFIGURED" in source
     assert "запрошено {}" in source
     assert "лимит за запуск {}" in source
+
+
+def test_unsigned_preview_reuses_configured_license_verification_key() -> None:
+    workflow = (ROOT / ".github/workflows/unsigned-preview.yml").read_text("utf-8")
+    assert "vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64" in workflow
+    assert "$env:DOKKOMPLEKT_LICENSE_PUBKEY_B64 = $licenseKey" in workflow
+    assert "preview remains local-trial only" in workflow
 
 
 def test_thin_and_offline_installers_have_distinct_payloads() -> None:

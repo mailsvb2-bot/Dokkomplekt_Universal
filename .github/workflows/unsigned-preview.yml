@@ -55,7 +55,16 @@ jobs:
           npm run test
           npm run build
       - name: Build thin unsigned NSIS preview
-        run: npx tauri build --bundles nsis --config src-tauri/tauri.thin.conf.json
+        shell: pwsh
+        run: |
+          $licenseKey = '${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}'
+          if (-not [string]::IsNullOrWhiteSpace($licenseKey)) {
+            $env:DOKKOMPLEKT_LICENSE_PUBKEY_B64 = $licenseKey
+            Write-Host 'Preview uses the configured production license verification public key.'
+          } else {
+            Write-Host 'No license verification key is configured; preview remains local-trial only.'
+          }
+          npx tauri build --bundles nsis --config src-tauri/tauri.thin.conf.json
       - name: Enforce unsigned-preview boundary
         shell: pwsh
         run: |

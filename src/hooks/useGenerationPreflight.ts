@@ -24,7 +24,7 @@ interface UseGenerationPreflightOptions {
   setStatus(message: string): void;
   requestWorkflowPlan(snapshot: GenerationSnapshot): Promise<WorkflowPlan | null | undefined>;
   applyAnswers(snapshot: GenerationSnapshot, answers: PopupAnswerDto[]): Promise<PopupApplyResult | null | undefined>;
-  onConfirmed(snapshot: GenerationSnapshot): Promise<void>;
+  onConfirmed(snapshot: GenerationSnapshot): Promise<string | null>;
 }
 
 /**
@@ -39,6 +39,8 @@ interface UseGenerationPreflightOptions {
 export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const [generationPreflightOpen, setGenerationPreflightOpen] = useState(false);
   const [generationSnapshot, setGenerationSnapshot] = useState<GenerationSnapshot | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generationValidationFieldId, setGenerationValidationFieldId] = useState<string | null>(null);
   const confirmationInFlight = useRef(false);
 
   async function openGenerationPreflight() {
@@ -50,6 +52,8 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       options.setStatus('Подождите: программа ещё проверяет выбранный комплект.');
       return;
     }
+    setGenerationError(null);
+    setGenerationValidationFieldId(null);
     const snapshot: GenerationSnapshot = {
       documentIds: [...options.selectedDocumentIds],
       sickLeaveEnabled: options.sickLeaveEnabled,
@@ -88,7 +92,10 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
           && !options.skippedAnswers[prompt.field_id]
           && !(options.answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
         if (missing.length) {
-          options.setStatus(`Не заполнено обязательное поле: ${missing[0].title}.`);
+          const message = `Не заполнено обязательное поле: ${missing[0].title}.`;
+          setGenerationError(message);
+          setGenerationValidationFieldId(missing[0].field_id);
+          options.setStatus(message);
           return;
         }
         const payload: PopupAnswerDto[] = activePrompts.map((prompt) => ({
@@ -99,13 +106,24 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
         const applied = await options.applyAnswers(snapshot, payload);
         if (!applied) return;
         if (!applied.accepted) {
-          options.setStatus(applied.message || `Не заполнено полей: ${applied.still_missing.length}`);
+          const message = applied.message || `Не заполнено полей: ${applied.still_missing.length}`;
+          setGenerationError(message);
+          setGenerationValidationFieldId(applied.still_missing[0]?.field_id ?? null);
+          options.setStatus(message);
           return;
         }
       }
-      setGenerationPreflightOpen(false);
+      setGenerationError(null);
+      setGenerationValidationFieldId(null);
       options.setStatus('Данные подтверждены. Формируется комплект…');
-      await options.onConfirmed(snapshot);
+      const generationFailure = await options.onConfirmed(snapshot);
+      if (generationFailure) {
+        setGenerationError(generationFailure);
+        setGenerationValidationFieldId(null);
+        options.setStatus(generationFailure);
+        return;
+      }
+      setGenerationPreflightOpen(false);
       setGenerationSnapshot(null);
     } finally {
       confirmationInFlight.current = false;
@@ -116,12 +134,16 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     if (confirmationInFlight.current) return;
     setGenerationPreflightOpen(false);
     setGenerationSnapshot(null);
+    setGenerationError(null);
+    setGenerationValidationFieldId(null);
   }
 
   return {
     generationPreflightOpen,
     generationDocumentIds: generationSnapshot?.documentIds ?? [],
     generationSnapshot,
+    generationError,
+    generationValidationFieldId,
     closeGenerationPreflight,
     openGenerationPreflight,
     confirmGenerationPreflight,

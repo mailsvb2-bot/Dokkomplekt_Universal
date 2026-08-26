@@ -14,15 +14,22 @@ const sampleDocument = {
   is_static_copy: true,
 };
 
-function installTemplateMock(staticCopy: boolean) {
+function installTemplateMock(staticCopy: boolean, includeRejected = false, rejectBrowserBad = false) {
   const calls: string[] = [];
   const confirmRequests: Array<Record<string, unknown> | undefined> = [];
   __setInvokeForTests(async (name: string, payload?: Record<string, unknown>) => {
     calls.push(name);
     if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
     if (name === 'get_intake_capabilities') return [] as never;
-    if (name === 'pick_template_files') return { files: [{ file_name: 'Акт выполненных работ.docx', template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' }] } as never;
-    if (name === 'import_template_file') return { template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' } as never;
+    if (name === 'pick_template_files') return { files: [
+      { file_name: 'Акт выполненных работ.docx', template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' },
+      ...(includeRejected ? [{ file_name: 'Повреждённый.docx', template_path: '', extracted_text: '', import_error: 'Файл не распознан как DOCX' }] : []),
+    ] } as never;
+    if (name === 'import_template_file') {
+      const req = payload?.req as { file_name?: string | null } | undefined;
+      if (rejectBrowserBad && req?.file_name === 'Повреждённый.docx') throw new Error('Файл повреждён');
+      return { template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' } as never;
+    }
     if (name === 'analyze_template_file') return { document: { ...sampleDocument, is_static_copy: staticCopy, popup_fields: [] }, analysis_json: {}, core_pipeline_json: {} } as never;
     if (name === 'prepare_template_setup') {
       return [{
@@ -48,7 +55,9 @@ function installTemplateMock(staticCopy: boolean) {
 }
 
 async function selectTemplateAndCreateButton() {
-  fireEvent.click(screen.getByRole('button', { name: 'Создать свои кнопки' }));
+  const create = await screen.findByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;
+  await waitFor(() => expect(create.disabled).toBe(false));
+  fireEvent.click(create);
   await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
   fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (1)' }));
 }
@@ -85,4 +94,35 @@ describe('App', () => {
       req: { auto_infer_static_templates: true },
     });
   });
+
+  it('keeps good templates when another selected DOCX is broken', async () => {
+    installTemplateMock(false, true);
+    render(<App />);
+    const create = await screen.findByRole('button', { name: 'Создать свои кнопки' });
+    await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(create);
+    await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
+    expect(await screen.findByText(/Пропущено проблемных шаблонов: 1/)).toBeTruthy();
+    expect(screen.getByText(/Повреждённый\.docx: Файл не распознан как DOCX/)).toBeTruthy();
+  });
+
+  it('keeps good modal-selected templates and reports a broken sibling file', async () => {
+    installTemplateMock(false, false, true);
+    render(<App />);
+    const create = await screen.findByRole('button', { name: 'Создать свои кнопки' });
+    await waitFor(() => expect((create as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(create);
+    await screen.findByLabelText('Название документа для Акт выполненных работ.docx');
+    const addMore = screen.getByText('Добавить ещё шаблоны').closest('label');
+    const input = addMore?.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [
+      new File(['ok'], 'Дополнительный.docx'),
+      new File(['bad'], 'Повреждённый.docx'),
+    ] } });
+    expect(await screen.findByLabelText('Название документа для Дополнительный.docx')).toBeTruthy();
+    expect(await screen.findByText(/Пропущено проблемных шаблонов: 1/)).toBeTruthy();
+    expect(screen.getByText(/Повреждённый\.docx: Файл повреждён/)).toBeTruthy();
+  });
+
 });

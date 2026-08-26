@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { useState } from 'react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { PromptSpec, WorkflowPlan } from '../lib/types';
 import { GenerationPreflightModal } from './GenerationPreflightModal';
@@ -40,6 +40,8 @@ function Harness() {
       skippedAnswers={skippedAnswers}
       busy={false}
       loading={false}
+      generationError={null}
+      invalidFieldId={null}
       showSickLeaveOption={false}
       sickLeaveEnabled={false}
       setAnswers={setAnswers}
@@ -63,5 +65,48 @@ describe('GenerationPreflightModal linked Yes/No visibility', () => {
 
     fireEvent.change(screen.getByLabelText('Лечится по больничному листу?*'), { target: { value: 'Нет' } });
     expect(screen.queryByText('Коррекция лечения')).toBeNull();
+  });
+});
+
+
+describe('GenerationPreflightModal validation feedback', () => {
+  it('keeps a missing-field error next to Create documents and focuses the exact field', async () => {
+    const requiredPrompt: PromptSpec = {
+      field_id: 'medical.vk_mse_protocol_number',
+      title: 'Номер протокола ВК на МСЭ',
+      required: true,
+      input_kind: 'text',
+      ask_mode: 'always',
+    };
+    const requiredPlan: WorkflowPlan = {
+      document_id: 'medical.vk_mse', prompts: [requiredPrompt], blocked: false, block_reasons: [],
+    };
+    const setAnswers = (() => undefined) as unknown as Dispatch<SetStateAction<Record<string, string>>>;
+    const setSkippedAnswers = (() => undefined) as unknown as Dispatch<SetStateAction<Record<string, boolean>>>;
+    render(
+      <GenerationPreflightModal
+        plan={requiredPlan}
+        documents={[]}
+        selectedDocumentIds={[]}
+        answers={{}}
+        skippedAnswers={{}}
+        busy={false}
+        loading={false}
+        generationError="Не заполнено обязательное поле: Номер протокола ВК на МСЭ."
+        invalidFieldId="medical.vk_mse_protocol_number"
+        showSickLeaveOption={false}
+        sickLeaveEnabled={false}
+        setAnswers={setAnswers}
+        setSkippedAnswers={setSkippedAnswers}
+        onSickLeaveChange={() => undefined}
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    expect(screen.getByTestId('generation-error').textContent).toContain('Номер протокола ВК на МСЭ');
+    const field = screen.getByLabelText('Номер протокола ВК на МСЭ*');
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(screen.getByRole('button', { name: 'Создать документы' })).toBeTruthy();
   });
 });

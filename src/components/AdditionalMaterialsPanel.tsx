@@ -21,6 +21,12 @@ interface MaterialIndexEntry {
   imported_at: string;
 }
 
+interface DiaryFileSelection {
+  name: string;
+  displayPath: string;
+  status: string;
+}
+
 interface DroppedFileEntry {
   isFile: boolean;
   isDirectory: boolean;
@@ -82,6 +88,18 @@ function isFinalDiaryText(fileName: string): boolean {
   return /(?:финал|итог|выписк|заключитель)/u.test(name);
 }
 
+const MEDICAL_DIARY_TEXT_EXTENSIONS = new Set(['docx', 'docm', 'doc', 'txt', 'rtf', 'odt', 'pdf']);
+
+function isSupportedDiaryTextFile(fileName: string): boolean {
+  const extension = fileName.split('.').at(-1)?.toLocaleLowerCase('ru-RU') ?? '';
+  return MEDICAL_DIARY_TEXT_EXTENSIONS.has(extension);
+}
+
+function shortImportError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim().slice(0, 180) || 'неизвестная ошибка';
+}
+
 function uniqueTexts(values: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -104,6 +122,7 @@ export function AdditionalMaterialsPanel(props: {
   const [working, setWorking] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [customRvk, setCustomRvk] = useState('');
+  const [diaryFiles, setDiaryFiles] = useState<DiaryFileSelection[]>([]);
   const selected = useMemo(
     () => props.documents.filter(document => props.selectedDocumentIds.includes(document.id)),
     [props.documents, props.selectedDocumentIds],
@@ -177,29 +196,67 @@ export function AdditionalMaterialsPanel(props: {
 
   async function importDiaryTexts(files: File[]) {
     if (!files.length) return;
-    await withWork('Импортируем медицинскую библиотеку текстов…', async () => {
+    const selections: DiaryFileSelection[] = files.map(file => ({
+      name: file.name,
+      displayPath: (file as File & { webkitRelativePath?: string }).webkitRelativePath?.trim() || file.name,
+      status: 'Импортируется',
+    }));
+    setDiaryFiles(selections);
+    setWorking(true);
+    setStatus('Импортируем медицинскую библиотеку текстов…');
+    try {
       const existing = await listClauseBlocks();
       const existingById = new Map(existing.map(block => [block.block_id, block.content]));
-      const grouped = new Map<string, string[]>();
-      for (const file of files) {
-        const imported = await extractMaterial(file);
+      const grouped = new Map<string, { values: string[]; indexes: number[] }>();
+
+      for (const [index, file] of files.entries()) {
+        if (!isSupportedDiaryTextFile(file.name)) {
+          selections[index].status = 'Пропущен: неподдерживаемый формат';
+          continue;
+        }
+        let imported;
+        try {
+          imported = await extractMaterial(file);
+        } catch (error) {
+          selections[index].status = `Ошибка импорта: ${shortImportError(error)}`;
+          continue;
+        }
         const content = imported.extracted_text.trim();
-        if (!content) continue;
+        if (!content) { selections[index].status = 'Пропущен: текст не найден'; continue; }
         const key = safeKey(file.name);
-        if (!key) continue;
+        if (!key) { selections[index].status = 'Пропущен: имя не распознано'; continue; }
         const prefix = isFinalDiaryText(file.name) ? MEDICAL_DIARY_FINAL_PREFIX : MEDICAL_DIARY_REGULAR_PREFIX;
         const blockId = `${prefix}${key}`;
-        const bucket = grouped.get(blockId) ?? [];
-        bucket.push(content);
+        const bucket = grouped.get(blockId) ?? { values: [], indexes: [] };
+        bucket.values.push(content);
+        bucket.indexes.push(index);
         grouped.set(blockId, bucket);
       }
-      for (const [blockId, values] of grouped) {
+
+      for (const [blockId, bucket] of grouped) {
         const previous = existingById.get(blockId);
-        const merged = uniqueTexts([...(previous ? [previous] : []), ...values]).join('\n\n');
-        await saveClauseBlock(blockId, `Медицинские дневники: ${blockId.split('.').pop()}`, merged);
+        const merged = uniqueTexts([...(previous ? [previous] : []), ...bucket.values]).join('\n\n');
+        try {
+          await saveClauseBlock(blockId, `Медицинские дневники: ${blockId.split('.').pop()}`, merged);
+          for (const index of bucket.indexes) selections[index].status = 'Сохранён';
+        } catch (error) {
+          const detail = shortImportError(error);
+          for (const index of bucket.indexes) selections[index].status = `Ошибка сохранения: ${detail}`;
+        }
       }
-      setStatus(`«Тексты» сохранены: ${grouped.size}. Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
-    });
+
+      setDiaryFiles([...selections]);
+      const saved = selections.filter(item => item.status === 'Сохранён').length;
+      const skipped = selections.filter(item => item.status.startsWith('Пропущен:')).length;
+      const failed = selections.filter(item => item.status.startsWith('Ошибка')).length;
+      setStatus(`«Тексты»: сохранено ${saved} из ${files.length}; пропущено ${skipped}; ошибок ${failed}. Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
+    } catch (error) {
+      const detail = shortImportError(error);
+      setDiaryFiles(selections.map(item => item.status === 'Импортируется' ? { ...item, status: `Ошибка импорта: ${detail}` } : item));
+      setStatus(`Не удалось открыть библиотеку дневников: ${detail}`);
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function applyRvkPreset(presetId: string) {
@@ -307,6 +364,19 @@ export function AdditionalMaterialsPanel(props: {
                 <input type="file" multiple accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf" onChange={(event) => { void importDiaryTexts(filesFrom(event)); }} disabled={working || props.busy} style={{ display: 'none' }} />
               </label>
               <small>Выберите папку «Тексты» или отдельные файлы. Программа сопоставит текст с диагнозом, спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
+              {diaryFiles.length > 0 && (
+                <div className="medicalDiarySelection" role="region" aria-label="Выбранные файлы дневников">
+                  <strong>Выбрано файлов: {diaryFiles.length}</strong>
+                  <ol className="medicalDiaryFileList">
+                    {diaryFiles.map((file, index) => (
+                      <li key={`${file.displayPath}-${index}`}>
+                        <span title={file.displayPath}>{file.displayPath}</span>
+                        <small>{file.status}</small>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
           </div>
         </section>

@@ -65,12 +65,36 @@ if ($env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '1') {
   if ($appSignature.Status -ne 'Valid') { throw "Installed application signature is invalid: $($appSignature.Status)" }
 }
 
+# Donor-derived installed-app contract: the canonical Desktop output root must
+# physically exist before the user creates the first document. Remove it first
+# so this smoke proves the installed application recreates it, not a test fixture.
+$desktopPath = [Environment]::GetFolderPath('Desktop')
+if ([string]::IsNullOrWhiteSpace($desktopPath)) { throw "Windows Desktop path is unavailable" }
+New-Item -ItemType Directory -Force -Path $desktopPath | Out-Null
+$defaultOutputRoot = Join-Path $desktopPath 'Выписанные пациенты'
+Remove-Item -LiteralPath $defaultOutputRoot -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $defaultOutputRoot) {
+  throw "Could not remove the pre-existing Desktop output root before launch smoke: $defaultOutputRoot"
+}
+
 $process = Start-Process -FilePath $app.FullName -PassThru
 Start-Sleep -Seconds 5
 if ($process.HasExited) {
   $earlyExitCode = $process.ExitCode
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
+
+$outputDeadline = [DateTime]::UtcNow.AddSeconds(20)
+while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and [DateTime]::UtcNow -lt $outputDeadline) {
+  if ($process.HasExited) {
+    throw "Installed application exited before creating the canonical Desktop output root"
+  }
+  Start-Sleep -Milliseconds 250
+}
+if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container)) {
+  throw "Installed application did not create the canonical Desktop output root: $defaultOutputRoot"
+}
+Write-Host "Desktop output root created by installed application: $defaultOutputRoot"
 
 # Product-level first-run proof: invoke the real WebView button and require the
 # native Windows OpenFileDialog to appear. A browser-only mock cannot prove this.
@@ -199,6 +223,29 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
+function Wait-FileDialog {
+  param([Parameter(Mandatory = $true)][string]$Description)
+
+  return Wait-UiElement -Description $Description -TimeoutSeconds 30 -Probe {
+    $fileNameCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $windows = $desktop.FindAll(
+      [System.Windows.Automation.TreeScope]::Children,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    foreach ($candidate in $windows) {
+      $fileNameControl = $candidate.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        $fileNameCondition
+      )
+      if ($null -ne $fileNameControl) { return $candidate }
+    }
+    return $null
+  }
+}
+
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
 
@@ -242,6 +289,14 @@ $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   )
   $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
+# Confirm the first-run output naming rule before exercising generation. The
+# default rule is deterministic: document number + document date.
+$saveFolderRule = Find-ButtonByNames -Root $appWindow -Names @('Сохранить папку и правило')
+if ($null -ne $saveFolderRule) {
+  Invoke-UiElement -Element $saveFolderRule
+  Write-Host 'Default output folder and subfolder naming rule confirmed.'
+}
+
 $createButton = Wait-UiElement -Description 'Создать свои кнопки button' -Probe {
   $name = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::NameProperty,
@@ -288,6 +343,97 @@ $createdDocumentButton = Wait-UiElement -Description 'created static template bu
 }
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
 Write-Host 'Create button from a real unmarked DOCX OK.'
+
+# A template is not a case source. Exercise the installed source picker separately
+# so the generation stage is reached through the same order as a real user.
+$sourceButton = Wait-UiElement -Description 'Выбрать исходный файл button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Выбрать исходный файл')
+}
+Invoke-UiElement -Element $sourceButton
+$sourceDialog = Wait-FileDialog -Description 'native source file picker'
+$sourceFileNameEdit = Wait-UiElement -Description 'source OpenFileDialog file name field' -Probe {
+  $automationId = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+  $sourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
+}
+Set-UiValue -Element $sourceFileNameEdit -Value $plainTemplate
+Submit-OpenFileDialog -Dialog $sourceDialog
+$sourceAccepted = Wait-UiElement -Description 'Источник принят after native source selection' -TimeoutSeconds 40 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Источник принят'
+  )
+  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+if ($null -eq $sourceAccepted) { throw 'Installed application did not accept the real source DOCX.' }
+Write-Host 'Real source DOCX accepted by installed application.'
+
+# End-to-end installed generation proof: select the real created button, open the
+# real preflight, fill deterministic folder fields when the backend asks for them,
+# click Create, then require a physical readable DOCX in the Desktop output subfolder.
+$selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Выбрать всё')
+}
+Invoke-UiElement -Element $selectAllButton
+
+$preflightButton = Wait-UiElement -Description 'generation action for one selected document' -TimeoutSeconds 40 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+}
+Invoke-UiElement -Element $preflightButton
+
+$preflightTitle = Wait-UiElement -Description 'Проверка перед созданием dialog' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Проверка перед созданием'
+  )
+  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+if ($null -eq $preflightTitle) { throw 'Generation action did not open the real preflight.' }
+
+$smokeNumber = "WIN-SMOKE-$PID"
+$numberCondition = [System.Windows.Automation.PropertyCondition]::new(
+  [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+  'workflow-document-number'
+)
+$dateCondition = [System.Windows.Automation.PropertyCondition]::new(
+  [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+  'workflow-document-date'
+)
+$numberInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $numberCondition)
+$dateInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $dateCondition)
+if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNumber }
+if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
+
+$generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @('Создать документы')
+}
+Invoke-UiElement -Element $generateButton
+
+$createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
+$createdDoc = $null
+do {
+  if ($process.HasExited) { throw 'Installed application exited during real document generation smoke.' }
+  $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -eq $createdDoc) { Start-Sleep -Milliseconds 500 }
+} while ($null -eq $createdDoc -and [DateTime]::UtcNow -lt $createdDeadline)
+if ($null -eq $createdDoc) {
+  throw "Installed application did not physically create Проверочная кнопка.docx under $defaultOutputRoot"
+}
+if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
+$createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
+try {
+  $documentEntry = $createdArchive.GetEntry('word/document.xml')
+  if ($null -eq $documentEntry) { throw "Created file is not a readable Word DOCX: $($createdDoc.FullName)" }
+  $reader = [System.IO.StreamReader]::new($documentEntry.Open(), [System.Text.Encoding]::UTF8)
+  try { $createdXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+  if ($createdXml -notmatch 'Проверочная кнопка') { throw 'Created DOCX lost the template content.' }
+} finally {
+  $createdArchive.Dispose()
+}
+Write-Host "Installed end-to-end document generation OK: $($createdDoc.FullName)"
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()

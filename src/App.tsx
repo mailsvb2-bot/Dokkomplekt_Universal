@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
-  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup, firstRunState,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
+  activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickFolder, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -22,14 +22,15 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
-import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './lib/templateSetupSupport';
+import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
@@ -37,7 +38,6 @@ import {
 export function App() {
   return <AppDialogProvider><AppContent /></AppDialogProvider>;
 }
-
 function AppContent() {
   const dialogs = useAppDialog();
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
@@ -46,8 +46,9 @@ function AppContent() {
   const [documents, setDocuments] = useState<DocumentTemplateSpec[]>([]);
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
-  const [status, setStatus] = useState('Добавьте исходный файл — остальное программа подготовит сама.');
+  const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
+  const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
 
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
@@ -63,7 +64,6 @@ function AppContent() {
     layoutRows?: number;
     tableRows?: number;
   } | null>(null);
-
   const [plan, setPlan] = useState<WorkflowPlan | null>(null);
   const [preflightPlan, setPreflightPlan] = useState<WorkflowPlan | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -122,26 +122,6 @@ function AppContent() {
 
   useEffect(() => {
     let alive = true;
-    (async () => {
-      try {
-        const res = await firstRunState();
-        if (!alive) return;
-        if (res?.pack?.documents?.length) {
-          setDocuments(res.pack.documents);
-          setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
-          setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
-        } else if (res?.has_user_buttons === false) {
-          setStatus('Нажмите «Создать свои кнопки» и выберите ваши шаблоны Word.');
-        } else if (res?.message) {
-          setStatus(res.message);
-        }
-      } catch { /* no backend in browser/tests — start empty */ }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
     void getIntakeCapabilities()
       .then((items) => { if (alive) setIntakeCapabilities(items); })
       .catch(() => { /* browser/tests */ });
@@ -168,6 +148,7 @@ function AppContent() {
     listen<unknown>('document-batch-ready', (event) => {
       try {
         const result = normalizeCreatedDocumentsIntakeResult(event.payload);
+        setLastOutput(null);
         setIntakeResult(result);
         setStatus(result.message);
         if (result.status === 'processed' && result.created_files.length) {
@@ -323,6 +304,20 @@ function AppContent() {
     return true;
   }
 
+  function clearSourceScopedUiState() {
+    setSemantic(null);
+    setAnswers({});
+    setSkippedAnswers({});
+    setPlan(null);
+    setPreflightPlan(null);
+    setPreview(null);
+    setScannerField('');
+    setScannerText('');
+    setModelOutput('');
+    setIntakeResult(null);
+    setLastOutput(null);
+  }
+
   async function resetCurrentCase() {
     const cleared = await run('reset_case', () => resetCase());
     if (!cleared) return;
@@ -331,15 +326,10 @@ function AppContent() {
     setSourceFilePath(null);
     setWebSourceUrl('');
     setParsed(null);
-    setSemantic(null);
-    setAnswers({}); setSkippedAnswers({});
+    clearSourceScopedUiState();
     setSelectedDocIds([]);
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
-    setScannerField('');
-    setScannerText('');
-    setStatus('Новый комплект начат. Данные предыдущего комплекта очищены.');
+    setSickLeave(false);
+    setStatus('Новый комплект начат. Данные и результаты предыдущего комплекта очищены.');
   }
 
   function applyBundleDecision(decision: BundleDecision, routing: DocumentRoutingRecommendation): string {
@@ -351,7 +341,11 @@ function AppContent() {
   async function parseSourceNow() {
     const res = await run('parse_source', () => parseSource(sourceText, DEFAULT_YEAR));
     if (!res) return;
-    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    setSourceFileName(null);
+    setSourceFilePath(null);
+    setWebSourceUrl('');
+    clearSourceScopedUiState();
+    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -362,18 +356,38 @@ function AppContent() {
       layoutRows: 0,
       tableRows: 0,
     });
-    setAnswers({}); setSkippedAnswers({});
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
     const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
-  async function pickSourceFile(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (file) await processSourceFile(file);
+  async function applyParsedSourceFile(res: ParseSourceFileResponse, fileName: string) {
+    clearSourceScopedUiState();
+    setSourceFileName(fileName);
+    setSourceFilePath(res.source_path);
+    setSourceText(res.source_text);
+    setWebSourceUrl('');
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
+    setSemantic(semanticResult ?? null);
+    const count = Object.keys(res.semantic_case?.values ?? {}).length;
+    const layoutItems = res.layout_items ?? [];
+    setParsed({
+      title: res.report?.recognized_title ?? fileName,
+      count,
+      warnings: res.report?.warnings ?? [],
+      sourceKind: res.source_kind ?? 'file',
+      layoutRows: layoutItems.length,
+      tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
+    });
+    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
+    setStatus(`Файл «${fileName}» прочитан. Найдено значений: ${count}.${routingSummary}`);
+  }
+
+  async function pickSourceFileNative() {
+    const picked = await run('pick_source_file', () => pickSourceFile());
+    if (!picked || !(await ensureComponentForSource(picked.file_name))) return;
+    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, DEFAULT_YEAR));
+    if (!res) return;
+    await applyParsedSourceFile(res, picked.file_name);
   }
 
   async function processSourceFile(file: File) {
@@ -382,27 +396,7 @@ function AppContent() {
     const res = await run('parse_source_file', () =>
       parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
     if (!res) return;
-    setSourceFileName(file.name);
-    setSourceFilePath(res.source_path);
-    setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR, modelOutput.trim() || undefined));
-    setSemantic(semanticResult ?? null);
-    const count = Object.keys(res.semantic_case?.values ?? {}).length;
-    const layoutItems = res.layout_items ?? [];
-    setParsed({
-      title: res.report?.recognized_title ?? file.name,
-      count,
-      warnings: res.report?.warnings ?? [],
-      sourceKind: res.source_kind ?? 'file',
-      layoutRows: layoutItems.length,
-      tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
-    });
-    setAnswers({}); setSkippedAnswers({});
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
-    const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Файл «${file.name}» прочитан. Найдено значений: ${count}.${routingSummary}`);
+    await applyParsedSourceFile(res, file.name);
   }
 
 
@@ -414,10 +408,11 @@ function AppContent() {
     }
     const res = await run('parse_web_source', () => parseWebSource(url, DEFAULT_YEAR));
     if (!res) return;
+    clearSourceScopedUiState();
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
     setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -428,10 +423,6 @@ function AppContent() {
       layoutRows: 0,
       tableRows: 0,
     });
-    setAnswers({}); setSkippedAnswers({});
-    setPlan(null);
-    setPreflightPlan(null);
-    setPreview(null);
     const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
     setStatus(`Источник загружен. Найдено значений: ${count}.${routingSummary}`);
   }
@@ -485,12 +476,6 @@ function AppContent() {
     });
   }
 
-  function jobsForItems(items: GeneratedPrintItem[]): PrintJobDto[] {
-    return items
-      .map((item) => ({ path: item.path, copies: printCopies[item.document_id] ?? 1 }))
-      .filter((job) => job.copies > 0);
-  }
-
   async function queuePrint(
     jobs: PrintJobDto[],
     automatic = false,
@@ -542,7 +527,7 @@ function AppContent() {
     const items = lastOutput.print_items?.length
       ? lastOutput.print_items
       : lastOutput.files.map((path, index) => ({ document_id: `generated:${index}`, label: fileLabel(path), path }));
-    await queuePrint(jobsForItems(items));
+    await queuePrint(jobsForItems(items, printCopies));
   }
 
   async function exportLastOutput(pdfa1: boolean) {
@@ -566,25 +551,39 @@ function AppContent() {
     setStatus(`Пакет обмена создан: ${result.package_folder}.`);
   }
 
-  async function chooseExistingOutputPolicy(snapshot: GenerationSnapshot) {
+  async function chooseExistingOutputPolicy(snapshot: GenerationSnapshot, onError?: (detail: string) => void) {
     const labels = snapshot.documentIds.map(id => documents.find(document => document.id === id)?.button_label).filter((value): value is string => Boolean(value));
     return chooseExistingOutputPolicyFlow({
       outputRoot: snapshot.outputRoot, folderParts: snapshot.folderParts, labels,
-      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names)),
+      getPlan: (root, parts, names) => run('get_output_plan', () => getOutputPlan(root, parts, names), onError),
       confirm: (options) => dialogs.confirm(options),
       openFolder: (path) => run('open_in_file_manager', () => openInFileManager(path)),
       onStatus: setStatus, onMissingRoot: () => setFolderNamingConfirmed(false),
     });
   }
 
-  async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot) {
+  async function performGenerateSelectedDocuments(snapshot: GenerationSnapshot): Promise<string | null> {
     if (!generationDocumentRevisionsMatch(snapshot.documentRevisionTokens, documents)) {
-      setStatus('Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.'); return;
+      return 'Комплект изменился после проверки. Нажмите «Проверить и создать» ещё раз. Ничего не создано.';
     }
-    const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot);
-    if (!existingOutputPolicy || !snapshot.outputRoot) return;
-    const res = await run('render_docx_batch', () => renderDocxBatch(snapshot.documentIds, snapshot.outputRoot, snapshot.folderParts, true, existingOutputPolicy, snapshot.sickLeaveEnabled));
-    if (!res) return;
+    if (!snapshot.outputRoot.trim()) {
+      setFolderNamingConfirmed(false);
+      return 'Папка готовых документов не определена. Выберите папку и повторите создание.';
+    }
+    let policyError: string | null = null;
+    const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot, (detail) => { policyError = detail; });
+    if (!existingOutputPolicy) return policyError ? `Не удалось подготовить папку результата: ${policyError}` : null;
+    // The previous successful batch remains useful while the user only reviews or
+    // cancels preflight. Once a new render actually starts it is no longer the
+    // current result and must not survive a failed attempt as a false green state.
+    setLastOutput(null);
+    let renderError: string | null = null;
+    const res = await run(
+      'render_docx_batch',
+      () => renderDocxBatch(snapshot.documentIds, snapshot.outputRoot, snapshot.folderParts, true, existingOutputPolicy, snapshot.sickLeaveEnabled),
+      (detail) => { renderError = detail; },
+    );
+    if (!res) return `Не удалось создать документы: ${renderError ?? 'backend не вернул результат генерации.'}`;
     const printItems = createdPrintItems(res.created_documents, res.created_files, documents, snapshot.documentIds);
     setLastOutput({ folder: res.output_folder, files: res.created_files, source: 'batch', print_items: printItems });
     const backupNote = res.backup_folder ? ` Предыдущий комплект сохранён: ${res.backup_folder}.` : '';
@@ -592,21 +591,16 @@ function AppContent() {
       ? `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote} Требует внимания: ${res.warnings.join(' ')}`
       : `Комплект создан: ${res.created_files.length} документ(ов) в ${res.output_folder}.${backupNote}`);
     await openCreatedOutputFolderSilently(res.output_folder, openInFileManager);
-    if (autoPrint) await queuePrint(jobsForItems(printItems), true, snapshot.documentIds, null, res.output_folder);
-  }
-
-  async function loadWorkflowPlan(documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts): Promise<WorkflowPlan> {
-    return documentIds.length === 1
-      ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts)
-      : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
+    if (autoPrint) await queuePrint(jobsForItems(printItems, printCopies), true, snapshot.documentIds, null, res.output_folder);
+    return null;
   }
 
   function changeGenerationSickLeave(value: boolean) {
     setSickLeave(value); closeGenerationPreflight();
     setStatus('Параметр больничного изменён. Нажмите «Проверить и создать» ещё раз, чтобы пересчитать обязательные вопросы.');
   }
-
-  const { generationPreflightOpen, generationDocumentIds, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
+  const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
+  const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds),
     preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
@@ -766,11 +760,8 @@ function AppContent() {
 
   async function openTemplateSetup() {
     setAutoInferStaticTemplates(true);
-    setTemplateText('');
-    setButtonLabel('');
-    setImportedTemplatePath(null);
-    setPendingTemplates([]);
-    setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
+    setTemplateText(''); setButtonLabel(''); setImportedTemplatePath(null);
+    setPendingTemplates([]); setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
     setSetupOpen(false);
     setStatus('Выберите шаблоны Word в системном окне…');
 
@@ -781,8 +772,9 @@ function AppContent() {
       return;
     }
 
+    const { acceptedTemplates, rejectedTemplates, rejectedDetails } = partitionPickedTemplates(picked);
     const importedRows: PendingTemplate[] = [];
-    for (const file of picked) {
+    for (const file of acceptedTemplates) {
       const id = newDocumentId();
       const detectedLabel = detectTitle(file.extracted_text) || file.file_name.replace(/\.doc[xm]$/i, '');
       const analyzed = await run('analyze_template_file', () => analyzeTemplateFile(file.template_path, id, detectedLabel));
@@ -798,7 +790,9 @@ function AppContent() {
       });
     }
     if (!importedRows.length) {
-      setStatus('Не удалось подготовить выбранные шаблоны. Проверьте, что это безопасные DOCX без макросов и внешних связей.');
+      setStatus(rejectedDetails
+        ? `Не удалось подготовить выбранные шаблоны. ${rejectedDetails}`
+        : 'Не удалось подготовить выбранные шаблоны. Проверьте, что это безопасные DOCX без макросов и внешних связей.');
       return;
     }
 
@@ -808,7 +802,7 @@ function AppContent() {
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
     setSetupOpen(true);
-    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
+    setStatus(templatePickerCompletionMessage(importedRows.length, rejectedTemplates));
   }
 
   function openTextTemplateSetup() {
@@ -823,39 +817,24 @@ function AppContent() {
   }
 
   async function processTemplateFiles(files: File[]) {
-    const accepted = files.filter((file) => /\.doc[xm]$/i.test(file.name));
-    if (!accepted.length) {
-      setStatus('Шаблоны должны быть в формате DOCX или DOCM.');
+    const imported = await run('import_template_files', () => importBrowserTemplateFiles(files, {
+      readFileBytes, importTemplateFile, analyzeTemplateFile,
+    }));
+    if (!imported) return;
+    const { importedRows, rejectedTemplates } = imported;
+    if (!importedRows.length) {
+      setStatus(rejectedTemplates.length
+        ? `Не удалось подготовить выбранные шаблоны. ${rejectedTemplates.map(file => `${file.file_name}: ${file.import_error}`).join('; ')}`
+        : 'Шаблоны должны быть в формате DOCX или DOCM.');
       return;
     }
-    const importedRows: PendingTemplate[] = [];
-    for (const file of accepted) {
-      const id = newDocumentId();
-      const buffer = await readFileBytes(file);
-      const imported = await run('import_template_file', () =>
-        importTemplateFile(id, { fileName: file.name, bytesBase64: arrayBufferToBase64(buffer) }));
-      if (!imported) continue;
-      const detectedLabel = detectTitle(imported.extracted_text) || file.name.replace(/\.doc[xm]$/i, '');
-      const analyzed = await run('analyze_template_file', () => analyzeTemplateFile(imported.template_path, id, detectedLabel));
-      if (!analyzed) continue;
-      importedRows.push({
-        document_id: id,
-        template_path: imported.template_path,
-        extracted_text: imported.extracted_text,
-        file_name: file.name,
-        button_label: detectedLabel,
-        popup_fields: analyzed.document.popup_fields ?? [],
-        domain_override: null,
-      });
-    }
-    if (!importedRows.length) return;
     const combinedTemplates = [...pendingTemplates, ...importedRows];
     setPendingTemplates(combinedTemplates); await refreshWorkspaceInference(combinedTemplates);
     const last = importedRows.at(-1)!;
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
-    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
+    setStatus(templatePickerCompletionMessage(importedRows.length, rejectedTemplates));
   }
 
   async function processTemplateFile(file: File) {
@@ -1267,6 +1246,8 @@ function AppContent() {
       setStatus('Укажите путь к исходному файлу поддерживаемого формата.');
       return;
     }
+    setIntakeResult(null);
+    setLastOutput(null);
     const res = await run('run_created_documents_intake', () =>
       runCreatedDocumentsIntake(intakeSource.trim(), watchFolder.trim() || 'Созданные документы', folderParts, DEFAULT_YEAR, sickLeave));
     if (!res) return;
@@ -1275,7 +1256,7 @@ function AppContent() {
     if (res.status === 'processed' && res.created_files.length) {
       const printItems = createdPrintItems(res.created_documents, res.created_files, documents);
       setLastOutput({ folder: res.patient_folder, files: res.created_files, source: 'zero_touch', print_items: printItems });
-      if (autoPrint) await queuePrint(jobsForItems(printItems), true, printItems.map((item) => item.document_id), res.print_triage ?? null, res.patient_folder);
+      if (autoPrint) await queuePrint(jobsForItems(printItems, printCopies), true, printItems.map((item) => item.document_id), res.print_triage ?? null, res.patient_folder);
     }
   }
 
@@ -1288,6 +1269,8 @@ function AppContent() {
       : `Проверка завершена: уверенно найдено значений — ${res.fields.length}.`);
   }
 
+
+  const interactionBusy = busy || workspaceStateLoading || !workspaceStateReady;
 
   return (
     <div className="appRoot">
@@ -1308,9 +1291,20 @@ function AppContent() {
           </div>
         </header>
 
+        {workspaceStateError && (
+          <section className="startupRecovery" role="alert" aria-label="Не удалось загрузить рабочий набор">
+            <div>
+              <strong>Рабочий набор не загружен</strong>
+              <span>Чтобы не потерять сохранённые кнопки и настройки, создание нового комплекта заблокировано до успешного чтения состояния.</span>
+              <small>{workspaceStateError}</small>
+            </div>
+            <button className="primaryBtn" type="button" onClick={() => { void retryWorkspaceStateLoad(); }} disabled={workspaceStateLoading}>Повторить загрузку</button>
+          </section>
+        )}
+
         <div className="grid clientGrid">
           <Workspace
-            busy={busy}
+            busy={interactionBusy}
             documents={documents}
             selectedDocumentIds={selectedDocIds}
             watchFolder={watchFolder}
@@ -1357,7 +1351,7 @@ function AppContent() {
             onExportLastOutputPdf={() => void exportLastOutput(false)}
             onExportLastOutputPdfa={() => void exportLastOutput(true)}
             onExportLastOutputKedo={() => void exportLastOutputKedo()}
-            onPickSourceFile={pickSourceFile}
+            onPickSourceFile={() => { void pickSourceFileNative(); }}
             onDropSourceFile={processSourceFile}
             onLoadWebSource={loadWebSource}
             onResetCase={resetCurrentCase}
@@ -1376,7 +1370,7 @@ function AppContent() {
             documents={visibleDocs}
             activeDocumentId={activeDoc}
             selectedDocumentIds={selectedDocIds}
-            busy={busy}
+            busy={interactionBusy}
             printCopies={printCopies}
             onSelect={selectDocument}
             onToggleSelected={toggleDocumentSelected}
@@ -1500,6 +1494,8 @@ function AppContent() {
           skippedAnswers={skippedAnswers}
           busy={busy}
           loading={preflightLoading}
+          generationError={generationError}
+          invalidFieldId={generationValidationFieldId}
           showSickLeaveOption={showSickLeaveOption}
           sickLeaveEnabled={sickLeave}
           setAnswers={setAnswers}

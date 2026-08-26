@@ -28,6 +28,13 @@ def test_first_run_button_uses_native_template_picker() -> None:
     assert "validate_safe_template_file" in runtime
     assert "extract_docx_text" in runtime
     assert "pick_template_files," in main
+    assert "import_picked_templates" in runtime
+    assert "import_error: Option<String>" in runtime
+    assert "one_broken_template_does_not_discard_other_selected_templates" in runtime
+    support = text("src/lib/templateSetupSupport.ts")
+    assert "partitionPickedTemplates" in app
+    assert "templatePickerCompletionMessage" in app
+    assert "Пропущено проблемных шаблонов" in support
 
 
 def test_windows_installer_smoke_clicks_real_button_and_requires_native_dialog() -> None:

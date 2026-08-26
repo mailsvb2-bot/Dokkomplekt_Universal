@@ -23,17 +23,22 @@ def test_license_server_defaults_to_strict_and_validates_public_origin() -> None
     config = text("crates/dokkomplekt-license-server/src/config.rs")
     assert "!(development_mode && explicit_insecure_opt_in)" in config
     assert "validate_public_base_url" in config
-    assert 'payment_provider != "yookassa"' in config
+    assert 'matches!(payment_provider.as_str(), "yookassa" | "sbp")' in config
+    assert "if strict_runtime && !uses_yookassa_api" in config
+    assert "strict_runtime && uses_yookassa_api" in config
     assert "unsupported payment provider" in config
 
 
-def test_failed_payment_creation_is_recoverable_and_stubs_fail_closed() -> None:
+def test_failed_payment_creation_is_recoverable_and_unverified_providers_fail_closed() -> None:
     orders = text("crates/dokkomplekt-license-server/src/http/orders.rs")
     sbp = text("crates/dokkomplekt-license-server/src/provider_sbp.rs")
     assert "/api/orders/:order_id/payment" in orders
     assert '"retry_required"' in orders
     assert "authorize_order" in orders
-    assert "ProviderError::Unsupported" in sbp
+    assert "YooKassaProvider" in sbp
+    assert "create_sbp_payment" in sbp
+    assert '"bank_invoice" => Err(ProviderCallError::Provider(' in orders
+    assert "bank invoice provider is not implemented and cannot create payments" in orders
 
 
 def test_payment_webhook_duplicate_is_atomic_and_order_bound() -> None:

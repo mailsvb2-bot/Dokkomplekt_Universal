@@ -300,8 +300,11 @@ if ($adversarial) {
     Stop-Process -Id $secondProcess.Id -Force -ErrorAction SilentlyContinue
     throw 'Adversarial single-instance check failed: second UI process remained alive.'
   }
+  if ($secondProcess.ExitCode -ne 0) {
+    throw "Adversarial single-instance check failed: second launch exited with code $($secondProcess.ExitCode)."
+  }
   if ($process.HasExited) { throw 'Adversarial single-instance check killed the primary UI process.' }
-  Write-Host 'ADVERSARIAL OK: second launch exited and primary UI stayed alive.'
+  Write-Host 'ADVERSARIAL OK: second launch exited cleanly and primary UI stayed alive.'
 }
 
 # Confirm the first-run output naming rule before exercising generation. The
@@ -413,6 +416,18 @@ if ($adversarial) {
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
   )
   if ($null -eq $acceptedAfterBroken) { throw 'Corrupt replacement erased the previously accepted source state.' }
+  $goodSourceName = [System.IO.Path]::GetFileName($plainTemplate)
+  $goodSourceAfterBroken = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $goodSourceName)
+  )
+  $brokenSourceActive = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, [System.IO.Path]::GetFileName($brokenSource))
+  )
+  if ($null -eq $goodSourceAfterBroken -or $null -ne $brokenSourceActive) {
+    throw 'Corrupt replacement became active or displaced the previously accepted source.'
+  }
   Write-Host 'ADVERSARIAL OK: corrupt DOCX rejected without losing previous source.'
 
   # Cancelling the native picker is a no-op, not a destructive source reset.
@@ -451,6 +466,17 @@ if ($adversarial) {
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
   )
   if ($null -eq $acceptedAfterOversized) { throw 'Oversized replacement erased the previously accepted source.' }
+  $goodSourceAfterOversized = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $goodSourceName)
+  )
+  $oversizedSourceActive = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, [System.IO.Path]::GetFileName($oversizedSource))
+  )
+  if ($null -eq $goodSourceAfterOversized -or $null -ne $oversizedSourceActive) {
+    throw 'Oversized replacement became active or displaced the previously accepted source.'
+  }
   Write-Host 'ADVERSARIAL OK: >100MB source rejected without losing previous source.'
 }
 

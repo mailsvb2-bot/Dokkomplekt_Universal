@@ -8,8 +8,20 @@ type OutputRootStorage = Pick<Storage, 'getItem' | 'setItem'>;
 type OutputRootResolver = () => Promise<string>;
 type OutputRootEnsurer = (path: string) => Promise<string>;
 
+let lastBootstrapError: string | null = null;
+
 function normalizedRoot(value: string): string {
   return value.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLocaleLowerCase('ru-RU');
+}
+
+function errorDetail(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  const detail = String(error ?? '').trim();
+  return detail || 'неизвестная ошибка файловой системы';
+}
+
+export function getOutputRootBootstrapError(): string | null {
+  return lastBootstrapError;
 }
 
 export function outputRootNeedsBootstrap(value: string | null): boolean {
@@ -28,6 +40,8 @@ async function resolveDesktopOutputRoot(): Promise<string> {
  * The destination is physically ensured before React starts. That keeps the
  * visible Desktop folder contract true even before the first successful batch,
  * and also repairs a previously saved path whose directory was removed.
+ * Filesystem failures are retained for the startup UI instead of being silently
+ * mistaken for a usable output destination.
  */
 export async function ensureDefaultOutputRoot(
   storage: OutputRootStorage = localStorage,
@@ -35,6 +49,7 @@ export async function ensureDefaultOutputRoot(
   ensureRoot?: OutputRootEnsurer,
 ): Promise<string | null> {
   const existing = storage.getItem(OUTPUT_ROOT_KEY);
+  lastBootstrapError = null;
 
   try {
     if (!outputRootNeedsBootstrap(existing)) {
@@ -43,13 +58,15 @@ export async function ensureDefaultOutputRoot(
     }
 
     const resolved = (await resolveRoot()).trim();
-    if (!resolved) return null;
+    if (!resolved) {
+      lastBootstrapError = 'Windows не вернул путь к рабочему столу.';
+      return null;
+    }
     const ensured = ensureRoot ? (await ensureRoot(resolved)).trim() || resolved : resolved;
     storage.setItem(OUTPUT_ROOT_KEY, ensured);
     return ensured;
-  } catch {
-    // Keep startup fail-safe: if the OS Desktop cannot be resolved, App falls
-    // back to the existing explicit folder picker instead of guessing a path.
+  } catch (error) {
+    lastBootstrapError = `Не удалось подготовить папку готовых документов: ${errorDetail(error)}`;
     return null;
   }
 }

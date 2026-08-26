@@ -5,7 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { App } from './App';
 import { ensureOutputRoot, getDefaultOutputRoot } from './lib/api';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
-import { ensureDefaultOutputRoot } from './lib/outputRootBootstrap';
+import { ensureDefaultOutputRoot, getOutputRootBootstrapError } from './lib/outputRootBootstrap';
 import './styles.css';
 
 const READY_WINDOW_TITLE = 'Dokkomplekt Universal';
@@ -71,14 +71,25 @@ if (!(rootElement instanceof HTMLElement)) {
 }
 
 async function bootstrapApplication(root: HTMLElement): Promise<void> {
-  // Resolve the canonical first-run Desktop output before App's synchronous
-  // useState(loadOutputRoot) executes. This restores the product contract that
-  // generation works without forcing the user to configure a folder first.
+  // Resolve and physically create the canonical first-run Desktop output before
+  // App's synchronous useState(loadOutputRoot) executes. Never hide a filesystem
+  // refusal: the donor applications made folder failures explicit, and Universal
+  // must preserve that user-visible guarantee.
   await ensureDefaultOutputRoot(localStorage, getDefaultOutputRoot, ensureOutputRoot);
+  const outputRootBootstrapError = getOutputRootBootstrapError();
 
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <AppErrorBoundary>
+        {outputRootBootstrapError ? (
+          <section className="startupRecovery" role="alert" aria-label="Не удалось подготовить папку готовых документов">
+            <div>
+              <strong>Папка готовых документов не подготовлена</strong>
+              <span>Программа не будет считать путь рабочим молча. Проверьте доступ к рабочему столу или выберите другую папку в настройках.</span>
+              <small>{outputRootBootstrapError}</small>
+            </div>
+          </section>
+        ) : null}
         <App />
       </AppErrorBoundary>
     </React.StrictMode>

@@ -147,3 +147,43 @@ def test_durable_journal_is_prepared_before_every_filesystem_publication_boundar
     ) < auto_confirm
     assert 'completed_in_publication_guard' in automation
     assert 'complete_publication_receipt' in automation
+
+
+
+def test_unverified_batch_readback_is_quarantined_without_refunding_business_state() -> None:
+    publication = read('src-tauri/src/subsystems/publication_collision.rs')
+    recovery = tail_between(
+        publication,
+        'fn recover_unverified_batch_publication',
+        '#[cfg(test)]',
+    )
+    assert 'rollback_unverified_publication' in recovery
+    assert '.dokkomplekt-failed' in publication
+    assert 'commit_generation_access' in recovery
+    assert 'rollback_generation_access' not in recovery
+    assert 'rollback_counter_reservations' not in recovery
+    assert '"usage_refunded": false' in recovery
+    assert '"counters_refunded": false' in recovery
+    assert 'abort_prepared_publication' in recovery
+
+    document = read('src-tauri/src/subsystems/document_commands.rs')
+    start = document.index('fn render_docx_batch(')
+    end = document.index('struct ScannerRequest', start)
+    batch = document[start:end]
+    assert batch.index('let verification =') < batch.index(
+        'generation_publication::confirm_publication'
+    )
+    assert 'recover_unverified_batch_publication' in batch
+    failure_start = batch.index('Err(error) => {', batch.index('let created_files = match verification'))
+    failure_end = batch.index('let mut warnings = Vec::new();', failure_start)
+    failure = batch[failure_start:failure_end]
+    assert 'rollback_generation_access' not in failure
+    assert 'rollback_counter_reservations' not in failure
+
+
+def test_failed_replacement_restores_previous_folder_and_quarantines_new_files() -> None:
+    publication = read('src-tauri/src/subsystems/publication_collision.rs')
+    assert 'fn failed_new_version_is_quarantined_outside_user_visible_folder()' in publication
+    assert 'fn failed_replacement_restores_previous_directory_from_backup()' in publication
+    assert 'std::fs::rename(output_folder, &failed)' in publication
+    assert 'std::fs::rename(backup, output_folder)' in publication

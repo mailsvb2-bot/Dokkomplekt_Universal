@@ -80,6 +80,129 @@ fn publish_stage_replacing_with_backup(
     result
 }
 
+fn rollback_unverified_publication(
+    output_folder: &Path,
+    backup_folder: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let parent = output_folder.parent().unwrap_or_else(|| Path::new("."));
+    let mut quarantined = None;
+    if output_folder.exists() {
+        let failed_root = parent.join(".dokkomplekt-failed");
+        std::fs::create_dir_all(&failed_root)
+            .map_err(|error| format!("Не удалось создать карантин для непроверенного комплекта: {error}"))?;
+        let stem = sanitize_path_component(
+            output_folder
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Комплект"),
+        );
+        let failed = failed_root.join(format!(
+            "{stem}.failed-{}-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+            Uuid::new_v4()
+        ));
+        std::fs::rename(output_folder, &failed).map_err(|error| {
+            format!(
+                "Не удалось убрать непроверенный комплект из пользовательской папки: {error}"
+            )
+        })?;
+        quarantined = Some(failed);
+    }
+
+    if let Some(backup) = backup_folder {
+        if !backup.is_dir() {
+            return Err(format!(
+                "Резервная копия предыдущего комплекта недоступна для восстановления: {}",
+                backup.display()
+            ));
+        }
+        if output_folder.exists() {
+            return Err(format!(
+                "Нельзя восстановить предыдущий комплект: пользовательский путь всё ещё занят: {}",
+                output_folder.display()
+            ));
+        }
+        std::fs::rename(backup, output_folder).map_err(|error| {
+            format!(
+                "Непроверенный комплект убран, но предыдущую версию не удалось восстановить из {}: {error}",
+                backup.display()
+            )
+        })?;
+    }
+    Ok(quarantined)
+}
+
+
+fn recover_unverified_batch_publication(
+    app: &tauri::AppHandle,
+    permit: &GenerationPermit,
+    output_folder: &Path,
+    backup_folder: Option<&Path>,
+    verification_error: String,
+) -> String {
+    // Files can be restored for the user after a failed read-back, but generated
+    // artifacts have already crossed the accounting/counter boundary. Never
+    // refund usage or counter reservations after this point: the quarantined
+    // documents still exist and their numbers must not be issued again.
+    let rollback = rollback_unverified_publication(output_folder, backup_folder);
+    let accounting = commit_generation_access(app, permit);
+    let receipt_cleanup = if accounting.is_ok() {
+        Some(generation_publication::abort_prepared_publication(app, permit))
+    } else {
+        None
+    };
+    let quarantine_path = rollback
+        .as_ref()
+        .ok()
+        .and_then(|value| value.as_ref())
+        .map(|path| path.display().to_string());
+    let rollback_error = rollback.as_ref().err().cloned();
+    let accounting_error = accounting.as_ref().err().cloned();
+    let receipt_cleanup_error = receipt_cleanup
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .cloned();
+    let _ = append_audit_event(
+        app,
+        "unverified_publication_quarantined",
+        "",
+        &serde_json::json!({
+            "verification_error": verification_error,
+            "quarantine_path": quarantine_path,
+            "filesystem_rollback_error": rollback_error,
+            "accounting_error": accounting_error,
+            "receipt_cleanup_error": receipt_cleanup_error,
+            "usage_refunded": false,
+            "counters_refunded": false,
+        }),
+    );
+
+    let rollback_note = match rollback.as_ref() {
+        Ok(Some(path)) => format!(
+            "Непроверенный комплект убран из пользовательской папки в карантин {}. Предыдущая версия восстановлена, если существовала.",
+            path.display()
+        ),
+        Ok(None) => "Непроверенный пользовательский комплект удалять не пришлось; предыдущая версия восстановлена, если существовала.".to_string(),
+        Err(error) => format!("КРИТИЧЕСКАЯ ОШИБКА файлового восстановления: {error}"),
+    };
+    let accounting_note = match accounting.as_ref() {
+        Ok(()) => "Расход генерации и зарезервированные номера сохранены, чтобы исключить бесплатный или повторный выпуск.".to_string(),
+        Err(error) => format!(
+            "Учёт расхода не удалось дофинализировать ({error}); защищённая pre-publication квитанция сохранена для восстановления, возврат лимита не выполнялся."
+        ),
+    };
+    let receipt_note = receipt_cleanup
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .map(|error| format!(
+            " Pre-publication квитанцию после фиксации расхода удалить не удалось ({error}); она оставлена как дополнительный recovery guard."
+        ))
+        .unwrap_or_default();
+    format!(
+        "{verification_error} Публикация не признана успешной. {rollback_note} {accounting_note}{receipt_note}"
+    )
+}
+
 #[cfg(test)]
 mod publication_collision_tests {
     use super::*;
@@ -125,6 +248,43 @@ mod publication_collision_tests {
         assert_eq!(std::fs::read_to_string(desired.join("new.txt")).unwrap(), "new");
         let _ = std::fs::remove_dir_all(root);
     }
+    #[test]
+    fn failed_new_version_is_quarantined_outside_user_visible_folder() {
+        let root = temp_root("rollback-unverified-version");
+        let desired = root.join("Комплект");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::write(desired.join("broken.docx"), b"broken").unwrap();
+
+        let quarantined = rollback_unverified_publication(&desired, None)
+            .unwrap()
+            .expect("failed publication must be quarantined");
+        assert!(!desired.exists());
+        assert!(quarantined.is_dir());
+        assert_eq!(std::fs::read(quarantined.join("broken.docx")).unwrap(), b"broken");
+        assert_eq!(quarantined.parent().unwrap(), root.join(".dokkomplekt-failed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_replacement_restores_previous_directory_from_backup() {
+        let root = temp_root("rollback-unverified-replace");
+        let desired = root.join("Комплект");
+        let backup = root.join(".dokkomplekt-backups").join("Комплект.backup-test");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(desired.join("new-broken.docx"), b"broken").unwrap();
+        std::fs::write(backup.join("old-good.docx"), b"old").unwrap();
+
+        let quarantined = rollback_unverified_publication(&desired, Some(&backup))
+            .unwrap()
+            .expect("failed replacement must be quarantined");
+        assert!(desired.is_dir());
+        assert_eq!(std::fs::read(desired.join("old-good.docx")).unwrap(), b"old");
+        assert!(!backup.exists());
+        assert_eq!(std::fs::read(quarantined.join("new-broken.docx")).unwrap(), b"broken");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
 }
 
 // Manual generation publication proof.

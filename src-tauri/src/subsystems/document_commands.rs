@@ -1531,6 +1531,51 @@ fn render_docx_batch(
             ));
         }
     };
+    // The directory rename is only the filesystem boundary. User-visible success
+    // is granted after every published file can be read back from that exact
+    // destination. This preserves the donor applications' rule that a broken
+    // replacement must never displace the last known-good user folder.
+    let verification = (|| -> Result<Vec<String>, String> {
+        let created_files = verify_published_batch_files(
+            &output_folder,
+            &staged_paths,
+            documents.len(),
+        )?;
+        if let Some(staged_source) = staged_source_copy.as_ref() {
+            let source_name = staged_source.file_name().ok_or_else(|| {
+                "Публикация комплекта не подтверждена: копия исходника не имеет имени файла."
+                    .to_string()
+            })?;
+            let published_source = output_folder.join(source_name);
+            let metadata = std::fs::metadata(&published_source).map_err(|error| {
+                format!(
+                    "Публикация комплекта не подтверждена: исходный документ отсутствует {}: {error}",
+                    published_source.display()
+                )
+            })?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err(format!(
+                    "Публикация комплекта не подтверждена: копия исходного документа пуста или отсутствует: {}",
+                    published_source.display()
+                ));
+            }
+        }
+        Ok(created_files)
+    })();
+
+    let created_files = match verification {
+        Ok(files) => files,
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &output_folder,
+                backup_folder.as_deref(),
+                error,
+            ));
+        }
+    };
+
     let mut warnings = Vec::new();
     warnings.extend(ancillary_warnings);
     if let Some(backup) = backup_folder.as_ref() {
@@ -1543,7 +1588,7 @@ fn render_docx_batch(
         generation_publication::confirm_publication(&app, &permit, &output_folder)
     {
         warnings.push(format!(
-            "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
+            "Комплект проверен и опубликован, но durable-квитанция не перешла в состояние published: {error}"
         ));
     }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
@@ -1560,33 +1605,6 @@ fn render_docx_batch(
     warnings.extend(generation_publication::finalize_published_generation(
         &app, &permit, false,
     ));
-    // Never fabricate success from staging file names. The response is emitted
-    // only after every requested final file is physically present, non-empty and
-    // readable as a Word document at the published path.
-    let created_files = verify_published_batch_files(
-        &output_folder,
-        &staged_paths,
-        documents.len(),
-    )?;
-    if let Some(staged_source) = staged_source_copy.as_ref() {
-        let source_name = staged_source.file_name().ok_or_else(|| {
-            "Публикация комплекта не подтверждена: копия исходника не имеет имени файла."
-                .to_string()
-        })?;
-        let published_source = output_folder.join(source_name);
-        let metadata = std::fs::metadata(&published_source).map_err(|error| {
-            format!(
-                "Публикация комплекта не подтверждена: исходный документ отсутствует {}: {error}",
-                published_source.display()
-            )
-        })?;
-        if !metadata.is_file() || metadata.len() == 0 {
-            return Err(format!(
-                "Публикация комплекта не подтверждена: копия исходного документа пуста или отсутствует: {}",
-                published_source.display()
-            ));
-        }
-    }
     let created_documents = documents
         .iter()
         .zip(created_files.iter())

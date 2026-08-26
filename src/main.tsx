@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { App } from './App';
 import { ensureOutputRoot, getDefaultOutputRoot } from './lib/api';
+import { OUTPUT_NAMING_CONFIRMED_KEY } from './lib/appSupport';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { ensureDefaultOutputRoot, getOutputRootBootstrapError } from './lib/outputRootBootstrap';
 import './styles.css';
@@ -77,6 +78,12 @@ async function bootstrapApplication(root: HTMLElement): Promise<void> {
   // must preserve that user-visible guarantee.
   await ensureDefaultOutputRoot(localStorage, getDefaultOutputRoot, ensureOutputRoot);
   const outputRootBootstrapError = getOutputRootBootstrapError();
+  if (outputRootBootstrapError) {
+    // Preserve the user's selected path, but force the recovery/onboarding modal
+    // back open. A remembered path that Windows cannot create is not a confirmed
+    // working destination.
+    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+  }
 
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
@@ -85,7 +92,7 @@ async function bootstrapApplication(root: HTMLElement): Promise<void> {
           <section className="startupRecovery" role="alert" aria-label="Не удалось подготовить папку готовых документов">
             <div>
               <strong>Папка готовых документов не подготовлена</strong>
-              <span>Программа не будет считать путь рабочим молча. Проверьте доступ к рабочему столу или выберите другую папку в настройках.</span>
+              <span>Программа не будет считать путь рабочим молча. Проверьте доступ к рабочему столу или выберите другую папку в настройке ниже.</span>
               <small>{outputRootBootstrapError}</small>
             </div>
           </section>

@@ -56,10 +56,12 @@ import {
   loadState,
   openInFileManager,
   pickFolder,
+  pickSourceFile,
   pickTemplateFiles,
   printFiles,
   parseSource,
   parseSourceFile,
+  parseSourcePath,
   parseWebSource,
   getDocumentTemplateText,
   prepareTemplateSetup,
@@ -115,6 +117,8 @@ export const registeredBackendCommands = [
   'reset_case',
   'set_field',
   'parse_source',
+  'pick_source_file',
+  'parse_source_path',
   'parse_source_file',
   'get_intake_capabilities',
   'get_sidecar_status',
@@ -271,6 +275,10 @@ function installContractMock(calls: Call[]) {
         return [{ version_id: 'tpl-v1', document_id: 'doc_1', version_number: 1, template_path: 'template.docx', template_sha256: 'a'.repeat(64), note: 'published', status: 'published', created_at: 'now' }] as never;
       case 'parse_source':
         return { semantic_case: caseDto, report: { recognized_title: 'Первичный документ', warnings: [] }, routing: { domain: 'Generic', domain_confidence: 0.99, predicted_role: null, cluster_id: 'contract', cluster_confidence: 0.99, recommended_document_ids: ['contract'], matches: [], auto_select: true, review_required: false, reasons: ['exact route'] }, bundle_decision: { document_ids: ['contract'], source: 'deterministic_route', confidence: 0.99, auto_apply: true, review_required: false, question: null, reasons: ['exact route'] } } as never;
+      case 'pick_source_file':
+        return { file_name: 'source.pdf', selected_path: 'C:/fixtures/source.pdf' } as never;
+      case 'parse_source_path':
+        return { source_text: 'source path', source_path: 'dokkomplekt-upload://current/source.pdf', source_kind: 'pdf_text', layout_items: [], semantic_case: { values: {} }, report: { recognized_title: 'Source', warnings: [] }, routing: { domain: 'Generic', domain_confidence: 1, predicted_role: 'generic', cluster_id: 'generic', cluster_confidence: 1, recommended_document_ids: [], matches: [], auto_select: false, review_required: true, reasons: [] }, bundle_decision: { document_ids: [], source: 'no_safe_proposal', confidence: 1, auto_apply: false, review_required: true, question: null, reasons: [] } } as never;
       case 'parse_source_file':
         return { source_text: 'Первичный документ', source_path: '/app-data/intake-work/source.pdf', source_kind: 'pdf', layout_items: [], semantic_case: caseDto, report: { recognized_title: 'Первичный документ', warnings: [] }, routing: { domain: 'Generic', domain_confidence: 0.99, predicted_role: null, cluster_id: 'contract', cluster_confidence: 0.99, recommended_document_ids: ['contract'], matches: [], auto_select: true, review_required: false, reasons: ['exact route'] }, bundle_decision: { document_ids: ['contract'], source: 'deterministic_route', confidence: 0.99, auto_apply: true, review_required: false, question: null, reasons: ['exact route'] } } as never;
       case 'get_intake_capabilities':
@@ -434,6 +442,8 @@ describe('Tauri command DTO contracts', () => {
     await ensureOutputRoot('C:/Users/Test/Desktop/Выписанные пациенты');
     await resetCase();
     await parseSource('Первичный документ', 2026);
+    await pickSourceFile('C:/fixtures');
+    await parseSourcePath('C:/fixtures/source.pdf', 2026);
     await parseSourceFile('source.pdf', 'JVBERi0=', 2026);
     await getIntakeCapabilities();
     await getSidecarStatus();
@@ -466,6 +476,8 @@ describe('Tauri command DTO contracts', () => {
       { command: 'ensure_output_root', payload: { req: { output_root: 'C:/Users/Test/Desktop/Выписанные пациенты' } } },
       { command: 'reset_case', payload: undefined },
       { command: 'parse_source', payload: { req: { source_text: 'Первичный документ', default_year: 2026 } } },
+      { command: 'pick_source_file', payload: { req: { initial_path: 'C:/fixtures' } } },
+      { command: 'parse_source_path', payload: { req: { selected_path: 'C:/fixtures/source.pdf', default_year: 2026 } } },
       { command: 'parse_source_file', payload: { req: { file_name: 'source.pdf', bytes_base64: 'JVBERi0=', default_year: 2026 } } },
       { command: 'get_intake_capabilities', payload: undefined },
       { command: 'get_sidecar_status', payload: undefined },

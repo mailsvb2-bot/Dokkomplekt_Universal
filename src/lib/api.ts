@@ -127,6 +127,19 @@ export async function parseSource(sourceText: string, defaultYear: number): Prom
   return callRust('parse_source', { req: { source_text: sourceText, default_year: defaultYear } });
 }
 
+export interface PickedSourceFile {
+  file_name: string;
+  selected_path: string;
+}
+
+export async function pickSourceFile(initialPath?: string | null): Promise<PickedSourceFile | null> {
+  return callRust('pick_source_file', { req: { initial_path: initialPath ?? null } });
+}
+
+export async function parseSourcePath(selectedPath: string, defaultYear: number): Promise<ParseSourceFileResponse> {
+  return callRust('parse_source_path', { req: { selected_path: selectedPath, default_year: defaultYear } });
+}
+
 export async function parseSourceFile(fileName: string, bytesBase64: string, defaultYear: number): Promise<ParseSourceFileResponse> {
   return callRust('parse_source_file', { req: { file_name: fileName, bytes_base64: bytesBase64, default_year: defaultYear } });
 }
@@ -672,6 +685,8 @@ export const rustCommandNames = [
   'reset_case',
   'set_field',
   'parse_source',
+  'pick_source_file',
+  'parse_source_path',
   'parse_source_file',
   'get_intake_capabilities',
   'get_sidecar_status',

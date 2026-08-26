@@ -12,9 +12,10 @@ const pack = { pack_id: 'default', name: 'Набор', documents: [accDoc, secon
 const caseDto = { values: { 'org.inn': { field_id: 'org.inn', value: '7701234567', source: 'parser', confidence: 0.9 } } };
 const workflow = { document_id: 'acc_1', prompts: [{ field_id: 'org.inn', title: 'ИНН', required: true, skippable: true, current_value: '7701234567', validation_hint: null }], blocked: false, block_reasons: [] };
 
-function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number } = {}) {
+function installMock(calls: Call[], options: { componentInstalled?: boolean; componentState?: 'downloaded' | 'bundled' | 'system' | 'missing'; bundleMode?: 'auto' | 'review' | 'none'; firstRunFailures?: number; renderFailureOnCall?: number } = {}) {
   const bundleMode = options.bundleMode ?? 'auto';
   let firstRunFailures = options.firstRunFailures ?? 0;
+  let renderBatchCallCount = 0;
   const bundleDocumentIds = bundleMode === 'none' ? [] : bundleMode === 'review' ? ['acc_1'] : ['acc_1', 'doc_2'];
   const routing = { domain: 'Accounting', domain_confidence: 0.99, predicted_role: 'invoice', cluster_id: 'invoice', cluster_confidence: 0.99, recommended_document_ids: bundleDocumentIds, matches: [{ document_id: 'acc_1', button_label: 'Счёт на оплату', role_id: 'invoice', score: 0.99, evidence: ['title'] }], auto_select: bundleMode === 'auto', review_required: bundleMode !== 'auto', reasons: ['route'] };
   const bundleDecision = { document_ids: bundleDocumentIds, source: bundleMode === 'auto' ? 'deterministic_route' : bundleMode === 'review' ? 'review_proposal' : 'no_safe_proposal', confidence: 0.99, auto_apply: bundleMode === 'auto', review_required: bundleMode !== 'auto', question: bundleMode === 'auto' ? null : 'Подтвердите состав', reasons: ['route'] };
@@ -35,6 +36,9 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         return { pack, has_user_buttons: true, message: 'ok' } as never;
       case 'parse_source':
         return { semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
+      case 'pick_source_file':
+        return { file_name: 'Источник.docx', selected_path: 'C:/fixtures/Источник.docx' } as never;
+      case 'parse_source_path':
       case 'parse_source_file':
         return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', source_kind: 'docx', layout_items: [], semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'get_intake_capabilities':
@@ -85,8 +89,11 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         return { output_text: 'СЧЁТ-ПРЕВЬЮ', missing_fields: [], unknown_fields: [], warnings: [] } as never;
       case 'render_docx':
         return { output_text: 'ok', missing_fields: [], unknown_fields: [], warnings: [], output_path: 'output/acc_1.docx' } as never;
-      case 'render_docx_batch':
+      case 'render_docx_batch': {
+        renderBatchCallCount += 1;
+        if (options.renderFailureOnCall === renderBatchCallCount) throw new Error('simulated render failure');
         return { output_folder: 'output/148_2026-02-01', created_files: ['output/148_2026-02-01/Счёт на оплату.docx'], created_documents: [{ document_id: 'acc_1', label: 'Счёт на оплату', path: 'output/148_2026-02-01/Счёт на оплату.docx' }] } as never;
+      }
       case 'get_privacy_preferences': return { copy_source_to_output: true, write_trust_report: true, include_values_in_trust_report: false, temp_retention_hours: 24, archive_processed_sources: true, archive_folder_name: '_обработано', service_note_retention_days: 30, processed_marker_retention_days: 7, archived_source_retention_days: 0 } as never;
       case 'get_semantic_model_config': return { config: { enabled: false, provider: 'ollama', endpoint: 'http://127.0.0.1:11434', model: 'qwen2.5:7b-instruct', preferred_language: 'auto', timeout_seconds: 90, shadow_mode: true, corpus_recording_enabled: false, auto_apply_zero_touch: false, consistency_passes: 2 }, status: { configured: true, reachable: false, provider: 'ollama', endpoint: 'http://127.0.0.1:11434', model: 'qwen2.5:7b-instruct', available_models: [], message: 'disabled' } } as never;
       case 'get_printer_inventory': return { platform: 'windows', printers: [{ name: 'Office Printer', is_default: true, driver: 'driver', port: 'port' }], preferences: { printer_name: null, duplex_mode: 'simplex', tray: null }, advanced_options_note: 'ok' } as never;
@@ -238,7 +245,12 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((c) => c.command === 'parse_source')).toBe(true));
     expect(parsePayload(calls, 'parse_source')).toMatchObject({ req: { default_year: expect.any(Number) } });
 
-    // direct DOCX source import -> parse_source_file
+    // Packaged desktop button uses the native OS picker and then parses the selected path.
+    fireEvent.click(screen.getByRole('button', { name: 'Заменить исходный файл' }));
+    await waitFor(() => expect(calls.some((c) => c.command === 'pick_source_file')).toBe(true));
+    await waitFor(() => expect(parsePayload(calls, 'parse_source_path')).toMatchObject({ req: { selected_path: 'C:/fixtures/Источник.docx', default_year: expect.any(Number) } }));
+
+    // Drag-and-drop remains a supported independent byte-upload path -> parse_source_file.
     const sourceFile = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], 'Источник.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const sourceDropZone = document.querySelector('.sourceStage');
     expect(sourceDropZone).toBeTruthy();
@@ -531,14 +543,14 @@ describe('Полный прогон пользовательских сцена�
     expect(within(alert).getByText('Рабочий набор не загружен')).toBeTruthy();
     const createButtons = screen.getByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;
     expect(createButtons.disabled).toBe(true);
-    expect((screen.getByTestId('source-file-input') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Выбрать исходный файл' }) as HTMLButtonElement).disabled).toBe(true);
 
     const retry = within(alert).getByRole('button', { name: 'Повторить загрузку' }) as HTMLButtonElement;
     await waitFor(() => expect(retry.disabled).toBe(false));
     fireEvent.click(retry);
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Не удалось загрузить рабочий набор' })).toBeNull());
-    expect((screen.getByTestId('source-file-input') as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Выбрать исходный файл' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('замена источника и новый комплект не оставляют имя, сканер или готовые файлы предыдущего дела', async () => {
@@ -573,6 +585,32 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.filter((call) => call.command === 'reset_case').length).toBeGreaterThan(0));
     expect(screen.queryByRole('status', { name: 'Комплект готов' })).toBeNull();
     expect(screen.getByRole('heading', { name: 'Добавьте исходный файл' })).toBeTruthy();
+  });
+
+  it('новая подтверждённая генерация убирает старую зелёную карточку, если текущий render падает', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { renderFailureOnCall: 2 });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+
+    fireEvent.click(screen.getByText('Другой способ добавить источник'));
+    fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Счёт № 148' } });
+    await click(/Использовать текст/);
+
+    await click(/Проверить и создать \(2\)/);
+    let preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
+    await screen.findByRole('status', { name: 'Комплект готов' });
+
+    await click(/Проверить и создать \(2\)/);
+    preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
+    expect(screen.getByRole('status', { name: 'Комплект готов' })).toBeTruthy();
+
+    fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
+    await within(preflight).findByText(/simulated render failure/);
+    expect(screen.queryByRole('status', { name: 'Комплект готов' })).toBeNull();
+    expect(within(preflight).getByText('Документы не созданы')).toBeTruthy();
+    expect(calls.filter((call) => call.command === 'render_docx_batch')).toHaveLength(2);
   });
 
   it('явное продолжение без обязательного значения передаётся в Rust и не блокирует генерацию', async () => {

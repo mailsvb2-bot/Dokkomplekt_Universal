@@ -388,8 +388,10 @@ export const COMMAND_RESPONSE_KIND = {
   'lookup_business_registry': 'nullable-object',
   'open_in_file_manager': 'void',
   'pick_template_files': 'object',
+  'pick_source_file': 'nullable-object',
   'pick_folder': 'object',
   'parse_source': 'object',
+  'parse_source_path': 'object',
   'parse_source_file': 'object',
   'parse_web_source': 'object',
   'prepare_mail_merge_file': 'object',
@@ -488,6 +490,7 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
       validateDocumentPack(command, value);
       break;
     case 'parse_source':
+    case 'parse_source_path':
     case 'parse_source_file':
     case 'parse_web_source':
       validateParseSource(command, value);
@@ -525,6 +528,12 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
     case 'semantic_extract':
       validateSemantic(command, value);
       break;
+    case 'pick_source_file': {
+      const root = record(command, value);
+      string(command, root.file_name, 'file_name');
+      string(command, root.selected_path, 'selected_path');
+      break;
+    }
     case 'pick_template_files': {
       const root = record(command, value);
       const files = array(command, root.files, 'files');

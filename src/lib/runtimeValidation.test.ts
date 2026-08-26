@@ -8,8 +8,10 @@ import {
 
 describe('runtime backend contracts', () => {
   it('registers a fail-closed response kind for every current Tauri command', () => {
-    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(117);
+    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(119);
     expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');
+    expect(COMMAND_RESPONSE_KIND.pick_source_file).toBe('nullable-object');
+    expect(COMMAND_RESPONSE_KIND.parse_source_path).toBe('object');
     expect(() => validateRustResponse('new_unregistered_command', {})).toThrow(/не зарегистрирован контракт/);
   });
 
@@ -28,6 +30,8 @@ describe('runtime backend contracts', () => {
     expect(validateRustResponse('save_state', null)).toBeNull();
     expect(() => validateRustResponse('save_state', {})).toThrow(/без результата/);
     expect(validateRustResponse('lookup_business_registry', null)).toBeNull();
+    expect(validateRustResponse('pick_source_file', null)).toBeNull();
+    expect(validateRustResponse('pick_source_file', { file_name: 'source.docx', selected_path: 'C:/source.docx' })).toMatchObject({ file_name: 'source.docx' });
     expect(() => validateRustResponse('lookup_business_registry', 'bad')).toThrow(/объектом/);
   });
 

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickFolder, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickFolder, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -360,20 +360,9 @@ function AppContent() {
     setStatus(`Источник прочитан. Найдено значений: ${count}.${routingSummary}`);
   }
 
-  async function pickSourceFile(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (file) await processSourceFile(file);
-  }
-
-  async function processSourceFile(file: File) {
-    if (!(await ensureComponentForSource(file.name))) return;
-    const buffer = await readFileBytes(file);
-    const res = await run('parse_source_file', () =>
-      parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
-    if (!res) return;
+  async function applyParsedSourceFile(res: ParseSourceFileResponse, fileName: string) {
     clearSourceScopedUiState();
-    setSourceFileName(file.name);
+    setSourceFileName(fileName);
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
     setWebSourceUrl('');
@@ -382,7 +371,7 @@ function AppContent() {
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     const layoutItems = res.layout_items ?? [];
     setParsed({
-      title: res.report?.recognized_title ?? file.name,
+      title: res.report?.recognized_title ?? fileName,
       count,
       warnings: res.report?.warnings ?? [],
       sourceKind: res.source_kind ?? 'file',
@@ -390,7 +379,24 @@ function AppContent() {
       tableRows: layoutItems.filter((item) => item.item_kind === 'table_row').length,
     });
     const routingSummary = applyBundleDecision(res.bundle_decision, res.routing);
-    setStatus(`Файл «${file.name}» прочитан. Найдено значений: ${count}.${routingSummary}`);
+    setStatus(`Файл «${fileName}» прочитан. Найдено значений: ${count}.${routingSummary}`);
+  }
+
+  async function pickSourceFileNative() {
+    const picked = await run('pick_source_file', () => pickSourceFile());
+    if (!picked || !(await ensureComponentForSource(picked.file_name))) return;
+    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, DEFAULT_YEAR));
+    if (!res) return;
+    await applyParsedSourceFile(res, picked.file_name);
+  }
+
+  async function processSourceFile(file: File) {
+    if (!(await ensureComponentForSource(file.name))) return;
+    const buffer = await readFileBytes(file);
+    const res = await run('parse_source_file', () =>
+      parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
+    if (!res) return;
+    await applyParsedSourceFile(res, file.name);
   }
 
 
@@ -567,6 +573,10 @@ function AppContent() {
     let policyError: string | null = null;
     const existingOutputPolicy = await chooseExistingOutputPolicy(snapshot, (detail) => { policyError = detail; });
     if (!existingOutputPolicy) return policyError ? `Не удалось подготовить папку результата: ${policyError}` : null;
+    // The previous successful batch remains useful while the user only reviews or
+    // cancels preflight. Once a new render actually starts it is no longer the
+    // current result and must not survive a failed attempt as a false green state.
+    setLastOutput(null);
     let renderError: string | null = null;
     const res = await run(
       'render_docx_batch',
@@ -1341,7 +1351,7 @@ function AppContent() {
             onExportLastOutputPdf={() => void exportLastOutput(false)}
             onExportLastOutputPdfa={() => void exportLastOutput(true)}
             onExportLastOutputKedo={() => void exportLastOutputKedo()}
-            onPickSourceFile={pickSourceFile}
+            onPickSourceFile={() => { void pickSourceFileNative(); }}
             onDropSourceFile={processSourceFile}
             onLoadWebSource={loadWebSource}
             onResetCase={resetCurrentCase}

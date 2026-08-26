@@ -271,6 +271,140 @@ return outputText
     }
 }
 
+
+fn pick_source_file_blocking(initial_path: Option<String>) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Выберите исходный документ'
+$dialog.Filter = 'Поддерживаемые документы|*.docx;*.docm;*.doc;*.ppt;*.pptx;*.pdf;*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;*.webp;*.xlsx;*.xls;*.ods;*.odt;*.rtf;*.txt;*.md;*.csv;*.tsv;*.json;*.xml;*.html;*.htm;*.eml;*.msg;*.zip;*.7z;*.rar|Все файлы (*.*)|*.*'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$dialog.RestoreDirectory = $true
+if ($env:DOKKOMPLEKT_PICK_SOURCE_INITIAL -and (Test-Path -LiteralPath $env:DOKKOMPLEKT_PICK_SOURCE_INITIAL -PathType Container)) {
+  $dialog.InitialDirectory = $env:DOKKOMPLEKT_PICK_SOURCE_INITIAL
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.WriteLine($dialog.FileName)
+}
+"#;
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-STA", "-Command", script])
+            .env(
+                "DOKKOMPLEKT_PICK_SOURCE_INITIAL",
+                initial_path.as_deref().unwrap_or_default(),
+            )
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| format!("Не удалось запустить системный выбор исходника: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор исходника завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_source_picker_path(&output.stdout)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+try
+  set chosenFile to choose file with prompt "Выберите исходный документ"
+  return POSIX path of chosenFile
+on error number -128
+  return ""
+end try
+"#;
+        let output = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|error| format!("Не удалось открыть системный выбор исходника: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор исходника завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_source_picker_path(&output.stdout)
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let initial = initial_path.filter(|value| Path::new(value).is_dir());
+        let output = if picker_command_exists("zenity") {
+            let mut command = std::process::Command::new("zenity");
+            command.args([
+                "--file-selection",
+                "--title=Выберите исходный документ",
+                "--file-filter=Документы | *.docx *.docm *.doc *.ppt *.pptx *.pdf *.jpg *.jpeg *.png *.tif *.tiff *.bmp *.webp *.xlsx *.xls *.ods *.odt *.rtf *.txt *.md *.csv *.tsv *.json *.xml *.html *.htm *.eml *.msg *.zip *.7z *.rar",
+            ]);
+            if let Some(path) = initial.as_deref() {
+                command.arg(format!("--filename={}/", path.trim_end_matches('/')));
+            }
+            command.output()
+        } else if picker_command_exists("kdialog") {
+            let mut command = std::process::Command::new("kdialog");
+            command.args([
+                "--getopenfilename",
+                initial.as_deref().unwrap_or("."),
+                "*.docx *.docm *.doc *.ppt *.pptx *.pdf *.jpg *.jpeg *.png *.tif *.tiff *.bmp *.webp *.xlsx *.xls *.ods *.odt *.rtf *.txt *.md *.csv *.tsv *.json *.xml *.html *.htm *.eml *.msg *.zip *.7z *.rar|Документы",
+            ]);
+            command.output()
+        } else {
+            return Err(
+                "Системный выбор исходника недоступен: установите zenity или kdialog.".into(),
+            );
+        }
+        .map_err(|error| format!("Не удалось открыть системный выбор исходника: {error}"))?;
+        if !output.status.success() {
+            if output.status.code() == Some(1) {
+                return Ok(None);
+            }
+            return Err(format!(
+                "Системный выбор исходника завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_source_picker_path(&output.stdout)
+    }
+}
+
+fn parse_source_picker_path(output: &[u8]) -> Result<Option<PathBuf>, String> {
+    let text = String::from_utf8(output.to_vec())
+        .map_err(|_| "Системный выбор исходника вернул некорректный UTF-8.".to_string())?;
+    let raw = text.lines().find(|line| !line.trim().is_empty());
+    let Some(raw) = raw else { return Ok(None); };
+    let value = raw.trim().trim_matches('\u{feff}').trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(value);
+    let extension = path
+        .extension()
+        .and_then(|part| part.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    const SUPPORTED: &[&str] = &[
+        "docx", "docm", "doc", "ppt", "pptx", "pdf", "jpg", "jpeg", "png", "tif",
+        "tiff", "bmp", "webp", "xlsx", "xls", "ods", "odt", "rtf", "txt", "md", "csv",
+        "tsv", "json", "xml", "html", "htm", "eml", "msg", "zip", "7z", "rar",
+    ];
+    if !SUPPORTED.contains(&extension.as_str()) {
+        return Err(format!(
+            "Системный выбор вернул неподдерживаемый исходник: {}",
+            path.display()
+        ));
+    }
+    Ok(Some(path))
+}
+
 fn parse_picker_paths(output: &[u8]) -> Result<Vec<PathBuf>, String> {
     let text = String::from_utf8(output.to_vec())
         .map_err(|_| "Системный выбор шаблонов вернул некорректный UTF-8.".to_string())?;
@@ -322,6 +456,27 @@ mod template_picker_tests {
     fn rejects_non_word_picker_output() {
         let result = parse_picker_paths(b"C:/tmp/template.pdf\n");
         assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));
+    }
+
+    #[test]
+    fn parses_supported_source_picker_path_and_preserves_spaces() {
+        let path = parse_source_picker_path("\u{feff}C:/Работа/Исходный документ.docx\r\n".as_bytes())
+            .expect("source picker output must parse")
+            .expect("source path must be present");
+        assert!(path.ends_with("Исходный документ.docx"));
+    }
+
+    #[test]
+    fn source_picker_cancel_is_not_an_error() {
+        assert_eq!(parse_source_picker_path(b"\r\n"), Ok(None));
+    }
+
+    #[test]
+    fn source_picker_rejects_unsupported_extension() {
+        let result = parse_source_picker_path(b"C:/tmp/source.exe\n");
+        assert!(result
+            .as_ref()
+            .is_err_and(|error| error.contains("неподдерживаемый исходник")));
     }
 
     #[test]

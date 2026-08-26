@@ -2423,6 +2423,8 @@ fn main() {
             reset_case,
             set_field,
             parse_source,
+            pick_source_file,
+            parse_source_path,
             parse_source_file,
             get_intake_capabilities,
             get_sidecar_status,

@@ -2207,6 +2207,7 @@ fn current_year_utc() -> i32 {
 
 include!("subsystems/legacy_template_runtime.rs");
 include!("subsystems/profile_sources.rs");
+include!("subsystems/output_root_commands.rs");
 include!("subsystems/publication_collision.rs");
 include!("subsystems/source_identity_runtime.rs");
 include!("subsystems/source_intake_commands.rs");
@@ -2407,6 +2408,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             first_run_state,
             get_default_output_root,
+            ensure_output_root,
             analyze_template,
             analyze_template_file,
             prepare_template_setup,

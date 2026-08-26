@@ -41,6 +41,10 @@ export async function getDefaultOutputRoot(): Promise<string> {
   return callRust('get_default_output_root');
 }
 
+export async function ensureOutputRoot(outputRoot: string): Promise<string> {
+  return callRust('ensure_output_root', { req: { output_root: outputRoot } });
+}
+
 export async function getProcessBlueprints(): Promise<ProcessBlueprintState> {
   return callRust('get_process_blueprints');
 }
@@ -653,6 +657,7 @@ export async function renderMailMerge(documentIds: string[], delimitedText: stri
 export const rustCommandNames = [
   'first_run_state',
   'get_default_output_root',
+  'ensure_output_root',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',

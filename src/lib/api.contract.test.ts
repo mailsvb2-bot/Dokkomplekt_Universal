@@ -23,6 +23,7 @@ import {
   exportOneCCounterparties,
   firstRunState,
   getDefaultOutputRoot,
+  ensureOutputRoot,
   deleteLearnedScannerRule,
   getDiaryPlan,
   getIntakeCapabilities,
@@ -99,6 +100,7 @@ type Call = { command: string; payload?: Record<string, unknown> };
 export const registeredBackendCommands = [
   'first_run_state',
   'get_default_output_root',
+  'ensure_output_root',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',
@@ -248,6 +250,7 @@ function installContractMock(calls: Call[]) {
     calls.push({ command, payload });
     switch (command) {
       case 'get_default_output_root':
+      case 'ensure_output_root':
         return 'C:/Users/Test/Desktop/Выписанные пациенты' as never;
       case 'first_run_state':
       case 'load_state':
@@ -428,6 +431,7 @@ describe('Tauri command DTO contracts', () => {
     installContractMock(calls);
     await firstRunState();
     await getDefaultOutputRoot();
+    await ensureOutputRoot('C:/Users/Test/Desktop/Выписанные пациенты');
     await resetCase();
     await parseSource('Первичный документ', 2026);
     await parseSourceFile('source.pdf', 'JVBERi0=', 2026);
@@ -459,6 +463,7 @@ describe('Tauri command DTO contracts', () => {
     expect(calls).toMatchObject([
       { command: 'first_run_state', payload: undefined },
       { command: 'get_default_output_root', payload: undefined },
+      { command: 'ensure_output_root', payload: { req: { output_root: 'C:/Users/Test/Desktop/Выписанные пациенты' } } },
       { command: 'reset_case', payload: undefined },
       { command: 'parse_source', payload: { req: { source_text: 'Первичный документ', default_year: 2026 } } },
       { command: 'parse_source_file', payload: { req: { file_name: 'source.pdf', bytes_base64: 'JVBERi0=', default_year: 2026 } } },

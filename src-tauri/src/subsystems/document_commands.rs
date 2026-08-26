@@ -1,36 +1,3 @@
-const DEFAULT_OUTPUT_FOLDER_NAME: &str = "Выписанные пациенты";
-
-fn canonical_default_output_root_under(desktop: &Path) -> PathBuf {
-    desktop.join(DEFAULT_OUTPUT_FOLDER_NAME)
-}
-
-fn canonical_default_output_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let desktop = app
-        .path()
-        .desktop_dir()
-        .map_err(|error| format!("Не удалось определить папку рабочего стола: {error}"))?;
-    Ok(canonical_default_output_root_under(&desktop))
-}
-
-#[tauri::command]
-fn get_default_output_root(app: tauri::AppHandle) -> Result<String, String> {
-    Ok(canonical_default_output_root(&app)?.display().to_string())
-}
-
-#[cfg(test)]
-mod default_output_root_contract_tests {
-    use super::*;
-
-    #[test]
-    fn canonical_default_output_root_is_desktop_child_without_side_effects() {
-        let desktop = Path::new("C:/Users/Operator/Desktop");
-        assert_eq!(
-            canonical_default_output_root_under(desktop),
-            desktop.join("Выписанные пациенты")
-        );
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct FirstRunStateResponse {
     pack: DocumentPack,

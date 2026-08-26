@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
+import { useEffect } from 'react';
 import type { DocumentTemplateSpec, PromptSpec, WorkflowPlan } from '../lib/types';
 import { activeWorkflowPrompts } from '../lib/workflowPromptVisibility';
 import { WorkflowPromptField } from './Workspace';
@@ -17,6 +18,7 @@ interface GenerationPreflightModalProps {
   busy: boolean;
   loading: boolean;
   generationError: string | null;
+  invalidFieldId: string | null;
   showSickLeaveOption: boolean;
   sickLeaveEnabled: boolean;
   setAnswers: Dispatch<SetStateAction<Record<string, string>>>;
@@ -27,6 +29,13 @@ interface GenerationPreflightModalProps {
 }
 
 export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
+  useEffect(() => {
+    if (!props.invalidFieldId) return;
+    const inputId = `workflow-${props.invalidFieldId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const control = document.getElementById(inputId) as HTMLElement | null;
+    control?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    control?.focus();
+  }, [props.invalidFieldId]);
   const selected = props.documents.filter((document) => props.selectedDocumentIds.includes(document.id));
   const prompts = activeWorkflowPrompts(props.plan.prompts, props.answers);
   // These values are backend-owned bounds for the generic repeated-record engine.
@@ -82,13 +91,6 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
           </div>
         ) : null}
 
-        {props.generationError ? (
-          <div className="readyMessage notReady" role="alert" data-testid="generation-error">
-            <i className="ti ti-alert-triangle" aria-hidden="true" />
-            <div><strong>Документы не созданы</strong><span>{props.generationError}</span></div>
-          </div>
-        ) : null}
-
         {props.showSickLeaveOption ? (
           <label className="checkLine workflowOption">
             <input type="checkbox" checked={props.sickLeaveEnabled} onChange={(event) => props.onSickLeaveChange(event.target.checked)} />
@@ -118,6 +120,13 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
             <div><strong>Все обязательные данные уже найдены</strong><span>Можно подтвердить создание комплекта.</span></div>
           </div>
         )}
+
+        {props.generationError ? (
+          <div className="readyMessage notReady generationActionError" role="alert" data-testid="generation-error">
+            <i className="ti ti-alert-triangle" aria-hidden="true" />
+            <div><strong>Документы не созданы</strong><span>{props.generationError}</span></div>
+          </div>
+        ) : null}
 
         <div className="modalActions">
           <button className="softBtn" type="button" onClick={props.onCancel} disabled={props.busy}>Отмена</button>

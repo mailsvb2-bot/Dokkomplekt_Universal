@@ -50,6 +50,31 @@ describe('default output root bootstrap', () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
+  it('physically ensures an already-saved destination without replacing the user choice', async () => {
+    const storage = new MemoryStorage();
+    storage.setItem(OUTPUT_ROOT_KEY, 'C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    const resolver = vi.fn(async () => 'D:\\Other\\Выписанные пациенты');
+    const ensurer = vi.fn(async (path: string) => path);
+
+    const resolved = await ensureDefaultOutputRoot(storage, resolver, ensurer);
+
+    expect(resolved).toBe('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    expect(ensurer).toHaveBeenCalledWith('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    expect(resolver).not.toHaveBeenCalled();
+    expect(storage.getItem(OUTPUT_ROOT_KEY)).toBe(resolved);
+  });
+
+  it('ensures the new Desktop destination before saving it', async () => {
+    const storage = new MemoryStorage();
+    const resolver = vi.fn(async () => 'C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    const ensurer = vi.fn(async (path: string) => path);
+
+    const resolved = await ensureDefaultOutputRoot(storage, resolver, ensurer);
+
+    expect(ensurer).toHaveBeenCalledWith('C:\\Users\\Doctor\\Desktop\\Выписанные пациенты');
+    expect(storage.getItem(OUTPUT_ROOT_KEY)).toBe(resolved);
+  });
+
   it('falls back safely to the existing folder picker when Desktop resolution fails', async () => {
     const storage = new MemoryStorage();
     const resolver = vi.fn(async () => { throw new Error('desktop unavailable'); });

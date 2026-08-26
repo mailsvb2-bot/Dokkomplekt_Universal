@@ -120,6 +120,40 @@ describe('useGenerationPreflight', () => {
     expect(setStatus).toHaveBeenLastCalledWith(failure);
   });
 
+  it('shows the exact missing required field instead of making Create documents look dead', async () => {
+    const requiredPlan: WorkflowPlan = {
+      document_id: 'medical.vk_mse',
+      prompts: [{
+        field_id: 'medical.vk_mse_protocol_number',
+        title: 'Номер протокола ВК на МСЭ',
+        required: true,
+        input_kind: 'text',
+        ask_mode: 'always',
+      }],
+      blocked: false,
+      block_reasons: [],
+    };
+    const setStatus = vi.fn();
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    const applyAnswers = vi.fn(async () => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['medical.vk_mse'], ...context('medical.vk_mse'), preflightPlan: requiredPlan,
+      preflightLoading: false, answers: {}, skippedAnswers: {},
+      setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>, setStatus,
+      requestWorkflowPlan: vi.fn(async () => requiredPlan), applyAnswers, onConfirmed,
+    }));
+
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+
+    expect(result.current.generationPreflightOpen).toBe(true);
+    expect(result.current.generationError).toBe('Не заполнено обязательное поле: Номер протокола ВК на МСЭ.');
+    expect(result.current.generationValidationFieldId).toBe('medical.vk_mse_protocol_number');
+    expect(setStatus).toHaveBeenLastCalledWith('Не заполнено обязательное поле: Номер протокола ВК на МСЭ.');
+    expect(applyAnswers).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
   it('ignores a duplicate confirm while one generation is already in flight', async () => {
     const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
     let release!: () => void;

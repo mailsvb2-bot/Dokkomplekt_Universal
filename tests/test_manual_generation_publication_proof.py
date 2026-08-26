@@ -35,3 +35,16 @@ def test_trust_report_is_ancillary_to_primary_docx_publication() -> None:
     assert "write_trust_report(" in trust
     assert "ancillary_warnings.push" in trust
     assert "Для проверяемого отчёта сначала загрузите файл" not in trust
+
+
+def test_desktop_publication_acceptance_creates_patient_subfolder_with_multiple_docx() -> None:
+    source = (ROOT / "src-tauri/src/subsystems/publication_collision.rs").read_text(encoding="utf-8")
+    assert "publishing_batch_creates_desktop_root_patient_subfolder_and_all_real_docx" in source
+    assert 'canonical_default_output_root_under(&desktop)' in source
+    assert 'FullSubjectName' in source
+    assert 'AdmissionAndDischargeDates' in source
+    assert 'Первичный осмотр.docx' in source
+    assert 'Выписной эпикриз.docx' in source
+    assert 'verify_published_batch_files(&published, &staged, 2)' in source
+    assert 'extract_docx_text(&expected_primary)' in source
+    assert 'extract_docx_text(&expected_discharge)' in source

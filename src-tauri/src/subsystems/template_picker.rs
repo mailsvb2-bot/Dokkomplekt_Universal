@@ -11,6 +11,8 @@ struct PickedTemplateFile {
     file_name: String,
     template_path: String,
     extracted_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,11 +47,30 @@ async fn pick_template_files(
     std::fs::create_dir_all(&templates_dir)
         .map_err(|error| format!("Не удалось создать папку пользовательских шаблонов: {error}"))?;
 
-    let mut files = Vec::with_capacity(selected_paths.len());
-    for source_path in selected_paths {
-        files.push(import_picked_template(&source_path, &templates_dir)?);
-    }
+    let files = import_picked_templates(selected_paths, &templates_dir);
     Ok(PickTemplateFilesResponse { files })
+}
+
+fn import_picked_templates(
+    selected_paths: Vec<PathBuf>,
+    templates_dir: &Path,
+) -> Vec<PickedTemplateFile> {
+    selected_paths
+        .into_iter()
+        .map(|source_path| match import_picked_template(&source_path, templates_dir) {
+            Ok(file) => file,
+            Err(error) => PickedTemplateFile {
+                file_name: source_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Неизвестный шаблон")
+                    .to_string(),
+                template_path: String::new(),
+                extracted_text: String::new(),
+                import_error: Some(error),
+            },
+        })
+        .collect()
 }
 
 fn import_picked_template(
@@ -122,6 +143,7 @@ fn import_picked_template(
         file_name,
         template_path: target.display().to_string(),
         extracted_text,
+        import_error: None,
     })
 }
 
@@ -300,5 +322,35 @@ mod template_picker_tests {
     fn rejects_non_word_picker_output() {
         let result = parse_picker_paths(b"C:/tmp/template.pdf\n");
         assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));
+    }
+
+    #[test]
+    fn one_broken_template_does_not_discard_other_selected_templates() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-template-picker-partial-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let templates_dir = root.join("imported");
+        std::fs::create_dir_all(&templates_dir).unwrap();
+        let good = root.join("Хороший шаблон.docx");
+        let broken = root.join("Повреждённый шаблон.docx");
+        dokkomplekt_docx::create_docx_from_text(&good, "АКТ ВЫПОЛНЕННЫХ РАБОТ").unwrap();
+        std::fs::write(&broken, b"not-a-docx").unwrap();
+
+        let files = import_picked_templates(vec![good, broken], &templates_dir);
+
+        assert_eq!(files.len(), 2);
+        let good = files.iter().find(|file| file.file_name == "Хороший шаблон.docx").unwrap();
+        assert!(good.import_error.is_none());
+        assert!(!good.template_path.is_empty());
+        assert!(Path::new(&good.template_path).is_file());
+        let broken = files
+            .iter()
+            .find(|file| file.file_name == "Повреждённый шаблон.docx")
+            .unwrap();
+        assert!(broken.import_error.as_deref().is_some_and(|error| !error.is_empty()));
+        assert!(broken.template_path.is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

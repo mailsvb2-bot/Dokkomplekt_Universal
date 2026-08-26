@@ -55,3 +55,24 @@ export function templateSetupCompletionMessage(requestedCount: number, createdCo
   }
   return `Кнопки созданы: ${created}. Теперь добавьте исходный документ.`;
 }
+
+
+type PickedTemplateLike = {
+  file_name: string;
+  template_path: string;
+  import_error?: string | null;
+};
+
+export function partitionPickedTemplates<T extends PickedTemplateLike>(files: T[]) {
+  const rejectedTemplates = files.filter(file => Boolean(file.import_error));
+  const acceptedTemplates = files.filter(file => !file.import_error && file.template_path.trim());
+  const rejectedDetails = rejectedTemplates.map(file => `${file.file_name}: ${file.import_error}`).join('; ');
+  return { acceptedTemplates, rejectedTemplates, rejectedDetails };
+}
+
+export function templatePickerCompletionMessage(createdCount: number, rejected: PickedTemplateLike[]): string {
+  const rejectedSummary = rejected.length
+    ? ` Пропущено проблемных шаблонов: ${rejected.length} — ${rejected.map(file => `${file.file_name}: ${file.import_error}`).join('; ')}.`
+    : '';
+  return `Шаблоны выбраны: ${createdCount}.${rejectedSummary} Проверьте названия и нажмите «Создать кнопки».`;
+}

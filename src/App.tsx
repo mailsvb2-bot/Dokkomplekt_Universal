@@ -25,7 +25,7 @@ import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGene
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
-import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './lib/templateSetupSupport';
+import { buildTemplateConfirmationRows, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
@@ -750,11 +750,8 @@ function AppContent() {
 
   async function openTemplateSetup() {
     setAutoInferStaticTemplates(true);
-    setTemplateText('');
-    setButtonLabel('');
-    setImportedTemplatePath(null);
-    setPendingTemplates([]);
-    setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
+    setTemplateText(''); setButtonLabel(''); setImportedTemplatePath(null);
+    setPendingTemplates([]); setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
     setSetupOpen(false);
     setStatus('Выберите шаблоны Word в системном окне…');
 
@@ -765,8 +762,9 @@ function AppContent() {
       return;
     }
 
+    const { acceptedTemplates, rejectedTemplates, rejectedDetails } = partitionPickedTemplates(picked);
     const importedRows: PendingTemplate[] = [];
-    for (const file of picked) {
+    for (const file of acceptedTemplates) {
       const id = newDocumentId();
       const detectedLabel = detectTitle(file.extracted_text) || file.file_name.replace(/\.doc[xm]$/i, '');
       const analyzed = await run('analyze_template_file', () => analyzeTemplateFile(file.template_path, id, detectedLabel));
@@ -782,7 +780,9 @@ function AppContent() {
       });
     }
     if (!importedRows.length) {
-      setStatus('Не удалось подготовить выбранные шаблоны. Проверьте, что это безопасные DOCX без макросов и внешних связей.');
+      setStatus(rejectedDetails
+        ? `Не удалось подготовить выбранные шаблоны. ${rejectedDetails}`
+        : 'Не удалось подготовить выбранные шаблоны. Проверьте, что это безопасные DOCX без макросов и внешних связей.');
       return;
     }
 
@@ -792,7 +792,7 @@ function AppContent() {
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
     setSetupOpen(true);
-    setStatus(`Шаблоны выбраны: ${importedRows.length}. Проверьте названия и нажмите «Создать кнопки».`);
+    setStatus(templatePickerCompletionMessage(importedRows.length, rejectedTemplates));
   }
 
   function openTextTemplateSetup() {

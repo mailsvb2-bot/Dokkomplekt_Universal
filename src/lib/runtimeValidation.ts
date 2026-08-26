@@ -532,6 +532,9 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
         string(command, file.file_name, `files[${index}].file_name`);
         string(command, file.template_path, `files[${index}].template_path`);
         string(command, file.extracted_text, `files[${index}].extracted_text`);
+        if (file.import_error !== undefined && file.import_error !== null) {
+          string(command, file.import_error, `files[${index}].import_error`);
+        }
       });
       break;
     }

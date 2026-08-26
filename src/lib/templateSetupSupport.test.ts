@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTemplateConfirmationRows, templateSetupCompletionMessage } from './templateSetupSupport';
+import { buildTemplateConfirmationRows, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './templateSetupSupport';
 import type { PopupFieldConfig, TemplateConfirmationRowDto } from './types';
 
 function popupField(fieldId: string): PopupFieldConfig {
@@ -109,5 +109,23 @@ describe('templateSetupCompletionMessage', () => {
     expect(templateSetupCompletionMessage(2, 0)).toBe(
       'Новых кнопок не создано. Повторяющихся шаблонов пропущено: 2.',
     );
+  });
+});
+
+
+describe('template picker partial failures', () => {
+  const good = { file_name: 'good.docx', template_path: '/safe/good.docx', extracted_text: 'GOOD' };
+  const broken = { file_name: 'bad.docx', template_path: '', extracted_text: '', import_error: 'broken zip' };
+
+  it('keeps valid selected templates while separating rejected ones', () => {
+    const result = partitionPickedTemplates([good, broken]);
+    expect(result.acceptedTemplates).toEqual([good]);
+    expect(result.rejectedTemplates).toEqual([broken]);
+    expect(result.rejectedDetails).toBe('bad.docx: broken zip');
+  });
+
+  it('reports partial failure without hiding successful imports', () => {
+    expect(templatePickerCompletionMessage(1, [broken])).toContain('Шаблоны выбраны: 1.');
+    expect(templatePickerCompletionMessage(1, [broken])).toContain('Пропущено проблемных шаблонов: 1');
   });
 });

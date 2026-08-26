@@ -500,6 +500,7 @@ export interface PickedTemplateFile {
   file_name: string;
   template_path: string;
   extracted_text: string;
+  import_error?: string | null;
 }
 
 export async function pickTemplateFiles(initialPath?: string | null): Promise<PickedTemplateFile[]> {

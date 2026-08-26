@@ -299,18 +299,48 @@ mod manual_batch_publication_proof_tests {
     }
 
     #[test]
-    fn publishing_batch_creates_missing_output_root_and_keeps_readable_docx() {
+    fn publishing_batch_creates_desktop_root_patient_subfolder_and_all_real_docx() {
         let root = std::env::temp_dir().join(format!(
             "dokkomplekt-create-output-root-{}-{}",
             std::process::id(),
             Uuid::new_v4()
         ));
-        let stage = root.join(".dokkomplekt-manual-stage-test");
-        let output_root = root.join("Выписанные пациенты");
-        let desired = output_root.join("Иванов Иван Иванович");
+        let desktop = root.join("Desktop");
+        let stage = desktop.join(".dokkomplekt-manual-stage-test");
+        let output_root = canonical_default_output_root_under(&desktop);
         std::fs::create_dir_all(&stage).unwrap();
-        let staged = stage.join("Выписной эпикриз.docx");
-        create_docx_from_text(&staged, "Физически созданный документ").unwrap();
+
+        let mut case = SemanticCase::default();
+        dokkomplekt_core::set_user_value(&mut case, "subject.name", "Иванов Иван Иванович");
+        dokkomplekt_core::set_user_value(&mut case, "medical.admission_date", "10.05.2026");
+        dokkomplekt_core::set_user_value(&mut case, "medical.discharge_date", "13.05.2026");
+        let output_plan = dokkomplekt_core::plan_output_paths(
+            &output_root,
+            &case,
+            &[
+                dokkomplekt_core::FolderNamePart::FullSubjectName,
+                dokkomplekt_core::FolderNamePart::AdmissionAndDischargeDates,
+            ],
+            &["Первичный осмотр".into(), "Выписной эпикриз".into()],
+        );
+        let desired = output_plan.patient_folder;
+        assert_eq!(
+            desired,
+            output_root.join("Иванов Иван Иванович 10.05.2026 - 13.05.2026")
+        );
+
+        let primary = stage.join("Первичный осмотр.docx");
+        let discharge = stage.join("Выписной эпикриз.docx");
+        create_docx_from_text(
+            &primary,
+            "Первичный осмотр\nИванов Иван Иванович\n10.05.2026",
+        )
+        .unwrap();
+        create_docx_from_text(
+            &discharge,
+            "Выписной эпикриз\nИванов Иван Иванович\n13.05.2026",
+        )
+        .unwrap();
         assert!(!output_root.exists());
 
         let published = publish_stage_to_unique_directory(&stage, &desired).unwrap();
@@ -318,10 +348,23 @@ mod manual_batch_publication_proof_tests {
         assert_eq!(published, desired);
         assert!(output_root.is_dir());
         assert!(published.is_dir());
-        let verified = verify_published_batch_files(&published, &[staged], 1).unwrap();
-        let expected = published.join("Выписной эпикриз.docx");
-        assert_eq!(verified, vec![expected.display().to_string()]);
-        assert_eq!(extract_docx_text(&expected).unwrap(), "Физически созданный документ");
+        let staged = vec![primary, discharge];
+        let verified = verify_published_batch_files(&published, &staged, 2).unwrap();
+        let expected_primary = published.join("Первичный осмотр.docx");
+        let expected_discharge = published.join("Выписной эпикриз.docx");
+        assert_eq!(
+            verified,
+            vec![
+                expected_primary.display().to_string(),
+                expected_discharge.display().to_string(),
+            ]
+        );
+        assert!(extract_docx_text(&expected_primary)
+            .unwrap()
+            .contains("10.05.2026"));
+        assert!(extract_docx_text(&expected_discharge)
+            .unwrap()
+            .contains("13.05.2026"));
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -65,12 +65,36 @@ if ($env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '1') {
   if ($appSignature.Status -ne 'Valid') { throw "Installed application signature is invalid: $($appSignature.Status)" }
 }
 
+# Donor-derived installed-app contract: the canonical Desktop output root must
+# physically exist before the user creates the first document. Remove it first
+# so this smoke proves the installed application recreates it, not a test fixture.
+$desktopPath = [Environment]::GetFolderPath('Desktop')
+if ([string]::IsNullOrWhiteSpace($desktopPath)) { throw "Windows Desktop path is unavailable" }
+New-Item -ItemType Directory -Force -Path $desktopPath | Out-Null
+$defaultOutputRoot = Join-Path $desktopPath 'Выписанные пациенты'
+Remove-Item -LiteralPath $defaultOutputRoot -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $defaultOutputRoot) {
+  throw "Could not remove the pre-existing Desktop output root before launch smoke: $defaultOutputRoot"
+}
+
 $process = Start-Process -FilePath $app.FullName -PassThru
 Start-Sleep -Seconds 5
 if ($process.HasExited) {
   $earlyExitCode = $process.ExitCode
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
+
+$outputDeadline = [DateTime]::UtcNow.AddSeconds(20)
+while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and [DateTime]::UtcNow -lt $outputDeadline) {
+  if ($process.HasExited) {
+    throw "Installed application exited before creating the canonical Desktop output root"
+  }
+  Start-Sleep -Milliseconds 250
+}
+if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container)) {
+  throw "Installed application did not create the canonical Desktop output root: $defaultOutputRoot"
+}
+Write-Host "Desktop output root created by installed application: $defaultOutputRoot"
 
 # Product-level first-run proof: invoke the real WebView button and require the
 # native Windows OpenFileDialog to appear. A browser-only mock cannot prove this.

@@ -1536,11 +1536,14 @@ fn render_docx_batch(
     let publication = match req.existing_output_policy {
         ExistingOutputPolicy::Version => publish_stage_to_unique_directory(&stage, &desired_output_folder)
             .map(|path| (path, None)),
-        ExistingOutputPolicy::ReplaceWithBackup => publish_stage_replacing_with_backup(
-            &stage,
-            &desired_output_folder,
-            replacement_backup.as_deref().expect("replace policy plans backup"),
-        ),
+        ExistingOutputPolicy::ReplaceWithBackup => match replacement_backup.as_deref() {
+            Some(backup) => publish_stage_replacing_with_backup(
+                &stage,
+                &desired_output_folder,
+                backup,
+            ),
+            None => Err("Безопасная замена не получила recovery-путь резервной копии.".into()),
+        },
     };
     let (output_folder, backup_folder) = match publication {
         Ok(value) => value,

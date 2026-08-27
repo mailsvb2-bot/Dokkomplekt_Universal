@@ -106,12 +106,12 @@ pub(crate) struct PublicationPlanBinding {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PublicationRecoveryContext {
-    staged_output_path: String,
+    stage_location: String,
     counter_reservations: Vec<CounterValue>,
     #[serde(default)]
-    replacement_target_path: Option<String>,
+    replacement_target: Option<String>,
     #[serde(default)]
-    replacement_backup_path: Option<String>,
+    replacement_backup: Option<String>,
 }
 
 impl PublicationReceipt {
@@ -189,7 +189,7 @@ fn file_link_count(_path: &Path) -> Option<u64> {
 }
 
 fn staged_output_definitely_unpublished(context: &PublicationRecoveryContext) -> bool {
-    let path = Path::new(&context.staged_output_path);
+    let path = Path::new(&context.stage_location);
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return false;
     };
@@ -208,10 +208,10 @@ fn recovery_blob(
     counter_reservations: &[CounterValue],
 ) -> Result<String, String> {
     let context = PublicationRecoveryContext {
-        staged_output_path: staged_output.display().to_string(),
+        stage_location: staged_output.display().to_string(),
         counter_reservations: counter_reservations.to_vec(),
-        replacement_target_path: None,
-        replacement_backup_path: None,
+        replacement_target: None,
+        replacement_backup: None,
     };
     let json = serde_json::to_string(&context).map_err(|error| error.to_string())?;
     repo.protect_local_value(&json)
@@ -369,8 +369,8 @@ pub(crate) fn attach_replacement_recovery(
     let repo = crate::repository_for(&state_path)?;
     let mut context = decode_recovery_blob(&repo, &receipt)?
         .ok_or_else(|| "Pre-publication квитанция не содержит recovery-контекста.".to_string())?;
-    context.replacement_target_path = Some(target.display().to_string());
-    context.replacement_backup_path = Some(backup.display().to_string());
+    context.replacement_target = Some(target.display().to_string());
+    context.replacement_backup = Some(backup.display().to_string());
     let json = serde_json::to_string(&context).map_err(|error| error.to_string())?;
     receipt.recovery_blob = Some(
         repo.protect_local_value(&json)
@@ -546,8 +546,8 @@ fn restore_interrupted_replacement(
     report: &mut PublicationReconciliationReport,
 ) -> Result<(), String> {
     let (Some(target_raw), Some(backup_raw)) = (
-        context.replacement_target_path.as_deref(),
-        context.replacement_backup_path.as_deref(),
+        context.replacement_target.as_deref(),
+        context.replacement_backup.as_deref(),
     ) else {
         return Ok(());
     };
@@ -835,10 +835,10 @@ mod tests {
         let stage = root.join(".stage");
         std::fs::create_dir_all(&stage).unwrap();
         let context = PublicationRecoveryContext {
-            staged_output_path: stage.display().to_string(),
+            stage_location: stage.display().to_string(),
             counter_reservations: Vec::new(),
-            replacement_target_path: None,
-            replacement_backup_path: None,
+            replacement_target: None,
+            replacement_backup: None,
         };
         assert!(staged_output_definitely_unpublished(&context));
         let _ = std::fs::remove_dir_all(root);
@@ -854,10 +854,10 @@ mod tests {
         std::fs::create_dir_all(&backup).unwrap();
         std::fs::write(backup.join("old.docx"), b"old").unwrap();
         let context = PublicationRecoveryContext {
-            staged_output_path: root.join(".stage").display().to_string(),
+            stage_location: root.join(".stage").display().to_string(),
             counter_reservations: Vec::new(),
-            replacement_target_path: Some(target.display().to_string()),
-            replacement_backup_path: Some(backup.display().to_string()),
+            replacement_target: Some(target.display().to_string()),
+            replacement_backup: Some(backup.display().to_string()),
         };
         let mut report = PublicationReconciliationReport::default();
         restore_interrupted_replacement(&context, &mut report).unwrap();
@@ -875,10 +875,10 @@ mod tests {
         let published = root.join("document.docx");
         std::fs::write(&stage, b"document").unwrap();
         let context = PublicationRecoveryContext {
-            staged_output_path: stage.display().to_string(),
+            stage_location: stage.display().to_string(),
             counter_reservations: Vec::new(),
-            replacement_target_path: None,
-            replacement_backup_path: None,
+            replacement_target: None,
+            replacement_backup: None,
         };
         assert!(staged_output_definitely_unpublished(&context));
         std::fs::hard_link(&stage, &published).unwrap();

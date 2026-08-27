@@ -67,15 +67,12 @@ fn replace_case_from_new_source(target: &mut SemanticCase, parsed: SemanticCase)
     *target = parsed;
 }
 
-fn lock_source_session_state(
-    state: &AppState,
-) -> Result<
-    (
-        std::sync::MutexGuard<'_, Option<universal_intake::RetainedUploadedSource>>,
-        std::sync::MutexGuard<'_, Option<SourceProvenance>>,
-    ),
-    String,
-> {
+type SourceSessionGuards<'a> = (
+    std::sync::MutexGuard<'a, Option<universal_intake::RetainedUploadedSource>>,
+    std::sync::MutexGuard<'a, Option<SourceProvenance>>,
+);
+
+fn lock_source_session_state(state: &AppState) -> Result<SourceSessionGuards<'_>, String> {
     // Acquire both fallible in-memory locks before the durable state transaction.
     // A poisoned lock must never make an intake command report failure after the
     // new case has already been committed to SQLite. Keep one global lock order

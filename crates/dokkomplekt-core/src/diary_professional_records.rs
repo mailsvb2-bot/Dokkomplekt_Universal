@@ -18,6 +18,19 @@ const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
 const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
 const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. Общее самочувствие стабильное, режим соблюдает, назначения выполняет. На текущую дату оформлена выписка из стационара. Даны рекомендации.";
 
+pub const MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT: &str = concat!(
+    "{{#each diaries}}\n",
+    "{{diary.datetime}} {{#if diary.is_final}}",
+    "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. ",
+    "Общее самочувствие стабильное, режим соблюдает, назначения выполняет. ",
+    "На текущую дату оформлена выписка из стационара. Даны рекомендации",
+    "{{else}}{{diary.text}}{{/if}}\n",
+    "{{diary.treating_physician_signature}}\n",
+    "{{diary.department_head_signature}}\n",
+    "\n",
+    "{{/each}}\n",
+);
+
 pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> SemanticCase {
     let mut prepared = professional_records::prepare_professional_collections(template, case);
     if !is_medical_case(case) {

@@ -59,24 +59,18 @@ fn merge_parsed_case(target: &mut SemanticCase, parsed: SemanticCase) -> Result<
     Ok(())
 }
 
-/// A newly loaded source starts a new document-set case. Values from the previous
-/// person/contract/patient must never leak into the next set. Reusable clause blocks
-/// remain available because they are specialist-owned configuration, not case data.
-fn replace_case_from_new_source(target: &mut SemanticCase, mut parsed: SemanticCase) {
-    let mut reusable_blocks = target.blocks.clone();
-    reusable_blocks.retain(|key, _| !key.starts_with("source."));
-    reusable_blocks.extend(parsed.blocks);
-    parsed.blocks = reusable_blocks;
+/// A newly loaded source starts a new document-set case. Values and blocks from the
+/// previous person/contract/patient must never leak into the next set. Reusable
+/// profile blocks are rehydrated from the clause-block store at render time, so the
+/// parsed source itself is the only block source carried into the new active case.
+fn replace_case_from_new_source(target: &mut SemanticCase, parsed: SemanticCase) {
     *target = parsed;
 }
 
 #[tauri::command]
 fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<SemanticCase, String> {
     let result = transact_default_state(&app, &state, |snapshot| {
-        let mut blocks = snapshot.semantic_case.blocks.clone();
-        blocks.retain(|key, _| !key.starts_with("source."));
         snapshot.semantic_case = SemanticCase::default();
-        snapshot.semantic_case.blocks = blocks;
         Ok((snapshot.semantic_case.clone(), true))
     })?;
     state
@@ -433,4 +427,40 @@ fn parse_web_source(
         .lock()
         .map_err(|_| "source provenance state lock failed")? = Some(provenance);
     Ok(response)
+}
+
+#[cfg(test)]
+mod source_intake_block_retention_tests {
+    use super::replace_case_from_new_source;
+    use dokkomplekt_core::SemanticCase;
+
+    #[test]
+    fn new_source_drops_every_block_from_previous_case() {
+        let mut current = SemanticCase::default();
+        current
+            .blocks
+            .insert("professional.medical.diary.regular.f200".into(), String::new());
+        current
+            .blocks
+            .insert("source.kind".into(), "old-docx".into());
+        current
+            .blocks
+            .insert("medical.diary.final_text".into(), "old-patient-local".into());
+        let mut parsed = SemanticCase::default();
+        parsed
+            .blocks
+            .insert("source.kind".into(), "new-docx".into());
+
+        replace_case_from_new_source(&mut current, parsed);
+
+        assert_eq!(current.blocks.len(), 1);
+        assert_eq!(
+            current.blocks.get("source.kind").map(String::as_str),
+            Some("new-docx")
+        );
+        assert!(!current
+            .blocks
+            .contains_key("professional.medical.diary.regular.f200"));
+        assert!(!current.blocks.contains_key("medical.diary.final_text"));
+    }
 }

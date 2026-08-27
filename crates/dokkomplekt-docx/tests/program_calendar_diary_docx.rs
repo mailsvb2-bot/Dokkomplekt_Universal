@@ -3,18 +3,7 @@ use dokkomplekt_docx::{create_docx_from_text, extract_docx_text, render_docx_fil
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const TEMPLATE: &str = concat!(
-    "{{#each diaries}}\n",
-    "{{diary.datetime}} {{#if diary.is_final}}",
-    "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. ",
-    "Общее самочувствие стабильное, режим соблюдает, назначения выполняет. ",
-    "На текущую дату оформлена выписка из стационара. Даны рекомендации",
-    "{{else}}{{diary.text}}{{/if}}\n",
-    "{{diary.treating_physician_signature}}\n",
-    "{{diary.department_head_signature}}\n",
-    "\n",
-    "{{/each}}\n",
-);
+const TEMPLATE: &str = dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
 
 fn unique_dir() -> PathBuf {
     let nonce = SystemTime::now()

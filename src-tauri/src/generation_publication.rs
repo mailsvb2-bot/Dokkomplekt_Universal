@@ -177,10 +177,19 @@ fn file_link_count(path: &Path) -> Option<u64> {
 
 #[cfg(windows)]
 fn file_link_count(path: &Path) -> Option<u64> {
-    use std::os::windows::fs::MetadataExt as _;
-    std::fs::metadata(path)
-        .ok()
-        .map(|metadata| metadata.number_of_links() as u64)
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` owns a valid open HANDLE for the duration of the call and
+    // `info` is a writable Win32 output structure. No handle ownership is transferred.
+    let succeeded =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &raw mut info) };
+    (succeeded != 0).then_some(u64::from(info.nNumberOfLinks))
 }
 
 #[cfg(not(any(unix, windows)))]

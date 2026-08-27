@@ -513,7 +513,7 @@ fn medical_diary_semantic_compatible(candidate: &str, target: &str) -> bool {
 }
 
 fn canonical_persistent_diagnosis_key(value: &str) -> String {
-    explicit_icd_source_key(value).unwrap_or_else(|| source_key(value))
+    explicit_icd_source_key(value).unwrap_or_else(|| source_key(value).chars().take(160).collect())
 }
 
 fn explicit_icd_source_key(value: &str) -> Option<String> {
@@ -1218,6 +1218,15 @@ mod tests {
         assert_eq!(
             canonical_persistent_diagnosis_key("Депрессивный эпизод лёгкой степени"),
             "депрессивныйэпизодлегкойстепени"
+        );
+        let long_text = format!("{} хвост", "Очень-длинный-диагноз-Ё".repeat(12));
+        let expected = source_key(&long_text).chars().take(160).collect::<String>();
+        assert_eq!(canonical_persistent_diagnosis_key(&long_text), expected);
+        assert_eq!(
+            canonical_persistent_diagnosis_key(&long_text)
+                .chars()
+                .count(),
+            160
         );
     }
 

@@ -60,6 +60,11 @@ mod profile_case_hydration_tests {
         );
     }
 
+    fn diary_case_with_stale_empty_profile_copy() -> dokkomplekt_core::SemanticCase {
+        let mut case = diary_case_with_stale_empty_profile_copy();
+        case
+    }
+
     #[test]
     fn fresh_diary_text_from_persistent_profile_survives_stale_empty_case_snapshot() {
         let mut case = dokkomplekt_core::SemanticCase::default();
@@ -109,4 +114,62 @@ mod profile_case_hydration_tests {
             .output_text
             .contains("новый выбранный врачом текст"));
     }
+    #[test]
+    fn sqlite_profile_replacement_rehydrates_stale_case_and_strict_runtime_diary_template() {
+        let path = std::env::temp_dir().join(format!(
+            "dokkomplekt-diary-profile-hydration-{}.sqlite3",
+            uuid::Uuid::new_v4()
+        ));
+        let mut repo = dokkomplekt_storage::LocalRepository::open_with_key(&path, [91_u8; 32])
+            .expect("temporary encrypted profile repository");
+        repo.replace_clause_blocks(
+            &[
+                "professional.medical.diary.regular.f200".into(),
+                "professional.medical.diary.final.f200".into(),
+            ],
+            &[
+                (
+                    "professional.medical.diary.regular.f200".into(),
+                    "Тексты F20.0".into(),
+                    "Свежий дневниковый текст, реально сохранённый через SQLite-профиль.".into(),
+                ),
+                (
+                    "professional.medical.diary.final.f200".into(),
+                    "Финальный текст F20.0".into(),
+                    String::new(),
+                ),
+            ],
+        )
+        .expect("replace saved profile texts atomically");
+
+        let persistent = repo.clause_blocks_map().expect("read saved profile texts");
+        let mut case = diary_case_with_stale_empty_profile_copy();
+        merge_persistent_clause_blocks(&mut case, persistent);
+        let rendered = dokkomplekt_core::render_text_template(
+            dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+            &case,
+            true,
+        );
+
+        assert!(
+            rendered.missing_fields.is_empty(),
+            "strict runtime diary template still misses: {:?}",
+            rendered.missing_fields
+        );
+        assert!(
+            rendered.unknown_fields.is_empty(),
+            "strict runtime diary template has unknown fields: {:?}",
+            rendered.unknown_fields
+        );
+        assert!(rendered
+            .output_text
+            .contains("реально сохранённый через SQLite-профиль"));
+        assert!(rendered
+            .output_text
+            .contains("На текущую дату оформлена выписка из стационара"));
+
+        drop(repo);
+        let _ = std::fs::remove_file(path);
+    }
+
 }

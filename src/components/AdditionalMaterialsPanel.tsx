@@ -356,14 +356,21 @@ export function AdditionalMaterialsPanel(props: {
                   onChange={(event) => { void importDiaryTexts(filesFrom(event)); }}
                   disabled={working || props.busy}
                   style={{ display: 'none' }}
-                  {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                 />
               </label>
               <label className="textBtn fileBtn">
-                выбрать отдельные файлы
-                <input type="file" multiple accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf" onChange={(event) => { void importDiaryTexts(filesFrom(event)); }} disabled={working || props.busy} style={{ display: 'none' }} />
+                выбрать папку «Тексты»
+                <input
+                  type="file"
+                  multiple
+                  accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
+                  onChange={(event) => { void importDiaryTexts(filesFrom(event)); }}
+                  disabled={working || props.busy}
+                  style={{ display: 'none' }}
+                  {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+                />
               </label>
-              <small>Выберите папку «Тексты» или отдельные файлы. Программа сопоставит текст с диагнозом, спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
+              <small>Кнопка «Тексты» показывает Word/TXT/PDF-файлы для выбора. Для импорта всей библиотеки сразу используйте «выбрать папку “Тексты”». Программа сопоставит текст с диагнозом, спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
               {diaryFiles.length > 0 && (
                 <div className="medicalDiarySelection" role="region" aria-label="Выбранные файлы дневников">
                   <strong>Выбрано файлов: {diaryFiles.length}</strong>

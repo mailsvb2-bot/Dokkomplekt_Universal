@@ -43,7 +43,7 @@ describe('AdditionalMaterialsPanel', () => {
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
 
-    const label = screen.getByText('выбрать отдельные файлы').closest('label');
+    const label = screen.getByText('Тексты').closest('label');
     const input = label?.querySelector('input[type="file"]') as HTMLInputElement | null;
     expect(input).toBeTruthy();
     expect(input?.multiple).toBe(true);
@@ -77,7 +77,7 @@ describe('AdditionalMaterialsPanel', () => {
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
 
-    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
     const good = new File(['статус'], 'Дневники F20.0.txt', { type: 'text/plain' });
     const broken = new File(['bad'], 'broken.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const junk = new File(['system'], 'desktop.ini', { type: 'text/plain' });
@@ -91,13 +91,16 @@ describe('AdditionalMaterialsPanel', () => {
     expect(screen.getByRole('status').textContent).toContain('сохранено 1 из 3; пропущено 1; ошибок 1');
   });
 
-  it('keeps the Texts control wired as a folder picker', () => {
+  it('shows Word files from the main Texts button and keeps whole-folder import explicit', () => {
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
-    const label = screen.getByText('Тексты').closest('label');
-    const input = label?.querySelector('input[type="file"]') as HTMLInputElement | null;
-    expect(input).toBeTruthy();
-    expect(input?.multiple).toBe(true);
-    expect(input?.hasAttribute('webkitdirectory')).toBe(true);
+    const fileInput = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement | null;
+    const folderInput = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).toBeTruthy();
+    expect(fileInput?.multiple).toBe(true);
+    expect(fileInput?.getAttribute('accept')).toContain('.docx');
+    expect(fileInput?.getAttribute('accept')).toContain('.doc');
+    expect(fileInput?.hasAttribute('webkitdirectory')).toBe(false);
+    expect(folderInput?.hasAttribute('webkitdirectory')).toBe(true);
   });
 
   it('normalizes source names without embedding psychiatric aliases in UI logic', () => {

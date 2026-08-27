@@ -6,7 +6,11 @@ struct FirstRunStateResponse {
 }
 
 #[tauri::command]
-fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, String> {
+fn first_run_state(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FirstRunStateResponse, String> {
+    ensure_default_state_loaded(&app, &state)?;
     if state.persistence_blocked.load(Ordering::SeqCst) {
         let reason = state
             .persistence_error
@@ -2797,7 +2801,7 @@ mod loaded_pack_role_canonicalization_tests {
     }
 }
 
-fn load_state_from(
+fn load_state_from_locked(
     app: &tauri::AppHandle,
     db_path: &Path,
     state: &AppState,
@@ -2867,6 +2871,19 @@ fn load_state_from(
     Ok(())
 }
 
+fn load_state_from(
+    app: &tauri::AppHandle,
+    db_path: &Path,
+    state: &AppState,
+    load_commercial_state: bool,
+) -> Result<(), String> {
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    load_state_from_locked(app, db_path, state, load_commercial_state)
+}
+
 #[tauri::command]
 fn load_state(
     req: LoadStateRequest,
@@ -2875,7 +2892,7 @@ fn load_state(
 ) -> Result<FirstRunStateResponse, String> {
     let db_path = resolve_user_path(&app, &req.db_path)?;
     load_state_from(&app, &db_path, &state, false)?;
-    first_run_state(state)
+    first_run_state(state, app)
 }
 
 #[derive(Debug, Deserialize)]

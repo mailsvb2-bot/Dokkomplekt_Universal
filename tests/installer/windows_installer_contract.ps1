@@ -650,10 +650,27 @@ if ($adversarial) {
   }
   Write-Host 'ADVERSARIAL OK: Desktop output root recovered on clean restart.'
 }
-$persistedButton = Wait-UiElement -Description 'persisted template button after restart' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+$restartState = Wait-UiElement -Description 'definitive workspace state after restart' -TimeoutSeconds 30 -Probe {
+  $persisted = Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+  if ($null -ne $persisted) { return @{ Kind = 'persisted'; Element = $persisted } }
+  $recovery = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Не удалось загрузить рабочий набор'
+    )
+  )
+  if ($null -ne $recovery) { return @{ Kind = 'recovery'; Element = $recovery } }
+  $firstRun = Find-ButtonByNames -Root $appWindow -Names @('Создать свои кнопки')
+  if ($null -ne $firstRun) { return @{ Kind = 'empty'; Element = $firstRun } }
+  return $null
 }
-if ($null -eq $persistedButton) { throw 'Created template button was lost after application restart.' }
+if ($restartState.Kind -eq 'recovery') {
+  throw 'Persisted workspace restart entered explicit recovery mode instead of restoring the saved button.'
+}
+if ($restartState.Kind -eq 'empty') {
+  throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
+}
 Write-Host 'Persisted template button survived application restart.'
 
 Stop-Process -Id $process.Id -Force

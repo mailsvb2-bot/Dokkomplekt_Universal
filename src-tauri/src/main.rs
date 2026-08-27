@@ -2204,6 +2204,7 @@ include!("subsystems/output_root_commands.rs");
 include!("subsystems/publication_collision.rs");
 include!("subsystems/source_identity_runtime.rs");
 include!("subsystems/source_intake_commands.rs");
+include!("subsystems/startup_state.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
@@ -2283,9 +2284,7 @@ fn main() {
                         .lock()
                         .map_err(|_| std::io::Error::other("instance state lock failed"))? =
                         Some(instance_path);
-                    if !background_watch {
-                        start_activation_listener(handle.clone()).map_err(std::io::Error::other)?;
-                    }
+
                 }
                 InstanceLockOutcome::AlreadyRunning => {
                     if !background_watch {
@@ -2296,24 +2295,11 @@ fn main() {
                 }
             }
 
-            // Normal and background launches both restore the latest user pack
-            // and semantic values. Persistence is no longer a hidden utility action.
-            if let Ok(db_path) = default_state_db_path(&handle) {
-                if db_path.exists() {
-                    if let Err(error) = load_state_from(&handle, &db_path, &state, true) {
-                        state.persistence_blocked.store(true, Ordering::SeqCst);
-                        if let Ok(mut slot) = state.persistence_error.lock() {
-                            *slot = Some(error.clone());
-                        }
-                        let marker = db_path.with_extension("recovery-required.txt");
-                        let message = format!(
-                            "Доккомплект не изменял повреждённую базу состояния.\nПуть: {}\nОшибка: {}\nЗагрузите исправную резервную базу через интерфейс.\n",
-                            db_path.display(), error
-                        );
-                        let _ = std::fs::write(&marker, message);
-                        let _ = handle.emit("state-recovery-required", &error);
-                    }
-                }
+            // Startup and the first UI state request share one serialized restore boundary.
+            // The WebView can never observe the default empty pack while a durable pack is
+            // still being restored from SQLite on another startup path.
+            if let Err(error) = ensure_default_state_loaded(&handle, &state) {
+                eprintln!("Восстановление рабочего набора требует внимания: {error}");
             }
             if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() {
                 if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {
@@ -2382,10 +2368,20 @@ fn main() {
                 handle.exit(0);
                 return Ok(());
             }
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("main window config missing"))?;
+            let main_window = tauri::WebviewWindowBuilder::from_config(&handle, &window_config)
+                .map_err(std::io::Error::other)?
+                .build()
+                .map_err(std::io::Error::other)?;
+
             if background_watch {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
+                let _ = main_window.hide();
                 let started = watcher_config_path(&handle)
                     .and_then(|config_path| std::fs::read(config_path).map_err(|e| e.to_string()))
                     .and_then(|bytes| {
@@ -2397,6 +2393,8 @@ fn main() {
                 if !started {
                     handle.exit(0);
                 }
+            } else {
+                start_activation_listener(handle.clone()).map_err(std::io::Error::other)?;
             }
             Ok(())
         })

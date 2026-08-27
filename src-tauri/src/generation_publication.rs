@@ -632,7 +632,7 @@ fn restore_interrupted_replacement(
     if !backup.exists() {
         return Ok(());
     }
-    publication_service_directory(target_parent, ".dokkomplekt-backups", false)?;
+    crate::publication_service_directory(target_parent, ".dokkomplekt-backups", false)?;
     let metadata = std::fs::symlink_metadata(backup)
         .map_err(|error| format!("Не удалось проверить резервную копию после сбоя: {error}"))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {

@@ -1616,6 +1616,7 @@ fn render_docx_batch(
                 &output_folder,
                 backup_folder.as_deref(),
                 error,
+                false,
             ));
         }
     };

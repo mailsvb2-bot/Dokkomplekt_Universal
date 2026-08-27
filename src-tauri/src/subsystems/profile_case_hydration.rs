@@ -61,12 +61,6 @@ mod profile_case_hydration_tests {
     }
 
     fn diary_case_with_stale_empty_profile_copy() -> dokkomplekt_core::SemanticCase {
-        let mut case = diary_case_with_stale_empty_profile_copy();
-        case
-    }
-
-    #[test]
-    fn fresh_diary_text_from_persistent_profile_survives_stale_empty_case_snapshot() {
         let mut case = dokkomplekt_core::SemanticCase::default();
         case.active_domains
             .push(dokkomplekt_core::DomainKind::Medical);
@@ -83,6 +77,12 @@ mod profile_case_hydration_tests {
             "professional.medical.diary.regular.f200".into(),
             String::new(),
         );
+        case
+    }
+
+    #[test]
+    fn fresh_diary_text_from_persistent_profile_survives_stale_empty_case_snapshot() {
+        let mut case = diary_case_with_stale_empty_profile_copy();
         let persistent = std::collections::BTreeMap::from([
             (
                 "professional.medical.diary.regular.f200".into(),

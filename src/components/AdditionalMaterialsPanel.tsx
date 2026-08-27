@@ -73,6 +73,14 @@ export function safeKey(value: string): string {
     .slice(0, 96);
 }
 
+export function medicalDiagnosisKey(value: string): string {
+  return value
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .slice(0, 160);
+}
+
 function isDiaryRole(roleId: string): boolean {
   const role = roleId.trim().toLowerCase();
   return role === 'diary' || role === 'diaries' || role.endsWith('.diary') || role.endsWith('.diaries');
@@ -117,6 +125,7 @@ export function AdditionalMaterialsPanel(props: {
   documents: DocumentTemplateSpec[];
   selectedDocumentIds: string[];
   busy: boolean;
+  medicalDiagnosis?: string;
 }) {
   const [status, setStatus] = useState('');
   const [working, setWorking] = useState(false);
@@ -194,8 +203,12 @@ export function AdditionalMaterialsPanel(props: {
     });
   }
 
-  async function importDiaryTexts(files: File[]) {
+  async function importDiaryTexts(files: File[], bindToCurrentDiagnosis = false) {
     if (!files.length) return;
+    if (bindToCurrentDiagnosis && !(props.medicalDiagnosis ?? '').trim()) {
+      setStatus('Сначала укажите или подтвердите диагноз текущего пациента, затем снова выберите «Тексты». Файл не сохранён, чтобы не привязать медицинский текст к неверному диагнозу.');
+      return;
+    }
     const selections: DiaryFileSelection[] = files.map(file => ({
       name: file.name,
       displayPath: (file as File & { webkitRelativePath?: string }).webkitRelativePath?.trim() || file.name,
@@ -223,8 +236,9 @@ export function AdditionalMaterialsPanel(props: {
         }
         const content = imported.extracted_text.trim();
         if (!content) { selections[index].status = 'Пропущен: текст не найден'; continue; }
-        const key = safeKey(file.name);
-        if (!key) { selections[index].status = 'Пропущен: имя не распознано'; continue; }
+        const diagnosisKey = bindToCurrentDiagnosis ? medicalDiagnosisKey(props.medicalDiagnosis ?? '') : '';
+        const key = diagnosisKey || safeKey(file.name);
+        if (!key) { selections[index].status = 'Пропущен: имя/диагноз не распознан'; continue; }
         const prefix = isFinalDiaryText(file.name) ? MEDICAL_DIARY_FINAL_PREFIX : MEDICAL_DIARY_REGULAR_PREFIX;
         const blockId = `${prefix}${key}`;
         const bucket = grouped.get(blockId) ?? { values: [], indexes: [] };
@@ -249,7 +263,10 @@ export function AdditionalMaterialsPanel(props: {
       const saved = selections.filter(item => item.status === 'Сохранён').length;
       const skipped = selections.filter(item => item.status.startsWith('Пропущен:')).length;
       const failed = selections.filter(item => item.status.startsWith('Ошибка')).length;
-      setStatus(`«Тексты»: сохранено ${saved} из ${files.length}; пропущено ${skipped}; ошибок ${failed}. Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
+      const diagnosisNote = bindToCurrentDiagnosis && (props.medicalDiagnosis ?? '').trim()
+        ? ` Тексты привязаны к текущему диагнозу: ${(props.medicalDiagnosis ?? '').trim()}.`
+        : '';
+      setStatus(`«Тексты»: сохранено ${saved} из ${files.length}; пропущено ${skipped}; ошибок ${failed}.${diagnosisNote} Даты программа рассчитает сама от поступления до выписки по выбранному врачом графику.`);
     } catch (error) {
       const detail = shortImportError(error);
       setDiaryFiles(selections.map(item => item.status === 'Импортируется' ? { ...item, status: `Ошибка импорта: ${detail}` } : item));
@@ -353,7 +370,7 @@ export function AdditionalMaterialsPanel(props: {
                   type="file"
                   multiple
                   accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
-                  onChange={(event) => { void importDiaryTexts(filesFrom(event)); }}
+                  onChange={(event) => { void importDiaryTexts(filesFrom(event), true); }}
                   disabled={working || props.busy}
                   style={{ display: 'none' }}
                 />
@@ -364,13 +381,13 @@ export function AdditionalMaterialsPanel(props: {
                   type="file"
                   multiple
                   accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
-                  onChange={(event) => { void importDiaryTexts(filesFrom(event)); }}
+                  onChange={(event) => { void importDiaryTexts(filesFrom(event), false); }}
                   disabled={working || props.busy}
                   style={{ display: 'none' }}
                   {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                 />
               </label>
-              <small>Кнопка «Тексты» показывает Word/TXT/PDF-файлы для выбора. Для импорта всей библиотеки сразу используйте «выбрать папку “Тексты”». Программа сопоставит текст с диагнозом, спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
+              <small>Кнопка «Тексты» выбирает файлы именно для текущего диагноза. Для импорта большой библиотеки по именам файлов используйте «выбрать папку “Тексты”». Программа спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
               {diaryFiles.length > 0 && (
                 <div className="medicalDiarySelection" role="region" aria-label="Выбранные файлы дневников">
                   <strong>Выбрано файлов: {diaryFiles.length}</strong>

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DocumentTemplateSpec } from '../lib/types';
-import { AdditionalMaterialsPanel, safeKey } from './AdditionalMaterialsPanel';
+import { AdditionalMaterialsPanel, medicalDiagnosisKey, safeKey } from './AdditionalMaterialsPanel';
 import { __resetInvokeForTests, __setInvokeForTests } from '../lib/api';
 
 const medicalDiary: DocumentTemplateSpec = {
@@ -41,7 +41,7 @@ describe('AdditionalMaterialsPanel', () => {
       if (command === 'save_clause_block') return [] as T;
       throw new Error(`Unexpected command: ${command}`);
     });
-    render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
+    render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0" />);
 
     const label = screen.getByText('Тексты').closest('label');
     const input = label?.querySelector('input[type="file"]') as HTMLInputElement | null;
@@ -57,6 +57,42 @@ describe('AdditionalMaterialsPanel', () => {
     expect(within(selection).getByText('Дневники F32.1.txt')).toBeTruthy();
     await waitFor(() => expect(within(selection).getAllByText('Сохранён')).toHaveLength(2));
     expect(screen.getByRole('status').textContent).toContain('сохранено 2 из 2');
+  });
+
+  it('fails early when explicit diary text is picked before the current diagnosis is known', async () => {
+    const savedBlocks: string[] = [];
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
+      if (command === 'save_clause_block') savedBlocks.push((payload as { req?: { block_id?: string } })?.req?.block_id ?? '');
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
+    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(['docx'], 'психотерапия.docx')] } });
+    expect((await screen.findByRole('status')).textContent).toContain('Сначала укажите или подтвердите диагноз');
+    expect(savedBlocks).toHaveLength(0);
+  });
+
+  it('binds explicitly selected diary Word text to the current diagnosis instead of guessing from the filename', async () => {
+    const savedBlocks: string[] = [];
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'import_learning_example_file') {
+        return { source_path: '/app-data/psychotherapy.docx', source_kind: 'docx', extracted_text: 'Достаточно длинный профессиональный текст дневника, выбранный врачом для текущего пациента.', warnings: [] } as T;
+      }
+      if (command === 'save_clause_block') {
+        savedBlocks.push((payload as { req?: { block_id?: string } })?.req?.block_id ?? '');
+        return [] as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0 Шизофрения параноидная" />);
+
+    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['docx'], 'психотерапия.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(savedBlocks).toEqual(['professional.medical.diary.regular.f200шизофренияпараноидная']));
+    expect(screen.getByRole('status').textContent).toContain('Тексты привязаны к текущему диагнозу: F20.0 Шизофрения параноидная');
   });
 
   it('keeps good diary files when a folder also contains junk or one broken document', async () => {
@@ -103,7 +139,8 @@ describe('AdditionalMaterialsPanel', () => {
     expect(folderInput?.hasAttribute('webkitdirectory')).toBe(true);
   });
 
-  it('normalizes source names without embedding psychiatric aliases in UI logic', () => {
+  it('normalizes source names and diagnoses with separate keys', () => {
     expect(safeKey('Дневники ВЭ — Лёгкая депрессия с датами.docx')).toBe('вэлегкаядепрессиясдатами');
+    expect(medicalDiagnosisKey('F20.0 Шизофрения параноидная')).toBe('f200шизофренияпараноидная');
   });
 });

@@ -372,6 +372,44 @@ mod tests {
     }
 
     #[test]
+    fn diagnosis_bound_persistent_text_feeds_every_regular_diary_row_and_keeps_final_fallback() {
+        let mut case = base_case("Нет");
+        case.collections.remove("medical_diary_texts");
+        insert(
+            &mut case,
+            "medical.diagnosis",
+            "F20.0 Шизофрения параноидная",
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200шизофренияпараноидная".into(),
+            "Профессиональный текст дневника, явно выбранный врачом для текущего диагноза и пациента.".into(),
+        );
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let rows = prepared.collection("diaries").expect("diaries");
+        assert!(rows.iter().all(|row| row.get("text").is_some()));
+        let regular = rows
+            .iter()
+            .find(|row| !record_bool(row, "is_final"))
+            .expect("regular row");
+        assert!(regular
+            .get("text")
+            .unwrap()
+            .as_text()
+            .contains("явно выбранный врачом"));
+        let final_row = rows
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final row");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            NEUTRAL_FINAL_DIARY_TEXT
+        );
+    }
+
+    #[test]
     fn final_diary_uses_neutral_donor_text_instead_of_rotating_regular_status() {
         let prepared = prepare_professional_collections(
             "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",

@@ -1524,6 +1524,18 @@ struct HydratedTemplateCase {
     counter_reservations: Vec<CounterValue>,
 }
 
+fn merge_persistent_clause_blocks(
+    case: &mut SemanticCase,
+    persistent: std::collections::BTreeMap<String, String>,
+) {
+    // Current-case/source blocks are authoritative. Persistent professional
+    // profile material is a fallback library and must never overwrite facts or
+    // specialist-owned content already attached to the active case.
+    for (block_id, content) in persistent {
+        case.blocks.entry(block_id).or_insert(content);
+    }
+}
+
 fn hydrate_case_with_persistent_template_data(
     app: &tauri::AppHandle,
     base: &SemanticCase,
@@ -1534,8 +1546,10 @@ fn hydrate_case_with_persistent_template_data(
     let mut repo = repository_for(&db_path)?;
     let mut case = base.clone();
     let mut counter_reservations = Vec::new();
-    case.blocks
-        .extend(repo.clause_blocks_map().map_err(|e| e.to_string())?);
+    merge_persistent_clause_blocks(
+        &mut case,
+        repo.clause_blocks_map().map_err(|e| e.to_string())?,
+    );
     let year = current_year_utc();
     let mut requests = std::collections::BTreeMap::new();
     for text in template_texts {
@@ -2207,6 +2221,7 @@ include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");
 include!("subsystems/quality_telemetry.rs");
 include!("subsystems/process_blueprints.rs");
+include!("subsystems/clause_block_commands.rs");
 
 include!("subsystems/automation_runtime.rs");
 
@@ -2450,6 +2465,7 @@ fn main() {
             list_audit_events,
             list_clause_blocks,
             save_clause_block,
+            replace_clause_blocks,
             delete_clause_block,
             suggest_template_markup_command,
             apply_template_markup_command,
@@ -2529,12 +2545,47 @@ mod tests {
     use super::{
         canonical_json_bytes, current_year_utc, is_forbidden_public_download_host,
         is_forbidden_public_download_ip, load_or_create_local_data_key,
-        local_trial_access_decision, normalized_picker_output, parse_semver, pdf_print_settings,
-        plan_label, reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
-        validate_printable_file, validate_update_url, write_trust_report, SourceProvenance,
-        TrustReportContext, TRIAL_DOCUMENT_LIMIT_MONTH,
+        local_trial_access_decision, merge_persistent_clause_blocks, normalized_picker_output,
+        parse_semver, pdf_print_settings, plan_label, reject_parent_traversal,
+        safe_update_file_name, signed_plan_to_product_plan, validate_printable_file,
+        validate_update_url, write_trust_report, SourceProvenance, TrustReportContext,
+        TRIAL_DOCUMENT_LIMIT_MONTH,
     };
     use base64::Engine as _;
+
+    #[test]
+    fn current_case_blocks_win_over_stale_persistent_profile_material() {
+        let mut case = dokkomplekt_core::SemanticCase::default();
+        case.blocks.insert(
+            "medical.diary.final_text".into(),
+            "Текущий подтверждённый текст пациента".into(),
+        );
+        let persistent = std::collections::BTreeMap::from([
+            (
+                "medical.diary.final_text".into(),
+                "СТАРЫЙ профильный текст, который не должен победить".into(),
+            ),
+            (
+                "professional.medical.diary.regular.f200".into(),
+                "Профильный fallback для отсутствующего блока".into(),
+            ),
+        ]);
+
+        merge_persistent_clause_blocks(&mut case, persistent);
+
+        assert_eq!(
+            case.blocks
+                .get("medical.diary.final_text")
+                .map(String::as_str),
+            Some("Текущий подтверждённый текст пациента")
+        );
+        assert_eq!(
+            case.blocks
+                .get("professional.medical.diary.regular.f200")
+                .map(String::as_str),
+            Some("Профильный fallback для отсутствующего блока")
+        );
+    }
 
     #[test]
     fn folder_picker_output_is_cancel_safe_and_requires_a_real_directory() {

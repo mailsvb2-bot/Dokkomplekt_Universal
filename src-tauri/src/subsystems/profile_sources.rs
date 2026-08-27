@@ -18,31 +18,44 @@ fn stored_clause_block(app: &tauri::AppHandle, block_id: &str) -> Result<Option<
     Ok(blocks.get(block_id).cloned())
 }
 
+fn parse_profile_quick_options(content: &str) -> Vec<String> {
+    let values = match serde_json::from_str::<Vec<String>>(content) {
+        Ok(values) => values,
+        Err(error) => {
+            // Quick options are optional convenience data. Corruption here must
+            // never brick document generation; the canonical prompt still allows
+            // manual input and remains the source of truth.
+            eprintln!("Повреждённые профильные быстрые варианты проигнорированы: {error}");
+            return Vec::new();
+        }
+    };
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && seen.insert(value.to_lowercase()))
+        .collect()
+}
+
 fn profile_quick_options(app: &tauri::AppHandle, block_id: &str) -> Result<Vec<String>, String> {
     let Some(content) = stored_clause_block(app, block_id)? else {
         return Ok(Vec::new());
     };
-    let values = serde_json::from_str::<Vec<String>>(&content)
-        .map_err(|error| format!("Профильные быстрые варианты повреждены: {error}"))?;
-    let mut seen = BTreeSet::new();
-    Ok(values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && seen.insert(value.to_lowercase()))
-        .collect())
+    Ok(parse_profile_quick_options(&content))
 }
 
 fn apply_profile_prompt_overrides(
     app: &tauri::AppHandle,
     plan: &mut WorkflowPlan,
 ) -> Result<(), String> {
-    let rvk_options = profile_quick_options(app, MEDICAL_RVK_OPTIONS_BLOCK_ID)?;
-    if !rvk_options.is_empty() {
-        if let Some(prompt) = plan
-            .prompts
-            .iter_mut()
-            .find(|prompt| prompt.field_id == "medical.rvk_commissariat")
-        {
+    if let Some(prompt_index) = plan
+        .prompts
+        .iter()
+        .position(|prompt| prompt.field_id == "medical.rvk_commissariat")
+    {
+        let rvk_options = profile_quick_options(app, MEDICAL_RVK_OPTIONS_BLOCK_ID)?;
+        if !rvk_options.is_empty() {
+            let prompt = &mut plan.prompts[prompt_index];
             prompt.options = rvk_options;
             prompt.allow_custom_option = true;
             prompt.help_text = Some(
@@ -157,4 +170,22 @@ fn medical_diary_template_override(
         return Ok(None);
     }
     program_calendar_diary_template(app).map(Some)
+}
+
+#[cfg(test)]
+mod profile_sources_tests {
+    use super::parse_profile_quick_options;
+
+    #[test]
+    fn corrupted_optional_quick_options_do_not_block_the_profile() {
+        assert!(parse_profile_quick_options("{broken json").is_empty());
+    }
+
+    #[test]
+    fn quick_options_are_trimmed_and_deduplicated_case_insensitively() {
+        let options = parse_profile_quick_options(
+            r#"[" Ленинский ", "ленинский", "", "Сормовский"]"#,
+        );
+        assert_eq!(options, vec!["Ленинский", "Сормовский"]);
+    }
 }

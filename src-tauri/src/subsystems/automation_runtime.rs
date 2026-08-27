@@ -2104,51 +2104,6 @@ fn list_audit_events(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn list_clause_blocks(app: tauri::AppHandle) -> Result<Vec<ClauseBlockRecord>, String> {
-    repository_for(&default_state_db_path(&app)?)?
-        .list_clause_blocks()
-        .map_err(|e| e.to_string())
-}
-#[derive(Debug, Deserialize)]
-struct SaveClauseBlockRequest {
-    block_id: String,
-    title: String,
-    content: String,
-}
-#[tauri::command]
-fn save_clause_block(
-    req: SaveClauseBlockRequest,
-    app: tauri::AppHandle,
-) -> Result<Vec<ClauseBlockRecord>, String> {
-    let id = req.block_id.trim();
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("Идентификатор блока может содержать латинские буквы, цифры, _ и -.".into());
-    }
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    repo.save_clause_block(id, req.title.trim(), &req.content)
-        .map_err(|e| e.to_string())?;
-    repo.list_clause_blocks().map_err(|e| e.to_string())
-}
-#[derive(Debug, Deserialize)]
-struct DeleteClauseBlockRequest {
-    block_id: String,
-}
-#[tauri::command]
-fn delete_clause_block(
-    req: DeleteClauseBlockRequest,
-    app: tauri::AppHandle,
-) -> Result<Vec<ClauseBlockRecord>, String> {
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    repo.delete_clause_block(req.block_id.trim())
-        .map_err(|e| e.to_string())?;
-    repo.list_clause_blocks().map_err(|e| e.to_string())
-}
-
 #[derive(Debug, Deserialize)]
 struct SuggestTemplateMarkupRequest {
     file_name: String,

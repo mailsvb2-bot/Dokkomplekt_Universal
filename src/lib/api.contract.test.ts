@@ -77,6 +77,7 @@ import {
   listTemplateVersions,
   rollbackTemplateVersion,
   saveClauseBlock,
+  replaceClauseBlocks,
   deleteClauseBlock,
   suggestTemplateMarkup,
   applyTemplateMarkup,
@@ -155,6 +156,7 @@ export const registeredBackendCommands = [
   'list_audit_events',
   'list_clause_blocks',
   'save_clause_block',
+  'replace_clause_blocks',
   'delete_clause_block',
   'suggest_template_markup_command',
   'apply_template_markup_command',
@@ -330,6 +332,7 @@ function installContractMock(calls: Call[]) {
       case 'list_audit_events': return [{ event_id: 'a-1', event_type: 'processed', object_hash: 'obj', detail_json: '{}', previous_hash: '', event_hash: 'hash', created_at: 'now' }] as never;
       case 'list_clause_blocks': return [] as never;
       case 'save_clause_block': return [{ block_id: 'requisites', title: 'Реквизиты', content: '{{org.name}}', updated_at: 'now' }] as never;
+      case 'replace_clause_blocks': return true as never;
       case 'delete_clause_block': return [] as never;
       case 'suggest_template_markup_command': return [{ field_id: 'org.inn', title: 'ИНН', value: '7736050003', confidence: 0.99, occurrences: 1, selected_by_default: true }] as never;
       case 'apply_template_markup_command': return { output_path: 'marked.docx', replacement_count: 1, replaced_occurrences: 1, skipped_values: [] } as never;
@@ -560,12 +563,18 @@ describe('Tauri command DTO contracts', () => {
 
   it('uses Rust DTO envelopes for v18 blocks, markup and mail merge', async () => {
     const calls: Call[] = []; installContractMock(calls);
-    await listClauseBlocks(); await saveClauseBlock('requisites', 'Реквизиты', '{{org.name}}'); await deleteClauseBlock('requisites');
+    await listClauseBlocks(); await saveClauseBlock('requisites', 'Реквизиты', '{{org.name}}');
+    await replaceClauseBlocks(
+      ['professional.medical.diary.final.f200'],
+      [{ blockId: 'professional.medical.diary.regular.f200', title: 'Медицинские дневники: f200', content: 'Актуальный текст' }],
+    );
+    await deleteClauseBlock('requisites');
     await suggestTemplateMarkup('t.docx', 'UEsDBA==', 2026); await applyTemplateMarkup('t.docx', 't.marked.docx', [{ field_id: 'org.inn', value: '7736050003' }]);
     await previewMailMerge('subject.name\nИванов'); await renderMailMerge(['doc_1'], 'subject.name\nИванов', 'output', true);
     expect(calls).toMatchObject([
       { command: 'list_clause_blocks', payload: undefined },
       { command: 'save_clause_block', payload: { req: { block_id: 'requisites', title: 'Реквизиты', content: '{{org.name}}' } } },
+      { command: 'replace_clause_blocks', payload: { req: { delete_block_ids: ['professional.medical.diary.final.f200'], blocks: [{ block_id: 'professional.medical.diary.regular.f200', title: 'Медицинские дневники: f200', content: 'Актуальный текст' }] } } },
       { command: 'delete_clause_block', payload: { req: { block_id: 'requisites' } } },
       { command: 'suggest_template_markup_command', payload: { req: { file_name: 't.docx', bytes_base64: 'UEsDBA==', default_year: 2026 } } },
       { command: 'apply_template_markup_command', payload: { req: { input_path: 't.docx', output_path: 't.marked.docx', replacements: [{ field_id: 'org.inn', value: '7736050003' }] } } },

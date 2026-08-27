@@ -660,6 +660,14 @@ export async function importReferenceDataFile(fileName: string, bytesBase64: str
 
 export async function listClauseBlocks(): Promise<ClauseBlockRecord[]> { return callRust('list_clause_blocks'); }
 export async function saveClauseBlock(blockId: string, title: string, content: string): Promise<ClauseBlockRecord[]> { return callRust('save_clause_block', { req: { block_id: blockId, title, content } }); }
+export async function replaceClauseBlocks(deleteBlockIds: string[], blocks: Array<{ blockId: string; title: string; content: string }>): Promise<boolean> {
+  return callRust('replace_clause_blocks', {
+    req: {
+      delete_block_ids: deleteBlockIds,
+      blocks: blocks.map(block => ({ block_id: block.blockId, title: block.title, content: block.content })),
+    },
+  });
+}
 export async function deleteClauseBlock(blockId: string): Promise<ClauseBlockRecord[]> { return callRust('delete_clause_block', { req: { block_id: blockId } }); }
 export async function suggestTemplateMarkup(fileName: string, bytesBase64: string, defaultYear: number): Promise<TemplateMarkupCandidate[]> { return callRust('suggest_template_markup_command', { req: { file_name: fileName, bytes_base64: bytesBase64, default_year: defaultYear } }); }
 export async function applyTemplateMarkup(inputPath: string, outputPath: string, replacements: TemplateMarkupReplacement[]): Promise<TemplateMarkupReport> { return callRust('apply_template_markup_command', { req: { input_path: inputPath, output_path: outputPath, replacements } }); }
@@ -729,6 +737,7 @@ export const rustCommandNames = [
   'import_reference_data',
   'list_clause_blocks',
   'save_clause_block',
+  'replace_clause_blocks',
   'delete_clause_block',
   'suggest_template_markup_command',
   'apply_template_markup_command',

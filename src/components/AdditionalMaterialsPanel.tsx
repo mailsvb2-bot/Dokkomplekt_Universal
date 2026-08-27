@@ -1,9 +1,10 @@
-import { useMemo, useState, type ChangeEvent, type DragEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react';
 import type { DocumentTemplateSpec, DomainKind } from '../lib/types';
 import {
   deleteClauseBlock,
   importLearningExampleFile,
   listClauseBlocks,
+  replaceClauseBlocks,
   saveClauseBlock,
 } from '../lib/api';
 import { arrayBufferToBase64, readFileBytes } from '../lib/appSupport';
@@ -73,12 +74,27 @@ export function safeKey(value: string): string {
     .slice(0, 96);
 }
 
+function medicalIcdCodeKey(value: string): string {
+  const folded = value.toLocaleUpperCase('ru-RU').replace(/Ё/g, 'Е');
+  const icdCode = folded.match(/(?:^|[^\p{L}\p{N}])([A-Z]\s*\d{2}(?:\s*\.\s*\d{1,4})?)(?=$|[^\p{L}\p{N}])/u)?.[1];
+  return icdCode
+    ? icdCode.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '').slice(0, 32)
+    : '';
+}
+
 export function medicalDiagnosisKey(value: string): string {
+  const codeKey = medicalIcdCodeKey(value);
+  if (codeKey) return codeKey;
   return value
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е')
     .replace(/[^\p{L}\p{N}]+/gu, '')
     .slice(0, 160);
+}
+
+export function medicalDiaryFileKey(fileName: string): string {
+  const stem = fileName.replace(/\.[^.]+$/, '');
+  return medicalIcdCodeKey(stem) || safeKey(fileName);
 }
 
 function isDiaryRole(roleId: string): boolean {
@@ -132,6 +148,7 @@ export function AdditionalMaterialsPanel(props: {
   const [dragging, setDragging] = useState(false);
   const [customRvk, setCustomRvk] = useState('');
   const [diaryFiles, setDiaryFiles] = useState<DiaryFileSelection[]>([]);
+  const [boundDiaryDiagnosisKey, setBoundDiaryDiagnosisKey] = useState('');
   const selected = useMemo(
     () => props.documents.filter(document => props.selectedDocumentIds.includes(document.id)),
     [props.documents, props.selectedDocumentIds],
@@ -143,6 +160,15 @@ export function AdditionalMaterialsPanel(props: {
     for (const document of selected) values.set(domainKey(document.category), document.category);
     return [...values.values()];
   }, [selected]);
+
+  useEffect(() => {
+    if (!boundDiaryDiagnosisKey) return;
+    const currentKey = medicalDiagnosisKey(props.medicalDiagnosis ?? '');
+    if (currentKey === boundDiaryDiagnosisKey) return;
+    setBoundDiaryDiagnosisKey('');
+    setDiaryFiles([]);
+    setStatus('Диагноз изменён. Ранее выбранные «Тексты» были привязаны к другому диагнозу и больше не используются; выберите актуальные тексты заново.');
+  }, [boundDiaryDiagnosisKey, props.medicalDiagnosis]);
 
   if (!selected.length) return null;
 
@@ -205,7 +231,8 @@ export function AdditionalMaterialsPanel(props: {
 
   async function importDiaryTexts(files: File[], bindToCurrentDiagnosis = false) {
     if (!files.length) return;
-    if (bindToCurrentDiagnosis && !(props.medicalDiagnosis ?? '').trim()) {
+    const currentDiagnosisKey = bindToCurrentDiagnosis ? medicalDiagnosisKey(props.medicalDiagnosis ?? '') : '';
+    if (bindToCurrentDiagnosis && !currentDiagnosisKey) {
       setStatus('Сначала укажите или подтвердите диагноз текущего пациента, затем снова выберите «Тексты». Файл не сохранён, чтобы не привязать медицинский текст к неверному диагнозу.');
       return;
     }
@@ -218,27 +245,31 @@ export function AdditionalMaterialsPanel(props: {
     setWorking(true);
     setStatus('Импортируем медицинскую библиотеку текстов…');
     try {
-      const existing = await listClauseBlocks();
-      const existingById = new Map(existing.map(block => [block.block_id, block.content]));
       const grouped = new Map<string, { values: string[]; indexes: number[] }>();
+      const blockedKeys = new Map<string, string>();
 
       for (const [index, file] of files.entries()) {
         if (!isSupportedDiaryTextFile(file.name)) {
           selections[index].status = 'Пропущен: неподдерживаемый формат';
           continue;
         }
+        const key = bindToCurrentDiagnosis ? currentDiagnosisKey : medicalDiaryFileKey(file.name);
+        if (!key) { selections[index].status = 'Пропущен: имя/диагноз не распознан'; continue; }
         let imported;
         try {
           imported = await extractMaterial(file);
         } catch (error) {
-          selections[index].status = `Ошибка импорта: ${shortImportError(error)}`;
+          const detail = shortImportError(error);
+          selections[index].status = `Ошибка импорта: ${detail}`;
+          blockedKeys.set(key, detail);
           continue;
         }
         const content = imported.extracted_text.trim();
-        if (!content) { selections[index].status = 'Пропущен: текст не найден'; continue; }
-        const diagnosisKey = bindToCurrentDiagnosis ? medicalDiagnosisKey(props.medicalDiagnosis ?? '') : '';
-        const key = diagnosisKey || safeKey(file.name);
-        if (!key) { selections[index].status = 'Пропущен: имя/диагноз не распознан'; continue; }
+        if (!content) {
+          selections[index].status = 'Ошибка импорта: текст не найден';
+          blockedKeys.set(key, 'текст не найден');
+          continue;
+        }
         const prefix = isFinalDiaryText(file.name) ? MEDICAL_DIARY_FINAL_PREFIX : MEDICAL_DIARY_REGULAR_PREFIX;
         const blockId = `${prefix}${key}`;
         const bucket = grouped.get(blockId) ?? { values: [], indexes: [] };
@@ -247,22 +278,57 @@ export function AdditionalMaterialsPanel(props: {
         grouped.set(blockId, bucket);
       }
 
+      // A diagnosis library is a coherent specialist-owned set. If any supported
+      // file for one diagnosis cannot be read, keep the previously stored set for
+      // that diagnosis intact instead of publishing a partial replacement. Other
+      // diagnosis keys in a large folder remain independent and may still update.
       for (const [blockId, bucket] of grouped) {
-        const previous = existingById.get(blockId);
-        const merged = uniqueTexts([...(previous ? [previous] : []), ...bucket.values]).join('\n\n');
+        const key = blockId.split('.').pop() ?? '';
+        if (!blockedKeys.has(key)) continue;
+        for (const index of bucket.indexes) {
+          selections[index].status = 'Не сохранён: другой файл этого диагноза не прочитан';
+        }
+      }
+
+      const publishable = [...grouped.entries()].filter(([blockId]) => {
+        const key = blockId.split('.').pop() ?? '';
+        return key && !blockedKeys.has(key);
+      });
+      if (publishable.length > 0) {
+        // Replace both regular/final slots for every complete diagnosis set in
+        // one SQLite transaction. This prevents stale final text and half-state.
+        const affectedKeys = new Set<string>();
+        const blocks = publishable.map(([blockId, bucket]) => {
+          const key = blockId.split('.').pop() ?? '';
+          affectedKeys.add(key);
+          return {
+            blockId,
+            title: `Медицинские дневники: ${key}`,
+            content: uniqueTexts(bucket.values).join('\n\n'),
+          };
+        });
+        const deleteBlockIds = [...affectedKeys].flatMap(key => [
+          `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
+          `${MEDICAL_DIARY_FINAL_PREFIX}${key}`,
+        ]);
         try {
-          await saveClauseBlock(blockId, `Медицинские дневники: ${blockId.split('.').pop()}`, merged);
-          for (const index of bucket.indexes) selections[index].status = 'Сохранён';
+          await replaceClauseBlocks(deleteBlockIds, blocks);
+          for (const [, bucket] of publishable) {
+            for (const index of bucket.indexes) selections[index].status = 'Сохранён';
+          }
         } catch (error) {
           const detail = shortImportError(error);
-          for (const index of bucket.indexes) selections[index].status = `Ошибка сохранения: ${detail}`;
+          for (const [, bucket] of publishable) {
+            for (const index of bucket.indexes) selections[index].status = `Ошибка сохранения: ${detail}`;
+          }
         }
       }
 
       setDiaryFiles([...selections]);
       const saved = selections.filter(item => item.status === 'Сохранён').length;
       const skipped = selections.filter(item => item.status.startsWith('Пропущен:')).length;
-      const failed = selections.filter(item => item.status.startsWith('Ошибка')).length;
+      const failed = selections.filter(item => item.status.startsWith('Ошибка') || item.status.startsWith('Не сохранён')).length;
+      if (bindToCurrentDiagnosis && saved > 0) setBoundDiaryDiagnosisKey(currentDiagnosisKey);
       const diagnosisNote = bindToCurrentDiagnosis && (props.medicalDiagnosis ?? '').trim()
         ? ` Тексты привязаны к текущему диагнозу: ${(props.medicalDiagnosis ?? '').trim()}.`
         : '';
@@ -387,7 +453,7 @@ export function AdditionalMaterialsPanel(props: {
                   {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                 />
               </label>
-              <small>Кнопка «Тексты» выбирает файлы именно для текущего диагноза. Для импорта большой библиотеки по именам файлов используйте «выбрать папку “Тексты”». Программа спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
+              <small>Кнопка «Тексты» выбирает актуальные файлы для текущего диагноза и заменяет ранее выбранный набор для того же кода. Для импорта большой библиотеки по именам файлов используйте «выбрать папку “Тексты”». Программа спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
               {diaryFiles.length > 0 && (
                 <div className="medicalDiarySelection" role="region" aria-label="Выбранные файлы дневников">
                   <strong>Выбрано файлов: {diaryFiles.length}</strong>

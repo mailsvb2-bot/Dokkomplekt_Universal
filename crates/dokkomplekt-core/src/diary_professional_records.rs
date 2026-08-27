@@ -381,7 +381,7 @@ mod tests {
             "F20.0 Шизофрения параноидная",
         );
         case.blocks.insert(
-            "professional.medical.diary.regular.f200шизофренияпараноидная".into(),
+            "professional.medical.diary.regular.f200".into(),
             "Профессиональный текст дневника, явно выбранный врачом для текущего диагноза и пациента.".into(),
         );
         let prepared = prepare_professional_collections(

@@ -681,6 +681,40 @@ impl LocalRepository {
         )?;
         Ok(())
     }
+    /// Atomically replace a scoped set of reusable clause blocks. Values are
+    /// encrypted before the transaction starts so a crypto failure cannot leave
+    /// the database half-updated.
+    pub fn replace_clause_blocks(
+        &mut self,
+        delete_block_ids: &[String],
+        replacements: &[(String, String, String)],
+    ) -> StorageResult<()> {
+        let encrypted = replacements
+            .iter()
+            .map(|(block_id, title, content)| {
+                Ok((
+                    block_id.clone(),
+                    self.encode_sensitive(title)?,
+                    self.encode_sensitive(content)?,
+                ))
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
+        let tx = self.conn.transaction()?;
+        for block_id in delete_block_ids {
+            tx.execute(
+                "DELETE FROM clause_blocks WHERE block_id=?1",
+                params![block_id],
+            )?;
+        }
+        for (block_id, title, content) in encrypted {
+            tx.execute(
+                "INSERT INTO clause_blocks(block_id,title,content) VALUES (?1,?2,?3) ON CONFLICT(block_id) DO UPDATE SET title=excluded.title,content=excluded.content,updated_at=CURRENT_TIMESTAMP",
+                params![block_id, title, content],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn clause_blocks_map(&self) -> StorageResult<std::collections::BTreeMap<String, String>> {
         Ok(self
             .list_clause_blocks()?
@@ -2762,6 +2796,119 @@ mod tests {
         assert!(repo.list_clause_blocks().unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }
+    #[test]
+    fn clause_block_family_replacement_is_atomic_and_preserves_unrelated_keys() {
+        let path = temp_db("blocks-family-replace");
+        let mut repo = LocalRepository::open_with_key(&path, [42u8; 32]).unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.regular.f200",
+            "old regular",
+            "СТАРЫЙ regular",
+        )
+        .unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.final.f200",
+            "old final",
+            "СТАРЫЙ final",
+        )
+        .unwrap();
+        repo.save_clause_block("professional.medical.diary.regular.f321", "other", "ДРУГОЙ")
+            .unwrap();
+
+        repo.replace_clause_blocks(
+            &[
+                "professional.medical.diary.regular.f200".into(),
+                "professional.medical.diary.final.f200".into(),
+            ],
+            &[(
+                "professional.medical.diary.regular.f200".into(),
+                "current regular".into(),
+                "АКТУАЛЬНЫЙ regular".into(),
+            )],
+        )
+        .unwrap();
+
+        let blocks = repo.clause_blocks_map().unwrap();
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.regular.f200")
+                .map(String::as_str),
+            Some("АКТУАЛЬНЫЙ regular")
+        );
+        assert!(!blocks.contains_key("professional.medical.diary.final.f200"));
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.regular.f321")
+                .map(String::as_str),
+            Some("ДРУГОЙ")
+        );
+        let raw: String = repo
+            .conn
+            .query_row(
+                "SELECT title || content FROM clause_blocks WHERE block_id=?1",
+                params!["professional.medical.diary.regular.f200"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("АКТУАЛЬНЫЙ"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn clause_block_family_replacement_rolls_back_deletes_when_insert_fails() {
+        let path = temp_db("blocks-family-replace-rollback");
+        let mut repo = LocalRepository::open_with_key(&path, [43u8; 32]).unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.regular.f200",
+            "old regular",
+            "СТАРЫЙ regular",
+        )
+        .unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.final.f200",
+            "old final",
+            "СТАРЫЙ final",
+        )
+        .unwrap();
+        repo.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_diary_replace BEFORE INSERT ON clause_blocks \
+                 WHEN NEW.block_id='professional.medical.diary.regular.f200' \
+                 BEGIN SELECT RAISE(ABORT, 'forced replacement failure'); END;",
+            )
+            .unwrap();
+
+        let error = repo
+            .replace_clause_blocks(
+                &[
+                    "professional.medical.diary.regular.f200".into(),
+                    "professional.medical.diary.final.f200".into(),
+                ],
+                &[(
+                    "professional.medical.diary.regular.f200".into(),
+                    "new regular".into(),
+                    "НОВЫЙ regular".into(),
+                )],
+            )
+            .expect_err("forced insert failure must abort the whole replacement");
+        assert!(error.to_string().contains("forced replacement failure"));
+
+        let blocks = repo.clause_blocks_map().unwrap();
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.regular.f200")
+                .map(String::as_str),
+            Some("СТАРЫЙ regular")
+        );
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.final.f200")
+                .map(String::as_str),
+            Some("СТАРЫЙ final")
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn save_pack_atomically_refreshes_encrypted_workspace_profile() {
         let path = temp_db("workspace-profile-pack");

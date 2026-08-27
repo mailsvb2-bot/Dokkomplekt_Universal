@@ -1094,6 +1094,7 @@ fn render_docx(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
+    require_strict_document_publication(req.strict)?;
     let doc = {
         let pack = state.pack.lock().map_err(|_| "state lock failed")?;
         pack.documents
@@ -1142,8 +1143,8 @@ fn render_docx(
         req.strict,
         permit.watermark.as_deref(),
     );
-    let mut result = match render_result {
-        Ok(result) => result,
+    let proof = match render_result {
+        Ok(proof) => proof,
         Err(error) => {
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
             rollback_generation_access(&app, &state, &permit);
@@ -1154,6 +1155,7 @@ fn render_docx(
         &doc,
         &template_text,
         &render_case,
+        &proof.visible_text,
         &reservation.path,
     ) {
         let _ = std::fs::remove_file(&reservation.path);
@@ -1161,6 +1163,7 @@ fn render_docx(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    let mut result = proof.render_result;
     if let Err(error) = template_snapshot.ensure_current() {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
@@ -1189,14 +1192,23 @@ fn render_docx(
             ));
         }
     };
-    let mut publication_warnings = Vec::new();
-    if let Err(error) =
-        generation_publication::confirm_publication(&app, &permit, &output_path)
-    {
-        publication_warnings.push(format!(
-            "Документ опубликован, но durable-квитанция не перешла в состояние published: {error}"
-        ));
-    }
+    let mut publication_warnings = match generation_publication::confirm_publication(
+        &app,
+        &permit,
+        &output_path,
+    ) {
+        Ok(warnings) => warnings,
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &output_path,
+                None,
+                error,
+                false,
+            ));
+        }
+    };
     if let Err(error) = template_snapshot.ensure_current() {
         publication_warnings.push(format!(
             "Документ уже опубликован, но шаблон изменился сразу после границы публикации: {error}"
@@ -1266,6 +1278,7 @@ fn render_docx_batch(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<RenderDocxBatchResponse, String> {
+    require_strict_document_publication(req.strict)?;
     let mut requested_ids = req
         .document_ids
         .into_iter()
@@ -1410,20 +1423,20 @@ fn render_docx_batch(
                 &document.category,
                 &document.role_id,
             );
-            if let Err(error) = render_docx_with_assets(
+            let proof = render_docx_with_assets(
                 &app,
                 template_snapshot.path(),
                 &reservation.path,
                 &render_case,
                 req.strict,
                 permit.watermark.as_deref(),
-            ) {
-                return Err(format!("Не создан «{}»: {error}", document.button_label));
-            }
+            )
+            .map_err(|error| format!("Не создан «{}»: {error}", document.button_label))?;
             if let Err(error) = ensure_rendered_document_complete(
                 document,
                 &template_text,
                 &render_case,
+                &proof.visible_text,
                 &reservation.path,
             ) {
                 let _ = std::fs::remove_file(&reservation.path);
@@ -1615,12 +1628,18 @@ fn render_docx_batch(
             backup.display()
         ));
     }
-    if let Err(error) =
-        generation_publication::confirm_publication(&app, &permit, &output_folder)
-    {
-        warnings.push(format!(
-            "Комплект проверен и опубликован, но durable-квитанция не перешла в состояние published: {error}"
-        ));
+    match generation_publication::confirm_publication(&app, &permit, &output_folder) {
+        Ok(confirmation_warnings) => warnings.extend(confirmation_warnings),
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &output_folder,
+                backup_folder.as_deref(),
+                error,
+                false,
+            ));
+        }
     }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
         warnings.push(format!(

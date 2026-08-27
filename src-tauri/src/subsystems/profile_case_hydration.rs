@@ -1,5 +1,15 @@
 // Persistent professional profile hydration for render-time SemanticCase clones.
 
+fn reusable_clause_block_id_is_allowed(block_id: &str) -> bool {
+    let id = block_id.trim();
+    // These namespaces are produced by one concrete intake/case and must never
+    // become installation-wide fallback data. The legacy diary final-text key is
+    // also case-owned; professional diary libraries use professional.medical.*.
+    !(id.starts_with("source.")
+        || id.starts_with("case.")
+        || id == "medical.diary.final_text")
+}
+
 fn merge_persistent_clause_blocks(
     case: &mut SemanticCase,
     persistent: std::collections::BTreeMap<String, String>,
@@ -10,6 +20,9 @@ fn merge_persistent_clause_blocks(
     // that copy to win makes a newly selected Texts file invisible to rendering.
     // Patient/source-local blocks keep their existing precedence.
     for (block_id, content) in persistent {
+        if !reusable_clause_block_id_is_allowed(&block_id) {
+            continue;
+        }
         if block_id.starts_with("professional.") {
             case.blocks.insert(block_id, content);
         } else {
@@ -114,6 +127,30 @@ mod profile_case_hydration_tests {
             .output_text
             .contains("новый выбранный врачом текст"));
     }
+    #[test]
+    fn runtime_owned_case_blocks_are_never_resurrected_from_persistent_library() {
+        let mut case = dokkomplekt_core::SemanticCase::default();
+        let persistent = std::collections::BTreeMap::from([
+            ("source.kind".into(), "СТАРЫЙ-PDF".into()),
+            ("source.segment_count".into(), "99".into()),
+            ("case.private_note".into(), "предыдущее дело".into()),
+            ("medical.diary.final_text".into(), "финал предыдущего пациента".into()),
+            ("requisites".into(), "ООО Ромашка".into()),
+        ]);
+
+        merge_persistent_clause_blocks(&mut case, persistent);
+
+        for forbidden in [
+            "source.kind",
+            "source.segment_count",
+            "case.private_note",
+            "medical.diary.final_text",
+        ] {
+            assert!(!case.blocks.contains_key(forbidden), "leaked {forbidden}");
+        }
+        assert_eq!(case.blocks.get("requisites").map(String::as_str), Some("ООО Ромашка"));
+    }
+
     #[test]
     fn sqlite_profile_replacement_rehydrates_stale_case_and_strict_runtime_diary_template() {
         let path = std::env::temp_dir().join(format!(

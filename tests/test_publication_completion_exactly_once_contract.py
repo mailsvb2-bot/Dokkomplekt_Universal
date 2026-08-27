@@ -30,6 +30,9 @@ def test_publication_completion_is_plan_bound_before_best_effort_metadata() -> N
     assert "PublicationPlanBinding" in automation
     assert "complete_publication_receipt" in automation
     assert "local_completion.is_err() && queue_completion.is_err() && case_completion.is_err()" in automation
-    assert "status=published_completion_ledgers_failed" in automation
-    assert "processing_job_sha256={processing_job_sha256}" in automation
+    assert "fn mark_plan_bound_emergency_guard" in publication_evidence
+    assert "published_completion_ledgers_failed" in publication_evidence
+    assert "unverified_publication_quarantined" in publication_evidence
+    assert "generation_publication::mark_plan_bound_emergency_guard" in automation
+    assert "processing_job_sha256" in automation
     assert "publication_completion_metadata" in automation

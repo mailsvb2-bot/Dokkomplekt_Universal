@@ -54,6 +54,22 @@ mod clause_block_id_contract_tests {
     }
 
     #[test]
+    fn runtime_owned_case_block_ids_are_not_reusable_library_ids() {
+        for id in [
+            "source.kind",
+            "source.segment_count",
+            "case.private_note",
+            "medical.diary.final_text",
+        ] {
+            assert!(valid_clause_block_id(id));
+            assert!(!super::reusable_clause_block_id_is_allowed(id));
+        }
+        for id in ["requisites", "custom.contract.footer", "professional.material.hr.policy"] {
+            assert!(super::reusable_clause_block_id_is_allowed(id));
+        }
+    }
+
+    #[test]
     fn reusable_block_ids_still_reject_path_and_empty_segment_tricks() {
         for id in [
             "",
@@ -76,6 +92,11 @@ fn validate_clause_block_id(raw: &str) -> Result<&str, String> {
         return Err(
             "Идентификатор блока должен состоять из непустых сегментов: буквы, цифры, _, - и точки между сегментами.".into(),
         );
+    }
+    if !reusable_clause_block_id_is_allowed(id) {
+        return Err(format!(
+            "Блок {id} принадлежит текущему делу и не может храниться в общей библиотеке."
+        ));
     }
     Ok(id)
 }

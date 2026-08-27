@@ -1,5 +1,91 @@
 // Explicit output-collision publication policies.
 
+// Publication service directories contain user-data backups/quarantine and are
+// therefore part of the same trust boundary as the visible output folder. Never
+// follow a pre-created symlink/junction/reparse point for these hidden locations.
+fn publication_metadata_is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn publication_service_directory(
+    parent: &Path,
+    name: &str,
+    create_if_missing: bool,
+) -> Result<PathBuf, String> {
+    let parent_canonical = parent.canonicalize().map_err(|error| {
+        format!(
+            "Не удалось проверить родительскую папку публикации {}: {error}",
+            parent.display()
+        )
+    })?;
+    let directory = parent.join(name);
+    match std::fs::symlink_metadata(&directory) {
+        Ok(metadata) => {
+            if publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+                return Err(format!(
+                    "Служебная папка публикации имеет небезопасный тип и заблокирована: {}",
+                    directory.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && create_if_missing => {
+            std::fs::create_dir(&directory).map_err(|create_error| {
+                format!(
+                    "Не удалось создать служебную папку публикации {}: {create_error}",
+                    directory.display()
+                )
+            })?;
+            let metadata = std::fs::symlink_metadata(&directory).map_err(|metadata_error| {
+                format!(
+                    "Не удалось проверить созданную служебную папку {}: {metadata_error}",
+                    directory.display()
+                )
+            })?;
+            if publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+                return Err(format!(
+                    "Созданная служебная папка публикации оказалась небезопасной: {}",
+                    directory.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "Служебная папка публикации отсутствует: {}",
+                directory.display()
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "Не удалось проверить служебную папку публикации {}: {error}",
+                directory.display()
+            ));
+        }
+    }
+    let canonical = directory.canonicalize().map_err(|error| {
+        format!(
+            "Не удалось канонизировать служебную папку публикации {}: {error}",
+            directory.display()
+        )
+    })?;
+    if !canonical.starts_with(&parent_canonical) {
+        return Err(format!(
+            "Служебная папка публикации вышла за границы пользовательского каталога: {}",
+            directory.display()
+        ));
+    }
+    Ok(directory)
+}
+
 fn planned_replacement_backup_path(desired: &Path, reservation_id: &str) -> PathBuf {
     let parent = desired.parent().unwrap_or_else(|| Path::new("."));
     let stem = sanitize_path_component(
@@ -51,9 +137,7 @@ fn publish_stage_replacing_with_backup(
             ));
         }
 
-        let backup_root = parent.join(".dokkomplekt-backups");
-        std::fs::create_dir_all(&backup_root)
-            .map_err(|error| format!("Не удалось создать каталог резервных копий: {error}"))?;
+        let backup_root = publication_service_directory(parent, ".dokkomplekt-backups", true)?;
         if backup.parent() != Some(backup_root.as_path()) {
             return Err("Путь резервной копии безопасной замены вышел за допустимый backup-каталог.".into());
         }
@@ -93,9 +177,7 @@ fn rollback_unverified_publication(
     let parent = output_folder.parent().unwrap_or_else(|| Path::new("."));
     let mut quarantined = None;
     if output_folder.exists() {
-        let failed_root = parent.join(".dokkomplekt-failed");
-        std::fs::create_dir_all(&failed_root)
-            .map_err(|error| format!("Не удалось создать карантин для непроверенного комплекта: {error}"))?;
+        let failed_root = publication_service_directory(parent, ".dokkomplekt-failed", true)?;
         let stem = sanitize_path_component(
             output_folder
                 .file_name()
@@ -145,6 +227,7 @@ fn recover_unverified_batch_publication(
     output_folder: &Path,
     backup_folder: Option<&Path>,
     verification_error: String,
+    retain_publication_guard: bool,
 ) -> String {
     // Files can be restored for the user after a failed read-back, but generated
     // artifacts have already crossed the accounting/counter boundary. Never
@@ -152,7 +235,7 @@ fn recover_unverified_batch_publication(
     // documents still exist and their numbers must not be issued again.
     let rollback = rollback_unverified_publication(output_folder, backup_folder);
     let accounting = commit_generation_access(app, permit);
-    let receipt_cleanup = if accounting.is_ok() {
+    let receipt_cleanup = if accounting.is_ok() && !retain_publication_guard {
         Some(generation_publication::abort_prepared_publication(app, permit))
     } else {
         None
@@ -180,6 +263,7 @@ fn recover_unverified_batch_publication(
             "receipt_cleanup_error": receipt_cleanup_error,
             "usage_refunded": false,
             "counters_refunded": false,
+            "publication_guard_retained": retain_publication_guard,
         }),
     );
 
@@ -197,13 +281,17 @@ fn recover_unverified_batch_publication(
             "Учёт расхода не удалось дофинализировать ({error}); защищённая pre-publication квитанция сохранена для восстановления, возврат лимита не выполнялся."
         ),
     };
-    let receipt_note = receipt_cleanup
-        .as_ref()
-        .and_then(|result| result.as_ref().err())
-        .map(|error| format!(
-            " Pre-publication квитанцию после фиксации расхода удалить не удалось ({error}); она оставлена как дополнительный recovery guard."
-        ))
-        .unwrap_or_default();
+    let receipt_note = if retain_publication_guard {
+        " Pre-publication квитанция сохранена как plan-bound guard от автоматического повторного выпуска.".to_string()
+    } else {
+        receipt_cleanup
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .map(|error| format!(
+                " Pre-publication квитанцию после фиксации расхода удалить не удалось ({error}); она оставлена как дополнительный recovery guard."
+            ))
+            .unwrap_or_default()
+    };
     format!(
         "{verification_error} Публикация не признана успешной. {rollback_note} {accounting_note}{receipt_note}"
     )
@@ -242,6 +330,33 @@ mod publication_collision_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn replacement_rejects_symlinked_backup_root_before_moving_user_output() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("replace-symlink-backup-root");
+        let desired = root.join("Комплект");
+        let stage = root.join(".stage");
+        let external = temp_root("replace-external-backup-root");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(desired.join("old.txt"), "old").unwrap();
+        std::fs::write(stage.join("new.txt"), "new").unwrap();
+        symlink(&external, root.join(".dokkomplekt-backups")).unwrap();
+
+        let planned_backup = planned_replacement_backup_path(&desired, "symlink-attack");
+        let error = publish_stage_replacing_with_backup(&stage, &desired, &planned_backup)
+            .expect_err("symlinked backup root must fail closed");
+        assert!(error.contains("небезопасный тип"), "{error}");
+        assert_eq!(std::fs::read_to_string(desired.join("old.txt")).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(stage.join("new.txt")).unwrap(), "new");
+        assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
+    }
+
     #[test]
     fn replace_policy_without_existing_target_publishes_without_backup() {
         let root = temp_root("replace-new-target");
@@ -258,6 +373,28 @@ mod publication_collision_tests {
         assert_eq!(std::fs::read_to_string(desired.join("new.txt")).unwrap(), "new");
         let _ = std::fs::remove_dir_all(root);
     }
+    #[cfg(unix)]
+    #[test]
+    fn quarantine_rejects_symlinked_failed_root_before_moving_user_output() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("failed-symlink-root");
+        let desired = root.join("Комплект");
+        let external = temp_root("failed-external-root");
+        std::fs::create_dir_all(&desired).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(desired.join("broken.docx"), b"broken").unwrap();
+        symlink(&external, root.join(".dokkomplekt-failed")).unwrap();
+
+        let error = rollback_unverified_publication(&desired, None)
+            .expect_err("symlinked quarantine root must fail closed");
+        assert!(error.contains("небезопасный тип"), "{error}");
+        assert!(desired.join("broken.docx").is_file());
+        assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
+    }
+
     #[test]
     fn failed_new_version_is_quarantined_outside_user_visible_folder() {
         let root = temp_root("rollback-unverified-version");
@@ -380,23 +517,25 @@ mod publication_collision_tests {
 // Keep filesystem publication verification separate from the Tauri command
 // orchestration so the final user-visible DOCX boundary can be unit-tested.
 
-/// Inspect the rendered Word document after strict rendering. This second pass is
-/// deliberately advisory for semantic/role heuristics: DOCX text extraction is
-/// lossy around tables, runs and signature layouts, while the preflight plus strict
-/// renderer already own missing-input enforcement. Only failure to read the actual
-/// rendered Word file remains a hard publication error.
-fn rendered_document_completeness_advisory(
+// Final publication is stricter than preview: placeholders, semantic role blocks,
+// signatures and physical DOCX readability are all mandatory before publication.
+fn require_strict_document_publication(strict: bool) -> Result<(), String> {
+    if strict {
+        Ok(())
+    } else {
+        Err(
+            "Финальная генерация допускается только в строгом режиме. Нестрогий режим доступен только для предварительного просмотра."
+                .into(),
+        )
+    }
+}
+
+fn rendered_document_semantic_error(
     document: &DocumentTemplateSpec,
     template_text: &str,
     semantic_case: &SemanticCase,
-    rendered_path: &Path,
-) -> Result<Option<String>, String> {
-    let rendered_text = extract_docx_text(rendered_path).map_err(|error| {
-        format!(
-            "Не удалось проверить созданный документ «{}»: {error}",
-            document.button_label
-        )
-    })?;
+    rendered_visible_text: &str,
+) -> Option<String> {
     let missing_required = document
         .required_fields
         .iter()
@@ -404,48 +543,57 @@ fn rendered_document_completeness_advisory(
         .cloned()
         .collect::<Vec<_>>();
     let requirements = dokkomplekt_core::required_blocks_for(document, template_text);
-    let unmet_blocks = dokkomplekt_core::unmet_blocks(&requirements, semantic_case, &rendered_text);
+    let unmet_blocks =
+        dokkomplekt_core::unmet_blocks(&requirements, semantic_case, rendered_visible_text);
     if missing_required.is_empty() && unmet_blocks.is_empty() {
-        return Ok(None);
+        return None;
     }
 
     let mut reasons = Vec::new();
     if !missing_required.is_empty() {
         reasons.push(format!(
-            "не подтверждены дополнительные поля: {}",
+            "не подтверждены обязательные поля: {}",
             missing_required.join(", ")
         ));
     }
     if !unmet_blocks.is_empty() {
         reasons.push(format!(
-            "извлечённый текст Word не подтвердил блоки: {}",
+            "в точном отрендеренном содержимом отсутствуют обязательные блоки: {}",
             unmet_blocks.join(", ")
         ));
     }
-    Ok(Some(format!(
-        "Документ «{}» физически создан; дополнительная проверка требует внимания: {}.",
+    Some(format!(
+        "Документ «{}» не опубликован: {}.",
         document.button_label,
         reasons.join("; ")
-    )))
+    ))
 }
 
 fn ensure_rendered_document_complete(
     document: &DocumentTemplateSpec,
     template_text: &str,
     semantic_case: &SemanticCase,
+    rendered_visible_text: &str,
     rendered_path: &Path,
 ) -> Result<(), String> {
-    // Do not destroy a successfully rendered DOCX because a lossy post-render
-    // text heuristic disagrees with the already-completed preflight/strict render.
-    // The advisory is intentionally evaluated (and unit-tested) so the validation
-    // contract does not disappear; the publication boundary remains fail-closed on
-    // unreadable/empty/missing physical files via this read and the final verifier.
-    let _advisory = rendered_document_completeness_advisory(
+    // Physical readability and semantic completeness are independent invariants.
+    // Reopen the actual artifact only to prove that a valid DOCX reached disk;
+    // semantic checks use the exact in-memory visible text produced from the same
+    // rendered OOXML, avoiding false negatives from a second lossy extraction pass.
+    extract_docx_text(rendered_path).map_err(|error| {
+        format!(
+            "Не удалось проверить созданный документ «{}»: {error}",
+            document.button_label
+        )
+    })?;
+    if let Some(error) = rendered_document_semantic_error(
         document,
         template_text,
         semantic_case,
-        rendered_path,
-    )?;
+        rendered_visible_text,
+    ) {
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -629,35 +777,68 @@ mod manual_batch_publication_proof_tests {
     }
 
     #[test]
-    fn post_render_semantic_advisory_does_not_delete_a_valid_docx() {
+    fn readable_medical_docx_without_required_signatures_is_rejected() {
         let root = std::env::temp_dir().join(format!(
-            "dokkomplekt-post-render-advisory-{}-{}",
+            "dokkomplekt-semantic-publication-proof-{}-{}",
             std::process::id(),
             Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let rendered = root.join("Документ.docx");
-        create_docx_from_text(&rendered, "Физически созданный документ").unwrap();
-        let document = generic_document_with_required_name();
-        let case = SemanticCase::default();
+        let rendered = root.join("Дневники.docx");
+        let visible_without_signatures = concat!(
+            "Иванов Иван Иванович\n",
+            "10.05.2026\n",
+            "13.05.2026\n",
+            "F20.0 Шизофрения параноидная\n",
+            "Состояние стабильное."
+        );
+        create_docx_from_text(&rendered, visible_without_signatures).unwrap();
+        let document = DocumentTemplateSpec {
+            id: "diary".into(),
+            button_label: "Дневники наблюдения".into(),
+            template_path: "diary.docx".into(),
+            category: dokkomplekt_core::DomainKind::Medical,
+            role_id: "diary".into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        let mut case = SemanticCase::default();
+        for (field_id, value) in [
+            ("subject.name", "Иванов Иван Иванович"),
+            ("medical.admission_date", "10.05.2026"),
+            ("medical.discharge_date", "13.05.2026"),
+            ("medical.diagnosis", "F20.0 Шизофрения параноидная"),
+        ] {
+            dokkomplekt_core::set_user_value(&mut case, field_id, value);
+        }
 
-        let advisory = rendered_document_completeness_advisory(
+        let error = ensure_rendered_document_complete(
             &document,
-            "{{subject.name}}",
+            "",
             &case,
+            visible_without_signatures,
             &rendered,
         )
-        .unwrap();
-        assert!(advisory.is_some());
-        assert!(ensure_rendered_document_complete(
-            &document,
-            "{{subject.name}}",
-            &case,
-            &rendered,
-        )
-        .is_ok());
-        assert!(rendered.is_file());
+        .expect_err("readable DOCX without required signatures must not publish");
+        assert!(error.contains("Подпись лечащего врача"), "{error}");
+        assert!(error.contains("Подпись заведующего отделением"), "{error}");
+
+        let complete = format!(
+            "{visible_without_signatures}\nЛечащий врач __________________ /____________/\nЗаведующий отделением __________ /____________/"
+        );
+        assert!(rendered_document_semantic_error(&document, "", &case, &complete).is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn final_publication_cannot_disable_strict_rendering() {
+        assert!(require_strict_document_publication(true).is_ok());
+        let error = require_strict_document_publication(false)
+            .expect_err("final publication must be fail-closed");
+        assert!(error.contains("только в строгом режиме"));
     }
 
     #[test]
@@ -676,6 +857,7 @@ mod manual_batch_publication_proof_tests {
             &document,
             "{{subject.name}}",
             &SemanticCase::default(),
+            "",
             &rendered,
         )
         .is_err());

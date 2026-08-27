@@ -38,12 +38,43 @@ pub(crate) fn plan_bound_emergency_completion_exists(
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
         .any(|body| {
-            body.lines()
-                .any(|line| line.trim() == format!("processing_job_sha256={processing_job_sha256}"))
-                && body
-                    .lines()
-                    .any(|line| line.trim() == "status=published_completion_ledgers_failed")
+            let plan_matches = body.lines().any(|line| {
+                line.trim() == format!("processing_job_sha256={processing_job_sha256}")
+            });
+            let terminal_attention = body.lines().any(|line| {
+                matches!(
+                    line.trim(),
+                    "status=published_completion_ledgers_failed"
+                        | "status=unverified_publication_quarantined"
+                )
+            });
+            plan_matches && terminal_attention
         })
+}
+
+pub(crate) fn mark_plan_bound_emergency_guard(
+    source: &Path,
+    source_sha256: &str,
+    processing_job_sha256: &str,
+    status: &str,
+) -> Result<PathBuf, String> {
+    if !matches!(
+        status,
+        "published_completion_ledgers_failed" | "unverified_publication_quarantined"
+    ) {
+        return Err("Недопустимый статус аварийного publication guard.".into());
+    }
+    let marker = crate::workspace_hygiene::processed_marker_path(source);
+    let payload = format!(
+        "sha256={source_sha256}\nprocessing_job_sha256={processing_job_sha256}\nstatus={status}\n"
+    );
+    crate::atomic_write_file(&marker, payload.as_bytes()).map_err(|error| {
+        format!(
+            "Не удалось записать plan-bound аварийный publication guard {}: {error}",
+            marker.display()
+        )
+    })?;
+    Ok(marker)
 }
 
 pub(crate) fn mark_local_completion(
@@ -388,33 +419,62 @@ pub(crate) fn attach_replacement_recovery(
     write_receipt(&path, &receipt)
 }
 
+fn verify_published_output_digest(
+    receipt: &PublicationReceipt,
+    published_output: &Path,
+) -> Result<(), String> {
+    let published_sha256 = output_digest(published_output).map_err(|error| {
+        format!("Нельзя доказать целостность опубликованного результата: {error}")
+    })?;
+    if published_sha256 != receipt.output_sha256 {
+        return Err(format!(
+            "Опубликованный результат не совпал с подготовленным snapshot: ожидался SHA-256 {}, получен {}.",
+            receipt.output_sha256, published_sha256
+        ));
+    }
+    Ok(())
+}
+
+/// Verify that the bytes which crossed the filesystem publication boundary are
+/// exactly the bytes protected by the Prepared receipt. An `Err` means the
+/// publication itself is *unverified* and must never be reported as success.
+///
+/// `Ok(warnings)` means byte identity is proven. A warning is possible only when
+/// persisting the Published phase failed after the digest already matched; callers
+/// may then keep the verified artifact and conservatively retain the receipt.
 pub(crate) fn confirm_publication(
     app: &tauri::AppHandle,
     permit: &crate::GenerationPermit,
     published_output: &Path,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     use tauri::Manager as _;
 
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
+    let app_data = app.path().app_data_dir().map_err(|error| {
+        format!("Не удалось получить app-data для проверки публикации: {error}")
+    })?;
     let path = receipt_path(&app_data, &permit.reservation.reservation_id);
-    let mut receipt = load_receipt(&path)?;
+    let mut receipt = load_receipt(&path).map_err(|error| {
+        format!(
+            "Нельзя доказать целостность публикации: pre-publication квитанция недоступна: {error}"
+        )
+    })?;
     if !supported_receipt(&receipt) || receipt.reservation_id != permit.reservation.reservation_id {
-        return Err("Квитанция публикации не соответствует резервации генерации.".into());
-    }
-    let published_sha256 = output_digest(published_output)?;
-    if published_sha256 != receipt.output_sha256 {
         return Err(
-            "Опубликованный результат не совпал с подготовленным snapshot; автоматическая финализация остановлена."
+            "Нельзя доказать целостность публикации: квитанция не соответствует резервации генерации."
                 .into(),
         );
     }
+    verify_published_output_digest(&receipt, published_output)?;
+
     receipt.schema = RECEIPT_SCHEMA;
     receipt.phase = Some(PublicationPhase::Published);
     receipt.published_unix = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-    write_receipt(&path, &receipt)
+    match write_receipt(&path, &receipt) {
+        Ok(()) => Ok(Vec::new()),
+        Err(error) => Ok(vec![format!(
+            "Байты опубликованного результата подтверждены SHA-256, но durable-квитанцию не удалось перевести в состояние published: {error}"
+        )]),
+    }
 }
 
 pub(crate) fn abort_prepared_publication(
@@ -572,6 +632,7 @@ fn restore_interrupted_replacement(
     if !backup.exists() {
         return Ok(());
     }
+    publication_service_directory(target_parent, ".dokkomplekt-backups", false)?;
     let metadata = std::fs::symlink_metadata(backup)
         .map_err(|error| format!("Не удалось проверить резервную копию после сбоя: {error}"))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -830,6 +891,62 @@ mod tests {
         assert!(!json.contains("fio"));
     }
 
+    #[test]
+    fn publication_digest_proof_rejects_any_post_prepare_change() {
+        let root = temp_root("digest-proof");
+        std::fs::create_dir_all(&root).unwrap();
+        let published = root.join("Комплект");
+        std::fs::create_dir_all(&published).unwrap();
+        std::fs::write(published.join("Документ.docx"), b"exact prepared bytes").unwrap();
+        let expected = output_digest(&published).unwrap();
+        let receipt = PublicationReceipt {
+            schema: RECEIPT_SCHEMA,
+            reservation_id: "reservation".into(),
+            output_sha256: expected,
+            phase: Some(PublicationPhase::Prepared),
+            prepared_unix: Some(1),
+            published_unix: None,
+            processing_job_sha256: None,
+            source_sha256: None,
+            processing_fingerprint: None,
+            recovery_blob: None,
+        };
+        assert!(verify_published_output_digest(&receipt, &published).is_ok());
+        std::fs::write(published.join("Документ.docx"), b"changed after prepare").unwrap();
+        let error = verify_published_output_digest(&receipt, &published)
+            .expect_err("changed published bytes must never confirm");
+        assert!(
+            error.contains("не совпал с подготовленным snapshot"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unverified_emergency_guard_is_plan_bound_and_blocks_only_same_job() {
+        let root = temp_root("unverified-guard");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("Исходник.docx");
+        std::fs::write(&source, b"source").unwrap();
+        let job = "a".repeat(64);
+        mark_plan_bound_emergency_guard(
+            &source,
+            &"b".repeat(64),
+            &job,
+            "unverified_publication_quarantined",
+        )
+        .unwrap();
+        assert!(plan_bound_emergency_completion_exists(&source, &job));
+        assert!(!plan_bound_emergency_completion_exists(
+            &source,
+            &"c".repeat(64)
+        ));
+        assert!(
+            mark_plan_bound_emergency_guard(&source, &"b".repeat(64), &job, "retryable",).is_err()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn temp_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "dokkomplekt-publication-{label}-{}-{}",
@@ -873,6 +990,38 @@ mod tests {
         assert_eq!(std::fs::read(target.join("old.docx")).unwrap(), b"old");
         assert!(!backup.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_replacement_never_follows_symlinked_backup_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("replace-symlink-recovery");
+        let target = root.join("Комплект");
+        let external = temp_root("replace-symlink-recovery-external");
+        let external_backup = external.join("Комплект.backup-test");
+        std::fs::create_dir_all(&external_backup).unwrap();
+        std::fs::write(external_backup.join("old.docx"), b"old").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        symlink(&external, root.join(".dokkomplekt-backups")).unwrap();
+        let backup = root
+            .join(".dokkomplekt-backups")
+            .join("Комплект.backup-test");
+        let context = PublicationRecoveryContext {
+            stage_location: root.join(".stage").display().to_string(),
+            counter_reservations: Vec::new(),
+            replacement_target: Some(target.display().to_string()),
+            replacement_backup: Some(backup.display().to_string()),
+        };
+        let mut report = PublicationReconciliationReport::default();
+        let error = restore_interrupted_replacement(&context, &mut report)
+            .expect_err("recovery must not traverse symlinked backup root");
+        assert!(error.contains("небезопасный тип"), "{error}");
+        assert!(!target.exists());
+        assert!(external_backup.join("old.docx").is_file());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
     }
 
     #[cfg(any(unix, windows))]

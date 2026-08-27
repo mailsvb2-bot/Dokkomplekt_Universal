@@ -504,6 +504,16 @@ fn validate_safe_template_archive<R: Read + Seek>(mut archive: ZipArchive<R>) ->
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderedDocxProof {
+    pub render_result: RenderResult,
+    /// Exact visible text derived from every rendered Word text-bearing part
+    /// before the archive is published. This is the semantic publication proof;
+    /// unlike reopening the finished DOCX it cannot drift from the bytes rendered
+    /// in this operation because it is produced from the same in-memory OOXML.
+    pub visible_text: String,
+}
+
 pub fn render_docx_file(
     template_path: &Path,
     output_path: &Path,
@@ -520,6 +530,17 @@ pub fn render_docx_file_with_watermark(
     strict: bool,
     watermark: Option<&str>,
 ) -> DocxResult<RenderResult> {
+    render_docx_file_with_watermark_proof(template_path, output_path, case, strict, watermark)
+        .map(|proof| proof.render_result)
+}
+
+pub fn render_docx_file_with_watermark_proof(
+    template_path: &Path,
+    output_path: &Path,
+    case: &SemanticCase,
+    strict: bool,
+    watermark: Option<&str>,
+) -> DocxResult<RenderedDocxProof> {
     validate_safe_template_file(template_path)?;
     let input = File::open(template_path)?;
     let mut archive = ZipArchive::new(input)?;
@@ -533,6 +554,7 @@ pub fn render_docx_file_with_watermark(
     };
     let mut found_main = false;
     let mut total_uncompressed = 0_u64;
+    let mut visible_parts = Vec::new();
 
     // Validate the whole archive and render every text-bearing part before
     // touching the destination. Large or suspicious archives fail closed.
@@ -578,6 +600,10 @@ pub fn render_docx_file_with_watermark(
                 aggregate.warnings.push("license_watermark_applied".into());
             }
             aggregate.output_text = output_xml.clone();
+        }
+        let visible = xml_to_text(&output_xml);
+        if !visible.trim().is_empty() {
+            visible_parts.push(visible);
         }
         rendered_parts.insert(name, output_xml.into_bytes());
     }
@@ -641,7 +667,10 @@ pub fn render_docx_file_with_watermark(
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
     }
-    Ok(aggregate)
+    Ok(RenderedDocxProof {
+        render_result: aggregate,
+        visible_text: visible_parts.join("\n"),
+    })
 }
 
 fn inject_watermark_paragraph(xml: &str, watermark: &str) -> DocxResult<String> {
@@ -1740,7 +1769,11 @@ mod tests {
             Some("<w:hdr><w:p><w:r><w:t>Шапка {{document.number}}</w:t></w:r></w:p></w:hdr>"),
         );
         let case = case_with(&[("org.name", "Ромашка"), ("document.number", "148")]);
-        render_docx_file(&tpl, &out, &case, true).expect("render all text parts");
+        let proof = render_docx_file_with_watermark_proof(&tpl, &out, &case, true, None)
+            .expect("render all text parts");
+        assert!(proof.visible_text.contains("Тело Ромашка"));
+        assert!(proof.visible_text.contains("Шапка 148"));
+        assert!(!proof.visible_text.contains("{{"));
         let extracted = extract_docx_text(&out).expect("extract all text parts");
         assert!(extracted.contains("Тело Ромашка"));
         assert!(extracted.contains("Шапка 148"));

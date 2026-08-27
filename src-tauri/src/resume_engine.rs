@@ -140,7 +140,10 @@ pub(crate) fn document_input_fingerprint(
         .map_err(|error| format!("Не удалось сериализовать зависимости документа: {error}"))?;
 
     let mut digest = Sha256::new();
-    digest.update(b"dokkomplekt-resume-v2\0");
+    // v3 invalidates checkpoints created before exact semantic publication proof
+    // became mandatory. Reusing an old, merely readable DOCX would otherwise bypass
+    // the new required-block/signature invariant.
+    digest.update(b"dokkomplekt-resume-v3\0");
     digest.update(document_id.as_bytes());
     digest.update([0_u8]);
     digest.update(Sha256::digest(&template_bytes));

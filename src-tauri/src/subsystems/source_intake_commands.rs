@@ -67,22 +67,39 @@ fn replace_case_from_new_source(target: &mut SemanticCase, parsed: SemanticCase)
     *target = parsed;
 }
 
+fn lock_source_session_state(
+    state: &AppState,
+) -> Result<
+    (
+        std::sync::MutexGuard<'_, Option<universal_intake::RetainedUploadedSource>>,
+        std::sync::MutexGuard<'_, Option<SourceProvenance>>,
+    ),
+    String,
+> {
+    // Acquire both fallible in-memory locks before the durable state transaction.
+    // A poisoned lock must never make an intake command report failure after the
+    // new case has already been committed to SQLite. Keep one global lock order
+    // (retained source -> provenance) to avoid cross-command deadlocks.
+    let retained = state
+        .retained_uploaded_source
+        .lock()
+        .map_err(|_| "uploaded source state lock failed")?;
+    let provenance = state
+        .source_provenance
+        .lock()
+        .map_err(|_| "source provenance state lock failed")?;
+    Ok((retained, provenance))
+}
+
 #[tauri::command]
 fn reset_case(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<SemanticCase, String> {
+    let (mut retained, mut provenance) = lock_source_session_state(&state)?;
     let result = transact_default_state(&app, &state, |snapshot| {
         snapshot.semantic_case = SemanticCase::default();
         Ok((snapshot.semantic_case.clone(), true))
     })?;
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")?
-        .take();
+    retained.take();
+    provenance.take();
     Ok(result)
 }
 
@@ -101,6 +118,7 @@ fn parse_source(
             learned.len()
         ));
     }
+    let (mut retained, mut source_provenance) = lock_source_session_state(&state)?;
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
@@ -122,15 +140,8 @@ fn parse_source(
             true,
         ))
     })?;
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    *state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")? = Some(provenance);
+    retained.take();
+    *source_provenance = Some(provenance);
     Ok(response)
 }
 
@@ -282,6 +293,7 @@ fn parse_source_file_bytes(
             learned.len()
         ));
     }
+    let (mut retained_slot, mut provenance_slot) = lock_source_session_state(&state)?;
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
@@ -308,14 +320,8 @@ fn parse_source_file_bytes(
         ))
     })?;
     drop(upload_session);
-    *state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")? = Some(retained_source);
-    *state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")? = Some(provenance);
+    *retained_slot = Some(retained_source);
+    *provenance_slot = Some(provenance);
     Ok(response)
 }
 
@@ -393,6 +399,7 @@ fn parse_web_source(
             learned.len()
         ));
     }
+    let (mut retained, mut source_provenance) = lock_source_session_state(&state)?;
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
@@ -417,15 +424,8 @@ fn parse_web_source(
             true,
         ))
     })?;
-    state
-        .retained_uploaded_source
-        .lock()
-        .map_err(|_| "uploaded source state lock failed")?
-        .take();
-    *state
-        .source_provenance
-        .lock()
-        .map_err(|_| "source provenance state lock failed")? = Some(provenance);
+    retained.take();
+    *source_provenance = Some(provenance);
     Ok(response)
 }
 

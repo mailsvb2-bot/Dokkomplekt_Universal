@@ -968,7 +968,7 @@ fn perform_created_documents_intake(
                             &doc.category,
                             &doc.role_id,
                         );
-                        render_docx_with_assets(
+                        let proof = render_docx_with_assets(
                             app,
                             template_snapshot.path(),
                             &out_path,
@@ -981,6 +981,7 @@ fn perform_created_documents_intake(
                             doc,
                             &template_text,
                             &render_case,
+                            &proof.visible_text,
                             &out_path,
                         )?;
                         rerendered_documents = rerendered_documents.saturating_add(1);
@@ -1113,18 +1114,89 @@ fn perform_created_documents_intake(
                     ));
                 }
             };
-            // The filesystem publication is the irreversible business boundary.
-            // From this point onward the output is never deleted and accounting is
-            // never refunded merely because best-effort metadata finalization fails.
+            // Filesystem publication is irreversible: never refund or silently delete after this boundary.
             case_run.mark_business_terminal();
-            let mut publication_warnings = Vec::new();
-            if let Err(error) =
-                generation_publication::confirm_publication(app, &permit, &patient_dir)
-            {
-                publication_warnings.push(format!(
-                    "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
-                ));
-            }
+            let mut publication_warnings = match generation_publication::confirm_publication(
+                app,
+                &permit,
+                &patient_dir,
+            ) {
+                Ok(warnings) => warnings,
+                Err(error) => {
+                    let recovery_message = recover_unverified_batch_publication(
+                        app,
+                        &permit,
+                        &patient_dir,
+                        None,
+                        error,
+                        true,
+                    );
+                    let emergency_guard = generation_publication::mark_plan_bound_emergency_guard(
+                        &source,
+                        &source_sha256,
+                        &processing_job_sha256,
+                        "unverified_publication_quarantined",
+                    );
+                    let queue_guard = if let Some(lease) = central_queue_lease.as_mut() {
+                        lease.complete().or_else(|queue_error| {
+                            mark_shared_completion(&source, &processing_job_sha256)
+                                .map(|_| ())
+                                .map_err(|shared_error| {
+                                    format!(
+                                        "central queue: {queue_error}; shared guard: {shared_error}"
+                                    )
+                                })
+                        })
+                    } else {
+                        mark_shared_completion(&source, &processing_job_sha256).map(|_| ())
+                    };
+                    let _ = case_run.finish(
+                        "attention",
+                        None,
+                        &[],
+                        &[],
+                        Some(&recovery_message),
+                    );
+                    let emergency_guard_status = emergency_guard
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|error| format!("ERROR: {error}"));
+                    let queue_guard_status = queue_guard
+                        .as_ref()
+                        .map(|_| "persisted".to_string())
+                        .unwrap_or_else(|error| format!("ERROR: {error}"));
+                    let details = serde_json::json!({
+                        "source_sha256": source_sha256,
+                        "processing_job_sha256": processing_job_sha256,
+                        "emergency_guard": emergency_guard_status,
+                        "queue_guard": queue_guard_status,
+                        "message": recovery_message,
+                    });
+                    let _ = create_automation_exception(
+                        app,
+                        "unverified_publication",
+                        &source.display().to_string(),
+                        "Комплект физически публиковался, но проверка точных байтов не прошла. Результат помещён в карантин, автоматический повтор заблокирован.",
+                        &details,
+                    );
+                    let _ = append_audit_event(
+                        app,
+                        "unverified_publication_attention",
+                        &source_sha256,
+                        &details,
+                    );
+                    return Ok(CreatedDocumentsIntakeResponse {
+                        status: "attention".into(),
+                        patient_folder: None,
+                        created_files: Vec::new(),
+                        created_documents: Vec::new(),
+                        missing: Vec::new(),
+                        attention_file: None,
+                        print_triage: None,
+                        message: recovery_message,
+                    });
+                }
+            };
             if let Err(error) = ensure_generation_inputs_current(
                 &source,
                 &source_sha256,
@@ -1278,12 +1350,11 @@ fn perform_created_documents_intake(
                     // Never claim that published files were rolled back. If all ordinary
                     // ledgers fail, keep either the explicit emergency marker or the
                     // pre-publication journal as the retry guard.
-                    let marker = workspace_hygiene::processed_marker_path(&source);
-                    std::fs::write(
-                        &marker,
-                        format!(
-                            "sha256={source_sha256}\nprocessing_job_sha256={processing_job_sha256}\nstatus=published_completion_ledgers_failed\n"
-                        ),
+                    generation_publication::mark_plan_bound_emergency_guard(
+                        &source,
+                        &source_sha256,
+                        &processing_job_sha256,
+                        "published_completion_ledgers_failed",
                     )
                     .is_ok()
                 } else {

@@ -9,11 +9,18 @@ import {
 } from '../lib/api';
 import { arrayBufferToBase64, readFileBytes } from '../lib/appSupport';
 import { MEDICAL_PROFILE_QUICK_OPTION_PRESETS } from '../data/medicalProfilePresets';
+import {
+  MEDICAL_DIARY_FINAL_PREFIX,
+  MEDICAL_DIARY_REGULAR_PREFIX,
+  isFinalMedicalDiaryText,
+  medicalDiagnosisKey,
+  medicalDiaryFileKey,
+  safeSourceKey,
+  uniqueMedicalDiaryTexts,
+} from '../lib/medicalDiarySources';
 
 const MATERIAL_INDEX_BLOCK = 'professional.materials.index';
 const MEDICAL_RVK_OPTIONS_BLOCK = 'professional.medical.rvk.quick_options';
-const MEDICAL_DIARY_REGULAR_PREFIX = 'professional.medical.diary.regular.';
-const MEDICAL_DIARY_FINAL_PREFIX = 'professional.medical.diary.final.';
 
 interface MaterialIndexEntry {
   block_id: string;
@@ -64,38 +71,8 @@ function domainKey(domain: DomainKind): string {
   return domain.toLowerCase();
 }
 
-export function safeKey(value: string): string {
-  return value
-    .replace(/\.[^.]+$/, '')
-    .toLocaleLowerCase('ru-RU')
-    .replace(/ё/g, 'е')
-    .replace(/^(?:дневники?|дневниковые|тексты?|даты|шаблоны?)[\s._—–:;,-]*/u, '')
-    .replace(/[^\p{L}\p{N}]+/gu, '')
-    .slice(0, 96);
-}
-
-function medicalIcdCodeKey(value: string): string {
-  const folded = value.toLocaleUpperCase('ru-RU').replace(/Ё/g, 'Е');
-  const icdCode = folded.match(/(?:^|[^\p{L}\p{N}])([A-Z]\s*\d{2}(?:\s*\.\s*\d{1,4})?)(?=$|[^\p{L}\p{N}])/u)?.[1];
-  return icdCode
-    ? icdCode.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '').slice(0, 32)
-    : '';
-}
-
-export function medicalDiagnosisKey(value: string): string {
-  const codeKey = medicalIcdCodeKey(value);
-  if (codeKey) return codeKey;
-  return value
-    .toLocaleLowerCase('ru-RU')
-    .replace(/ё/g, 'е')
-    .replace(/[^\p{L}\p{N}]+/gu, '')
-    .slice(0, 160);
-}
-
-export function medicalDiaryFileKey(fileName: string): string {
-  const stem = fileName.replace(/\.[^.]+$/, '');
-  return medicalIcdCodeKey(stem) || safeKey(fileName);
-}
+export const safeKey = safeSourceKey;
+export { medicalDiagnosisKey, medicalDiaryFileKey };
 
 function isDiaryRole(roleId: string): boolean {
   const role = roleId.trim().toLowerCase();
@@ -270,7 +247,7 @@ export function AdditionalMaterialsPanel(props: {
           blockedKeys.set(key, 'текст не найден');
           continue;
         }
-        const prefix = isFinalDiaryText(file.name) ? MEDICAL_DIARY_FINAL_PREFIX : MEDICAL_DIARY_REGULAR_PREFIX;
+        const prefix = isFinalMedicalDiaryText(file.name) ? MEDICAL_DIARY_FINAL_PREFIX : MEDICAL_DIARY_REGULAR_PREFIX;
         const blockId = `${prefix}${key}`;
         const bucket = grouped.get(blockId) ?? { values: [], indexes: [] };
         bucket.values.push(content);
@@ -305,7 +282,7 @@ export function AdditionalMaterialsPanel(props: {
           blockById.set(blockId, {
             blockId,
             title: `Медицинские дневники: ${key}`,
-            content: uniqueTexts(bucket.values).join('\n\n'),
+            content: uniqueMedicalDiaryTexts(bucket.values).join('\n\n'),
           });
         }
         // Canonical empty slots are deliberate tombstones. They suppress legacy

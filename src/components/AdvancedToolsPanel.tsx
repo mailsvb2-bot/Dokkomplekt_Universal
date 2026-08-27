@@ -27,6 +27,7 @@ import {
   prepareTemplateSetup,
   previewMailMerge,
   renderMailMerge,
+  replaceClauseBlocks,
   registerLearnedTemplate,
   rollbackTemplateVersion,
   saveClauseBlock,
@@ -36,6 +37,14 @@ import {
 } from '../lib/api';
 import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
 import { STARTER_PACKS, type StarterPackAsset } from '../data/starterPacks';
+import {
+  MEDICAL_DIARY_FINAL_PREFIX,
+  MEDICAL_DIARY_REGULAR_PREFIX,
+  isFinalMedicalDiaryText,
+  medicalDiagnosisKey,
+  medicalDiaryFileKey,
+  uniqueMedicalDiaryTexts,
+} from '../lib/medicalDiarySources';
 
 interface Props {
   documents: DocumentTemplateSpec[];
@@ -46,22 +55,6 @@ interface Props {
 }
 
 const YEAR = new Date().getFullYear();
-const MEDICAL_DIARY_REGULAR_PREFIX = 'professional.medical.diary.regular.';
-const MEDICAL_DIARY_FINAL_PREFIX = 'professional.medical.diary.final.';
-
-function diarySourceKey(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase('ru-RU')
-    .replace(/ё/g, 'е')
-    .replace(/[^\p{L}\p{N}]+/gu, '');
-}
-
-function diagnosisFromDiaryFileName(fileName: string): string {
-  const stem = fileName.replace(/\.[^.]+$/, '').trim();
-  const icdCode = stem.match(/(?:^|[^\p{L}\p{N}])([A-Z]\d{2}(?:\.\d{1,4})?)(?=$|[^\p{L}\p{N}])/iu)?.[1];
-  return icdCode ?? stem;
-}
 
 export function AdvancedToolsPanel({
   documents,
@@ -278,34 +271,58 @@ export function AdvancedToolsPanel({
   async function importMedicalDiaryTexts(files: File[]) {
     if (!files.length) return;
     const result = await execute('импорт текстов дневников', async () => {
-      let current = blocks;
+      const buckets = new Map<string, { regular: string[]; final: string[] }>();
       let imported = 0;
       for (const file of files) {
         const supported = /\.(txt|docx|docm)$/i.test(file.name);
         if (!supported) continue;
-        const diagnosis = diagnosisFromDiaryFileName(file.name);
-        const key = diarySourceKey(diagnosis);
+        const key = medicalDiaryFileKey(file.name);
         const content = /\.txt$/i.test(file.name)
           ? (await file.text()).trim()
           : (await importLearningExampleFile(file.name, toBase64(await readBytes(file)))).extracted_text.trim();
-        if (!key || !content) continue;
-        current = await saveClauseBlock(
-          `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
-          `Тексты дневников: ${diagnosis}`,
-          content,
-        );
+        if (!key) continue;
+        if (!content) {
+          throw new Error(`Файл «${file.name}» прочитан, но не содержит текста; набор дневников не изменён.`);
+        }
+        const bucket = buckets.get(key) ?? { regular: [], final: [] };
+        const role = isFinalMedicalDiaryText(file.name) ? bucket.final : bucket.regular;
+        role.push(content);
+        buckets.set(key, bucket);
         imported += 1;
       }
-      return { current, imported };
+      if (!buckets.size) return { current: blocks, imported };
+
+      const deleteBlockIds: string[] = [];
+      const replacements: Array<{ blockId: string; title: string; content: string }> = [];
+      for (const [key, bucket] of buckets) {
+        deleteBlockIds.push(
+          `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
+          `${MEDICAL_DIARY_FINAL_PREFIX}${key}`,
+        );
+        replacements.push(
+          {
+            blockId: `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
+            title: `Тексты дневников: ${key}`,
+            content: uniqueMedicalDiaryTexts(bucket.regular).join('\n\n'),
+          },
+          {
+            blockId: `${MEDICAL_DIARY_FINAL_PREFIX}${key}`,
+            title: `Итоговый дневник: ${key}`,
+            content: uniqueMedicalDiaryTexts(bucket.final).join('\n\n'),
+          },
+        );
+      }
+      await replaceClauseBlocks(deleteBlockIds, replacements);
+      return { current: await listClauseBlocks(), imported };
     });
     if (!result) return;
     setBlocks(result.current);
-    onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; данные сохранены локально.`);
+    onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; данные сохранены локально атомарным набором.`);
   }
 
   async function saveMedicalFinalDiary() {
     const diagnosis = diaryFinalDiagnosis.trim();
-    const key = diarySourceKey(diagnosis);
+    const key = medicalDiagnosisKey(diagnosis);
     if (!key || !diaryFinalText.trim()) {
       onStatus('Для итогового дневника укажите диагноз и подтверждённый специалистом текст.');
       return;

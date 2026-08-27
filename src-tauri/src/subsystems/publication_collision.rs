@@ -1,8 +1,23 @@
 // Explicit output-collision publication policies.
 
+fn planned_replacement_backup_path(desired: &Path, reservation_id: &str) -> PathBuf {
+    let parent = desired.parent().unwrap_or_else(|| Path::new("."));
+    let stem = sanitize_path_component(
+        desired
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Комплект"),
+    );
+    let digest = hex::encode(Sha256::digest(reservation_id.as_bytes()));
+    parent
+        .join(".dokkomplekt-backups")
+        .join(format!("{stem}.backup-{}", &digest[..24]))
+}
+
 fn publish_stage_replacing_with_backup(
     stage: &Path,
     desired: &Path,
+    backup: &Path,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     let parent = desired.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -15,15 +30,12 @@ fn publish_stage_replacing_with_backup(
                 .unwrap_or("output")
         )
     ));
-    let lock = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-        .map_err(|error| {
-            format!(
-                "Не удалось получить эксклюзивную блокировку безопасной замены комплекта: {error}"
-            )
-        })?;
+    let Some(lock) = try_acquire_publication_lock(&lock_path)? else {
+        return Err(
+            "Безопасная замена уже выполняется другим живым процессом; повторите операцию после её завершения."
+                .into(),
+        );
+    };
 
     let result = (|| -> Result<(PathBuf, Option<PathBuf>), String> {
         if !desired.exists() {
@@ -42,27 +54,22 @@ fn publish_stage_replacing_with_backup(
         let backup_root = parent.join(".dokkomplekt-backups");
         std::fs::create_dir_all(&backup_root)
             .map_err(|error| format!("Не удалось создать каталог резервных копий: {error}"))?;
-        let stem = sanitize_path_component(
-            desired
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("Комплект"),
-        );
-        let backup = backup_root.join(format!(
-            "{stem}.backup-{}-{}",
-            time::OffsetDateTime::now_utc().unix_timestamp(),
-            Uuid::new_v4()
-        ));
+        if backup.parent() != Some(backup_root.as_path()) {
+            return Err("Путь резервной копии безопасной замены вышел за допустимый backup-каталог.".into());
+        }
+        if backup.exists() {
+            return Err("Плановая резервная копия безопасной замены уже существует; публикация остановлена.".into());
+        }
 
-        std::fs::rename(desired, &backup).map_err(|error| {
+        std::fs::rename(desired, backup).map_err(|error| {
             format!(
                 "Не удалось сначала сохранить существующий комплект в резервную копию: {error}"
             )
         })?;
         match std::fs::rename(stage, desired) {
-            Ok(()) => Ok((desired.to_path_buf(), Some(backup))),
+            Ok(()) => Ok((desired.to_path_buf(), Some(backup.to_path_buf()))),
             Err(publish_error) => {
-                match std::fs::rename(&backup, desired) {
+                match std::fs::rename(backup, desired) {
                     Ok(()) => Err(format!(
                         "Новый комплект не опубликован ({publish_error}); предыдущая версия восстановлена."
                     )),
@@ -76,7 +83,6 @@ fn publish_stage_replacing_with_backup(
     })();
 
     drop(lock);
-    let _ = std::fs::remove_file(&lock_path);
     result
 }
 
@@ -225,7 +231,9 @@ mod publication_collision_tests {
         std::fs::write(desired.join("old.txt"), "old").unwrap();
         std::fs::write(stage.join("new.txt"), "new").unwrap();
 
-        let (published, backup) = publish_stage_replacing_with_backup(&stage, &desired).unwrap();
+        let planned_backup = planned_replacement_backup_path(&desired, "test-reservation");
+        let (published, backup) =
+            publish_stage_replacing_with_backup(&stage, &desired, &planned_backup).unwrap();
         let backup = backup.expect("existing target must be backed up");
         assert_eq!(published, desired);
         assert_eq!(std::fs::read_to_string(desired.join("new.txt")).unwrap(), "new");
@@ -242,7 +250,9 @@ mod publication_collision_tests {
         std::fs::create_dir_all(&stage).unwrap();
         std::fs::write(stage.join("new.txt"), "new").unwrap();
 
-        let (published, backup) = publish_stage_replacing_with_backup(&stage, &desired).unwrap();
+        let planned_backup = planned_replacement_backup_path(&desired, "test-reservation-new");
+        let (published, backup) =
+            publish_stage_replacing_with_backup(&stage, &desired, &planned_backup).unwrap();
         assert_eq!(published, desired);
         assert!(backup.is_none());
         assert_eq!(std::fs::read_to_string(desired.join("new.txt")).unwrap(), "new");
@@ -285,6 +295,84 @@ mod publication_collision_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn stale_dead_process_publication_lock_is_reclaimed() {
+        let root = temp_root("stale-publication-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let lock_path = root.join("publication.lock");
+        std::fs::write(
+            &lock_path,
+            format!("host={}\npid=4294967294\n", processing_lock_host_id()),
+        )
+        .unwrap();
+
+        let lock = try_acquire_publication_lock(&lock_path)
+            .unwrap()
+            .expect("dead-process lock must be reclaimed");
+        assert_eq!(publication_lock_pid(&lock_path), Some(std::process::id()));
+        drop(lock);
+        assert!(!lock_path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_process_publication_lock_is_not_stolen() {
+        let root = temp_root("live-publication-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let lock_path = root.join("publication.lock");
+        std::fs::write(
+            &lock_path,
+            format!(
+                "host={}\npid={}\n",
+                processing_lock_host_id(),
+                std::process::id()
+            ),
+        )
+        .unwrap();
+
+        assert!(try_acquire_publication_lock(&lock_path).unwrap().is_none());
+        assert!(lock_path.exists());
+        std::fs::remove_file(&lock_path).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_foreign_host_publication_lock_is_not_stolen() {
+        let root = temp_root("foreign-publication-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let lock_path = root.join("publication.lock");
+        std::fs::write(&lock_path, "host=other-machine\npid=4294967294\n").unwrap();
+
+        assert!(try_acquire_publication_lock(&lock_path).unwrap().is_none());
+        assert!(lock_path.exists());
+        std::fs::remove_file(&lock_path).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dropping_old_lock_does_not_delete_replacement_lock() {
+        let root = temp_root("publication-lock-token");
+        std::fs::create_dir_all(&root).unwrap();
+        let lock_path = root.join("publication.lock");
+        let lock = try_acquire_publication_lock(&lock_path)
+            .unwrap()
+            .expect("lock must be acquired");
+        std::fs::remove_file(&lock_path).unwrap();
+        std::fs::write(
+            &lock_path,
+            format!(
+                "host={}\npid={}\ntoken=replacement\n",
+                processing_lock_host_id(),
+                std::process::id()
+            ),
+        )
+        .unwrap();
+
+        drop(lock);
+        assert!(lock_path.exists());
+        std::fs::remove_file(&lock_path).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 // Manual generation publication proof.

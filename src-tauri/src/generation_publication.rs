@@ -1,4 +1,4 @@
-use dokkomplekt_storage::LocalRepository;
+use dokkomplekt_storage::{CounterValue, LocalRepository, UsageReservation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
@@ -64,8 +64,9 @@ pub(crate) fn mark_local_completion(
     Ok(final_path)
 }
 
-const RECEIPT_SCHEMA: u32 = 2;
-const LEGACY_RECEIPT_SCHEMA: u32 = 1;
+const RECEIPT_SCHEMA: u32 = 3;
+const LEGACY_RECEIPT_SCHEMA_V1: u32 = 1;
+const LEGACY_RECEIPT_SCHEMA_V2: u32 = 2;
 const RECEIPT_DIR: &str = "generation-publication-receipts";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +93,8 @@ struct PublicationReceipt {
     source_sha256: Option<String>,
     #[serde(default)]
     processing_fingerprint: Option<String>,
+    #[serde(default)]
+    recovery_blob: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +102,16 @@ pub(crate) struct PublicationPlanBinding {
     pub processing_job_sha256: String,
     pub source_sha256: String,
     pub processing_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublicationRecoveryContext {
+    staged_output_path: String,
+    counter_reservations: Vec<CounterValue>,
+    #[serde(default)]
+    replacement_target_path: Option<String>,
+    #[serde(default)]
+    replacement_backup_path: Option<String>,
 }
 
 impl PublicationReceipt {
@@ -136,6 +149,7 @@ impl PublicationReceipt {
 #[derive(Debug, Default)]
 pub(crate) struct PublicationReconciliationReport {
     pub finalized: usize,
+    pub rolled_back: usize,
     pub ambiguous: usize,
     pub warnings: Vec<String>,
 }
@@ -151,6 +165,72 @@ fn receipt_path(app_data: &Path, reservation_id: &str) -> PathBuf {
     app_data
         .join(RECEIPT_DIR)
         .join(receipt_name(reservation_id))
+}
+
+#[cfg(unix)]
+fn file_link_count(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.nlink())
+}
+
+#[cfg(windows)]
+fn file_link_count(path: &Path) -> Option<u64> {
+    use std::os::windows::fs::MetadataExt as _;
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.number_of_links() as u64)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_link_count(_path: &Path) -> Option<u64> {
+    None
+}
+
+fn staged_output_definitely_unpublished(context: &PublicationRecoveryContext) -> bool {
+    let path = Path::new(&context.staged_output_path);
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() {
+        return false;
+    }
+    if metadata.is_dir() {
+        return true;
+    }
+    metadata.is_file() && file_link_count(path) == Some(1)
+}
+
+fn recovery_blob(
+    repo: &LocalRepository,
+    staged_output: &Path,
+    counter_reservations: &[CounterValue],
+) -> Result<String, String> {
+    let context = PublicationRecoveryContext {
+        staged_output_path: staged_output.display().to_string(),
+        counter_reservations: counter_reservations.to_vec(),
+        replacement_target_path: None,
+        replacement_backup_path: None,
+    };
+    let json = serde_json::to_string(&context).map_err(|error| error.to_string())?;
+    repo.protect_local_value(&json)
+        .map_err(|error| error.to_string())
+}
+
+fn decode_recovery_blob(
+    repo: &LocalRepository,
+    receipt: &PublicationReceipt,
+) -> Result<Option<PublicationRecoveryContext>, String> {
+    let Some(stored) = receipt.recovery_blob.as_deref() else {
+        return Ok(None);
+    };
+    let json = repo
+        .unprotect_local_value(stored)
+        .map_err(|error| error.to_string())?;
+    serde_json::from_str(&json)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn hash_file(path: &Path, hasher: &mut Sha256) -> Result<(), String> {
@@ -219,8 +299,10 @@ fn load_receipt(path: &Path) -> Result<PublicationReceipt, String> {
 }
 
 fn supported_receipt(receipt: &PublicationReceipt) -> bool {
-    matches!(receipt.schema, LEGACY_RECEIPT_SCHEMA | RECEIPT_SCHEMA)
-        && !receipt.reservation_id.trim().is_empty()
+    matches!(
+        receipt.schema,
+        LEGACY_RECEIPT_SCHEMA_V1 | LEGACY_RECEIPT_SCHEMA_V2 | RECEIPT_SCHEMA
+    ) && !receipt.reservation_id.trim().is_empty()
         && !receipt.output_sha256.trim().is_empty()
 }
 
@@ -228,6 +310,7 @@ pub(crate) fn prepare_publication(
     app: &tauri::AppHandle,
     permit: &crate::GenerationPermit,
     staged_output: &Path,
+    counter_reservations: &[CounterValue],
     plan_binding: Option<&PublicationPlanBinding>,
 ) -> Result<(), String> {
     use tauri::Manager as _;
@@ -236,6 +319,8 @@ pub(crate) fn prepare_publication(
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
+    let state_path = crate::default_state_db_path(app)?;
+    let repo = crate::repository_for(&state_path)?;
     let binding = plan_binding.cloned();
     let receipt = PublicationReceipt {
         schema: RECEIPT_SCHEMA,
@@ -251,11 +336,47 @@ pub(crate) fn prepare_publication(
         processing_fingerprint: binding
             .as_ref()
             .map(|value| value.processing_fingerprint.clone()),
+        recovery_blob: Some(recovery_blob(&repo, staged_output, counter_reservations)?),
     };
     write_receipt(
         &receipt_path(&app_data, &permit.reservation.reservation_id),
         &receipt,
     )
+}
+
+pub(crate) fn attach_replacement_recovery(
+    app: &tauri::AppHandle,
+    permit: &crate::GenerationPermit,
+    target: &Path,
+    backup: &Path,
+) -> Result<(), String> {
+    use tauri::Manager as _;
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let path = receipt_path(&app_data, &permit.reservation.reservation_id);
+    let mut receipt = load_receipt(&path)?;
+    if receipt.schema != RECEIPT_SCHEMA
+        || receipt.reservation_id != permit.reservation.reservation_id
+        || receipt.effective_phase() != PublicationPhase::Prepared
+    {
+        return Err(
+            "Pre-publication квитанция не допускает привязку recovery безопасной замены.".into(),
+        );
+    }
+    let state_path = crate::default_state_db_path(app)?;
+    let repo = crate::repository_for(&state_path)?;
+    let mut context = decode_recovery_blob(&repo, &receipt)?
+        .ok_or_else(|| "Pre-publication квитанция не содержит recovery-контекста.".to_string())?;
+    context.replacement_target_path = Some(target.display().to_string());
+    context.replacement_backup_path = Some(backup.display().to_string());
+    let json = serde_json::to_string(&context).map_err(|error| error.to_string())?;
+    receipt.recovery_blob = Some(
+        repo.protect_local_value(&json)
+            .map_err(|error| error.to_string())?,
+    );
+    write_receipt(&path, &receipt)
 }
 
 pub(crate) fn confirm_publication(
@@ -420,6 +541,96 @@ pub(crate) fn remove_publication_receipt(app_data: &Path, reservation_id: &str) 
     }
 }
 
+fn restore_interrupted_replacement(
+    context: &PublicationRecoveryContext,
+    report: &mut PublicationReconciliationReport,
+) -> Result<(), String> {
+    let (Some(target_raw), Some(backup_raw)) = (
+        context.replacement_target_path.as_deref(),
+        context.replacement_backup_path.as_deref(),
+    ) else {
+        return Ok(());
+    };
+    let target = Path::new(target_raw);
+    let backup = Path::new(backup_raw);
+    let target_parent = target
+        .parent()
+        .ok_or_else(|| "Recovery-путь публикации не имеет родительской папки.".to_string())?;
+    let expected_backup_root = target_parent.join(".dokkomplekt-backups");
+    if backup.parent() != Some(expected_backup_root.as_path()) {
+        return Err("Recovery-путь резервной копии вышел за допустимый каталог backup.".into());
+    }
+    if !backup.exists() {
+        return Ok(());
+    }
+    let metadata = std::fs::symlink_metadata(backup)
+        .map_err(|error| format!("Не удалось проверить резервную копию после сбоя: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("Резервная копия после сбоя имеет небезопасный тип файла.".into());
+    }
+    if target.exists() {
+        report.warnings.push(
+            "После прерванной безопасной замены исходный backup сохранён: пользовательский путь уже занят и не был перезаписан."
+                .into(),
+        );
+        return Ok(());
+    }
+    std::fs::create_dir_all(target_parent).map_err(|error| {
+        format!("Не удалось подготовить папку для восстановления backup: {error}")
+    })?;
+    std::fs::rename(backup, target).map_err(|error| {
+        format!("Не удалось восстановить предыдущий комплект после сбоя: {error}")
+    })?;
+    report.warnings.push(
+        "После прерванной безопасной замены предыдущий пользовательский комплект автоматически восстановлен."
+            .into(),
+    );
+    Ok(())
+}
+
+fn rollback_unpublished_receipt(
+    repo: &mut LocalRepository,
+    receipt: &PublicationReceipt,
+    context: &PublicationRecoveryContext,
+    report: &mut PublicationReconciliationReport,
+) -> Result<bool, String> {
+    if !staged_output_definitely_unpublished(context) {
+        return Ok(false);
+    }
+    restore_interrupted_replacement(context, report)?;
+    let reservation = UsageReservation {
+        reservation_id: receipt.reservation_id.clone(),
+        month_key: String::new(),
+        documents: 0,
+        trial: false,
+    };
+    if !repo
+        .rollback_usage(&reservation)
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(false);
+    }
+    let mut counter_gaps = Vec::new();
+    for counter in context.counter_reservations.iter().rev() {
+        match repo.rollback_counter(counter) {
+            Ok(true) => {}
+            Ok(false) => counter_gaps.push(format!(
+                "{}:{}={}",
+                counter.counter_key, counter.year, counter.value
+            )),
+            Err(error) => counter_gaps.push(format!(
+                "{}:{}={} ({error})",
+                counter.counter_key, counter.year, counter.value
+            )),
+        }
+    }
+    report.rolled_back += 1;
+    if !counter_gaps.is_empty() {
+        report.warnings.push(format!("Неопубликованная генерация отменена и лимит возвращён, но более новые номера не позволяют безопасно откатить: {}.", counter_gaps.join(", ")));
+    }
+    Ok(true)
+}
+
 pub(crate) fn reconcile_publication_receipts(
     app_data: &Path,
     repo: &mut LocalRepository,
@@ -452,6 +663,20 @@ pub(crate) fn reconcile_publication_receipts(
             }
         };
 
+        if receipt.effective_phase() == PublicationPhase::Prepared
+            && receipt.schema == RECEIPT_SCHEMA
+        {
+            match decode_recovery_blob(repo, &receipt) {
+                Ok(Some(context)) => match rollback_unpublished_receipt(repo, &receipt, &context, &mut report) {
+                    Ok(true) => { let _ = std::fs::remove_file(&path); continue; }
+                    Ok(false) => {}
+                    Err(error) => report.warnings.push(format!("Не удалось отменить доказанно неопубликованную генерацию: {error}")),
+                },
+                Ok(None) => report.warnings.push("Pre-publication квитанция нового формата не содержит recovery-контекста; применяется консервативная финализация.".into()),
+                Err(error) => report.warnings.push(format!("Recovery-контекст pre-publication квитанции повреждён ({error}); применяется консервативная финализация.")),
+            }
+        }
+
         match repo.finalize_published_usage(&receipt.reservation_id) {
             Ok(true) => {
                 report.finalized += 1;
@@ -459,7 +684,7 @@ pub(crate) fn reconcile_publication_receipts(
                     PublicationPhase::Prepared => {
                         report.ambiguous += 1;
                         report.warnings.push(
-                            "Обнаружена pre-publication квитанция после прерывания процесса. Резервация дофинализирована консервативно, а квитанция сохранена, чтобы не допустить бесплатного или двойного повтора до ручной проверки."
+                            "Обнаружена pre-publication квитанция после прерывания процесса. Публикация не может быть доказанно исключена, поэтому резервация дофинализирована консервативно, а квитанция сохранена от бесплатного или двойного повтора."
                                 .into(),
                         );
                     }
@@ -497,6 +722,36 @@ pub(crate) fn reconcile_publication_receipts(
     report
 }
 
+fn recover_stale_prepublication_reservations(
+    app_data: &Path,
+    repo: &mut LocalRepository,
+) -> Result<usize, String> {
+    let stale = repo
+        .stale_publication_recovery_reservations(24 * 60)
+        .map_err(|error| error.to_string())?;
+    let mut rolled_back = 0usize;
+    for reservation in stale {
+        let path = receipt_path(app_data, &reservation.reservation_id);
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось безопасно проверить publication receipt {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+        if repo
+            .rollback_usage(&reservation)
+            .map_err(|error| error.to_string())?
+        {
+            rolled_back += 1;
+        }
+    }
+    Ok(rolled_back)
+}
+
 pub(crate) fn recover_startup_generation_state(app: &tauri::AppHandle, repo: &mut LocalRepository) {
     use tauri::Manager as _;
 
@@ -508,6 +763,12 @@ pub(crate) fn recover_startup_generation_state(app: &tauri::AppHandle, repo: &mu
                 report.finalized
             );
         }
+        if report.rolled_back > 0 {
+            eprintln!(
+                "Отменено {} доказанно неопубликованных генераций после сбоя; лимит возвращён.",
+                report.rolled_back
+            );
+        }
         if report.ambiguous > 0 {
             eprintln!(
                 "Обнаружено {} двусмысленных pre-publication состояний; повтор заблокирован до ручной проверки.",
@@ -516,6 +777,15 @@ pub(crate) fn recover_startup_generation_state(app: &tauri::AppHandle, repo: &mu
         }
         for warning in report.warnings {
             eprintln!("Восстановление опубликованной генерации: {warning}");
+        }
+        match recover_stale_prepublication_reservations(&app_data, repo) {
+            Ok(count) if count > 0 => eprintln!(
+                "Возвращён лимит для {count} зависших v3-резерваций без publication receipt."
+            ),
+            Ok(_) => {}
+            Err(error) => eprintln!(
+                "Не удалось безопасно восстановить v3-резервации до publication receipt: {error}"
+            ),
         }
     }
     if let Err(error) = repo.recover_stale_usage_reservations(24 * 60) {
@@ -542,11 +812,77 @@ mod tests {
             processing_job_sha256: Some("job".into()),
             source_sha256: Some("source".into()),
             processing_fingerprint: Some("plan".into()),
+            recovery_blob: Some("enc:v1:opaque".into()),
         };
         let json = serde_json::to_string(&receipt).unwrap();
         assert!(!json.contains("output_path"));
         assert!(!json.contains("source_path"));
         assert!(!json.contains("patient"));
         assert!(!json.contains("fio"));
+    }
+
+    fn temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "dokkomplekt-publication-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn existing_stage_directory_proves_nonpublication() {
+        let root = temp_root("stage-directory");
+        let stage = root.join(".stage");
+        std::fs::create_dir_all(&stage).unwrap();
+        let context = PublicationRecoveryContext {
+            staged_output_path: stage.display().to_string(),
+            counter_reservations: Vec::new(),
+            replacement_target_path: None,
+            replacement_backup_path: None,
+        };
+        assert!(staged_output_definitely_unpublished(&context));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_replacement_restores_previous_directory() {
+        let root = temp_root("replace-restore");
+        let target = root.join("Комплект");
+        let backup = root
+            .join(".dokkomplekt-backups")
+            .join("Комплект.backup-test");
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("old.docx"), b"old").unwrap();
+        let context = PublicationRecoveryContext {
+            staged_output_path: root.join(".stage").display().to_string(),
+            counter_reservations: Vec::new(),
+            replacement_target_path: Some(target.display().to_string()),
+            replacement_backup_path: Some(backup.display().to_string()),
+        };
+        let mut report = PublicationReconciliationReport::default();
+        restore_interrupted_replacement(&context, &mut report).unwrap();
+        assert_eq!(std::fs::read(target.join("old.docx")).unwrap(), b"old");
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn hard_link_marks_single_file_stage_as_ambiguous_after_publication() {
+        let root = temp_root("hard-link-boundary");
+        std::fs::create_dir_all(&root).unwrap();
+        let stage = root.join(".stage.tmp");
+        let published = root.join("document.docx");
+        std::fs::write(&stage, b"document").unwrap();
+        let context = PublicationRecoveryContext {
+            staged_output_path: stage.display().to_string(),
+            counter_reservations: Vec::new(),
+            replacement_target_path: None,
+            replacement_backup_path: None,
+        };
+        assert!(staged_output_definitely_unpublished(&context));
+        std::fs::hard_link(&stage, &published).unwrap();
+        assert!(!staged_output_definitely_unpublished(&context));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

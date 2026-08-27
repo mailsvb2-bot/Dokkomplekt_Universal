@@ -1167,7 +1167,7 @@ fn render_docx(
         return Err(error);
     }
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &reservation.path, None)
+        generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, None)
     {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
@@ -1500,19 +1500,47 @@ fn render_docx_batch(
         return Err(error);
     }
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &stage, None)
+        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, None)
     {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    let replacement_backup = match req.existing_output_policy {
+        ExistingOutputPolicy::Version => None,
+        ExistingOutputPolicy::ReplaceWithBackup => {
+            let backup = planned_replacement_backup_path(
+                &desired_output_folder,
+                &permit.reservation.reservation_id,
+            );
+            if let Err(error) = generation_publication::attach_replacement_recovery(
+                &app,
+                &permit,
+                &desired_output_folder,
+                &backup,
+            ) {
+                let journal_cleanup = generation_publication::abort_prepared_publication(&app, &permit);
+                let _ = std::fs::remove_dir_all(&stage);
+                rollback_counter_reservations(&app, &counter_reservations);
+                if journal_cleanup.is_ok() {
+                    rollback_generation_access(&app, &state, &permit);
+                }
+                return Err(format!(
+                    "Не удалось подготовить recovery безопасной замены: {error}"
+                ));
+            }
+            Some(backup)
+        }
+    };
     let publication = match req.existing_output_policy {
         ExistingOutputPolicy::Version => publish_stage_to_unique_directory(&stage, &desired_output_folder)
             .map(|path| (path, None)),
-        ExistingOutputPolicy::ReplaceWithBackup => {
-            publish_stage_replacing_with_backup(&stage, &desired_output_folder)
-        }
+        ExistingOutputPolicy::ReplaceWithBackup => publish_stage_replacing_with_backup(
+            &stage,
+            &desired_output_folder,
+            replacement_backup.as_deref().expect("replace policy plans backup"),
+        ),
     };
     let (output_folder, backup_folder) = match publication {
         Ok(value) => value,

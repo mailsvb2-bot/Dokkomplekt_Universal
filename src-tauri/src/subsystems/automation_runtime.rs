@@ -1087,6 +1087,7 @@ fn perform_created_documents_intake(
                 app,
                 &permit,
                 &stage,
+                &counter_reservations,
                 Some(&publication_binding),
             ) {
                 let _ = std::fs::remove_dir_all(&stage);

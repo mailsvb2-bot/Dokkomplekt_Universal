@@ -182,7 +182,7 @@ fn render_mail_merge(
         OffsetDateTime::now_utc().date()
     ));
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &stage, None)
+        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, None)
     {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);

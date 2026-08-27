@@ -41,7 +41,7 @@ pub struct UsageReservation {
     pub trial: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CounterValue {
     pub counter_key: String,
     pub year: i32,
@@ -278,6 +278,7 @@ impl LocalRepository {
               documents INTEGER NOT NULL,
               trial INTEGER NOT NULL,
               status TEXT NOT NULL,
+              recovery_protocol TEXT NOT NULL DEFAULT 'legacy_conservative',
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -373,6 +374,11 @@ impl LocalRepository {
             "case_runs",
             "processing_fingerprint",
             "TEXT NOT NULL DEFAULT ''",
+        )?;
+        self.ensure_column(
+            "usage_reservations",
+            "recovery_protocol",
+            "TEXT NOT NULL DEFAULT 'legacy_conservative'",
         )?;
         Ok(())
     }
@@ -624,6 +630,14 @@ impl LocalRepository {
         Ok(())
     }
 
+    pub fn protect_local_value(&self, plaintext: &str) -> StorageResult<String> {
+        self.encode_sensitive(plaintext)
+    }
+
+    pub fn unprotect_local_value(&self, stored: &str) -> StorageResult<String> {
+        self.decode_sensitive(stored)
+    }
+
     pub fn list_clause_blocks(&self) -> StorageResult<Vec<ClauseBlockRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT block_id,title,content,updated_at FROM clause_blocks ORDER BY block_id",
@@ -697,9 +711,9 @@ impl LocalRepository {
         })
     }
 
-    /// Reserves commercial usage under an IMMEDIATE transaction. This is the
-    /// only supported writer path for UI and background processes, preventing
-    /// lost updates and limit bypass by concurrent generation.
+    /// Reserves commercial usage using the legacy conservative crash policy.
+    /// Existing callers keep the historical behavior: stale ambiguous rows are
+    /// finalized rather than refunded.
     pub fn reserve_usage(
         &mut self,
         month_key: &str,
@@ -707,6 +721,49 @@ impl LocalRepository {
         trial: bool,
         monthly_limit: u32,
         trial_total_limit: u32,
+    ) -> StorageResult<UsageReservation> {
+        self.reserve_usage_internal(
+            month_key,
+            documents,
+            trial,
+            monthly_limit,
+            trial_total_limit,
+            "legacy_conservative",
+        )
+    }
+
+    /// Reserves usage for the publication-receipt v3 protocol. If the process
+    /// dies before any receipt exists, startup recovery can prove that no
+    /// publication boundary was crossed and safely refund this reservation.
+    pub fn reserve_usage_with_publication_recovery(
+        &mut self,
+        month_key: &str,
+        documents: u32,
+        trial: bool,
+        monthly_limit: u32,
+        trial_total_limit: u32,
+    ) -> StorageResult<UsageReservation> {
+        self.reserve_usage_internal(
+            month_key,
+            documents,
+            trial,
+            monthly_limit,
+            trial_total_limit,
+            "publication_receipt_v3",
+        )
+    }
+
+    /// Reserves commercial usage under an IMMEDIATE transaction. This is the
+    /// only supported writer path for UI and background processes, preventing
+    /// lost updates and limit bypass by concurrent generation.
+    fn reserve_usage_internal(
+        &mut self,
+        month_key: &str,
+        documents: u32,
+        trial: bool,
+        monthly_limit: u32,
+        trial_total_limit: u32,
+        recovery_protocol: &str,
     ) -> StorageResult<UsageReservation> {
         if documents == 0 {
             return Err(StorageError::Crypto(
@@ -755,8 +812,14 @@ impl LocalRepository {
                 .unwrap_or_default()
         );
         tx.execute(
-            "INSERT INTO usage_reservations(reservation_id,month_key,documents,trial,status) VALUES (?1,?2,?3,?4,'reserved')",
-            params![reservation_id, month_key, requested, if trial { 1 } else { 0 }],
+            "INSERT INTO usage_reservations(reservation_id,month_key,documents,trial,status,recovery_protocol) VALUES (?1,?2,?3,?4,'reserved',?5)",
+            params![
+                reservation_id,
+                month_key,
+                requested,
+                if trial { 1 } else { 0 },
+                recovery_protocol,
+            ],
         )?;
         tx.commit()?;
         Ok(UsageReservation {
@@ -854,13 +917,34 @@ impl LocalRepository {
         Ok(true)
     }
 
-    /// Finalizes old ambiguous reservations conservatively after a hard crash.
-    ///
-    /// Usage is incremented when a reservation is created. A process can die after
-    /// publishing a complete document but before it flips the reservation to
-    /// `committed`; automatically subtracting such a row later creates a quota-bypass
-    /// window. Explicit, observed generation failures still call `rollback_usage` and
-    /// are refunded. Ambiguous crash leftovers are therefore finalized without a refund.
+    /// Returns stale v3 reservations that are still awaiting a publication
+    /// receipt. The caller must additionally prove that the deterministic receipt
+    /// path does not exist before refunding one of these rows.
+    pub fn stale_publication_recovery_reservations(
+        &self,
+        max_age_minutes: u32,
+    ) -> StorageResult<Vec<UsageReservation>> {
+        let modifier = format!("-{} minutes", max_age_minutes.max(60));
+        let mut statement = self.conn.prepare(
+            "SELECT reservation_id,month_key,documents,trial FROM usage_reservations WHERE status='reserved' AND recovery_protocol='publication_receipt_v3' AND created_at <= datetime('now', ?1) ORDER BY created_at,reservation_id",
+        )?;
+        let rows = statement.query_map(params![modifier], |row| {
+            let documents: i64 = row.get(2)?;
+            let trial: i64 = row.get(3)?;
+            Ok(UsageReservation {
+                reservation_id: row.get(0)?,
+                month_key: row.get(1)?,
+                documents: documents.max(0).try_into().unwrap_or(u32::MAX),
+                trial: trial != 0,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    /// Finalizes only legacy ambiguous reservations conservatively after a hard
+    /// crash. Receipt-v3 rows are intentionally excluded: the application layer
+    /// reconciles their deterministic publication evidence first.
     pub fn recover_stale_usage_reservations(
         &mut self,
         max_age_minutes: u32,
@@ -870,7 +954,7 @@ impl LocalRepository {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let changed = tx.execute(
-            "UPDATE usage_reservations SET status='committed_after_crash',updated_at=CURRENT_TIMESTAMP WHERE status='reserved' AND created_at <= datetime('now', ?1)",
+            "UPDATE usage_reservations SET status='committed_after_crash',updated_at=CURRENT_TIMESTAMP WHERE status='reserved' AND recovery_protocol='legacy_conservative' AND created_at <= datetime('now', ?1)",
             params![modifier],
         )?;
         tx.commit()?;
@@ -2180,6 +2264,29 @@ mod tests {
             .unwrap();
         assert_eq!(status, "committed_after_crash");
         assert!(!repo.rollback_usage(&reservation).unwrap());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn publication_recovery_reservations_are_not_legacy_finalized() {
+        let path = temp_db("usage-publication-recovery");
+        let mut repo = LocalRepository::open(&path).unwrap();
+        let reservation = repo
+            .reserve_usage_with_publication_recovery("2026-07", 2, true, 30, 30)
+            .unwrap();
+        repo.conn
+            .execute(
+                "UPDATE usage_reservations SET created_at=datetime('now','-2 hours') WHERE reservation_id=?1",
+                params![reservation.reservation_id.as_str()],
+            )
+            .unwrap();
+
+        assert_eq!(repo.recover_stale_usage_reservations(30).unwrap(), 0);
+        let stale = repo.stale_publication_recovery_reservations(30).unwrap();
+        assert_eq!(stale, vec![reservation.clone()]);
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 2);
+        assert!(repo.rollback_usage(&reservation).unwrap());
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 0);
         let _ = std::fs::remove_file(path);
     }
 

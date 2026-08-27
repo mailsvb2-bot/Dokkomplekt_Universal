@@ -1473,7 +1473,7 @@ fn reserve_generation_access(
     let db_path = default_state_db_path(app)?;
     let mut repo = repository_for(&db_path)?;
     let reservation = repo
-        .reserve_usage(
+        .reserve_usage_with_publication_recovery(
             &month_key,
             requested_documents,
             trial,
@@ -1672,6 +1672,107 @@ fn numbered_candidate(path: &Path, index: u32) -> PathBuf {
     parent.join(name)
 }
 
+const PUBLICATION_LOCK_ORPHAN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+
+struct PublicationLock {
+    path: PathBuf,
+    token: String,
+    _file: std::fs::File,
+}
+
+impl Drop for PublicationLock {
+    fn drop(&mut self) {
+        if publication_lock_field(&self.path, "token").as_deref() == Some(self.token.as_str()) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn publication_lock_is_old_enough(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= PUBLICATION_LOCK_ORPHAN_GRACE)
+}
+
+fn publication_lock_field(path: &Path, key: &str) -> Option<String> {
+    let body = std::fs::read_to_string(path).ok()?;
+    let prefix = format!("{key}=");
+    body.lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix).map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn publication_lock_pid(path: &Path) -> Option<u32> {
+    publication_lock_field(path, "pid")?.parse::<u32>().ok()
+}
+
+fn try_acquire_publication_lock(path: &Path) -> Result<Option<PublicationLock>, String> {
+    use std::io::Write as _;
+    let current_host = processing_lock_host_id();
+    for _ in 0..3 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                let token = Uuid::new_v4().to_string();
+                let payload = format!(
+                    "schema=1\nhost={current_host}\npid={}\ntoken={token}\ncreated_unix={}\n",
+                    std::process::id(),
+                    unix_now_seconds()
+                );
+                if let Err(error) = file
+                    .write_all(payload.as_bytes())
+                    .and_then(|_| file.sync_all())
+                {
+                    drop(file);
+                    let _ = std::fs::remove_file(path);
+                    return Err(format!(
+                        "Не удалось записать блокировку публикации: {error}"
+                    ));
+                }
+                return Ok(Some(PublicationLock {
+                    path: path.to_path_buf(),
+                    token,
+                    _file: file,
+                }));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+                    format!("Не удалось проверить существующую блокировку публикации: {error}")
+                })?;
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    return Err("Блокировка публикации имеет небезопасный тип файла.".into());
+                }
+                let lock_host = publication_lock_field(path, "host");
+                let reclaim = match (lock_host.as_deref(), publication_lock_pid(path)) {
+                    (Some(host), Some(pid)) if host == current_host => !process_is_alive(pid),
+                    _ => publication_lock_is_old_enough(path),
+                };
+                if !reclaim {
+                    return Ok(None);
+                }
+                match std::fs::remove_file(path) {
+                    Ok(()) => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(format!(
+                            "Не удалось удалить устаревшую блокировку публикации: {error}"
+                        ))
+                    }
+                }
+            }
+            Err(error) => return Err(format!("Не удалось создать блокировку публикации: {error}")),
+        }
+    }
+    Err("Не удалось получить блокировку публикации после очистки устаревшего состояния.".into())
+}
+
 struct UniqueFileReservation {
     /// Hidden staging file used by the renderer. It is never the user-visible name.
     path: PathBuf,
@@ -1761,27 +1862,15 @@ fn publish_stage_to_unique_directory(stage: &Path, desired: &Path) -> Result<Pat
             )
         );
         let lock_path = parent.join(lock_name);
-        let reservation = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(format!(
-                    "Не удалось зарезервировать папку результата: {error}"
-                ))
-            }
+        let Some(reservation) = try_acquire_publication_lock(&lock_path)? else {
+            continue;
         };
         if candidate.exists() {
             drop(reservation);
-            let _ = std::fs::remove_file(&lock_path);
             continue;
         }
         let publish_result = std::fs::rename(stage, &candidate);
         drop(reservation);
-        let _ = std::fs::remove_file(&lock_path);
         match publish_result {
             Ok(()) => return Ok(candidate),
             Err(error)

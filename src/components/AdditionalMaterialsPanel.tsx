@@ -298,15 +298,34 @@ export function AdditionalMaterialsPanel(props: {
         // Replace both regular/final slots for every complete diagnosis set in
         // one SQLite transaction. This prevents stale final text and half-state.
         const affectedKeys = new Set<string>();
-        const blocks = publishable.map(([blockId, bucket]) => {
+        const blockById = new Map<string, { blockId: string; title: string; content: string }>();
+        for (const [blockId, bucket] of publishable) {
           const key = blockId.split('.').pop() ?? '';
           affectedKeys.add(key);
-          return {
+          blockById.set(blockId, {
             blockId,
             title: `Медицинские дневники: ${key}`,
             content: uniqueTexts(bucket.values).join('\n\n'),
-          };
-        });
+          });
+        }
+        // Canonical empty slots are deliberate tombstones. They suppress legacy
+        // compatible keys from older releases, so an omitted final/regular text
+        // cannot silently reappear after a snapshot replacement.
+        for (const key of affectedKeys) {
+          for (const blockId of [
+            `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
+            `${MEDICAL_DIARY_FINAL_PREFIX}${key}`,
+          ]) {
+            if (!blockById.has(blockId)) {
+              blockById.set(blockId, {
+                blockId,
+                title: `Медицинские дневники: ${key}`,
+                content: '',
+              });
+            }
+          }
+        }
+        const blocks = [...blockById.values()];
         const deleteBlockIds = [...affectedKeys].flatMap(key => [
           `${MEDICAL_DIARY_REGULAR_PREFIX}${key}`,
           `${MEDICAL_DIARY_FINAL_PREFIX}${key}`,

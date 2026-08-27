@@ -129,7 +129,10 @@ describe('AdditionalMaterialsPanel', () => {
     const file = new File(['docx'], 'психотерапия.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     fireEvent.change(input, { target: { files: [file] } });
 
-    await waitFor(() => expect(savedBlocks).toEqual(['professional.medical.diary.regular.f200']));
+    await waitFor(() => expect(savedBlocks).toEqual([
+      'professional.medical.diary.regular.f200',
+      'professional.medical.diary.final.f200',
+    ]));
     expect(screen.getByRole('status').textContent).toContain('Тексты привязаны к текущему диагнозу: F20.0 Шизофрения параноидная');
   });
 
@@ -176,10 +179,12 @@ describe('AdditionalMaterialsPanel', () => {
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0 Новая формулировка" />);
     const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(['docx'], 'актуальный.docx')] } });
-    await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0].blockId).toBe('professional.medical.diary.regular.f200');
-    expect(saved[0].content).toContain('НОВЫЙ подтверждённый врачом текст');
-    expect(saved[0].content).not.toContain('СТАРЫЙ ТЕКСТ');
+    await waitFor(() => expect(saved).toHaveLength(2));
+    const regular = saved.find(block => block.blockId === 'professional.medical.diary.regular.f200');
+    const final = saved.find(block => block.blockId === 'professional.medical.diary.final.f200');
+    expect(regular?.content).toContain('НОВЫЙ подтверждённый врачом текст');
+    expect(regular?.content).not.toContain('СТАРЫЙ ТЕКСТ');
+    expect(final?.content).toBe('');
     expect(deleted).toEqual([
       'professional.medical.diary.regular.f200',
       'professional.medical.diary.final.f200',
@@ -206,10 +211,12 @@ describe('AdditionalMaterialsPanel', () => {
       new File(['a'], 'Дневники F20.0 — вариант 1.txt'),
       new File(['b'], 'F20.0 вариант 2.txt'),
     ] } });
-    await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0].blockId).toBe('professional.medical.diary.regular.f200');
-    expect(saved[0].content).toContain('вариант 1');
-    expect(saved[0].content).toContain('вариант 2');
+    await waitFor(() => expect(saved).toHaveLength(2));
+    const regular = saved.find(block => block.blockId === 'professional.medical.diary.regular.f200');
+    const final = saved.find(block => block.blockId === 'professional.medical.diary.final.f200');
+    expect(regular?.content).toContain('вариант 1');
+    expect(regular?.content).toContain('вариант 2');
+    expect(final?.content).toBe('');
   });
 
   it('re-importing a folder replaces stale text for affected diagnosis keys', async () => {
@@ -228,11 +235,11 @@ describe('AdditionalMaterialsPanel', () => {
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
     const input = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(['current'], 'F20.0 актуальный.txt')] } });
-    await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]).toEqual({
-      blockId: 'professional.medical.diary.regular.f200',
-      content: 'АКТУАЛЬНЫЙ текст из текущей папки',
-    });
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved).toEqual(expect.arrayContaining([
+      { blockId: 'professional.medical.diary.regular.f200', content: 'АКТУАЛЬНЫЙ текст из текущей папки' },
+      { blockId: 'professional.medical.diary.final.f200', content: '' },
+    ]));
   });
 
   it('keeps the previous diagnosis set intact when one explicitly selected file cannot be read', async () => {
@@ -292,7 +299,9 @@ describe('AdditionalMaterialsPanel', () => {
     ]);
     expect(replacementBlocks(replacements[0] as unknown as Record<string, unknown>).map(block => block.block_id)).toEqual([
       'professional.medical.diary.regular.f321',
+      'professional.medical.diary.final.f321',
     ]);
+    expect(replacementBlocks(replacements[0] as unknown as Record<string, unknown>).find(block => block.block_id === 'professional.medical.diary.final.f321')?.content).toBe('');
     const selection = screen.getByRole('region', { name: 'Выбранные файлы дневников' });
     expect(within(selection).getByText('Не сохранён: другой файл этого диагноза не прочитан')).toBeTruthy();
     expect(within(selection).getByText(/Ошибка импорта: DOCX повреждён/)).toBeTruthy();
@@ -326,7 +335,10 @@ describe('AdditionalMaterialsPanel', () => {
     await waitFor(() => expect(within(selection).getByText('Сохранён')).toBeTruthy());
     expect(within(selection).getByText(/Ошибка импорта: DOCX повреждён/)).toBeTruthy();
     expect(within(selection).getByText('Пропущен: неподдерживаемый формат')).toBeTruthy();
-    expect(savedBlocks).toEqual(['professional.medical.diary.regular.f200']);
+    expect(savedBlocks).toEqual([
+      'professional.medical.diary.regular.f200',
+      'professional.medical.diary.final.f200',
+    ]);
     expect(screen.getByRole('status').textContent).toContain('сохранено 1 из 3; пропущено 1; ошибок 1');
   });
 

@@ -32,7 +32,7 @@ fn valid_clause_block_id(raw: &str) -> bool {
 
 #[cfg(test)]
 mod clause_block_id_contract_tests {
-    use super::valid_clause_block_id;
+    use super::{valid_clause_block_id, MAX_CLAUSE_BLOCK_ID_CHARS};
 
     #[test]
     fn reusable_block_ids_accept_unicode_segments_used_by_universal_materials() {

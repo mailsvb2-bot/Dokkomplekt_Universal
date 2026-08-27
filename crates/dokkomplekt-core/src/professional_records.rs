@@ -1119,6 +1119,33 @@ mod tests {
     }
 
     #[test]
+    fn canonical_empty_final_tombstone_suppresses_legacy_compatible_final_text() {
+        let mut case = medical_case();
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Актуальный обычный дневниковый текст достаточной длины для генерации.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200шизофренияпараноидная".into(),
+            "СТАРЫЙ финальный текст из прежней схемы ключей, который не должен вернуться.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200".into(),
+            String::new(),
+        );
+
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.date}}|{{diary.text}}\n{{/each}}",
+            &case,
+            true,
+        );
+        assert!(!rendered.output_text.contains("СТАРЫЙ финальный текст"));
+        assert!(rendered
+            .output_text
+            .contains("Актуальный обычный дневниковый текст"));
+    }
+
+    #[test]
     fn donor_wrapped_free_form_diary_filename_matches_formal_diagnosis() {
         let mut case = medical_case();
         case.values.get_mut("medical.diagnosis").unwrap().value =

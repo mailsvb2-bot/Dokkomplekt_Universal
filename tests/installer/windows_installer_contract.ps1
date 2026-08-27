@@ -115,6 +115,12 @@ public static class DokkomplektNativeMouse {
 }
 "@
 
+function Test-UiaTransientTimeout {
+  param([Parameter(Mandatory = $true)]$ErrorRecord)
+  $message = [string]$ErrorRecord.Exception.Message
+  return $message -match 'Operation timed out|0x80131505'
+}
+
 function Wait-UiElement {
   param(
     [Parameter(Mandatory = $true)][scriptblock]$Probe,
@@ -123,7 +129,12 @@ function Wait-UiElement {
   )
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   do {
-    $element = & $Probe
+    try {
+      $element = & $Probe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $element = $null
+    }
     if ($null -ne $element) { return $element }
     Start-Sleep -Milliseconds 250
   } while ([DateTime]::UtcNow -lt $deadline)
@@ -186,10 +197,19 @@ function Find-ButtonByNames {
       [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
       [System.Windows.Automation.ControlType]::Button
     )
-    $found = $Root.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.AndCondition]::new($name, $kind)
-    )
+    $condition = [System.Windows.Automation.AndCondition]::new($name, $kind)
+    $found = $null
+    for ($attempt = 0; $attempt -lt 3 -and $null -eq $found; $attempt++) {
+      try {
+        $found = $Root.FindFirst(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          $condition
+        )
+      } catch {
+        if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+        if ($attempt -lt 2) { Start-Sleep -Milliseconds 200 }
+      }
+    }
     if ($null -ne $found) { return $found }
   }
   return $null

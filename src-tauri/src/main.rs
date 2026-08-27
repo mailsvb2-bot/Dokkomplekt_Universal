@@ -2202,6 +2202,7 @@ include!("subsystems/publication_collision.rs");
 include!("subsystems/source_identity_runtime.rs");
 include!("subsystems/source_intake_commands.rs");
 include!("subsystems/document_commands.rs");
+include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
 include!("subsystems/knowledge_registry.rs");
 include!("subsystems/quality_telemetry.rs");

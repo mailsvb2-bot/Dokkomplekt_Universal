@@ -85,13 +85,25 @@ def test_all_runtime_default_state_writes_use_transaction_boundary() -> None:
 
 def test_source_transients_are_changed_only_after_persisted_candidate_succeeds() -> None:
     intake = read("src-tauri/src/subsystems/source_intake_commands.rs")
-    for command in ["reset_case", "parse_source", "parse_web_source", "parse_source_file_bytes"]:
+    expected_mutations = {
+        "reset_case": ["retained.take();", "provenance.take();"],
+        "parse_source": ["retained.take();", "*source_provenance = Some(provenance);"],
+        "parse_web_source": ["retained.take();", "*source_provenance = Some(provenance);"],
+        "parse_source_file_bytes": [
+            "*retained_slot = Some(retained_source);",
+            "*provenance_slot = Some(provenance);",
+        ],
+    }
+    for command, mutations in expected_mutations.items():
         body = function_slice(intake, command)
+        lock = body.index("lock_source_session_state")
         transaction = body.index("transact_default_state")
-        for token in ["retained_uploaded_source", "source_provenance"]:
-            position = body.find(token)
-            if position >= 0:
-                assert position > transaction
+        # Fallible mutex acquisition happens before SQLite commit, so a poisoned
+        # transient lock can never make the command fail after switching durable case.
+        assert lock < transaction
+        # Actual transient values still change only after durable persistence succeeds.
+        for mutation in mutations:
+            assert body.index(mutation) > transaction
 
     wrappers = {
         "parse_source_file": intake[

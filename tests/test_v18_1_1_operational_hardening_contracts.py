@@ -39,8 +39,11 @@ class OperationalHardeningContracts(unittest.TestCase):
             "local_completion.is_err() && queue_completion.is_err() && case_completion.is_err()",
             main,
         )
-        self.assertIn("status=published_completion_ledgers_failed", main)
-        self.assertIn("processing_job_sha256={processing_job_sha256}", main)
+        self.assertIn("mark_plan_bound_emergency_guard", publication)
+        self.assertIn("published_completion_ledgers_failed", publication)
+        self.assertIn("unverified_publication_quarantined", publication)
+        self.assertIn("generation_publication::mark_plan_bound_emergency_guard", main)
+        self.assertIn("processing_job_sha256", main)
         self.assertNotIn("status=published_source_retained_by_privacy_policy", main)
         self.assertNotIn("status=shared_receipt_failed", main)
 

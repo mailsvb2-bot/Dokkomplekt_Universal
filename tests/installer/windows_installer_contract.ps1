@@ -620,7 +620,19 @@ if ($adversarial) {
   }
   try {
     $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
-      $blockedWindow.FindFirst(
+      # WebView2 may rebuild its accessibility provider after startup on hosted
+      # Windows runners. Re-resolve the top-level window on every probe instead
+      # of keeping an AutomationElement whose descendant tree can go stale.
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        [int]$blockedProcess.Id
+      )
+      $currentBlockedWindow = $desktop.FindFirst(
+        [System.Windows.Automation.TreeScope]::Children,
+        $condition
+      )
+      if ($null -eq $currentBlockedWindow) { return $null }
+      $currentBlockedWindow.FindFirst(
         [System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.PropertyCondition]::new(
           [System.Windows.Automation.AutomationElement]::NameProperty,
@@ -629,10 +641,22 @@ if ($adversarial) {
       )
     }
   } catch {
-    $visibleNames = @($blockedWindow.FindAll(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.Condition]::TrueCondition
-    ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$blockedProcess.Id
+    )
+    $diagnosticWindow = $desktop.FindFirst(
+      [System.Windows.Automation.TreeScope]::Children,
+      $condition
+    )
+    $visibleNames = if ($null -eq $diagnosticWindow) {
+      @()
+    } else {
+      @($diagnosticWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
+    }
     Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
     throw
   }

@@ -945,7 +945,9 @@ pub fn apply_template_markup_file(
                     vec![replacement.value.as_str()]
                 };
                 for needle in needles {
-                    while let Some(next) = replace_visible_text_once(&xml, needle, &rendered_replacement) {
+                    while let Some(next) =
+                        replace_visible_text_once(&xml, needle, &rendered_replacement)
+                    {
                         xml = next;
                         local += 1;
                     }
@@ -1773,10 +1775,8 @@ mod tests {
 
     #[test]
     fn filled_multiline_value_can_be_replaced_by_one_semantic_placeholder() {
-        let dir = std::env::temp_dir().join(format!(
-            "dokkomplekt-filled-markup-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("dokkomplekt-filled-markup-{}", std::process::id()));
         let input = dir.join("filled.docx");
         let marked = dir.join("marked.docx");
         write_test_docx(

@@ -565,14 +565,22 @@ mod tests {
             "medical.workplace",
             "medical.position",
         ] {
-            assert!(selected.contains(field_id), "missing safe markup candidate: {field_id}; candidates={candidates:?}");
+            assert!(
+                selected.contains(field_id),
+                "missing safe markup candidate: {field_id}; candidates={candidates:?}"
+            );
         }
-        assert!(!candidates.iter().any(|candidate| candidate.field_id == "employee.position"));
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate.field_id == "employee.position"));
         let icd = candidates
             .iter()
             .find(|candidate| candidate.field_id == "medical.icd10")
             .expect("ICD is recognized independently");
-        assert!(!icd.selected_by_default, "nested ICD must not compete with the diagnosis replacement");
+        assert!(
+            !icd.selected_by_default,
+            "nested ICD must not compete with the diagnosis replacement"
+        );
     }
 
     #[test]
@@ -580,7 +588,10 @@ mod tests {
         let text = "Выписной эпикриз\nФ.И.О.: Иванов Иван Иванович\nДата поступления: 09.09.2026\nДата выписки: 09.09.2026\nДиагноз: F20.0";
         let candidates = suggest_filled_medical_template_markup(text, 2026);
         for field_id in ["medical.admission_date", "medical.discharge_date"] {
-            let candidate = candidates.iter().find(|candidate| candidate.field_id == field_id).expect(field_id);
+            let candidate = candidates
+                .iter()
+                .find(|candidate| candidate.field_id == field_id)
+                .expect(field_id);
             assert!(!candidate.selected_by_default);
         }
     }

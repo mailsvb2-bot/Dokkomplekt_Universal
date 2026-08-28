@@ -684,9 +684,22 @@ if ($adversarial) {
   Write-Host 'ADVERSARIAL OK: Desktop output root recovered on clean restart.'
 }
 $restartState = Wait-UiElement -Description 'definitive workspace state after restart' -TimeoutSeconds 30 -Probe {
-  $persisted = Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+  # WebView2 may rebuild its accessibility provider after a clean restart on
+  # hosted Windows runners. Re-resolve the top-level window on every poll so
+  # persisted/recovery/empty is read from the live accessibility tree.
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  $currentAppWindow = $desktop.FindFirst(
+    [System.Windows.Automation.TreeScope]::Children,
+    $condition
+  )
+  if ($null -eq $currentAppWindow) { return $null }
+
+  $persisted = Find-ButtonByNames -Root $currentAppWindow -Names @('Проверочная кнопка')
   if ($null -ne $persisted) { return @{ Kind = 'persisted'; Element = $persisted } }
-  $recovery = $appWindow.FindFirst(
+  $recovery = $currentAppWindow.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::NameProperty,
@@ -694,7 +707,7 @@ $restartState = Wait-UiElement -Description 'definitive workspace state after re
     )
   )
   if ($null -ne $recovery) { return @{ Kind = 'recovery'; Element = $recovery } }
-  $firstRun = Find-ButtonByNames -Root $appWindow -Names @('Создать свои кнопки')
+  $firstRun = Find-ButtonByNames -Root $currentAppWindow -Names @('Создать свои кнопки')
   if ($null -ne $firstRun) { return @{ Kind = 'empty'; Element = $firstRun } }
   return $null
 }

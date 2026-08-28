@@ -3,6 +3,31 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
 
+fn read_optional_guard_file(path: &Path, label: &str) -> Result<Option<String>, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Не удалось безопасно проверить {label} {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!("{label} не может быть ссылкой: {}", path.display()));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "{label} имеет недопустимый тип: {}",
+            path.display()
+        ));
+    }
+    std::fs::read_to_string(path)
+        .map(Some)
+        .map_err(|error| format!("Не удалось прочитать {label} {}: {error}", path.display()))
+}
+
 pub(crate) fn local_completion_receipt(app_data: &Path, processing_job_sha256: &str) -> PathBuf {
     app_data
         .join("intake-completion-receipts")
@@ -14,42 +39,62 @@ pub(crate) fn local_completion_receipt_matches(
     processing_job_sha256: &str,
     source_sha256: &str,
     processing_fingerprint: &str,
-) -> bool {
-    let Ok(body) =
-        std::fs::read_to_string(local_completion_receipt(app_data, processing_job_sha256))
+) -> Result<bool, String> {
+    let path = local_completion_receipt(app_data, processing_job_sha256);
+    let Some(body) = read_optional_guard_file(&path, "локальную квитанцию завершения")?
     else {
-        return false;
+        return Ok(false);
     };
     let required = [
+        "schema=1".to_string(),
         format!("processing_job_sha256={processing_job_sha256}"),
         format!("source_sha256={source_sha256}"),
         format!("processing_fingerprint={processing_fingerprint}"),
     ];
-    required
+    if required
         .iter()
         .all(|expected| body.lines().any(|line| line.trim() == expected))
+    {
+        Ok(true)
+    } else {
+        Err(format!(
+            "Локальная квитанция завершения повреждена или не соответствует plan binding: {}",
+            path.display()
+        ))
+    }
 }
 
 pub(crate) fn plan_bound_emergency_completion_exists(
     source: &Path,
     processing_job_sha256: &str,
-) -> bool {
-    crate::workspace_hygiene::processed_marker_candidates(source)
-        .into_iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .any(|body| {
-            let plan_matches = body.lines().any(|line| {
-                line.trim() == format!("processing_job_sha256={processing_job_sha256}")
-            });
-            let terminal_attention = body.lines().any(|line| {
-                matches!(
-                    line.trim(),
-                    "status=published_completion_ledgers_failed"
-                        | "status=unverified_publication_quarantined"
-                )
-            });
-            plan_matches && terminal_attention
-        })
+) -> Result<bool, String> {
+    for path in crate::workspace_hygiene::processed_marker_candidates(source) {
+        let Some(body) = read_optional_guard_file(&path, "аварийный publication guard")?
+        else {
+            continue;
+        };
+        let plan_matches = body
+            .lines()
+            .any(|line| line.trim() == format!("processing_job_sha256={processing_job_sha256}"));
+        if !plan_matches {
+            continue;
+        }
+        let terminal_attention = body.lines().any(|line| {
+            matches!(
+                line.trim(),
+                "status=published_completion_ledgers_failed"
+                    | "status=unverified_publication_quarantined"
+            )
+        });
+        if terminal_attention {
+            return Ok(true);
+        }
+        return Err(format!(
+            "Plan-bound аварийный publication guard имеет неизвестный статус: {}",
+            path.display()
+        ));
+    }
+    Ok(false)
 }
 
 pub(crate) fn mark_plan_bound_emergency_guard(
@@ -146,9 +191,16 @@ struct PublicationRecoveryContext {
 }
 
 impl PublicationReceipt {
-    fn effective_phase(&self) -> PublicationPhase {
-        // Schema v1 receipts were written only after filesystem publication.
-        self.phase.unwrap_or(PublicationPhase::Published)
+    fn effective_phase(&self) -> Option<PublicationPhase> {
+        match (self.schema, self.phase) {
+            // Schema v1 receipts predate the phase field and were written only
+            // after filesystem publication. Newer schemas must carry an explicit
+            // phase; accepting a missing phase there would turn corruption into a
+            // false Published proof.
+            (LEGACY_RECEIPT_SCHEMA_V1, None) => Some(PublicationPhase::Published),
+            (_, Some(phase)) => Some(phase),
+            _ => None,
+        }
     }
 
     fn plan_binding_matches(
@@ -338,12 +390,16 @@ fn load_receipt(path: &Path) -> Result<PublicationReceipt, String> {
     serde_json::from_slice::<PublicationReceipt>(&bytes).map_err(|error| error.to_string())
 }
 
-fn supported_receipt(receipt: &PublicationReceipt) -> bool {
+fn known_receipt_identity(receipt: &PublicationReceipt) -> bool {
     matches!(
         receipt.schema,
         LEGACY_RECEIPT_SCHEMA_V1 | LEGACY_RECEIPT_SCHEMA_V2 | RECEIPT_SCHEMA
     ) && !receipt.reservation_id.trim().is_empty()
         && !receipt.output_sha256.trim().is_empty()
+}
+
+fn supported_receipt(receipt: &PublicationReceipt) -> bool {
+    known_receipt_identity(receipt) && receipt.effective_phase().is_some()
 }
 
 pub(crate) fn prepare_publication(
@@ -399,7 +455,7 @@ pub(crate) fn attach_replacement_recovery(
     let mut receipt = load_receipt(&path)?;
     if receipt.schema != RECEIPT_SCHEMA
         || receipt.reservation_id != permit.reservation.reservation_id
-        || receipt.effective_phase() != PublicationPhase::Prepared
+        || receipt.effective_phase() != Some(PublicationPhase::Prepared)
     {
         return Err(
             "Pre-publication квитанция не допускает привязку recovery безопасной замены.".into(),
@@ -510,7 +566,9 @@ fn receipt_phase_for_permit(
     if !supported_receipt(&receipt) {
         return Err("Некорректная квитанция опубликованной генерации.".into());
     }
-    Ok(receipt.effective_phase())
+    receipt
+        .effective_phase()
+        .ok_or_else(|| "Квитанция не содержит допустимую фазу публикации.".to_string())
 }
 
 pub(crate) fn finalize_published_generation(
@@ -582,25 +640,67 @@ pub(crate) fn plan_bound_publication_guard_exists(
     processing_job_sha256: &str,
     source_sha256: &str,
     processing_fingerprint: &str,
-) -> bool {
+) -> Result<bool, String> {
     let root = app_data.join(RECEIPT_DIR);
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
+    let root_metadata = match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Не удалось безопасно проверить каталог publication guards {}: {error}",
+                root.display()
+            ))
+        }
     };
-    entries.flatten().any(|entry| {
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(format!(
+            "Каталог publication guards имеет недопустимый тип: {}",
+            root.display()
+        ));
+    }
+    let entries = std::fs::read_dir(&root).map_err(|error| {
+        format!(
+            "Не удалось прочитать каталог publication guards {}: {error}",
+            root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Не удалось прочитать запись каталога publication guards {}: {error}",
+                root.display()
+            )
+        })?;
         let path = entry.path();
-        path.is_file()
-            && load_receipt(&path)
-                .ok()
-                .filter(supported_receipt)
-                .is_some_and(|receipt| {
-                    receipt.plan_binding_matches(
-                        processing_job_sha256,
-                        source_sha256,
-                        processing_fingerprint,
-                    )
-                })
-    })
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "Не удалось проверить publication guard {}: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!(
+                "Publication guard имеет недопустимый тип: {}",
+                path.display()
+            ));
+        }
+        let receipt = load_receipt(&path)
+            .map_err(|error| format!("Publication guard повреждён {}: {error}", path.display()))?;
+        if !known_receipt_identity(&receipt) {
+            return Err(format!(
+                "Publication guard имеет неизвестный или неполный формат: {}",
+                path.display()
+            ));
+        }
+        if receipt.plan_binding_matches(
+            processing_job_sha256,
+            source_sha256,
+            processing_fingerprint,
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) fn remove_publication_receipt(app_data: &Path, reservation_id: &str) {
@@ -717,6 +817,14 @@ pub(crate) fn reconcile_publication_receipts(
         }
         let receipt = match load_receipt(&path) {
             Ok(receipt) if supported_receipt(&receipt) => receipt,
+            Ok(receipt) if known_receipt_identity(&receipt) => {
+                report.ambiguous += 1;
+                report.warnings.push(
+                    "Квитанция известного формата не содержит допустимую фазу публикации; автоматическая финализация и повтор заблокированы до ручной проверки."
+                        .into(),
+                );
+                continue;
+            }
             Ok(_) => {
                 report.warnings.push(
                     "Некорректная квитанция опубликованной генерации оставлена для ручной проверки."
@@ -733,7 +841,7 @@ pub(crate) fn reconcile_publication_receipts(
             }
         };
 
-        if receipt.effective_phase() == PublicationPhase::Prepared
+        if receipt.effective_phase() == Some(PublicationPhase::Prepared)
             && receipt.schema == RECEIPT_SCHEMA
         {
             match decode_recovery_blob(repo, &receipt) {
@@ -751,14 +859,14 @@ pub(crate) fn reconcile_publication_receipts(
             Ok(true) => {
                 report.finalized += 1;
                 match receipt.effective_phase() {
-                    PublicationPhase::Prepared => {
+                    Some(PublicationPhase::Prepared) => {
                         report.ambiguous += 1;
                         report.warnings.push(
                             "Обнаружена pre-publication квитанция после прерывания процесса. Публикация не может быть доказанно исключена, поэтому резервация дофинализирована консервативно, а квитанция сохранена от бесплатного или двойного повтора."
                                 .into(),
                         );
                     }
-                    PublicationPhase::Published if receipt.has_complete_plan_binding() => {
+                    Some(PublicationPhase::Published) if receipt.has_complete_plan_binding() => {
                         let local_completion = mark_local_completion(
                             app_data,
                             receipt.processing_job_sha256.as_deref().unwrap_or_default(),
@@ -774,8 +882,14 @@ pub(crate) fn reconcile_publication_receipts(
                             );
                         }
                     }
-                    PublicationPhase::Published => {
+                    Some(PublicationPhase::Published) => {
                         let _ = std::fs::remove_file(path);
+                    }
+                    None => {
+                        report.ambiguous += 1;
+                        report.warnings.push(
+                            "Квитанция не содержит допустимую фазу публикации; состояние оставлено для ручной проверки.".into(),
+                        );
                     }
                 }
             }
@@ -891,6 +1005,108 @@ mod tests {
         assert!(!json.contains("fio"));
     }
 
+    fn receipt_fixture(schema: u32, phase: Option<PublicationPhase>) -> PublicationReceipt {
+        PublicationReceipt {
+            schema,
+            reservation_id: "reservation".into(),
+            output_sha256: "ab".repeat(32),
+            phase,
+            prepared_unix: Some(1),
+            published_unix: None,
+            processing_job_sha256: Some("job".into()),
+            source_sha256: Some("source".into()),
+            processing_fingerprint: Some("plan".into()),
+            recovery_blob: None,
+        }
+    }
+
+    #[test]
+    fn only_schema_v1_may_omit_publication_phase() {
+        let v1 = receipt_fixture(LEGACY_RECEIPT_SCHEMA_V1, None);
+        assert_eq!(v1.effective_phase(), Some(PublicationPhase::Published));
+        assert!(supported_receipt(&v1));
+
+        for schema in [LEGACY_RECEIPT_SCHEMA_V2, RECEIPT_SCHEMA] {
+            let missing_phase = receipt_fixture(schema, None);
+            assert_eq!(missing_phase.effective_phase(), None);
+            assert!(known_receipt_identity(&missing_phase));
+            assert!(!supported_receipt(&missing_phase));
+        }
+    }
+
+    #[test]
+    fn explicit_new_schema_phases_remain_valid() {
+        for schema in [LEGACY_RECEIPT_SCHEMA_V2, RECEIPT_SCHEMA] {
+            for phase in [PublicationPhase::Prepared, PublicationPhase::Published] {
+                let receipt = receipt_fixture(schema, Some(phase));
+                assert_eq!(receipt.effective_phase(), Some(phase));
+                assert!(supported_receipt(&receipt));
+            }
+        }
+    }
+
+    #[test]
+    fn ambiguous_phase_still_blocks_same_plan_automatic_retry() {
+        let root = temp_root("ambiguous-phase-guard");
+        let receipts = root.join(RECEIPT_DIR);
+        std::fs::create_dir_all(&receipts).unwrap();
+        let receipt = receipt_fixture(RECEIPT_SCHEMA, None);
+        write_receipt(&receipts.join("ambiguous.receipt.json"), &receipt).unwrap();
+
+        assert!(plan_bound_publication_guard_exists(&root, "job", "source", "plan").unwrap());
+        assert!(
+            !plan_bound_publication_guard_exists(&root, "other-job", "source", "plan").unwrap()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_guard_files_are_the_only_safe_absence() {
+        let root = temp_root("missing-guards");
+        let source = root.join("Исходник.docx");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&source, b"source").unwrap();
+        assert!(!local_completion_receipt_matches(&root, "job", "source", "plan").unwrap());
+        assert!(!plan_bound_emergency_completion_exists(&source, "job").unwrap());
+        assert!(!plan_bound_publication_guard_exists(&root, "job", "source", "plan").unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_local_completion_guard_fails_closed() {
+        let root = temp_root("corrupt-local-guard");
+        let path = local_completion_receipt(&root, "job");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"schema=1\nprocessing_job_sha256=job\n").unwrap();
+        let error = local_completion_receipt_matches(&root, "job", "source", "plan")
+            .expect_err("corrupt completion guard must not mean not-completed");
+        assert!(error.contains("повреждена"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unreadable_publication_guard_namespace_fails_closed() {
+        let root = temp_root("guard-root-is-file");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(RECEIPT_DIR), b"not a directory").unwrap();
+        let error = plan_bound_publication_guard_exists(&root, "job", "source", "plan")
+            .expect_err("invalid receipt namespace must stop automatic issuance");
+        assert!(error.contains("недопустимый тип"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_publication_receipt_fails_closed() {
+        let root = temp_root("malformed-receipt");
+        let receipts = root.join(RECEIPT_DIR);
+        std::fs::create_dir_all(&receipts).unwrap();
+        std::fs::write(receipts.join("broken.receipt.json"), b"{not-json").unwrap();
+        let error = plan_bound_publication_guard_exists(&root, "job", "source", "plan")
+            .expect_err("malformed publication receipt must stop automatic issuance");
+        assert!(error.contains("повреждён"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn publication_digest_proof_rejects_any_post_prepare_change() {
         let root = temp_root("digest-proof");
@@ -936,11 +1152,8 @@ mod tests {
             "unverified_publication_quarantined",
         )
         .unwrap();
-        assert!(plan_bound_emergency_completion_exists(&source, &job));
-        assert!(!plan_bound_emergency_completion_exists(
-            &source,
-            &"c".repeat(64)
-        ));
+        assert!(plan_bound_emergency_completion_exists(&source, &job).unwrap());
+        assert!(!plan_bound_emergency_completion_exists(&source, &"c".repeat(64)).unwrap());
         assert!(
             mark_plan_bound_emergency_guard(&source, &"b".repeat(64), &job, "retryable",).is_err()
         );

@@ -614,18 +614,27 @@ if ($adversarial) {
     )
     $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
   }
-  $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
-    $blockedWindow.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        'Не удалось подготовить папку готовых документов'
-      )
-    )
-  }
   if ($blockedProcess.HasExited) { throw 'Output-root path collision crashed the application.' }
   if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Leaf)) {
     throw 'Application silently replaced the deliberate output-root collision file.'
+  }
+  try {
+    $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
+      $blockedWindow.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          'Не удалось подготовить папку готовых документов'
+        )
+      )
+    }
+  } catch {
+    $visibleNames = @($blockedWindow.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
+    Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
+    throw
   }
   Write-Host 'ADVERSARIAL OK: output-root collision stayed fail-closed and visible.'
   Stop-Process -Id $blockedProcess.Id -Force

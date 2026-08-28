@@ -91,7 +91,7 @@ async function bootstrapApplication(root: HTMLElement): Promise<void> {
         {outputRootBootstrapError ? (
           <section className="startupRecovery" role="alert" aria-label="Не удалось подготовить папку готовых документов">
             <div>
-              <strong>Папка готовых документов не подготовлена</strong>
+              <strong>Не удалось подготовить папку готовых документов</strong>
               <span>Программа не будет считать путь рабочим молча. Проверьте доступ к рабочему столу или выберите другую папку в настройке ниже.</span>
               <small>{outputRootBootstrapError}</small>
             </div>

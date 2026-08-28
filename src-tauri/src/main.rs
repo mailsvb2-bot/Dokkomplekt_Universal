@@ -1826,6 +1826,47 @@ fn shared_completion_receipt(source: &Path, source_sha256: &str) -> PathBuf {
         .join(format!("{source_sha256}.done"))
 }
 
+fn shared_completion_receipt_matches(
+    source: &Path,
+    processing_job_sha256: &str,
+) -> Result<bool, String> {
+    let path = shared_completion_receipt(source, processing_job_sha256);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "Не удалось безопасно проверить общую квитанцию завершения {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "Общая квитанция завершения имеет недопустимый тип: {}",
+            path.display()
+        ));
+    }
+    let body = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "Не удалось прочитать общую квитанцию завершения {}: {error}",
+            path.display()
+        )
+    })?;
+    let schema_matches = body.lines().any(|line| line.trim() == "schema=1");
+    let job_matches = body
+        .lines()
+        .any(|line| line.trim() == format!("sha256={processing_job_sha256}"));
+    if schema_matches && job_matches {
+        Ok(true)
+    } else {
+        Err(format!(
+            "Общая квитанция завершения повреждена или не соответствует processing job: {}",
+            path.display()
+        ))
+    }
+}
+
 fn mark_shared_completion(source: &Path, source_sha256: &str) -> Result<PathBuf, String> {
     let completed_dir = shared_queue_root(source).join("completed");
     std::fs::create_dir_all(&completed_dir)
@@ -2208,11 +2249,14 @@ include!("subsystems/startup_state.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
+#[cfg(test)]
+include!("subsystems/dedup_guard_tests.rs");
 include!("subsystems/knowledge_registry.rs");
 include!("subsystems/quality_telemetry.rs");
 include!("subsystems/process_blueprints.rs");
 include!("subsystems/clause_block_commands.rs");
 
+include!("subsystems/automation_dedup.rs");
 include!("subsystems/automation_runtime.rs");
 
 fn main() {

@@ -140,12 +140,14 @@ def test_durable_journal_is_prepared_before_every_filesystem_publication_boundar
     )
 
     automation = read('src-tauri/src/subsystems/automation_runtime.rs')
+    dedup = read('src-tauri/src/subsystems/automation_dedup.rs')
     auto_publish = automation.index('let publication_binding = generation_publication::PublicationPlanBinding')
     auto_confirm = automation.index('generation_publication::confirm_publication', auto_publish)
     assert automation.index('generation_publication::prepare_publication', auto_publish) < automation.index(
         'publish_stage_to_unique_directory', auto_publish
     ) < auto_confirm
-    assert 'completed_in_publication_guard' in automation
+    assert 'completed_in_publication_guard' in dedup
+    assert 'automatic_generation_already_processed' in automation
     assert 'complete_publication_receipt' in automation
 
 

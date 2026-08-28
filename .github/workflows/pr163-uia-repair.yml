@@ -1,0 +1,121 @@
+name: PR 163 one-shot UIA repair
+
+on:
+  push:
+    branches:
+      - agent/final-adversarial-windows-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Patch stale WebView2 UIA probe
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/installer/windows_installer_contract.ps1')
+          s = p.read_text(encoding='utf-8')
+          old = '''  try {
+            $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
+              $blockedWindow.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.PropertyCondition]::new(
+                  [System.Windows.Automation.AutomationElement]::NameProperty,
+                  'Не удалось подготовить папку готовых документов'
+                )
+              )
+            }
+          } catch {
+            $visibleNames = @($blockedWindow.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              [System.Windows.Automation.Condition]::TrueCondition
+            ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
+            Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
+            throw
+          }
+          '''
+          new = '''  try {
+            $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
+              # WebView2 may rebuild its accessibility provider after startup on hosted
+              # Windows runners. Re-resolve the top-level window on every probe instead
+              # of keeping an AutomationElement whose descendant tree can go stale.
+              $condition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+                [int]$blockedProcess.Id
+              )
+              $currentBlockedWindow = $desktop.FindFirst(
+                [System.Windows.Automation.TreeScope]::Children,
+                $condition
+              )
+              if ($null -eq $currentBlockedWindow) { return $null }
+              $currentBlockedWindow.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.PropertyCondition]::new(
+                  [System.Windows.Automation.AutomationElement]::NameProperty,
+                  'Не удалось подготовить папку готовых документов'
+                )
+              )
+            }
+          } catch {
+            $condition = [System.Windows.Automation.PropertyCondition]::new(
+              [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+              [int]$blockedProcess.Id
+            )
+            $diagnosticWindow = $desktop.FindFirst(
+              [System.Windows.Automation.TreeScope]::Children,
+              $condition
+            )
+            $visibleNames = if ($null -eq $diagnosticWindow) {
+              @()
+            } else {
+              @($diagnosticWindow.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition
+              ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
+            }
+            Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
+            throw
+          }
+          '''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one repair target, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+          assert p.read_text(encoding='utf-8').count('$currentBlockedWindow') == 3
+          assert p.read_text(encoding='utf-8').count('$diagnosticWindow') == 3
+          PY
+      - name: Remove one-shot workflow and refresh provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pr163-uia-repair.yml
+          rm -f verification/ci/SOURCE_MANIFEST_SHA256.generated.txt verification/ci/source-manifest-report.json
+          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.json || true
+          test -s verification/ci/SOURCE_MANIFEST_SHA256.generated.txt
+          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          rm -f verification/ci/SOURCE_MANIFEST_SHA256.generated.txt verification/ci/source-manifest-report.json
+          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.json
+          rm -f verification/ci/SOURCE_MANIFEST_SHA256.generated.txt verification/ci/source-manifest-report.json
+          git diff --check
+          test "$(git hash-object tests/installer/windows_installer_contract.ps1)" = "80991e58962a1ba6d85be163d12d020497699fb0"
+          test "$(git hash-object SOURCE_MANIFEST_SHA256.txt)" = "02e869bb12654a92e62259040f6cfad001d8d057"
+      - name: Commit repaired branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tests/installer/windows_installer_contract.ps1 SOURCE_MANIFEST_SHA256.txt
+          git status --short
+          git commit -m 'Stabilize Windows output-root recovery UIA probe'
+          git push origin HEAD:agent/final-adversarial-windows-hardening

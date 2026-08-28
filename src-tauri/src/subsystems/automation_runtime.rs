@@ -2968,9 +2968,11 @@ mod publication_completion_receipt_tests {
         assert!(body.contains(&format!("processing_job_sha256={job}")));
         assert!(body.contains(&format!("source_sha256={source}")));
         assert!(body.contains(&format!("processing_fingerprint={plan}")));
-        assert!(local_completion_receipt_matches(&root, &job, &source, &plan));
+        assert!(local_completion_receipt_matches(&root, &job, &source, &plan).unwrap());
         std::fs::write(&path, b"schema=1\n").expect("corrupt local completion receipt");
-        assert!(!local_completion_receipt_matches(&root, &job, &source, &plan));
+        let error = local_completion_receipt_matches(&root, &job, &source, &plan)
+            .expect_err("corrupt completion receipt must fail closed");
+        assert!(error.contains("повреждена"), "{error}");
         assert_ne!(
             local_completion_receipt(&root, &job),
             local_completion_receipt(&root, &"d".repeat(64))

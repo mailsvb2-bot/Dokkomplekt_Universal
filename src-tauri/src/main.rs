@@ -951,6 +951,109 @@ fn repository_for(path: &Path) -> Result<LocalRepository, String> {
 #[cfg(windows)]
 const DPAPI_KEY_FILE_MAGIC: &[u8] = b"DKDPAPI1\0";
 
+#[cfg(any(windows, test))]
+fn raw_key_backup_candidates(key_path: &Path) -> Result<Vec<PathBuf>, String> {
+    let parent = key_path
+        .parent()
+        .ok_or_else(|| "Путь локального ключа не имеет родительской папки.".to_string())?;
+    let key_name = key_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Имя локального ключа не является допустимым UTF-8.".to_string())?;
+    let prefix = format!("{key_name}.raw.");
+    let mut backups = Vec::new();
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(backups),
+        Err(error) => {
+            return Err(format!(
+                "Не удалось проверить резервные копии локального ключа {}: {error}",
+                parent.display()
+            ))
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Не удалось прочитать запись папки локального ключа {}: {error}",
+                parent.display()
+            )
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(&prefix) || !name.ends_with(".bak") {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "Не удалось проверить резервную копию локального ключа {}: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!(
+                "Резервная копия локального ключа имеет недопустимый тип: {}",
+                path.display()
+            ));
+        }
+        backups.push(path);
+    }
+    backups.sort();
+    Ok(backups)
+}
+
+#[cfg(any(windows, test))]
+fn recover_interrupted_key_migration(key_path: &Path) -> Result<(), String> {
+    let backups = raw_key_backup_candidates(key_path)?;
+    match std::fs::symlink_metadata(key_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "Локальный ключ имеет недопустимый тип: {}",
+                    key_path.display()
+                ));
+            }
+            // Do not delete raw backups until the primary key has been decoded
+            // successfully. A present-but-corrupt primary file must not destroy
+            // the only recoverable copy.
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match backups.as_slice() {
+            [] => Ok(()),
+            [backup] => std::fs::rename(backup, key_path).map_err(|error| {
+                format!(
+                    "Обнаружен прерванный перенос локального ключа, но не удалось восстановить backup {}: {error}",
+                    backup.display()
+                )
+            }),
+            _ => Err(format!(
+                "Найдено несколько резервных копий локального ключа ({}); автоматический выбор небезопасен.",
+                backups.len()
+            )),
+        },
+        Err(error) => Err(format!(
+            "Не удалось безопасно проверить локальный ключ {}: {error}",
+            key_path.display()
+        )),
+    }
+}
+
+#[cfg(any(windows, test))]
+fn cleanup_raw_key_backups(key_path: &Path) -> Result<(), String> {
+    for backup in raw_key_backup_candidates(key_path)? {
+        std::fs::remove_file(&backup).map_err(|error| {
+            format!(
+                "Локальный ключ успешно проверен, но не удалось удалить сырой backup {}: {error}",
+                backup.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn load_or_create_local_data_key(db_path: &Path) -> Result<[u8; 32], String> {
     let file_name = db_path
         .file_name()
@@ -961,10 +1064,31 @@ fn load_or_create_local_data_key(db_path: &Path) -> Result<[u8; 32], String> {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
 
-    if key_path.exists() {
-        let stored = std::fs::read(&key_path)
-            .map_err(|error| format!("Не удалось прочитать локальный ключ защиты: {error}"))?;
-        return decode_or_migrate_local_key(&key_path, &stored);
+    #[cfg(windows)]
+    recover_interrupted_key_migration(&key_path)?;
+
+    match std::fs::symlink_metadata(&key_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "Локальный ключ имеет недопустимый тип: {}",
+                    key_path.display()
+                ));
+            }
+            let stored = std::fs::read(&key_path)
+                .map_err(|error| format!("Не удалось прочитать локальный ключ защиты: {error}"))?;
+            let key = decode_or_migrate_local_key(&key_path, &stored)?;
+            #[cfg(windows)]
+            cleanup_raw_key_backups(&key_path)?;
+            return Ok(key);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Не удалось безопасно проверить локальный ключ {}: {error}",
+                key_path.display()
+            ))
+        }
     }
 
     let mut key = [0u8; 32];
@@ -1000,10 +1124,9 @@ fn write_new_key_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(windows)]
 fn replace_key_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write as _;
-    let temp = path.with_extension(format!("key.protected.{}.tmp", std::process::id()));
-    let backup = path.with_extension(format!("key.raw.{}.bak", std::process::id()));
-    let _ = std::fs::remove_file(&temp);
-    let _ = std::fs::remove_file(&backup);
+    let nonce = Uuid::new_v4();
+    let temp = path.with_extension(format!("key.protected.{nonce}.tmp"));
+    let backup = path.with_extension(format!("key.raw.{nonce}.bak"));
     {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -1020,13 +1143,30 @@ fn replace_key_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::rename(path, &backup)
         .map_err(|error| format!("Не удалось начать миграцию локального ключа: {error}"))?;
     if let Err(error) = std::fs::rename(&temp, path) {
-        let _ = std::fs::rename(&backup, path);
-        let _ = std::fs::remove_file(&temp);
+        let rollback = std::fs::rename(&backup, path);
+        let cleanup = std::fs::remove_file(&temp);
+        if let Err(rollback_error) = rollback {
+            return Err(format!(
+                "Не удалось завершить миграцию локального ключа: {error}; также не удалось восстановить сырой backup {}: {rollback_error}. Backup сохранён для автоматического восстановления при следующем запуске.",
+                backup.display()
+            ));
+        }
+        if let Err(cleanup_error) = cleanup {
+            return Err(format!(
+                "Не удалось завершить миграцию локального ключа: {error}; исходный ключ восстановлен, но временный защищённый файл {} не удалён: {cleanup_error}",
+                temp.display()
+            ));
+        }
         return Err(format!(
-            "Не удалось завершить миграцию локального ключа: {error}"
+            "Не удалось завершить миграцию локального ключа: {error}; исходный ключ восстановлен."
         ));
     }
-    let _ = std::fs::remove_file(&backup);
+    std::fs::remove_file(&backup).map_err(|error| {
+        format!(
+            "Защищённый локальный ключ установлен, но сырой backup {} не удалось удалить: {error}",
+            backup.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -1794,346 +1934,6 @@ fn publish_stage_to_unique_directory(stage: &Path, desired: &Path) -> Result<Pat
     Err("Не удалось подобрать уникальную папку после 10000 попыток.".into())
 }
 
-fn processing_lock_host_id() -> String {
-    let raw = stable_machine_guid()
-        .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| format!("{}-unknown", std::env::consts::OS));
-    let mut hasher = Sha256::new();
-    hasher.update(std::env::consts::OS.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(raw.as_bytes());
-    hex::encode(hasher.finalize())[..24].to_string()
-}
-
-fn unix_now_seconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_secs())
-        .unwrap_or_default()
-}
-
-fn shared_queue_root(source: &Path) -> PathBuf {
-    source
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".dokkomplekt-queue")
-}
-
-fn shared_completion_receipt(source: &Path, source_sha256: &str) -> PathBuf {
-    shared_queue_root(source)
-        .join("completed")
-        .join(format!("{source_sha256}.done"))
-}
-
-fn shared_completion_receipt_matches(
-    source: &Path,
-    processing_job_sha256: &str,
-) -> Result<bool, String> {
-    let path = shared_completion_receipt(source, processing_job_sha256);
-    let metadata = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(format!(
-                "Не удалось безопасно проверить общую квитанцию завершения {}: {error}",
-                path.display()
-            ))
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(format!(
-            "Общая квитанция завершения имеет недопустимый тип: {}",
-            path.display()
-        ));
-    }
-    let body = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Не удалось прочитать общую квитанцию завершения {}: {error}",
-            path.display()
-        )
-    })?;
-    let schema_matches = body.lines().any(|line| line.trim() == "schema=1");
-    let job_matches = body
-        .lines()
-        .any(|line| line.trim() == format!("sha256={processing_job_sha256}"));
-    if schema_matches && job_matches {
-        Ok(true)
-    } else {
-        Err(format!(
-            "Общая квитанция завершения повреждена или не соответствует processing job: {}",
-            path.display()
-        ))
-    }
-}
-
-fn mark_shared_completion(source: &Path, source_sha256: &str) -> Result<PathBuf, String> {
-    let completed_dir = shared_queue_root(source).join("completed");
-    std::fs::create_dir_all(&completed_dir)
-        .map_err(|error| format!("Не удалось создать общую очередь завершённых дел: {error}"))?;
-    let final_path = shared_completion_receipt(source, source_sha256);
-    let temporary = completed_dir.join(format!(".{source_sha256}.{}.tmp", Uuid::new_v4()));
-    std::fs::write(
-        &temporary,
-        format!(
-            "schema=1\nsha256={source_sha256}\ncompleted_unix={}\nhost={}\n",
-            unix_now_seconds(),
-            processing_lock_host_id(),
-        ),
-    )
-    .map_err(|error| format!("Не удалось записать квитанцию общей очереди: {error}"))?;
-    match std::fs::rename(&temporary, &final_path) {
-        Ok(()) => Ok(final_path),
-        Err(_error) if final_path.is_file() => {
-            let _ = std::fs::remove_file(&temporary);
-            Ok(final_path)
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(&temporary);
-            Err(format!(
-                "Не удалось опубликовать квитанцию общей очереди: {error}"
-            ))
-        }
-    }
-}
-
-fn processing_owner_nonce(owner_text: &str) -> Option<&str> {
-    owner_text
-        .lines()
-        .find_map(|line| line.strip_prefix("nonce="))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn processing_heartbeat_path(marker: &Path, nonce: &str) -> PathBuf {
-    marker.join(format!("heartbeat-{nonce}"))
-}
-
-fn processing_release_path(marker: &Path, nonce: &str) -> PathBuf {
-    marker.join(format!("released-{nonce}"))
-}
-
-fn processing_owner_matches(marker: &Path, expected_nonce: &str) -> bool {
-    std::fs::read_to_string(marker.join("owner"))
-        .ok()
-        .and_then(|text| processing_owner_nonce(&text).map(str::to_owned))
-        .is_some_and(|nonce| nonce == expected_nonce)
-}
-
-fn processing_release_matches(marker: &Path, expected_nonce: &str) -> bool {
-    std::fs::read_to_string(processing_release_path(marker, expected_nonce))
-        .ok()
-        .is_some_and(|text| {
-            text.lines()
-                .any(|line| line.strip_prefix("nonce=") == Some(expected_nonce))
-        })
-}
-
-fn processing_claim_heartbeat_path(marker: &Path, owner_text: &str) -> PathBuf {
-    let schema = owner_text
-        .lines()
-        .find_map(|line| line.strip_prefix("schema="))
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or_default();
-    if schema >= 3 {
-        if let Some(nonce) = processing_owner_nonce(owner_text) {
-            return processing_heartbeat_path(marker, nonce);
-        }
-    }
-    marker.join("heartbeat")
-}
-
-struct ProcessingGuard {
-    marker: PathBuf,
-    owner_nonce: String,
-    heartbeat_stop: Arc<AtomicBool>,
-    heartbeat_thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl ProcessingGuard {
-    fn acquire(source: &Path, source_sha256: &str) -> Result<Option<Self>, String> {
-        const REMOTE_LEASE_TIMEOUT: Duration = Duration::from_secs(2 * 60);
-        const LEGACY_LEASE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-        // The claim is content-addressed and lives in the shared folder, so two
-        // computers, aliases or renamed copies of the same source contend for the
-        // same lease. Directory creation is atomic on normal SMB/NFS servers.
-        let claims_dir = shared_queue_root(source).join("claims");
-        std::fs::create_dir_all(&claims_dir)
-            .map_err(|error| format!("Не удалось создать общую очередь обработки: {error}"))?;
-        let marker = claims_dir.join(format!("{source_sha256}.lock"));
-        let owner_path = marker.join("owner");
-        let current_host = processing_lock_host_id();
-        for _ in 0..2 {
-            match std::fs::create_dir(&marker) {
-                Ok(()) => {
-                    let nonce = Uuid::new_v4().to_string();
-                    let owner = format!(
-                        "schema=3\nhost={current_host}\npid={}\ncreated_unix={}\nnonce={nonce}\n",
-                        std::process::id(),
-                        unix_now_seconds(),
-                    );
-                    if let Err(error) = std::fs::write(&owner_path, &owner) {
-                        let _ = std::fs::remove_dir_all(&marker);
-                        return Err(format!("Не удалось записать владельца блокировки: {error}"));
-                    }
-                    let heartbeat_path = processing_heartbeat_path(&marker, &nonce);
-                    if let Err(error) =
-                        std::fs::write(&heartbeat_path, unix_now_seconds().to_string())
-                    {
-                        let _ = std::fs::remove_dir_all(&marker);
-                        return Err(format!(
-                            "Не удалось запустить heartbeat блокировки: {error}"
-                        ));
-                    }
-                    let verified = processing_owner_matches(&marker, &nonce);
-                    if !verified {
-                        let _ = std::fs::remove_dir_all(&marker);
-                        return Err(
-                            "Сетевая папка не подтвердила владельца блокировки источника.".into(),
-                        );
-                    }
-                    let heartbeat_stop = Arc::new(AtomicBool::new(false));
-                    let thread_stop = Arc::clone(&heartbeat_stop);
-                    let thread_marker = marker.clone();
-                    let thread_nonce = nonce.clone();
-                    let thread_path = heartbeat_path.clone();
-                    let heartbeat_thread = std::thread::spawn(move || {
-                        while !thread_stop.load(Ordering::SeqCst) {
-                            for _ in 0..30 {
-                                if thread_stop.load(Ordering::SeqCst) {
-                                    return;
-                                }
-                                std::thread::sleep(Duration::from_secs(1));
-                            }
-                            if !processing_owner_matches(&thread_marker, &thread_nonce) {
-                                return;
-                            }
-                            if std::fs::write(&thread_path, unix_now_seconds().to_string()).is_err()
-                            {
-                                return;
-                            }
-                            if !processing_owner_matches(&thread_marker, &thread_nonce) {
-                                return;
-                            }
-                        }
-                    });
-                    return Ok(Some(Self {
-                        marker,
-                        owner_nonce: nonce,
-                        heartbeat_stop,
-                        heartbeat_thread: Some(heartbeat_thread),
-                    }));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let text = std::fs::read_to_string(&owner_path).unwrap_or_default();
-                    let owner_host = text
-                        .lines()
-                        .find_map(|line| line.strip_prefix("host="))
-                        .map(str::to_owned);
-                    let owner_nonce = processing_owner_nonce(&text).map(str::to_owned);
-                    let pid = text
-                        .lines()
-                        .find_map(|line| line.strip_prefix("pid="))
-                        .and_then(|value| value.parse::<u32>().ok());
-                    let heartbeat_path = processing_claim_heartbeat_path(&marker, &text);
-                    let lease_age = std::fs::metadata(&heartbeat_path)
-                        .or_else(|_| std::fs::metadata(&marker))
-                        .and_then(|metadata| metadata.modified())
-                        .ok()
-                        .and_then(|modified| {
-                            std::time::SystemTime::now().duration_since(modified).ok()
-                        });
-                    let explicitly_released = owner_nonce
-                        .as_deref()
-                        .is_some_and(|nonce| processing_release_matches(&marker, nonce));
-                    let same_host = owner_host.as_deref() == Some(current_host.as_str());
-                    if !explicitly_released && same_host && pid.is_some_and(process_is_alive) {
-                        return Ok(None);
-                    }
-                    if !explicitly_released
-                        && !same_host
-                        && owner_host.is_some()
-                        && lease_age.is_none_or(|age| age <= REMOTE_LEASE_TIMEOUT)
-                    {
-                        return Ok(None);
-                    }
-                    if !explicitly_released
-                        && owner_host.is_none()
-                        && lease_age.is_none_or(|age| age <= LEGACY_LEASE_TIMEOUT)
-                    {
-                        return Ok(None);
-                    }
-                    let quarantine =
-                        claims_dir.join(format!(".{source_sha256}.reclaim-{}", Uuid::new_v4()));
-                    match std::fs::rename(&marker, &quarantine) {
-                        Ok(()) => {
-                            std::fs::remove_dir_all(&quarantine).map_err(|remove_error| {
-                                format!("Не удалось очистить перехваченную блокировку источника: {remove_error}")
-                            })?;
-                        }
-                        Err(rename_error)
-                            if rename_error.kind() == std::io::ErrorKind::NotFound =>
-                        {
-                            continue;
-                        }
-                        Err(rename_error) => {
-                            return Err(format!(
-                                "Не удалось атомарно перехватить истёкшую блокировку источника: {rename_error}"
-                            ));
-                        }
-                    }
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "Не удалось установить блокировку источника: {error}"
-                    ));
-                }
-            }
-        }
-        Err("Не удалось восстановить блокировку источника после сбоя.".into())
-    }
-
-    fn ensure_current(&self) -> Result<(), String> {
-        if !processing_owner_matches(&self.marker, &self.owner_nonce) {
-            return Err(
-                "Блокировка обработки была передана другому экземпляру; устаревший результат не опубликован."
-                    .into(),
-            );
-        }
-        std::fs::write(
-            processing_heartbeat_path(&self.marker, &self.owner_nonce),
-            unix_now_seconds().to_string(),
-        )
-        .map_err(|error| format!("Не удалось продлить блокировку обработки: {error}"))?;
-        if !processing_owner_matches(&self.marker, &self.owner_nonce) {
-            return Err(
-                "Блокировка обработки изменилась во время продления; устаревший результат не опубликован."
-                    .into(),
-            );
-        }
-        Ok(())
-    }
-}
-
-impl Drop for ProcessingGuard {
-    fn drop(&mut self) {
-        self.heartbeat_stop.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.heartbeat_thread.take() {
-            let _ = thread.join();
-        }
-        if processing_owner_matches(&self.marker, &self.owner_nonce) {
-            let _ = std::fs::write(
-                processing_release_path(&self.marker, &self.owner_nonce),
-                format!(
-                    "nonce={}\nreleased_unix={}\n",
-                    self.owner_nonce,
-                    unix_now_seconds()
-                ),
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod processing_guard_fencing_tests {
     use super::*;
@@ -2256,6 +2056,8 @@ include!("subsystems/quality_telemetry.rs");
 include!("subsystems/process_blueprints.rs");
 include!("subsystems/clause_block_commands.rs");
 
+include!("subsystems/processing_guard.rs");
+include!("subsystems/shared_completion_guards.rs");
 include!("subsystems/automation_dedup.rs");
 include!("subsystems/automation_runtime.rs");
 
@@ -2756,6 +2558,99 @@ mod tests {
         let db = root.join("state.sqlite");
         std::fs::write(root.join("state.sqlite.key"), b"short").expect("bad key");
         assert!(load_or_create_local_data_key(&db).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_local_key_migration_recovers_single_raw_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-key-recovery-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let key_path = root.join("state.sqlite.key");
+        let backup = root.join("state.sqlite.key.raw.interrupted.bak");
+        let raw_key = [7u8; 32];
+        std::fs::write(&backup, raw_key).unwrap();
+
+        super::recover_interrupted_key_migration(&key_path).expect("recover raw backup");
+
+        assert_eq!(std::fs::read(&key_path).unwrap(), raw_key);
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ambiguous_local_key_backups_fail_closed_without_guessing() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-key-ambiguous-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let key_path = root.join("state.sqlite.key");
+        let first = root.join("state.sqlite.key.raw.first.bak");
+        let second = root.join("state.sqlite.key.raw.second.bak");
+        std::fs::write(&first, [1u8; 32]).unwrap();
+        std::fs::write(&second, [2u8; 32]).unwrap();
+
+        let error = super::recover_interrupted_key_migration(&key_path)
+            .expect_err("multiple raw backups must not be guessed");
+
+        assert!(error.contains("несколько резервных копий"), "{error}");
+        assert!(!key_path.exists());
+        assert!(first.is_file());
+        assert!(second.is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_primary_key_preserves_raw_backup_for_manual_recovery() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-key-corrupt-primary-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("state.sqlite");
+        let key_path = root.join("state.sqlite.key");
+        let backup = root.join("state.sqlite.key.raw.recovery.bak");
+        std::fs::write(&key_path, b"corrupt-primary").unwrap();
+        std::fs::write(&backup, [4u8; 32]).unwrap();
+
+        super::recover_interrupted_key_migration(&key_path).expect("primary path is present");
+        assert!(
+            backup.is_file(),
+            "backup must survive before primary validation"
+        );
+        assert!(load_or_create_local_data_key(&db).is_err());
+        assert!(
+            backup.is_file(),
+            "failed primary decode must preserve raw backup"
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), [4u8; 32]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn existing_local_key_removes_stale_raw_backup_or_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-key-cleanup-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let key_path = root.join("state.sqlite.key");
+        let backup = root.join("state.sqlite.key.raw.stale.bak");
+        std::fs::write(&key_path, b"protected-key-envelope").unwrap();
+        std::fs::write(&backup, [9u8; 32]).unwrap();
+
+        super::recover_interrupted_key_migration(&key_path).expect("preserve valid primary");
+        assert!(
+            backup.is_file(),
+            "backup must survive until primary validation"
+        );
+        super::cleanup_raw_key_backups(&key_path).expect("remove raw backup after validation");
+
+        assert_eq!(std::fs::read(&key_path).unwrap(), b"protected-key-envelope");
+        assert!(!backup.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

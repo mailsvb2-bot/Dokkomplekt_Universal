@@ -1,15 +1,10 @@
 // Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
 
 const MEDICAL_RVK_OPTIONS_BLOCK_ID: &str = "professional.medical.rvk.quick_options";
-const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v4";
-const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str = concat!(
-    "{{#each diaries}}\n",
-    "{{diary.datetime}} {{diary.text}}\n",
-    "{{diary.treating_physician_signature}}\n",
-    "{{diary.department_head_signature}}\n",
-    "\n",
-    "{{/each}}\n",
-);
+const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v5";
+const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str =
+    dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
+
 
 fn stored_clause_block(app: &tauri::AppHandle, block_id: &str) -> Result<Option<String>, String> {
     let blocks = repository_for(&default_state_db_path(app)?)?
@@ -18,31 +13,44 @@ fn stored_clause_block(app: &tauri::AppHandle, block_id: &str) -> Result<Option<
     Ok(blocks.get(block_id).cloned())
 }
 
+fn parse_profile_quick_options(content: &str) -> Vec<String> {
+    let values = match serde_json::from_str::<Vec<String>>(content) {
+        Ok(values) => values,
+        Err(error) => {
+            // Quick options are optional convenience data. Corruption here must
+            // never brick document generation; the canonical prompt still allows
+            // manual input and remains the source of truth.
+            eprintln!("Повреждённые профильные быстрые варианты проигнорированы: {error}");
+            return Vec::new();
+        }
+    };
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && seen.insert(value.to_lowercase()))
+        .collect()
+}
+
 fn profile_quick_options(app: &tauri::AppHandle, block_id: &str) -> Result<Vec<String>, String> {
     let Some(content) = stored_clause_block(app, block_id)? else {
         return Ok(Vec::new());
     };
-    let values = serde_json::from_str::<Vec<String>>(&content)
-        .map_err(|error| format!("Профильные быстрые варианты повреждены: {error}"))?;
-    let mut seen = BTreeSet::new();
-    Ok(values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && seen.insert(value.to_lowercase()))
-        .collect())
+    Ok(parse_profile_quick_options(&content))
 }
 
 fn apply_profile_prompt_overrides(
     app: &tauri::AppHandle,
     plan: &mut WorkflowPlan,
 ) -> Result<(), String> {
-    let rvk_options = profile_quick_options(app, MEDICAL_RVK_OPTIONS_BLOCK_ID)?;
-    if !rvk_options.is_empty() {
-        if let Some(prompt) = plan
-            .prompts
-            .iter_mut()
-            .find(|prompt| prompt.field_id == "medical.rvk_commissariat")
-        {
+    if let Some(prompt_index) = plan
+        .prompts
+        .iter()
+        .position(|prompt| prompt.field_id == "medical.rvk_commissariat")
+    {
+        let rvk_options = profile_quick_options(app, MEDICAL_RVK_OPTIONS_BLOCK_ID)?;
+        if !rvk_options.is_empty() {
+            let prompt = &mut plan.prompts[prompt_index];
             prompt.options = rvk_options;
             prompt.allow_custom_option = true;
             prompt.help_text = Some(
@@ -129,7 +137,8 @@ fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, St
             .map(|text| {
                 text.contains("{{#each diaries}}")
                     && text.contains("{{diary.datetime}}")
-                    && text.contains("{{diary.text}}")
+                    && text.contains("{{#if diary.is_final}}")
+                    && text.contains("{{else}}{{diary.text}}{{/if}}")
                     && text.contains("{{diary.treating_physician_signature}}")
                     && text.contains("{{diary.department_head_signature}}")
             })
@@ -157,4 +166,22 @@ fn medical_diary_template_override(
         return Ok(None);
     }
     program_calendar_diary_template(app).map(Some)
+}
+
+#[cfg(test)]
+mod profile_sources_tests {
+    use super::parse_profile_quick_options;
+
+    #[test]
+    fn corrupted_optional_quick_options_do_not_block_the_profile() {
+        assert!(parse_profile_quick_options("{broken json").is_empty());
+    }
+
+    #[test]
+    fn quick_options_are_trimmed_and_deduplicated_case_insensitively() {
+        let options = parse_profile_quick_options(
+            r#"[" Ленинский ", "ленинский", "", "Сормовский"]"#,
+        );
+        assert_eq!(options, vec!["Ленинский", "Сормовский"]);
+    }
 }

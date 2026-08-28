@@ -41,7 +41,7 @@ pub struct UsageReservation {
     pub trial: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CounterValue {
     pub counter_key: String,
     pub year: i32,
@@ -278,6 +278,7 @@ impl LocalRepository {
               documents INTEGER NOT NULL,
               trial INTEGER NOT NULL,
               status TEXT NOT NULL,
+              recovery_protocol TEXT NOT NULL DEFAULT 'legacy_conservative',
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -373,6 +374,11 @@ impl LocalRepository {
             "case_runs",
             "processing_fingerprint",
             "TEXT NOT NULL DEFAULT ''",
+        )?;
+        self.ensure_column(
+            "usage_reservations",
+            "recovery_protocol",
+            "TEXT NOT NULL DEFAULT 'legacy_conservative'",
         )?;
         Ok(())
     }
@@ -624,6 +630,14 @@ impl LocalRepository {
         Ok(())
     }
 
+    pub fn protect_local_value(&self, plaintext: &str) -> StorageResult<String> {
+        self.encode_sensitive(plaintext)
+    }
+
+    pub fn unprotect_local_value(&self, stored: &str) -> StorageResult<String> {
+        self.decode_sensitive(stored)
+    }
+
     pub fn list_clause_blocks(&self) -> StorageResult<Vec<ClauseBlockRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT block_id,title,content,updated_at FROM clause_blocks ORDER BY block_id",
@@ -667,6 +681,40 @@ impl LocalRepository {
         )?;
         Ok(())
     }
+    /// Atomically replace a scoped set of reusable clause blocks. Values are
+    /// encrypted before the transaction starts so a crypto failure cannot leave
+    /// the database half-updated.
+    pub fn replace_clause_blocks(
+        &mut self,
+        delete_block_ids: &[String],
+        replacements: &[(String, String, String)],
+    ) -> StorageResult<()> {
+        let encrypted = replacements
+            .iter()
+            .map(|(block_id, title, content)| {
+                Ok((
+                    block_id.clone(),
+                    self.encode_sensitive(title)?,
+                    self.encode_sensitive(content)?,
+                ))
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
+        let tx = self.conn.transaction()?;
+        for block_id in delete_block_ids {
+            tx.execute(
+                "DELETE FROM clause_blocks WHERE block_id=?1",
+                params![block_id],
+            )?;
+        }
+        for (block_id, title, content) in encrypted {
+            tx.execute(
+                "INSERT INTO clause_blocks(block_id,title,content) VALUES (?1,?2,?3) ON CONFLICT(block_id) DO UPDATE SET title=excluded.title,content=excluded.content,updated_at=CURRENT_TIMESTAMP",
+                params![block_id, title, content],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn clause_blocks_map(&self) -> StorageResult<std::collections::BTreeMap<String, String>> {
         Ok(self
             .list_clause_blocks()?
@@ -697,9 +745,9 @@ impl LocalRepository {
         })
     }
 
-    /// Reserves commercial usage under an IMMEDIATE transaction. This is the
-    /// only supported writer path for UI and background processes, preventing
-    /// lost updates and limit bypass by concurrent generation.
+    /// Reserves commercial usage using the legacy conservative crash policy.
+    /// Existing callers keep the historical behavior: stale ambiguous rows are
+    /// finalized rather than refunded.
     pub fn reserve_usage(
         &mut self,
         month_key: &str,
@@ -707,6 +755,49 @@ impl LocalRepository {
         trial: bool,
         monthly_limit: u32,
         trial_total_limit: u32,
+    ) -> StorageResult<UsageReservation> {
+        self.reserve_usage_internal(
+            month_key,
+            documents,
+            trial,
+            monthly_limit,
+            trial_total_limit,
+            "legacy_conservative",
+        )
+    }
+
+    /// Reserves usage for the publication-receipt v3 protocol. If the process
+    /// dies before any receipt exists, startup recovery can prove that no
+    /// publication boundary was crossed and safely refund this reservation.
+    pub fn reserve_usage_with_publication_recovery(
+        &mut self,
+        month_key: &str,
+        documents: u32,
+        trial: bool,
+        monthly_limit: u32,
+        trial_total_limit: u32,
+    ) -> StorageResult<UsageReservation> {
+        self.reserve_usage_internal(
+            month_key,
+            documents,
+            trial,
+            monthly_limit,
+            trial_total_limit,
+            "publication_receipt_v3",
+        )
+    }
+
+    /// Reserves commercial usage under an IMMEDIATE transaction. This is the
+    /// only supported writer path for UI and background processes, preventing
+    /// lost updates and limit bypass by concurrent generation.
+    fn reserve_usage_internal(
+        &mut self,
+        month_key: &str,
+        documents: u32,
+        trial: bool,
+        monthly_limit: u32,
+        trial_total_limit: u32,
+        recovery_protocol: &str,
     ) -> StorageResult<UsageReservation> {
         if documents == 0 {
             return Err(StorageError::Crypto(
@@ -755,8 +846,14 @@ impl LocalRepository {
                 .unwrap_or_default()
         );
         tx.execute(
-            "INSERT INTO usage_reservations(reservation_id,month_key,documents,trial,status) VALUES (?1,?2,?3,?4,'reserved')",
-            params![reservation_id, month_key, requested, if trial { 1 } else { 0 }],
+            "INSERT INTO usage_reservations(reservation_id,month_key,documents,trial,status,recovery_protocol) VALUES (?1,?2,?3,?4,'reserved',?5)",
+            params![
+                reservation_id,
+                month_key,
+                requested,
+                if trial { 1 } else { 0 },
+                recovery_protocol,
+            ],
         )?;
         tx.commit()?;
         Ok(UsageReservation {
@@ -854,13 +951,34 @@ impl LocalRepository {
         Ok(true)
     }
 
-    /// Finalizes old ambiguous reservations conservatively after a hard crash.
-    ///
-    /// Usage is incremented when a reservation is created. A process can die after
-    /// publishing a complete document but before it flips the reservation to
-    /// `committed`; automatically subtracting such a row later creates a quota-bypass
-    /// window. Explicit, observed generation failures still call `rollback_usage` and
-    /// are refunded. Ambiguous crash leftovers are therefore finalized without a refund.
+    /// Returns stale v3 reservations that are still awaiting a publication
+    /// receipt. The caller must additionally prove that the deterministic receipt
+    /// path does not exist before refunding one of these rows.
+    pub fn stale_publication_recovery_reservations(
+        &self,
+        max_age_minutes: u32,
+    ) -> StorageResult<Vec<UsageReservation>> {
+        let modifier = format!("-{} minutes", max_age_minutes.max(60));
+        let mut statement = self.conn.prepare(
+            "SELECT reservation_id,month_key,documents,trial FROM usage_reservations WHERE status='reserved' AND recovery_protocol='publication_receipt_v3' AND created_at <= datetime('now', ?1) ORDER BY created_at,reservation_id",
+        )?;
+        let rows = statement.query_map(params![modifier], |row| {
+            let documents: i64 = row.get(2)?;
+            let trial: i64 = row.get(3)?;
+            Ok(UsageReservation {
+                reservation_id: row.get(0)?,
+                month_key: row.get(1)?,
+                documents: documents.max(0).try_into().unwrap_or(u32::MAX),
+                trial: trial != 0,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    /// Finalizes only legacy ambiguous reservations conservatively after a hard
+    /// crash. Receipt-v3 rows are intentionally excluded: the application layer
+    /// reconciles their deterministic publication evidence first.
     pub fn recover_stale_usage_reservations(
         &mut self,
         max_age_minutes: u32,
@@ -870,7 +988,7 @@ impl LocalRepository {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let changed = tx.execute(
-            "UPDATE usage_reservations SET status='committed_after_crash',updated_at=CURRENT_TIMESTAMP WHERE status='reserved' AND created_at <= datetime('now', ?1)",
+            "UPDATE usage_reservations SET status='committed_after_crash',updated_at=CURRENT_TIMESTAMP WHERE status='reserved' AND recovery_protocol='legacy_conservative' AND created_at <= datetime('now', ?1)",
             params![modifier],
         )?;
         tx.commit()?;
@@ -2184,6 +2302,29 @@ mod tests {
     }
 
     #[test]
+    fn publication_recovery_reservations_are_not_legacy_finalized() {
+        let path = temp_db("usage-publication-recovery");
+        let mut repo = LocalRepository::open(&path).unwrap();
+        let reservation = repo
+            .reserve_usage_with_publication_recovery("2026-07", 2, true, 30, 30)
+            .unwrap();
+        repo.conn
+            .execute(
+                "UPDATE usage_reservations SET created_at=datetime('now','-2 hours') WHERE reservation_id=?1",
+                params![reservation.reservation_id.as_str()],
+            )
+            .unwrap();
+
+        assert_eq!(repo.recover_stale_usage_reservations(30).unwrap(), 0);
+        let stale = repo.stale_publication_recovery_reservations(30).unwrap();
+        assert_eq!(stale, vec![reservation.clone()]);
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 2);
+        assert!(repo.rollback_usage(&reservation).unwrap());
+        assert_eq!(repo.usage_snapshot("2026-07").unwrap().created_documents, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn usage_rollback_uses_persisted_reservation_fields_as_source_of_truth() {
         let path = temp_db("usage-persisted-source-of-truth");
         let mut repo = LocalRepository::open(&path).unwrap();
@@ -2655,6 +2796,119 @@ mod tests {
         assert!(repo.list_clause_blocks().unwrap().is_empty());
         let _ = std::fs::remove_file(path);
     }
+    #[test]
+    fn clause_block_family_replacement_is_atomic_and_preserves_unrelated_keys() {
+        let path = temp_db("blocks-family-replace");
+        let mut repo = LocalRepository::open_with_key(&path, [42u8; 32]).unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.regular.f200",
+            "old regular",
+            "СТАРЫЙ regular",
+        )
+        .unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.final.f200",
+            "old final",
+            "СТАРЫЙ final",
+        )
+        .unwrap();
+        repo.save_clause_block("professional.medical.diary.regular.f321", "other", "ДРУГОЙ")
+            .unwrap();
+
+        repo.replace_clause_blocks(
+            &[
+                "professional.medical.diary.regular.f200".into(),
+                "professional.medical.diary.final.f200".into(),
+            ],
+            &[(
+                "professional.medical.diary.regular.f200".into(),
+                "current regular".into(),
+                "АКТУАЛЬНЫЙ regular".into(),
+            )],
+        )
+        .unwrap();
+
+        let blocks = repo.clause_blocks_map().unwrap();
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.regular.f200")
+                .map(String::as_str),
+            Some("АКТУАЛЬНЫЙ regular")
+        );
+        assert!(!blocks.contains_key("professional.medical.diary.final.f200"));
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.regular.f321")
+                .map(String::as_str),
+            Some("ДРУГОЙ")
+        );
+        let raw: String = repo
+            .conn
+            .query_row(
+                "SELECT title || content FROM clause_blocks WHERE block_id=?1",
+                params!["professional.medical.diary.regular.f200"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("АКТУАЛЬНЫЙ"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn clause_block_family_replacement_rolls_back_deletes_when_insert_fails() {
+        let path = temp_db("blocks-family-replace-rollback");
+        let mut repo = LocalRepository::open_with_key(&path, [43u8; 32]).unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.regular.f200",
+            "old regular",
+            "СТАРЫЙ regular",
+        )
+        .unwrap();
+        repo.save_clause_block(
+            "professional.medical.diary.final.f200",
+            "old final",
+            "СТАРЫЙ final",
+        )
+        .unwrap();
+        repo.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_diary_replace BEFORE INSERT ON clause_blocks \
+                 WHEN NEW.block_id='professional.medical.diary.regular.f200' \
+                 BEGIN SELECT RAISE(ABORT, 'forced replacement failure'); END;",
+            )
+            .unwrap();
+
+        let error = repo
+            .replace_clause_blocks(
+                &[
+                    "professional.medical.diary.regular.f200".into(),
+                    "professional.medical.diary.final.f200".into(),
+                ],
+                &[(
+                    "professional.medical.diary.regular.f200".into(),
+                    "new regular".into(),
+                    "НОВЫЙ regular".into(),
+                )],
+            )
+            .expect_err("forced insert failure must abort the whole replacement");
+        assert!(error.to_string().contains("forced replacement failure"));
+
+        let blocks = repo.clause_blocks_map().unwrap();
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.regular.f200")
+                .map(String::as_str),
+            Some("СТАРЫЙ regular")
+        );
+        assert_eq!(
+            blocks
+                .get("professional.medical.diary.final.f200")
+                .map(String::as_str),
+            Some("СТАРЫЙ final")
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn save_pack_atomically_refreshes_encrypted_workspace_profile() {
         let path = temp_db("workspace-profile-pack");

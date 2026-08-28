@@ -18,6 +18,19 @@ const MEDICAL_DIARY_COLLECTIONS: [&str; 2] = ["diaries", "medical_diaries"];
 const MEDICAL_DIARY_TEXT_COLLECTIONS: [&str; 2] = ["medical_diary_texts", "diary_texts"];
 const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. Общее самочувствие стабильное, режим соблюдает, назначения выполняет. На текущую дату оформлена выписка из стационара. Даны рекомендации.";
 
+pub const MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT: &str = concat!(
+    "{{#each diaries}}\n",
+    "{{diary.datetime}} {{#if diary.is_final}}",
+    "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. ",
+    "Общее самочувствие стабильное, режим соблюдает, назначения выполняет. ",
+    "На текущую дату оформлена выписка из стационара. Даны рекомендации",
+    "{{else}}{{diary.text}}{{/if}}\n",
+    "{{diary.treating_physician_signature}}\n",
+    "{{diary.department_head_signature}}\n",
+    "\n",
+    "{{/each}}\n",
+);
+
 pub fn prepare_professional_collections(template: &str, case: &SemanticCase) -> SemanticCase {
     let mut prepared = professional_records::prepare_professional_collections(template, case);
     if !is_medical_case(case) {
@@ -114,9 +127,11 @@ fn has_explicit_final_diary_source(case: &SemanticCase) -> bool {
         }
     }
 
-    case.blocks.iter().any(|(id, value)| {
-        id.starts_with("professional.medical.diary.final.") && !value.trim().is_empty()
-    })
+    case.get("medical.diagnosis")
+        .map(str::trim)
+        .filter(|diagnosis| !diagnosis.is_empty())
+        .and_then(|diagnosis| professional_records::persistent_final_diary_source(case, diagnosis))
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn source_row_is_final(row: &SemanticRecord) -> bool {
@@ -369,6 +384,150 @@ mod tests {
             .unwrap()
             .iter()
             .all(|row| !record_bool(row, "is_dynamic_epicrisis")));
+    }
+
+    #[test]
+    fn diagnosis_bound_persistent_text_feeds_every_regular_diary_row_and_keeps_final_fallback() {
+        let mut case = base_case("Нет");
+        case.collections.remove("medical_diary_texts");
+        insert(
+            &mut case,
+            "medical.diagnosis",
+            "F20.0 Шизофрения параноидная",
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Профессиональный текст дневника, явно выбранный врачом для текущего диагноза и пациента.".into(),
+        );
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let rows = prepared.collection("diaries").expect("diaries");
+        assert!(rows.iter().all(|row| row.get("text").is_some()));
+        let regular = rows
+            .iter()
+            .find(|row| !record_bool(row, "is_final"))
+            .expect("regular row");
+        assert!(regular
+            .get("text")
+            .unwrap()
+            .as_text()
+            .contains("явно выбранный врачом"));
+        let final_row = rows
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final row");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            NEUTRAL_FINAL_DIARY_TEXT
+        );
+    }
+
+    #[test]
+    fn compatible_legacy_final_remains_available_without_a_canonical_tombstone() {
+        let mut case = base_case("Нет");
+        case.collections.remove("medical_diary_texts");
+        insert(
+            &mut case,
+            "medical.diagnosis",
+            "F20.0 Шизофрения параноидная",
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Актуальный обычный дневниковый текст, подтверждённый врачом.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200шизофренияпараноидная".into(),
+            "Legacy финальный текст, который остаётся допустимым до явной замены набора.".into(),
+        );
+
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            "Legacy финальный текст, который остаётся допустимым до явной замены набора."
+        );
+    }
+
+    #[test]
+    fn persistent_final_from_another_diagnosis_is_not_active_for_current_case() {
+        let mut case = base_case("Нет");
+        case.collections.remove("medical_diary_texts");
+        insert(
+            &mut case,
+            "medical.diagnosis",
+            "F20.0 Шизофрения параноидная",
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Актуальный обычный дневниковый текст, подтверждённый врачом.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f321".into(),
+            "Финальный текст совершенно другого диагноза.".into(),
+        );
+
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            NEUTRAL_FINAL_DIARY_TEXT
+        );
+    }
+
+    #[test]
+    fn canonical_final_tombstone_makes_stale_legacy_final_inactive() {
+        let mut case = base_case("Нет");
+        case.collections.remove("medical_diary_texts");
+        insert(
+            &mut case,
+            "medical.diagnosis",
+            "F20.0 Шизофрения параноидная",
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Актуальный обычный дневниковый текст, подтверждённый врачом.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200шизофренияпараноидная".into(),
+            "СТАРЫЙ финальный текст из прежней схемы ключей.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200".into(),
+            String::new(),
+        );
+
+        let prepared = prepare_professional_collections(
+            "{{#each diaries}}{{diary.date}} {{diary.text}}{{/each}}",
+            &case,
+        );
+        let final_row = prepared
+            .collection("diaries")
+            .unwrap()
+            .iter()
+            .find(|row| record_bool(row, "is_final"))
+            .expect("final discharge diary must exist");
+        assert_eq!(
+            final_row.get("text").unwrap().as_text(),
+            NEUTRAL_FINAL_DIARY_TEXT
+        );
     }
 
     #[test]

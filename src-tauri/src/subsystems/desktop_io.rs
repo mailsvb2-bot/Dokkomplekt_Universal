@@ -447,10 +447,10 @@ fn render_docx_with_assets(
     case: &SemanticCase,
     strict: bool,
     watermark: Option<&str>,
-) -> Result<dokkomplekt_core::RenderResult, String> {
+) -> Result<RenderedDocxProof, String> {
     let template_text = extract_docx_text(template_path).map_err(|error| error.to_string())?;
     let image_fields = template_image_requests(&template_text);
-    let result = render_docx_file_with_watermark(
+    let proof = render_docx_file_with_watermark_proof(
         template_path,
         output_path,
         case,
@@ -459,7 +459,7 @@ fn render_docx_with_assets(
     )
     .map_err(|error| error.to_string())?;
     if image_fields.is_empty() {
-        return Ok(result);
+        return Ok(proof);
     }
     let mut assets = Vec::new();
     for field_id in image_fields {
@@ -489,7 +489,7 @@ fn render_docx_with_assets(
         assets.push((field_id, path));
     }
     inject_word_image_assets(output_path, &assets)?;
-    Ok(result)
+    Ok(proof)
 }
 
 fn inject_word_image_assets(document: &Path, assets: &[(String, PathBuf)]) -> Result<(), String> {

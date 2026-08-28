@@ -4,6 +4,7 @@ from pathlib import Path
 def test_active_templates_bind_to_published_archives_and_update_uses_one_snapshot():
     source = Path("src-tauri/src/subsystems/document_commands.rs").read_text(encoding="utf-8")
     main = Path("src-tauri/src/main.rs").read_text(encoding="utf-8")
+    startup = Path("src-tauri/src/subsystems/startup_state.rs").read_text(encoding="utf-8")
 
     assert "bind_loaded_pack_to_published_template_versions" in source
     assert "verify_published_template_version_file(&archived_path, &record)?" in source
@@ -17,10 +18,11 @@ def test_active_templates_bind_to_published_archives_and_update_uses_one_snapsho
     assert "candidate_snapshot.ensure_current()?;" in source
     assert "load_state_from(\n    app: &tauri::AppHandle," in source
     assert "load_state_from(&app, &db_path, &state, false)?;" in source
-    assert "load_state_from(&handle, &db_path, &state, true)" in main
+    assert "ensure_default_state_loaded(&handle, &state)" in main
+    assert "load_state_from_locked(app, &db_path, state, true)" in startup
 
-    loader_start = source.index("fn load_state_from(")
-    loader_end = source.index("#[tauri::command]\nfn load_state(", loader_start)
+    loader_start = source.index("fn load_state_from_locked(")
+    loader_end = source.index("fn load_state_from(", loader_start)
     loader = source[loader_start:loader_end]
     assert "let loaded_pack = repo.load_pack" in loader
     assert "bind_loaded_pack_to_published_template_versions(app, &repo, &mut pack)?" in loader

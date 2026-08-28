@@ -15,7 +15,7 @@ def tail_between(text: str, start: str, end: str) -> str:
 
 def test_published_outputs_are_never_deleted_or_refunded_after_boundary() -> None:
     document = read('src-tauri/src/subsystems/document_commands.rs')
-    single = tail_between(document, '    let mut publication_warnings = Vec::new();', '#[derive(Debug, Deserialize)]\nstruct RenderDocxBatchRequest')
+    single = tail_between(document, '    let mut publication_warnings = match generation_publication::confirm_publication(', '#[derive(Debug, Deserialize)]\nstruct RenderDocxBatchRequest')
     assert 'rollback_generation_access' not in single
     assert 'rollback_counter_reservations' not in single
     assert 'remove_file(&output_path)' not in single
@@ -28,14 +28,14 @@ def test_published_outputs_are_never_deleted_or_refunded_after_boundary() -> Non
     assert 'generation_publication::finalize_published_generation' in batch
 
     mail = read('src-tauri/src/subsystems/automation_mail_merge.rs')
-    published = mail[mail.index('    let mut warnings = Vec::new();'):]
+    published = mail[mail.index('    let mut warnings = match generation_publication::confirm_publication('):]
     assert 'rollback_generation_access' not in published
     assert 'rollback_counter_reservations' not in published
     assert 'remove_dir_all(&published)' not in published
     assert 'generation_publication::finalize_published_generation' in published
 
     automation = read('src-tauri/src/subsystems/automation_runtime.rs')
-    after_publish = tail_between(automation, '// The filesystem publication is the irreversible business boundary.', 'let audit_details = serde_json::json!')
+    after_publish = tail_between(automation, 'case_run.mark_business_terminal();', 'let audit_details = serde_json::json!')
     assert 'case_run.mark_business_terminal();' in after_publish
     assert after_publish.index('case_run.mark_business_terminal();') < after_publish.index('ensure_generation_inputs_current(')
     assert 'rollback_generation_access' not in after_publish
@@ -98,7 +98,7 @@ def test_publication_warnings_cross_rust_typescript_and_ui_boundaries() -> None:
 
 def test_postpublish_template_change_is_warning_not_rollback() -> None:
     document = read('src-tauri/src/subsystems/document_commands.rs')
-    single = tail_between(document, '    let mut publication_warnings = Vec::new();', '#[derive(Debug, Deserialize)]\nstruct RenderDocxBatchRequest')
+    single = tail_between(document, '    let mut publication_warnings = match generation_publication::confirm_publication(', '#[derive(Debug, Deserialize)]\nstruct RenderDocxBatchRequest')
     assert 'published_template_changed_after_boundary' in single
     assert 'result.warnings.extend(publication_warnings)' in single
     batch = tail_between(document, '    let mut warnings = Vec::new();', '#[derive(Debug, Deserialize)]\nstruct ScannerRequest')
@@ -140,12 +140,14 @@ def test_durable_journal_is_prepared_before_every_filesystem_publication_boundar
     )
 
     automation = read('src-tauri/src/subsystems/automation_runtime.rs')
+    dedup = read('src-tauri/src/subsystems/automation_dedup.rs')
     auto_publish = automation.index('let publication_binding = generation_publication::PublicationPlanBinding')
     auto_confirm = automation.index('generation_publication::confirm_publication', auto_publish)
     assert automation.index('generation_publication::prepare_publication', auto_publish) < automation.index(
         'publish_stage_to_unique_directory', auto_publish
     ) < auto_confirm
-    assert 'completed_in_publication_guard' in automation
+    assert 'completed_in_publication_guard' in dedup
+    assert 'automatic_generation_already_processed' in automation
     assert 'complete_publication_receipt' in automation
 
 

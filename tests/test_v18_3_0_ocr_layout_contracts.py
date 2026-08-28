@@ -49,7 +49,11 @@ def test_source_layout_is_exposed_to_frontend_without_network_dependency() -> No
     assert "MAX_LAYOUT_ITEMS" in read(INTAKE)
 
 
-def test_new_case_cannot_reuse_previous_source_layout_metadata() -> None:
+def test_new_case_cannot_reuse_previous_case_or_source_metadata() -> None:
     source = read(SOURCE_INTAKE_COMMANDS)
-    assert 'reusable_blocks.retain(|key, _| !key.starts_with("source."));' in source
-    assert 'blocks.retain(|key, _| !key.starts_with("source."));' in source
+    assert "fn replace_case_from_new_source" in source
+    assert "*target = parsed;" in source
+    assert "fn new_source_drops_every_block_from_previous_case()" in source
+    assert "assert_eq!(current.blocks.len(), 1);" in source
+    assert 'contains_key("professional.medical.diary.regular.f200")' in source
+    assert 'contains_key("medical.diary.final_text")' in source

@@ -56,6 +56,7 @@ fn render_mail_merge(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<RenderMailMergeResponse, String> {
+    require_strict_document_publication(req.strict)?;
     let table = parse_delimited_table(&req.delimited_text)?;
     if table.rows.is_empty() {
         return Err("В таблице нет строк данных.".into());
@@ -123,7 +124,10 @@ fn render_mail_merge(
             let row_dir = stage.join(format!("{:04}", row_index + 1));
             std::fs::create_dir_all(&row_dir).map_err(|e| e.to_string())?;
             let row_case = case_for_mail_merge_row(&base, &table, row_index)?;
-            for template in &template_inputs {
+            for (template_index, template) in template_inputs.iter().enumerate() {
+                let document = documents
+                    .get(template_index)
+                    .ok_or_else(|| "Внутренняя ошибка соответствия mail-merge шаблона документу.".to_string())?;
                 let template_path = template.snapshot.path();
                 let hydrated = hydrate_case_with_persistent_template_data(
                     &app,
@@ -132,6 +136,11 @@ fn render_mail_merge(
                     true,
                 )?;
                 counter_reservations.extend(hydrated.counter_reservations);
+                let render_case = dokkomplekt_core::domains::case_for_document_render(
+                    &hydrated.case,
+                    &document.category,
+                    &document.role_id,
+                );
                 let ext = template_path
                     .extension()
                     .and_then(|x| x.to_str())
@@ -142,17 +151,31 @@ fn render_mail_merge(
                     sanitize_path_component(&template.button_label),
                     ext
                 ));
-                render_docx_with_assets(
+                let proof = render_docx_with_assets(
                     &app,
                     template_path,
                     &out,
-                    &hydrated.case,
+                    &render_case,
                     req.strict,
                     permit.watermark.as_deref(),
                 )
                 .map_err(|e| {
                     format!(
                         "Строка {} / {}: {e}",
+                        row_index + 1,
+                        template.button_label
+                    )
+                })?;
+                ensure_rendered_document_complete(
+                    document,
+                    &template.text,
+                    &render_case,
+                    &proof.visible_text,
+                    &out,
+                )
+                .map_err(|error| {
+                    format!(
+                        "Строка {} / {}: {error}",
                         row_index + 1,
                         template.button_label
                     )
@@ -182,7 +205,7 @@ fn render_mail_merge(
         OffsetDateTime::now_utc().date()
     ));
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &stage, None)
+        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, None)
     {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
@@ -206,14 +229,23 @@ fn render_mail_merge(
             ));
         }
     };
-    let mut warnings = Vec::new();
-    if let Err(error) =
-        generation_publication::confirm_publication(&app, &permit, &published)
-    {
-        warnings.push(format!(
-            "Пакет опубликован, но durable-квитанция не перешла в состояние published: {error}"
-        ));
-    }
+    let mut warnings = match generation_publication::confirm_publication(
+        &app,
+        &permit,
+        &published,
+    ) {
+        Ok(warnings) => warnings,
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &published,
+                None,
+                error,
+                false,
+            ));
+        }
+    };
     if let Err(error) = ensure_mail_merge_templates_current(&template_inputs) {
         warnings.push(format!(
             "Пакет уже опубликован, но один из шаблонов изменился сразу после границы публикации: {error}"

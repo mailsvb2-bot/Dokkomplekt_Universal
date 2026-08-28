@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$adversarial = $env:DOKKOMPLEKT_ADVERSARIAL -eq '1'
 $baseConfig = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
 $config = Get-Content $TauriConfig -Raw | ConvertFrom-Json
 $webViewMode = [string]$config.bundle.windows.webviewInstallMode.type
@@ -114,6 +115,12 @@ public static class DokkomplektNativeMouse {
 }
 "@
 
+function Test-UiaTransientTimeout {
+  param([Parameter(Mandatory = $true)]$ErrorRecord)
+  $message = [string]$ErrorRecord.Exception.Message
+  return $message -match 'Operation timed out|0x80131505'
+}
+
 function Wait-UiElement {
   param(
     [Parameter(Mandatory = $true)][scriptblock]$Probe,
@@ -122,7 +129,12 @@ function Wait-UiElement {
   )
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   do {
-    $element = & $Probe
+    try {
+      $element = & $Probe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $element = $null
+    }
     if ($null -ne $element) { return $element }
     Start-Sleep -Milliseconds 250
   } while ([DateTime]::UtcNow -lt $deadline)
@@ -185,10 +197,19 @@ function Find-ButtonByNames {
       [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
       [System.Windows.Automation.ControlType]::Button
     )
-    $found = $Root.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.AndCondition]::new($name, $kind)
-    )
+    $condition = [System.Windows.Automation.AndCondition]::new($name, $kind)
+    $found = $null
+    for ($attempt = 0; $attempt -lt 3 -and $null -eq $found; $attempt++) {
+      try {
+        $found = $Root.FindFirst(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          $condition
+        )
+      } catch {
+        if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+        if ($attempt -lt 2) { Start-Sleep -Milliseconds 200 }
+      }
+    }
     if ($null -ne $found) { return $found }
   }
   return $null
@@ -289,6 +310,23 @@ $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   )
   $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
+if ($adversarial) {
+  $secondProcess = Start-Process -FilePath $app.FullName -PassThru
+  $secondDeadline = [DateTime]::UtcNow.AddSeconds(12)
+  while (-not $secondProcess.HasExited -and [DateTime]::UtcNow -lt $secondDeadline) {
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $secondProcess.HasExited) {
+    Stop-Process -Id $secondProcess.Id -Force -ErrorAction SilentlyContinue
+    throw 'Adversarial single-instance check failed: second UI process remained alive.'
+  }
+  if ($secondProcess.ExitCode -ne 0) {
+    throw "Adversarial single-instance check failed: second launch exited with code $($secondProcess.ExitCode)."
+  }
+  if ($process.HasExited) { throw 'Adversarial single-instance check killed the primary UI process.' }
+  Write-Host 'ADVERSARIAL OK: second launch exited cleanly and primary UI stayed alive.'
+}
+
 # Confirm the first-run output naming rule before exercising generation. The
 # default rule is deterministic: document number + document date.
 $saveFolderRule = Find-ButtonByNames -Root $appWindow -Names @('Сохранить папку и правило')
@@ -320,7 +358,13 @@ $templateDialog = Wait-UiElement -Description 'native Word template picker' -Pro
 }
 
 # Create button from a real unmarked DOCX through the installed application's native picker.
-$plainTemplate = Join-Path $env:RUNNER_TEMP "button-smoke.docx"
+if ($adversarial) {
+  $fixtureDir = Join-Path $env:RUNNER_TEMP 'Документы с пробелами'
+  New-Item -ItemType Directory -Force -Path $fixtureDir | Out-Null
+  $plainTemplate = Join-Path $fixtureDir 'исходник проверка № 1.docx'
+} else {
+  $plainTemplate = Join-Path $env:RUNNER_TEMP 'button-smoke.docx'
+}
 New-PlainDocxFixture -Path $plainTemplate
 $fileNameEdit = Wait-UiElement -Description 'OpenFileDialog file name field' -Probe {
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
@@ -369,6 +413,92 @@ $sourceAccepted = Wait-UiElement -Description 'Источник принят aft
 }
 if ($null -eq $sourceAccepted) { throw 'Installed application did not accept the real source DOCX.' }
 Write-Host 'Real source DOCX accepted by installed application.'
+
+if ($adversarial) {
+  # A failed replacement must never erase the already accepted good source.
+  $brokenSource = Join-Path $fixtureDir 'повреждённый источник.docx'
+  [System.IO.File]::WriteAllText($brokenSource, 'this is deliberately not a DOCX archive')
+  $replaceSource = Wait-UiElement -Description 'Заменить исходный файл button' -Probe {
+    Find-ButtonByNames -Root $appWindow -Names @('Заменить исходный файл')
+  }
+  Invoke-UiElement -Element $replaceSource
+  $brokenDialog = Wait-FileDialog -Description 'native picker for broken source'
+  $brokenEdit = $brokenDialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
+  )
+  Set-UiValue -Element $brokenEdit -Value $brokenSource
+  Submit-OpenFileDialog -Dialog $brokenDialog
+  Start-Sleep -Seconds 2
+  if ($process.HasExited) { throw 'Application crashed after a corrupt DOCX replacement.' }
+  $acceptedAfterBroken = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
+  )
+  if ($null -eq $acceptedAfterBroken) { throw 'Corrupt replacement erased the previously accepted source state.' }
+  $goodSourceName = [System.IO.Path]::GetFileName($plainTemplate)
+  $goodSourceAfterBroken = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $goodSourceName)
+  )
+  $brokenSourceActive = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, [System.IO.Path]::GetFileName($brokenSource))
+  )
+  if ($null -eq $goodSourceAfterBroken -or $null -ne $brokenSourceActive) {
+    throw 'Corrupt replacement became active or displaced the previously accepted source.'
+  }
+  Write-Host 'ADVERSARIAL OK: corrupt DOCX rejected without losing previous source.'
+
+  # Cancelling the native picker is a no-op, not a destructive source reset.
+  $replaceSource = Find-ButtonByNames -Root $appWindow -Names @('Заменить исходный файл')
+  Invoke-UiElement -Element $replaceSource
+  $cancelDialog = Wait-FileDialog -Description 'native picker cancellation'
+  $cancelHandle = [IntPtr]$cancelDialog.Current.NativeWindowHandle
+  if ($cancelHandle -eq [IntPtr]::Zero) { throw 'Cancellation dialog has no native HWND.' }
+  $null = [DokkomplektNativeMouse]::SendMessagePtr($cancelHandle, 0x0111, [IntPtr]2, [IntPtr]::Zero)
+  Start-Sleep -Seconds 1
+  if ($process.HasExited) { throw 'Application crashed after native picker cancellation.' }
+  $acceptedAfterCancel = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
+  )
+  if ($null -eq $acceptedAfterCancel) { throw 'Native picker cancellation erased the accepted source.' }
+  Write-Host 'ADVERSARIAL OK: source picker cancellation preserved current case.'
+
+  # Oversized source is rejected before byte loading and must preserve current case.
+  $oversizedSource = Join-Path $fixtureDir 'слишком большой источник.docx'
+  $oversizedStream = [System.IO.File]::Open($oversizedSource, [System.IO.FileMode]::Create)
+  try { $oversizedStream.SetLength(101MB) } finally { $oversizedStream.Dispose() }
+  $replaceSource = Find-ButtonByNames -Root $appWindow -Names @('Заменить исходный файл')
+  Invoke-UiElement -Element $replaceSource
+  $oversizedDialog = Wait-FileDialog -Description 'native picker for oversized source'
+  $oversizedEdit = $oversizedDialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
+  )
+  Set-UiValue -Element $oversizedEdit -Value $oversizedSource
+  Submit-OpenFileDialog -Dialog $oversizedDialog
+  Start-Sleep -Seconds 2
+  if ($process.HasExited) { throw 'Application crashed after oversized source selection.' }
+  $acceptedAfterOversized = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
+  )
+  if ($null -eq $acceptedAfterOversized) { throw 'Oversized replacement erased the previously accepted source.' }
+  $goodSourceAfterOversized = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $goodSourceName)
+  )
+  $oversizedSourceActive = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, [System.IO.Path]::GetFileName($oversizedSource))
+  )
+  if ($null -eq $goodSourceAfterOversized -or $null -ne $oversizedSourceActive) {
+    throw 'Oversized replacement became active or displaced the previously accepted source.'
+  }
+  Write-Host 'ADVERSARIAL OK: >100MB source rejected without losing previous source.'
+}
 
 # End-to-end installed generation proof: select the real created button, open the
 # real preflight, fill deterministic folder fields when the backend asks for them,
@@ -435,9 +565,106 @@ try {
 }
 Write-Host "Installed end-to-end document generation OK: $($createdDoc.FullName)"
 
+if ($adversarial) {
+  # Repeating the same deterministic output must not overwrite the first kit.
+  $repeatAction = Wait-UiElement -Description 'repeat generation action' -TimeoutSeconds 30 -Probe {
+    Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  }
+  Invoke-UiElement -Element $repeatAction
+  $repeatPreflight = Wait-UiElement -Description 'repeat preflight' -TimeoutSeconds 30 -Probe {
+    $appWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+    )
+  }
+  $repeatGenerate = Wait-UiElement -Description 'repeat Создать документы' -TimeoutSeconds 30 -Probe {
+    Find-ButtonByNames -Root $appWindow -Names @('Создать документы')
+  }
+  Invoke-UiElement -Element $repeatGenerate
+  $otherVariants = Wait-UiElement -Description 'existing-kit Другие варианты' -TimeoutSeconds 30 -Probe {
+    Find-ButtonByNames -Root $appWindow -Names @('Другие варианты')
+  }
+  Invoke-UiElement -Element $otherVariants
+  $newVersion = Wait-UiElement -Description 'Создать новую версию' -TimeoutSeconds 30 -Probe {
+    Find-ButtonByNames -Root $appWindow -Names @('Создать новую версию')
+  }
+  Invoke-UiElement -Element $newVersion
+  $versionDeadline = [DateTime]::UtcNow.AddSeconds(60)
+  do {
+    $versionDocs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue)
+    if ($versionDocs.Count -lt 2) { Start-Sleep -Milliseconds 500 }
+  } while ($versionDocs.Count -lt 2 -and [DateTime]::UtcNow -lt $versionDeadline)
+  if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
+  $distinctFolders = @($versionDocs | ForEach-Object DirectoryName | Sort-Object -Unique)
+  if ($distinctFolders.Count -lt 2) { throw 'Repeat generation overwrote the original output folder.' }
+  Write-Host "ADVERSARIAL OK: collision created a second version in a distinct folder ($($distinctFolders.Count) folders)."
+}
+
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
 Start-Sleep -Seconds 1
+if ($adversarial) {
+  Remove-Item -LiteralPath $defaultOutputRoot -Recurse -Force -ErrorAction SilentlyContinue
+  [System.IO.File]::WriteAllText($defaultOutputRoot, 'deliberate path collision')
+  $blockedProcess = Start-Process -FilePath $app.FullName -PassThru
+  $blockedWindow = Wait-UiElement -Description 'window with output-root collision' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$blockedProcess.Id
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
+  if ($blockedProcess.HasExited) { throw 'Output-root path collision crashed the application.' }
+  if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Leaf)) {
+    throw 'Application silently replaced the deliberate output-root collision file.'
+  }
+  try {
+    $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
+      # WebView2 may rebuild its accessibility provider after startup on hosted
+      # Windows runners. Re-resolve the top-level window on every probe instead
+      # of keeping an AutomationElement whose descendant tree can go stale.
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        [int]$blockedProcess.Id
+      )
+      $currentBlockedWindow = $desktop.FindFirst(
+        [System.Windows.Automation.TreeScope]::Children,
+        $condition
+      )
+      if ($null -eq $currentBlockedWindow) { return $null }
+      $currentBlockedWindow.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          'Не удалось подготовить папку готовых документов'
+        )
+      )
+    }
+  } catch {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$blockedProcess.Id
+    )
+    $diagnosticWindow = $desktop.FindFirst(
+      [System.Windows.Automation.TreeScope]::Children,
+      $condition
+    )
+    $visibleNames = if ($null -eq $diagnosticWindow) {
+      @()
+    } else {
+      @($diagnosticWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
+    }
+    Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
+    throw
+  }
+  Write-Host 'ADVERSARIAL OK: output-root collision stayed fail-closed and visible.'
+  Stop-Process -Id $blockedProcess.Id -Force
+  $blockedProcess.WaitForExit()
+  Remove-Item -LiteralPath $defaultOutputRoot -Force
+}
 $process = Start-Process -FilePath $app.FullName -PassThru
 $appWindow = Wait-UiElement -Description 'restarted installed Dokkomplekt window' -TimeoutSeconds 30 -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -446,10 +673,37 @@ $appWindow = Wait-UiElement -Description 'restarted installed Dokkomplekt window
   )
   $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
-$persistedButton = Wait-UiElement -Description 'persisted template button after restart' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+if ($adversarial) {
+  $rootRecoveryDeadline = [DateTime]::UtcNow.AddSeconds(20)
+  while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and [DateTime]::UtcNow -lt $rootRecoveryDeadline) {
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container)) {
+    throw 'Application did not recreate Desktop output root after collision was removed.'
+  }
+  Write-Host 'ADVERSARIAL OK: Desktop output root recovered on clean restart.'
 }
-if ($null -eq $persistedButton) { throw 'Created template button was lost after application restart.' }
+$restartState = Wait-UiElement -Description 'definitive workspace state after restart' -TimeoutSeconds 30 -Probe {
+  $persisted = Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+  if ($null -ne $persisted) { return @{ Kind = 'persisted'; Element = $persisted } }
+  $recovery = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Не удалось загрузить рабочий набор'
+    )
+  )
+  if ($null -ne $recovery) { return @{ Kind = 'recovery'; Element = $recovery } }
+  $firstRun = Find-ButtonByNames -Root $appWindow -Names @('Создать свои кнопки')
+  if ($null -ne $firstRun) { return @{ Kind = 'empty'; Element = $firstRun } }
+  return $null
+}
+if ($restartState.Kind -eq 'recovery') {
+  throw 'Persisted workspace restart entered explicit recovery mode instead of restoring the saved button.'
+}
+if ($restartState.Kind -eq 'empty') {
+  throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
+}
 Write-Host 'Persisted template button survived application restart.'
 
 Stop-Process -Id $process.Id -Force

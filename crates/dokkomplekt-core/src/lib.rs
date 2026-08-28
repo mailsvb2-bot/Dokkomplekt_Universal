@@ -83,7 +83,9 @@ pub use diary_popup_profile::{
     default_popup_fields_for_document, effective_popup_fields, profession_runtime_control_fields,
     DIARY_SICK_LEAVE_EPICRISIS, DIARY_TREATMENT_CORRECTION,
 };
-pub use diary_professional_records::prepare_professional_collections;
+pub use diary_professional_records::{
+    prepare_professional_collections, MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+};
 pub use document_generation::*;
 pub use document_routing::*;
 pub use domain_plugin_layer::{

@@ -77,11 +77,25 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   }
 
   async function confirmGenerationPreflight() {
-    const workflow = options.preflightPlan;
+    const reviewedWorkflow = options.preflightPlan;
     const snapshot = generationSnapshot;
-    if (!workflow || !snapshot?.documentIds.length || options.preflightLoading || confirmationInFlight.current) return;
+    if (!reviewedWorkflow || !snapshot?.documentIds.length || options.preflightLoading || confirmationInFlight.current) return;
     confirmationInFlight.current = true;
     try {
+      // Re-read the backend-owned plan at the actual commit boundary. The case can
+      // legitimately change between opening the dialog and pressing Create.
+      // Submitting prompts from the stale reviewed plan makes the backend reject a
+      // now-satisfied field as an "unknown popup answer". The UI still owns no
+      // business rules: it submits only the newest server plan.
+      const workflow = await options.requestWorkflowPlan(snapshot);
+      if (!workflow) {
+        const message = 'Не удалось обновить план создания. Комплект не создан.';
+        setGenerationError(message);
+        setGenerationValidationFieldId(null);
+        options.setStatus(message);
+        return;
+      }
+      options.setPreflightPlan(workflow);
       if (workflow.blocked) {
         options.setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
         return;

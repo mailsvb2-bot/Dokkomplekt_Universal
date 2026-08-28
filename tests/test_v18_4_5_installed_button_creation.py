@@ -39,5 +39,15 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
     assert "Проверочная кнопка" in smoke
     assert "Create button from a real unmarked DOCX" in smoke
     assert "$application.FullName" not in smoke
-    assert smoke.count("Start-Process -FilePath $app.FullName -PassThru") == 2
+    # Baseline install/restart plus adversarial single-instance and fail-closed
+    # output-root collision launches must all exercise the installed binary.
+    assert smoke.count("Start-Process -FilePath $app.FullName -PassThru") >= 4
+    assert "$secondProcess.ExitCode -ne 0" in smoke
+    assert "ADVERSARIAL OK: second launch exited cleanly and primary UI stayed alive" in smoke
+    assert "goodSourceAfterBroken" in smoke
+    assert "brokenSourceActive" in smoke
+    assert "goodSourceAfterOversized" in smoke
+    assert "oversizedSourceActive" in smoke
+    assert "ADVERSARIAL OK: output-root collision stayed fail-closed and visible" in smoke
+    assert "ADVERSARIAL OK: Desktop output root recovered on clean restart" in smoke
     assert "Persisted template button survived application restart" in smoke

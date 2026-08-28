@@ -36,7 +36,7 @@ class V1821ResumeQueueModularizationContracts(unittest.TestCase):
             self.assertIn(invariant, storage)
         for invariant in [
             "document_input_fingerprint",
-            "dokkomplekt-resume-v2",
+            "dokkomplekt-resume-v3",
             "template_collection_references",
             "template_block_references",
             "asset_sha256",

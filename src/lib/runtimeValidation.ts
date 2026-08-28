@@ -416,6 +416,7 @@ export const COMMAND_RESPONSE_KIND = {
   'run_created_documents_intake': 'object',
   'run_workspace_hygiene': 'object',
   'save_clause_block': 'array',
+  'replace_clause_blocks': 'boolean',
   'save_learned_scanner_rule': 'array',
   'save_state': 'void',
   'select_process_blueprint': 'object',

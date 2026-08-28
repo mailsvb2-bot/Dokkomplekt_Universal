@@ -160,6 +160,8 @@ fn sanitize_picker_component(value: &str) -> String {
 }
 
 fn pick_template_files_blocking(initial_path: Option<String>) -> Result<Vec<PathBuf>, String> {
+    #[cfg(target_os = "macos")]
+    let _ = initial_path;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt as _;
@@ -273,6 +275,8 @@ return outputText
 
 
 fn pick_source_file_blocking(initial_path: Option<String>) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "macos")]
+    let _ = initial_path;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt as _;

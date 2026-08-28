@@ -172,34 +172,15 @@ fn perform_created_documents_intake(
     let processing_fingerprint =
         automation_plan_fingerprint(app, &pack, &template_snapshots, &req)?;
     let processing_job_sha256 = processing_job_key(&source_sha256, &processing_fingerprint);
-    let completed_in_history = repository_for(&default_state_db_path(app)?)?
-        .completed_case_exists_for_source_and_plan(&source_sha256, &processing_fingerprint)
-        .map_err(|error| error.to_string())?;
-    let completed_in_shared_queue =
-        shared_completion_receipt(&source, &processing_job_sha256).is_file();
-    let completed_in_local_receipts = generation_publication::local_completion_receipt_matches(
+    let processed_is_current = automatic_generation_already_processed(
+        app,
+        &source,
         &app_data,
-        &processing_job_sha256,
         &source_sha256,
         &processing_fingerprint,
-    );
-    let completed_in_emergency_marker =
-        generation_publication::plan_bound_emergency_completion_exists(&source, &processing_job_sha256);
-    let completed_in_publication_guard =
-        generation_publication::plan_bound_publication_guard_exists(
-            &app_data,
-            &processing_job_sha256,
-            &source_sha256,
-            &processing_fingerprint,
-        );
-    // Legacy adjacent markers remain non-authoritative. Only explicit
-    // plan-bound emergency publication marker can suppress a duplicate retry.
-    let processed_is_current = !req.force_reissue
-        && (completed_in_history
-            || completed_in_shared_queue
-            || completed_in_local_receipts
-            || completed_in_emergency_marker
-            || completed_in_publication_guard);
+        &processing_job_sha256,
+        req.force_reissue,
+    )?;
     if processed_is_current {
         return Ok(CreatedDocumentsIntakeResponse {
             status: "ignored".into(),
@@ -968,7 +949,7 @@ fn perform_created_documents_intake(
                             &doc.category,
                             &doc.role_id,
                         );
-                        render_docx_with_assets(
+                        let proof = render_docx_with_assets(
                             app,
                             template_snapshot.path(),
                             &out_path,
@@ -981,6 +962,7 @@ fn perform_created_documents_intake(
                             doc,
                             &template_text,
                             &render_case,
+                            &proof.visible_text,
                             &out_path,
                         )?;
                         rerendered_documents = rerendered_documents.saturating_add(1);
@@ -1087,6 +1069,7 @@ fn perform_created_documents_intake(
                 app,
                 &permit,
                 &stage,
+                &counter_reservations,
                 Some(&publication_binding),
             ) {
                 let _ = std::fs::remove_dir_all(&stage);
@@ -1112,18 +1095,89 @@ fn perform_created_documents_intake(
                     ));
                 }
             };
-            // The filesystem publication is the irreversible business boundary.
-            // From this point onward the output is never deleted and accounting is
-            // never refunded merely because best-effort metadata finalization fails.
+            // Filesystem publication is irreversible: never refund or silently delete after this boundary.
             case_run.mark_business_terminal();
-            let mut publication_warnings = Vec::new();
-            if let Err(error) =
-                generation_publication::confirm_publication(app, &permit, &patient_dir)
-            {
-                publication_warnings.push(format!(
-                    "Комплект опубликован, но durable-квитанция не перешла в состояние published: {error}"
-                ));
-            }
+            let mut publication_warnings = match generation_publication::confirm_publication(
+                app,
+                &permit,
+                &patient_dir,
+            ) {
+                Ok(warnings) => warnings,
+                Err(error) => {
+                    let recovery_message = recover_unverified_batch_publication(
+                        app,
+                        &permit,
+                        &patient_dir,
+                        None,
+                        error,
+                        true,
+                    );
+                    let emergency_guard = generation_publication::mark_plan_bound_emergency_guard(
+                        &source,
+                        &source_sha256,
+                        &processing_job_sha256,
+                        "unverified_publication_quarantined",
+                    );
+                    let queue_guard = if let Some(lease) = central_queue_lease.as_mut() {
+                        lease.complete().or_else(|queue_error| {
+                            mark_shared_completion(&source, &processing_job_sha256)
+                                .map(|_| ())
+                                .map_err(|shared_error| {
+                                    format!(
+                                        "central queue: {queue_error}; shared guard: {shared_error}"
+                                    )
+                                })
+                        })
+                    } else {
+                        mark_shared_completion(&source, &processing_job_sha256).map(|_| ())
+                    };
+                    let _ = case_run.finish(
+                        "attention",
+                        None,
+                        &[],
+                        &[],
+                        Some(&recovery_message),
+                    );
+                    let emergency_guard_status = emergency_guard
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|error| format!("ERROR: {error}"));
+                    let queue_guard_status = queue_guard
+                        .as_ref()
+                        .map(|_| "persisted".to_string())
+                        .unwrap_or_else(|error| format!("ERROR: {error}"));
+                    let details = serde_json::json!({
+                        "source_sha256": source_sha256,
+                        "processing_job_sha256": processing_job_sha256,
+                        "emergency_guard": emergency_guard_status,
+                        "queue_guard": queue_guard_status,
+                        "message": recovery_message,
+                    });
+                    let _ = create_automation_exception(
+                        app,
+                        "unverified_publication",
+                        &source.display().to_string(),
+                        "Комплект физически публиковался, но проверка точных байтов не прошла. Результат помещён в карантин, автоматический повтор заблокирован.",
+                        &details,
+                    );
+                    let _ = append_audit_event(
+                        app,
+                        "unverified_publication_attention",
+                        &source_sha256,
+                        &details,
+                    );
+                    return Ok(CreatedDocumentsIntakeResponse {
+                        status: "attention".into(),
+                        patient_folder: None,
+                        created_files: Vec::new(),
+                        created_documents: Vec::new(),
+                        missing: Vec::new(),
+                        attention_file: None,
+                        print_triage: None,
+                        message: recovery_message,
+                    });
+                }
+            };
             if let Err(error) = ensure_generation_inputs_current(
                 &source,
                 &source_sha256,
@@ -1277,12 +1331,11 @@ fn perform_created_documents_intake(
                     // Never claim that published files were rolled back. If all ordinary
                     // ledgers fail, keep either the explicit emergency marker or the
                     // pre-publication journal as the retry guard.
-                    let marker = workspace_hygiene::processed_marker_path(&source);
-                    std::fs::write(
-                        &marker,
-                        format!(
-                            "sha256={source_sha256}\nprocessing_job_sha256={processing_job_sha256}\nstatus=published_completion_ledgers_failed\n"
-                        ),
+                    generation_publication::mark_plan_bound_emergency_guard(
+                        &source,
+                        &source_sha256,
+                        &processing_job_sha256,
+                        "published_completion_ledgers_failed",
                     )
                     .is_ok()
                 } else {
@@ -2103,51 +2156,6 @@ fn list_audit_events(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn list_clause_blocks(app: tauri::AppHandle) -> Result<Vec<ClauseBlockRecord>, String> {
-    repository_for(&default_state_db_path(&app)?)?
-        .list_clause_blocks()
-        .map_err(|e| e.to_string())
-}
-#[derive(Debug, Deserialize)]
-struct SaveClauseBlockRequest {
-    block_id: String,
-    title: String,
-    content: String,
-}
-#[tauri::command]
-fn save_clause_block(
-    req: SaveClauseBlockRequest,
-    app: tauri::AppHandle,
-) -> Result<Vec<ClauseBlockRecord>, String> {
-    let id = req.block_id.trim();
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("Идентификатор блока может содержать латинские буквы, цифры, _ и -.".into());
-    }
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    repo.save_clause_block(id, req.title.trim(), &req.content)
-        .map_err(|e| e.to_string())?;
-    repo.list_clause_blocks().map_err(|e| e.to_string())
-}
-#[derive(Debug, Deserialize)]
-struct DeleteClauseBlockRequest {
-    block_id: String,
-}
-#[tauri::command]
-fn delete_clause_block(
-    req: DeleteClauseBlockRequest,
-    app: tauri::AppHandle,
-) -> Result<Vec<ClauseBlockRecord>, String> {
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    repo.delete_clause_block(req.block_id.trim())
-        .map_err(|e| e.to_string())?;
-    repo.list_clause_blocks().map_err(|e| e.to_string())
-}
-
 #[derive(Debug, Deserialize)]
 struct SuggestTemplateMarkupRequest {
     file_name: String,
@@ -2960,9 +2968,11 @@ mod publication_completion_receipt_tests {
         assert!(body.contains(&format!("processing_job_sha256={job}")));
         assert!(body.contains(&format!("source_sha256={source}")));
         assert!(body.contains(&format!("processing_fingerprint={plan}")));
-        assert!(local_completion_receipt_matches(&root, &job, &source, &plan));
+        assert!(local_completion_receipt_matches(&root, &job, &source, &plan).unwrap());
         std::fs::write(&path, b"schema=1\n").expect("corrupt local completion receipt");
-        assert!(!local_completion_receipt_matches(&root, &job, &source, &plan));
+        let error = local_completion_receipt_matches(&root, &job, &source, &plan)
+            .expect_err("corrupt completion receipt must fail closed");
+        assert!(error.contains("повреждена"), "{error}");
         assert_ne!(
             local_completion_receipt(&root, &job),
             local_completion_receipt(&root, &"d".repeat(64))

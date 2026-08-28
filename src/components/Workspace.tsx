@@ -278,7 +278,12 @@ export function Workspace(props: WorkspaceProps) {
         </details>
       </section>
 
-      <AdditionalMaterialsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} busy={props.busy} />
+      <AdditionalMaterialsPanel
+        documents={props.documents}
+        selectedDocumentIds={props.selectedDocumentIds}
+        busy={props.busy}
+        medicalDiagnosis={props.answers['medical.diagnosis']?.trim() || props.semantic?.fields.find((field) => field.field_id === 'medical.diagnosis')?.value?.trim() || ''}
+      />
 
       {sourceReady && (
         <section className="reviewStage">

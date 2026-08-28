@@ -78,10 +78,11 @@ jobs:
             }
             Write-Host "UNSIGNED PREVIEW CONFIRMED: $target"
           }
-      - name: Install, launch and uninstall smoke test
+      - name: Install, adversarially smash and uninstall preview
         shell: pwsh
         env:
           DOKKOMPLEKT_REQUIRE_AUTHENTICODE: '0'
+          DOKKOMPLEKT_ADVERSARIAL: '1'
         run: tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper
       - name: Stage clearly labelled preview artifact
         shell: pwsh
@@ -103,9 +104,23 @@ jobs:
           Windows может показать «Неизвестный издатель» или предупреждение SmartScreen.
           Это не подписанный production-релиз.
           '@ | Set-Content 'release-preview/README-UNSIGNED-PREVIEW.txt' -Encoding UTF8
+          $licenseKey = '${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}'
+          if ([string]::IsNullOrWhiteSpace($licenseKey)) {
+            @'
+
+          License mode: LOCAL TRIAL ONLY (production license verification key is not configured).
+          Режим лицензии: ТОЛЬКО ЛОКАЛЬНЫЙ TRIAL (production-ключ проверки лицензии не настроен).
+          '@ | Add-Content 'release-preview/README-UNSIGNED-PREVIEW.txt' -Encoding UTF8
+          } else {
+            @'
+
+          License mode: production license verification public key embedded.
+          Режим лицензии: встроен production public key проверки лицензии.
+          '@ | Add-Content 'release-preview/README-UNSIGNED-PREVIEW.txt' -Encoding UTF8
+          }
           $hash = Get-FileHash (Join-Path 'release-preview' $previewName) -Algorithm SHA256
           "$($hash.Hash.ToLowerInvariant())  $previewName" | Set-Content 'release-preview/SHA256SUMS.txt' -Encoding ASCII
-          "## Free unsigned Windows preview`n`n- Installer: ``$previewName```n- Signature: **NotSigned** (expected)`n- Installer smoke: passed before upload`n- SHA-256: ``$($hash.Hash.ToLowerInvariant())``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "## Free unsigned Windows preview`n`n- Installer: ``$previewName```n- Signature: **NotSigned** (expected)`n- Installer adversarial smoke: passed before upload`n- SHA-256: ``$($hash.Hash.ToLowerInvariant())``" | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Upload unsigned preview
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:

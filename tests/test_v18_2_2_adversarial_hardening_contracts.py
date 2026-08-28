@@ -105,6 +105,10 @@ class AdversarialHardeningContracts(unittest.TestCase):
         self.assertIn("verify_reboot_evidence.ps1", hardware)
         self.assertIn("post_reboot_case_completed", hardware)
         self.assertTrue((ROOT / "tests/windows/verify_reboot_evidence.ps1").is_file())
+        self.assertIn("function Test-UiaTransientTimeout", installer)
+        self.assertIn("Operation timed out|0x80131505", installer)
+        self.assertIn("if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }", installer)
+        self.assertIn("for ($attempt = 0; $attempt -lt 3", installer)
 
     def test_windows_batch_gate_is_non_mutating_and_signed(self) -> None:
         batch = read("scripts/prepackage_rust_gate.bat")

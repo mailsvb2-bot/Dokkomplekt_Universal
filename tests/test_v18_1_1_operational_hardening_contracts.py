@@ -25,6 +25,7 @@ class OperationalHardeningContracts(unittest.TestCase):
 
     def test_retained_sources_use_plan_bound_completion_evidence_without_routine_adjacent_markers(self) -> None:
         main = self.read("src-tauri/src/main.rs")
+        dedup = self.read("src-tauri/src/subsystems/automation_dedup.rs")
         storage = self.read("crates/dokkomplekt-storage/src/lib.rs")
         self.assertIn("completed_case_exists_for_source_hash", storage)
         self.assertIn("source_retained_and_tracked_in_case_history", main)
@@ -32,15 +33,20 @@ class OperationalHardeningContracts(unittest.TestCase):
         publication = self.read("src-tauri/src/generation_publication.rs")
         self.assertIn("prepare_publication", publication)
         self.assertIn("plan_bound_publication_guard_exists", publication)
-        self.assertIn("fn local_completion_receipt", main)
-        self.assertIn("completed_in_local_receipts", main)
-        self.assertIn("completed_in_emergency_marker", main)
+        self.assertIn("fn local_completion_receipt", publication)
+        self.assertIn("completed_in_local_receipts", dedup)
+        self.assertIn("completed_in_emergency_marker", dedup)
+        self.assertIn("completed_in_shared_queue", dedup)
+        self.assertIn("if force_reissue", dedup)
         self.assertIn(
             "local_completion.is_err() && queue_completion.is_err() && case_completion.is_err()",
             main,
         )
-        self.assertIn("status=published_completion_ledgers_failed", main)
-        self.assertIn("processing_job_sha256={processing_job_sha256}", main)
+        self.assertIn("mark_plan_bound_emergency_guard", publication)
+        self.assertIn("published_completion_ledgers_failed", publication)
+        self.assertIn("unverified_publication_quarantined", publication)
+        self.assertIn("generation_publication::mark_plan_bound_emergency_guard", main)
+        self.assertIn("processing_job_sha256", main)
         self.assertNotIn("status=published_source_retained_by_privacy_policy", main)
         self.assertNotIn("status=shared_receipt_failed", main)
 

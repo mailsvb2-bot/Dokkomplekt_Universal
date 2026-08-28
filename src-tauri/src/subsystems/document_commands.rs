@@ -6,7 +6,11 @@ struct FirstRunStateResponse {
 }
 
 #[tauri::command]
-fn first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateResponse, String> {
+fn first_run_state(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FirstRunStateResponse, String> {
+    ensure_default_state_loaded(&app, &state)?;
     if state.persistence_blocked.load(Ordering::SeqCst) {
         let reason = state
             .persistence_error
@@ -1094,6 +1098,7 @@ fn render_docx(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
+    require_strict_document_publication(req.strict)?;
     let doc = {
         let pack = state.pack.lock().map_err(|_| "state lock failed")?;
         pack.documents
@@ -1142,8 +1147,8 @@ fn render_docx(
         req.strict,
         permit.watermark.as_deref(),
     );
-    let mut result = match render_result {
-        Ok(result) => result,
+    let proof = match render_result {
+        Ok(proof) => proof,
         Err(error) => {
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
             rollback_generation_access(&app, &state, &permit);
@@ -1154,6 +1159,7 @@ fn render_docx(
         &doc,
         &template_text,
         &render_case,
+        &proof.visible_text,
         &reservation.path,
     ) {
         let _ = std::fs::remove_file(&reservation.path);
@@ -1161,13 +1167,14 @@ fn render_docx(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    let mut result = proof.render_result;
     if let Err(error) = template_snapshot.ensure_current() {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &reservation.path, None)
+        generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, None)
     {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
@@ -1189,14 +1196,23 @@ fn render_docx(
             ));
         }
     };
-    let mut publication_warnings = Vec::new();
-    if let Err(error) =
-        generation_publication::confirm_publication(&app, &permit, &output_path)
-    {
-        publication_warnings.push(format!(
-            "Документ опубликован, но durable-квитанция не перешла в состояние published: {error}"
-        ));
-    }
+    let mut publication_warnings = match generation_publication::confirm_publication(
+        &app,
+        &permit,
+        &output_path,
+    ) {
+        Ok(warnings) => warnings,
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &output_path,
+                None,
+                error,
+                false,
+            ));
+        }
+    };
     if let Err(error) = template_snapshot.ensure_current() {
         publication_warnings.push(format!(
             "Документ уже опубликован, но шаблон изменился сразу после границы публикации: {error}"
@@ -1266,6 +1282,7 @@ fn render_docx_batch(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<RenderDocxBatchResponse, String> {
+    require_strict_document_publication(req.strict)?;
     let mut requested_ids = req
         .document_ids
         .into_iter()
@@ -1410,20 +1427,20 @@ fn render_docx_batch(
                 &document.category,
                 &document.role_id,
             );
-            if let Err(error) = render_docx_with_assets(
+            let proof = render_docx_with_assets(
                 &app,
                 template_snapshot.path(),
                 &reservation.path,
                 &render_case,
                 req.strict,
                 permit.watermark.as_deref(),
-            ) {
-                return Err(format!("Не создан «{}»: {error}", document.button_label));
-            }
+            )
+            .map_err(|error| format!("Не создан «{}»: {error}", document.button_label))?;
             if let Err(error) = ensure_rendered_document_complete(
                 document,
                 &template_text,
                 &render_case,
+                &proof.visible_text,
                 &reservation.path,
             ) {
                 let _ = std::fs::remove_file(&reservation.path);
@@ -1500,19 +1517,50 @@ fn render_docx_batch(
         return Err(error);
     }
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &stage, None)
+        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, None)
     {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    let replacement_backup = match req.existing_output_policy {
+        ExistingOutputPolicy::Version => None,
+        ExistingOutputPolicy::ReplaceWithBackup => {
+            let backup = planned_replacement_backup_path(
+                &desired_output_folder,
+                &permit.reservation.reservation_id,
+            );
+            if let Err(error) = generation_publication::attach_replacement_recovery(
+                &app,
+                &permit,
+                &desired_output_folder,
+                &backup,
+            ) {
+                let journal_cleanup = generation_publication::abort_prepared_publication(&app, &permit);
+                let _ = std::fs::remove_dir_all(&stage);
+                rollback_counter_reservations(&app, &counter_reservations);
+                if journal_cleanup.is_ok() {
+                    rollback_generation_access(&app, &state, &permit);
+                }
+                return Err(format!(
+                    "Не удалось подготовить recovery безопасной замены: {error}"
+                ));
+            }
+            Some(backup)
+        }
+    };
     let publication = match req.existing_output_policy {
         ExistingOutputPolicy::Version => publish_stage_to_unique_directory(&stage, &desired_output_folder)
             .map(|path| (path, None)),
-        ExistingOutputPolicy::ReplaceWithBackup => {
-            publish_stage_replacing_with_backup(&stage, &desired_output_folder)
-        }
+        ExistingOutputPolicy::ReplaceWithBackup => match replacement_backup.as_deref() {
+            Some(backup) => publish_stage_replacing_with_backup(
+                &stage,
+                &desired_output_folder,
+                backup,
+            ),
+            None => Err("Безопасная замена не получила recovery-путь резервной копии.".into()),
+        },
     };
     let (output_folder, backup_folder) = match publication {
         Ok(value) => value,
@@ -1572,6 +1620,7 @@ fn render_docx_batch(
                 &output_folder,
                 backup_folder.as_deref(),
                 error,
+                false,
             ));
         }
     };
@@ -1584,12 +1633,18 @@ fn render_docx_batch(
             backup.display()
         ));
     }
-    if let Err(error) =
-        generation_publication::confirm_publication(&app, &permit, &output_folder)
-    {
-        warnings.push(format!(
-            "Комплект проверен и опубликован, но durable-квитанция не перешла в состояние published: {error}"
-        ));
+    match generation_publication::confirm_publication(&app, &permit, &output_folder) {
+        Ok(confirmation_warnings) => warnings.extend(confirmation_warnings),
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &output_folder,
+                backup_folder.as_deref(),
+                error,
+                false,
+            ));
+        }
     }
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
         warnings.push(format!(
@@ -2746,7 +2801,7 @@ mod loaded_pack_role_canonicalization_tests {
     }
 }
 
-fn load_state_from(
+fn load_state_from_locked(
     app: &tauri::AppHandle,
     db_path: &Path,
     state: &AppState,
@@ -2816,6 +2871,19 @@ fn load_state_from(
     Ok(())
 }
 
+fn load_state_from(
+    app: &tauri::AppHandle,
+    db_path: &Path,
+    state: &AppState,
+    load_commercial_state: bool,
+) -> Result<(), String> {
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    load_state_from_locked(app, db_path, state, load_commercial_state)
+}
+
 #[tauri::command]
 fn load_state(
     req: LoadStateRequest,
@@ -2824,7 +2892,7 @@ fn load_state(
 ) -> Result<FirstRunStateResponse, String> {
     let db_path = resolve_user_path(&app, &req.db_path)?;
     load_state_from(&app, &db_path, &state, false)?;
-    first_run_state(state)
+    first_run_state(state, app)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2904,66 +2972,3 @@ fn verify_rust_license_text(
 }
 
 include!("watcher_commands.rs");
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CreatedDocumentsIntakeRequest {
-    source_path: String,
-    output_root: String,
-    #[serde(default)]
-    folder_parts: Vec<FolderNamePart>,
-    default_year: i32,
-    #[serde(default)]
-    sick_leave_enabled: bool,
-    #[serde(default)]
-    model_output: Option<String>,
-    #[serde(default)]
-    confirmed_fields: Vec<String>,
-    #[serde(default)]
-    confirmed_document_ids: Vec<String>,
-    #[serde(default)]
-    force_reissue: bool,
-    #[serde(default)]
-    preserve_source_after_success: bool,
-    #[serde(default)]
-    resume_from_case_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct CreatedDocumentsIntakeResponse {
-    status: String,
-    patient_folder: Option<String>,
-    created_files: Vec<String>,
-    created_documents: Vec<CreatedDocumentOutputDto>,
-    missing: Vec<String>,
-    attention_file: Option<String>,
-    print_triage: Option<PrintTriageReport>,
-    message: String,
-}
-
-/// Zero-touch «Созданные документы» run: one dropped primary document -> the whole
-/// configured set into a fresh output folder, or a safe attention note when data
-/// is missing. Decision logic lives in dokkomplekt_core; this command only does IO.
-#[tauri::command]
-fn run_created_documents_intake(
-    req: CreatedDocumentsIntakeRequest,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
-    let source_path = req.source_path.clone();
-    match perform_created_documents_intake(&state, &app, req) {
-        Ok(response) => serde_json::to_value(response).map_err(|e| e.to_string()),
-        Err(error) => {
-            increment_metric(&app, "failed_sources", 1);
-            let details = serde_json::json!({ "error": &error });
-            let _ = create_automation_exception(
-                &app,
-                "processing_error",
-                &source_path,
-                "Источник не обработан.",
-                &details,
-            );
-            let _ = append_audit_event(&app, "intake_failed", "", &details);
-            Err(error)
-        }
-    }
-}

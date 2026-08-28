@@ -52,12 +52,17 @@ def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
     preflight = read("src/components/GenerationPreflightModal.tsx")
 
     assert "MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT" in profile_sources
-    assert 'MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v4"' in profile_sources
+    assert "MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION" in profile_sources
+    assert (
+        "medical-diary-program-calendar-{MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION}.docx"
+        in profile_sources
+    )
     assert "program_calendar_diary_template(app).map(Some)" in profile_sources
     assert "select_diary_template_for_admission" not in profile_sources
     assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
     assert "{{#each diaries}}" in profile_sources
-    assert "{{diary.datetime}} {{diary.text}}" in profile_sources
+    assert "{{diary.datetime}}" in profile_sources
+    assert "{{else}}{{diary.text}}{{/if}}" in profile_sources
     assert "{{diary.treating_physician_signature}}" in profile_sources
     assert "{{diary.department_head_signature}}" in profile_sources
     assert "психотических расстройств" not in profile_sources.lower()

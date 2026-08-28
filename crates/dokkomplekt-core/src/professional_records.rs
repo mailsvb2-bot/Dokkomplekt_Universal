@@ -381,15 +381,13 @@ fn diary_text_sources(case: &SemanticCase, diagnosis: &str) -> DiaryTextSources 
     // Persistent profile sources reuse the existing local clause-block store.
     // This keeps storage universal: other professions may introduce their own
     // namespaced sources without a medical database or a second semantic brain.
-    let key = source_key(diagnosis);
     if result.regular.is_empty() {
-        if let Some(content) = persistent_source(case, "professional.medical.diary.regular.", &key)
-        {
+        if let Some(content) = persistent_regular_diary_source(case, diagnosis) {
             result.regular = split_status_source(content);
         }
     }
     if result.final_text.is_none() {
-        result.final_text = persistent_source(case, "professional.medical.diary.final.", &key)
+        result.final_text = persistent_final_diary_source(case, diagnosis)
             .map(clean_diary_source_text)
             .filter(|value| !value.is_empty() && !is_source_noise(value));
     }
@@ -514,8 +512,92 @@ fn medical_diary_semantic_compatible(candidate: &str, target: &str) -> bool {
         || !candidate_severity.is_disjoint(&target_severity)
 }
 
-fn persistent_source<'a>(case: &'a SemanticCase, prefix: &str, key: &str) -> Option<&'a str> {
-    let exact = format!("{prefix}{key}");
+fn canonical_persistent_diagnosis_key(value: &str) -> String {
+    explicit_icd_source_key(value).unwrap_or_else(|| source_key(value).chars().take(160).collect())
+}
+
+fn explicit_icd_source_key(value: &str) -> Option<String> {
+    let chars = value.chars().collect::<Vec<_>>();
+    for start in 0..chars.len() {
+        let first = chars[start];
+        if !first.is_ascii_alphabetic()
+            || start
+                .checked_sub(1)
+                .and_then(|index| chars.get(index))
+                .is_some_and(|ch| ch.is_alphanumeric())
+        {
+            continue;
+        }
+
+        let mut cursor = start + 1;
+        while chars.get(cursor).is_some_and(|ch| ch.is_whitespace()) {
+            cursor += 1;
+        }
+        let Some(first_digit) = chars.get(cursor).copied() else {
+            continue;
+        };
+        let Some(second_digit) = chars.get(cursor + 1).copied() else {
+            continue;
+        };
+        if !first_digit.is_ascii_digit() || !second_digit.is_ascii_digit() {
+            continue;
+        }
+        let mut key = String::with_capacity(7);
+        key.push(first.to_ascii_lowercase());
+        key.push(first_digit);
+        key.push(second_digit);
+        cursor += 2;
+
+        let base_boundary = cursor;
+        while chars.get(cursor).is_some_and(|ch| ch.is_whitespace()) {
+            cursor += 1;
+        }
+        if chars.get(cursor) == Some(&'.') {
+            cursor += 1;
+            while chars.get(cursor).is_some_and(|ch| ch.is_whitespace()) {
+                cursor += 1;
+            }
+            let mut extension_digits = 0usize;
+            while extension_digits < 4 && chars.get(cursor).is_some_and(|ch| ch.is_ascii_digit()) {
+                key.push(chars[cursor]);
+                cursor += 1;
+                extension_digits += 1;
+            }
+            if extension_digits == 0 {
+                continue;
+            }
+        } else {
+            cursor = base_boundary;
+        }
+
+        if chars.get(cursor).is_some_and(|ch| ch.is_alphanumeric()) {
+            continue;
+        }
+        return Some(key);
+    }
+    None
+}
+
+fn persistent_regular_diary_source<'a>(case: &'a SemanticCase, diagnosis: &str) -> Option<&'a str> {
+    let key = canonical_persistent_diagnosis_key(diagnosis);
+    persistent_source(case, "professional.medical.diary.regular.", &key, diagnosis)
+}
+
+pub(crate) fn persistent_final_diary_source<'a>(
+    case: &'a SemanticCase,
+    diagnosis: &str,
+) -> Option<&'a str> {
+    let key = canonical_persistent_diagnosis_key(diagnosis);
+    persistent_source(case, "professional.medical.diary.final.", &key, diagnosis)
+}
+
+fn persistent_source<'a>(
+    case: &'a SemanticCase,
+    prefix: &str,
+    exact_key: &str,
+    compatibility_target: &str,
+) -> Option<&'a str> {
+    let exact = format!("{prefix}{exact_key}");
     if let Some(value) = case.blocks.get(&exact) {
         return Some(value.as_str());
     }
@@ -524,7 +606,7 @@ fn persistent_source<'a>(case: &'a SemanticCase, prefix: &str, key: &str) -> Opt
         .iter()
         .filter_map(|(id, value)| {
             let suffix = id.strip_prefix(prefix)?;
-            diagnosis_compatible(suffix, key).then_some((suffix, value.as_str()))
+            diagnosis_compatible(suffix, compatibility_target).then_some((suffix, value.as_str()))
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.0.cmp(right.0));
@@ -1116,6 +1198,79 @@ mod tests {
         assert!(rendered
             .output_text
             .contains("Подтверждённый специалистом итоговый дневник"));
+    }
+
+    #[test]
+    fn persistent_diagnosis_key_matches_frontend_icd_contract() {
+        assert_eq!(
+            canonical_persistent_diagnosis_key("F20.0 Шизофрения параноидная"),
+            "f200"
+        );
+        assert_eq!(canonical_persistent_diagnosis_key("F20 Шизофрения"), "f20");
+        assert_eq!(
+            canonical_persistent_diagnosis_key("Диагноз F20 . 0, ремиссия"),
+            "f200"
+        );
+        assert_eq!(
+            canonical_persistent_diagnosis_key("Диагноз: F32.1 Депрессивный эпизод"),
+            "f321"
+        );
+        assert_eq!(
+            canonical_persistent_diagnosis_key("Депрессивный эпизод лёгкой степени"),
+            "депрессивныйэпизодлегкойстепени"
+        );
+        let long_text = format!("{} хвост", "Очень-длинный-диагноз-Ё".repeat(12));
+        let expected = source_key(&long_text).chars().take(160).collect::<String>();
+        assert_eq!(canonical_persistent_diagnosis_key(&long_text), expected);
+        assert_eq!(
+            canonical_persistent_diagnosis_key(&long_text)
+                .chars()
+                .count(),
+            160
+        );
+    }
+
+    #[test]
+    fn canonical_empty_regular_tombstone_suppresses_legacy_compatible_regular_text() {
+        let mut case = medical_case();
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200шизофренияпараноидная".into(),
+            "СТАРЫЙ обычный дневниковый текст из прежней схемы ключей.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            String::new(),
+        );
+
+        let resolved = persistent_regular_diary_source(&case, "F20.0 Шизофрения параноидная");
+        assert_eq!(resolved, Some(""));
+    }
+
+    #[test]
+    fn canonical_empty_final_tombstone_suppresses_legacy_compatible_final_text() {
+        let mut case = medical_case();
+        case.blocks.insert(
+            "professional.medical.diary.regular.f200".into(),
+            "Актуальный обычный дневниковый текст достаточной длины для генерации.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200шизофренияпараноидная".into(),
+            "СТАРЫЙ финальный текст из прежней схемы ключей, который не должен вернуться.".into(),
+        );
+        case.blocks.insert(
+            "professional.medical.diary.final.f200".into(),
+            String::new(),
+        );
+
+        let rendered = render_text_template(
+            "{{#each diaries}}{{diary.date}}|{{diary.text}}\n{{/each}}",
+            &case,
+            true,
+        );
+        assert!(!rendered.output_text.contains("СТАРЫЙ финальный текст"));
+        assert!(rendered
+            .output_text
+            .contains("Актуальный обычный дневниковый текст"));
     }
 
     #[test]

@@ -83,6 +83,38 @@ describe('useGenerationPreflight', () => {
     expect(onConfirmed).toHaveBeenCalledWith(expect.objectContaining({ documentIds: ['generic.contract'] }));
   });
 
+  it('refreshes the backend plan before submit so a stale discharge-date prompt is never sent as unknown', async () => {
+    const reviewedPlan: WorkflowPlan = {
+      document_id: 'medical.discharge',
+      prompts: [{
+        field_id: 'medical.discharge_date', title: 'Дата выписки', required: true, input_kind: 'date', ask_mode: 'if_missing',
+      }],
+      blocked: false, block_reasons: [],
+    };
+    const freshPlan: WorkflowPlan = {
+      document_id: 'medical.discharge', prompts: [], blocked: false, block_reasons: [],
+    };
+    const requestWorkflowPlan = vi.fn()
+      .mockResolvedValueOnce(reviewedPlan)
+      .mockResolvedValueOnce(freshPlan);
+    const applyAnswers = vi.fn(async () => null as PopupApplyResult | null);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    const setPreflightPlan = vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>;
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['medical.discharge'], ...context('medical.discharge'), preflightPlan: reviewedPlan,
+      preflightLoading: false, answers: { 'medical.discharge_date': '25.09.2026' }, skippedAnswers: {},
+      setPreflightPlan, setStatus: vi.fn(), requestWorkflowPlan, applyAnswers, onConfirmed,
+    }));
+
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(2);
+    expect(setPreflightPlan).toHaveBeenLastCalledWith(freshPlan);
+    expect(applyAnswers).not.toHaveBeenCalled();
+    expect(onConfirmed).toHaveBeenCalledWith(expect.objectContaining({ documentIds: ['medical.discharge'] }));
+  });
+
   it('binds popup and publication to the same immutable donor-style generation snapshot', async () => {
     let outputRoot = 'C:/Desktop/Выписанные пациенты';
     let sickLeaveEnabled = false;

@@ -24,13 +24,17 @@ def test_word_scanner_and_printer_reject_active_ooxml_before_opening() -> None:
 
 def test_desktop_state_is_loaded_then_applied_and_saved_as_one_snapshot() -> None:
     commands = text("src-tauri/src/subsystems/document_commands.rs")
-    loader = commands[commands.index("fn load_state_from(") : commands.index("#[tauri::command]\nfn load_state(")]
+    loader = commands[commands.index("fn load_state_from_locked(") : commands.index("fn load_state_from(")]
+    wrapper = commands[commands.index("fn load_state_from(") : commands.index("#[tauri::command]\nfn load_state(")]
     assert "quick_integrity_check" in loader
     assert loader.index("let loaded_case") < loader.index("let mut case_guard")
     assert loader.index("let loaded_pack") < loader.index("let mut pack_guard")
     assert "persistence_blocked.store(false" in loader
+    assert "persistence_gate" in wrapper
+    assert "load_state_from_locked" in wrapper
 
     main = text("src-tauri/src/main.rs")
+    startup = text("src-tauri/src/subsystems/startup_state.rs")
     assert "save_case_and_pack_atomic" in main
     assert "transact_default_state" in main
     transaction = text("src-tauri/src/state_transaction.rs")
@@ -39,9 +43,32 @@ def test_desktop_state_is_loaded_then_applied_and_saved_as_one_snapshot() -> Non
     assert transaction.index(".save_desktop_snapshot(") < transaction.index(
         "if let Some(next) = prepared.next_state"
     )
-    assert "if let Err(error) = load_state_from" in main
-    assert "persistence_blocked.store(true" in main
+    assert "ensure_default_state_loaded(&handle, &state)" in main
+    assert "persistence_gate" in startup
+    assert "mark_default_state_restore_failure" in startup
+    assert "persistence_blocked.store(true" in startup
 
+
+
+def test_main_window_cannot_start_before_durable_workspace_restore() -> None:
+    import json
+
+    config = json.loads(text("src-tauri/tauri.conf.json"))
+    assert config["app"]["windows"][0]["create"] is False
+
+    main = text("src-tauri/src/main.rs")
+    restore = main.index("ensure_default_state_loaded(&handle, &state)")
+    window = main.index("WebviewWindowBuilder::from_config", restore)
+    assert restore < window
+
+    commands = text("src-tauri/src/subsystems/document_commands.rs")
+    first_run = commands[commands.index("fn first_run_state(") : commands.index("struct AnalyzeTemplateRequest")]
+    assert first_run.index("ensure_default_state_loaded") < first_run.index("state.pack.lock")
+
+    startup = text("src-tauri/src/subsystems/startup_state.rs")
+    gate = startup.index("persistence_gate")
+    durable_load = startup.index("load_state_from_locked", gate)
+    assert gate < durable_load
 
 def test_first_run_fails_closed_when_persisted_state_cannot_be_restored() -> None:
     commands = text("src-tauri/src/subsystems/document_commands.rs")

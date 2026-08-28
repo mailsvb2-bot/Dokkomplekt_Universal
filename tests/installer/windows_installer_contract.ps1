@@ -567,26 +567,58 @@ Write-Host "Installed end-to-end document generation OK: $($createdDoc.FullName)
 
 if ($adversarial) {
   # Repeating the same deterministic output must not overwrite the first kit.
+  # Generation/modals can rebuild WebView2's accessibility provider on hosted
+  # Windows runners, so every poll must resolve the live top-level window.
   $repeatAction = Wait-UiElement -Description 'repeat generation action' -TimeoutSeconds 30 -Probe {
-    Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
   }
   Invoke-UiElement -Element $repeatAction
   $repeatPreflight = Wait-UiElement -Description 'repeat preflight' -TimeoutSeconds 30 -Probe {
-    $appWindow.FindFirst(
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $currentAppWindow) { return $null }
+    $currentAppWindow.FindFirst(
       [System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
     )
   }
   $repeatGenerate = Wait-UiElement -Description 'repeat Создать документы' -TimeoutSeconds 30 -Probe {
-    Find-ButtonByNames -Root $appWindow -Names @('Создать документы')
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Создать документы')
   }
   Invoke-UiElement -Element $repeatGenerate
   $otherVariants = Wait-UiElement -Description 'existing-kit Другие варианты' -TimeoutSeconds 30 -Probe {
-    Find-ButtonByNames -Root $appWindow -Names @('Другие варианты')
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
   }
   Invoke-UiElement -Element $otherVariants
   $newVersion = Wait-UiElement -Description 'Создать новую версию' -TimeoutSeconds 30 -Probe {
-    Find-ButtonByNames -Root $appWindow -Names @('Создать новую версию')
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
   }
   Invoke-UiElement -Element $newVersion
   $versionDeadline = [DateTime]::UtcNow.AddSeconds(60)

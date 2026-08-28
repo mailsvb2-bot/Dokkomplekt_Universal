@@ -23,74 +23,18 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import base64
           from pathlib import Path
           p = Path('tests/installer/windows_installer_contract.ps1')
           s = p.read_text(encoding='utf-8')
-          old = '''  try {
-            $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
-              $blockedWindow.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.PropertyCondition]::new(
-                  [System.Windows.Automation.AutomationElement]::NameProperty,
-                  'Не удалось подготовить папку готовых документов'
-                )
-              )
-            }
-          } catch {
-            $visibleNames = @($blockedWindow.FindAll(
-              [System.Windows.Automation.TreeScope]::Descendants,
-              [System.Windows.Automation.Condition]::TrueCondition
-            ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
-            Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
-            throw
-          }
-          '''
-          new = '''  try {
-            $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert' -TimeoutSeconds 30 -Probe {
-              # WebView2 may rebuild its accessibility provider after startup on hosted
-              # Windows runners. Re-resolve the top-level window on every probe instead
-              # of keeping an AutomationElement whose descendant tree can go stale.
-              $condition = [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-                [int]$blockedProcess.Id
-              )
-              $currentBlockedWindow = $desktop.FindFirst(
-                [System.Windows.Automation.TreeScope]::Children,
-                $condition
-              )
-              if ($null -eq $currentBlockedWindow) { return $null }
-              $currentBlockedWindow.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.PropertyCondition]::new(
-                  [System.Windows.Automation.AutomationElement]::NameProperty,
-                  'Не удалось подготовить папку готовых документов'
-                )
-              )
-            }
-          } catch {
-            $condition = [System.Windows.Automation.PropertyCondition]::new(
-              [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-              [int]$blockedProcess.Id
-            )
-            $diagnosticWindow = $desktop.FindFirst(
-              [System.Windows.Automation.TreeScope]::Children,
-              $condition
-            )
-            $visibleNames = if ($null -eq $diagnosticWindow) {
-              @()
-            } else {
-              @($diagnosticWindow.FindAll(
-                [System.Windows.Automation.TreeScope]::Descendants,
-                [System.Windows.Automation.Condition]::TrueCondition
-              ) | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique)
-            }
-            Write-Host ('Output-root collision UIA names: ' + ($visibleNames -join ' | '))
-            throw
-          }
-          '''
-          if s.count(old) != 1:
-              raise SystemExit(f'expected exactly one repair target, found {s.count(old)}')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+          start_marker = "  try {\n    $recoveryAlert = Wait-UiElement -Description 'visible output-root recovery alert'"
+          end_marker = "  Write-Host 'ADVERSARIAL OK: output-root collision stayed fail-closed and visible.'"
+          if s.count(start_marker) != 1 or s.count(end_marker) != 1:
+              raise SystemExit('repair anchors are not unique')
+          start = s.index(start_marker)
+          end = s.index(end_marker, start)
+          replacement = base64.b64decode('ICB0cnkgewogICAgJHJlY292ZXJ5QWxlcnQgPSBXYWl0LVVpRWxlbWVudCAtRGVzY3JpcHRpb24gJ3Zpc2libGUgb3V0cHV0LXJvb3QgcmVjb3ZlcnkgYWxlcnQnIC1UaW1lb3V0U2Vjb25kcyAzMCAtUHJvYmUgewogICAgICAjIFdlYlZpZXcyIG1heSByZWJ1aWxkIGl0cyBhY2Nlc3NpYmlsaXR5IHByb3ZpZGVyIGFmdGVyIHN0YXJ0dXAgb24gaG9zdGVkCiAgICAgICMgV2luZG93cyBydW5uZXJzLiBSZS1yZXNvbHZlIHRoZSB0b3AtbGV2ZWwgd2luZG93IG9uIGV2ZXJ5IHByb2JlIGluc3RlYWQKICAgICAgIyBvZiBrZWVwaW5nIGFuIEF1dG9tYXRpb25FbGVtZW50IHdob3NlIGRlc2NlbmRhbnQgdHJlZSBjYW4gZ28gc3RhbGUuCiAgICAgICRjb25kaXRpb24gPSBbU3lzdGVtLldpbmRvd3MuQXV0b21hdGlvbi5Qcm9wZXJ0eUNvbmRpdGlvbl06Om5ldygKICAgICAgICBbU3lzdGVtLldpbmRvd3MuQXV0b21hdGlvbi5BdXRvbWF0aW9uRWxlbWVudF06OlByb2Nlc3NJZFByb3BlcnR5LAogICAgICAgIFtpbnRdJGJsb2NrZWRQcm9jZXNzLklkCiAgICAgICkKICAgICAgJGN1cnJlbnRCbG9ja2VkV2luZG93ID0gJGRlc2t0b3AuRmluZEZpcnN0KAogICAgICAgIFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLlRyZWVTY29wZV06OkNoaWxkcmVuLAogICAgICAgICRjb25kaXRpb24KICAgICAgKQogICAgICBpZiAoJG51bGwgLWVxICRjdXJyZW50QmxvY2tlZFdpbmRvdykgeyByZXR1cm4gJG51bGwgfQogICAgICAkY3VycmVudEJsb2NrZWRXaW5kb3cuRmluZEZpcnN0KAogICAgICAgIFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLlRyZWVTY29wZV06OkRlc2NlbmRhbnRzLAogICAgICAgIFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLlByb3BlcnR5Q29uZGl0aW9uXTo6bmV3KAogICAgICAgICAgW1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uQXV0b21hdGlvbkVsZW1lbnRdOjpOYW1lUHJvcGVydHksCiAgICAgICAgICAn0J3QtSDRg9C00LDQu9C+0YHRjCDQv9C+0LTQs9C+0YLQvtCy0LjRgtGMINC/0LDQv9C60YMg0LPQvtGC0L7QstGL0YUg0LTQvtC60YPQvNC10L3RgtC+0LInCiAgICAgICAgKQogICAgICApCiAgICB9CiAgfSBjYXRjaCB7CiAgICAkY29uZGl0aW9uID0gW1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uUHJvcGVydHlDb25kaXRpb25dOjpuZXcoCiAgICAgIFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLkF1dG9tYXRpb25FbGVtZW50XTo6UHJvY2Vzc0lkUHJvcGVydHksCiAgICAgIFtpbnRdJGJsb2NrZWRQcm9jZXNzLklkCiAgICApCiAgICAkZGlhZ25vc3RpY1dpbmRvdyA9ICRkZXNrdG9wLkZpbmRGaXJzdCgKICAgICAgW1N5c3RlbS5XaW5kb3dzLkF1dG9tYXRpb24uVHJlZVNjb3BlXTo6Q2hpbGRyZW4sCiAgICAgICRjb25kaXRpb24KICAgICkKICAgICR2aXNpYmxlTmFtZXMgPSBpZiAoJG51bGwgLWVxICRkaWFnbm9zdGljV2luZG93KSB7CiAgICAgIEAoKQogICAgfSBlbHNlIHsKICAgICAgQCgkZGlhZ25vc3RpY1dpbmRvdy5GaW5kQWxsKAogICAgICAgIFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLlRyZWVTY29wZV06OkRlc2NlbmRhbnRzLAogICAgICAgIFtTeXN0ZW0uV2luZG93cy5BdXRvbWF0aW9uLkNvbmRpdGlvbl06OlRydWVDb25kaXRpb24KICAgICAgKSB8IEZvckVhY2gtT2JqZWN0IHsgJF8uQ3VycmVudC5OYW1lIH0gfCBXaGVyZS1PYmplY3QgeyAkXyB9IHwgU2VsZWN0LU9iamVjdCAtVW5pcXVlKQogICAgfQogICAgV3JpdGUtSG9zdCAoJ091dHB1dC1yb290IGNvbGxpc2lvbiBVSUEgbmFtZXM6ICcgKyAoJHZpc2libGVOYW1lcyAtam9pbiAnIHwgJykpCiAgICB0aHJvdwogIH0K').decode('utf-8')
+          p.write_text(s[:start] + replacement + s[end:], encoding='utf-8', newline='\n')
           assert p.read_text(encoding='utf-8').count('$currentBlockedWindow') == 3
           assert p.read_text(encoding='utf-8').count('$diagnosticWindow') == 3
           PY

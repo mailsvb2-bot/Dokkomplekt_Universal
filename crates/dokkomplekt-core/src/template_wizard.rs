@@ -163,7 +163,7 @@ pub fn suggest_filled_medical_template_markup(
                 value: value.to_string(),
                 confidence: semantic.confidence,
                 occurrences,
-                selected_by_default: semantic.confidence >= 0.80 && occurrences <= 5,
+                selected_by_default: semantic.confidence >= 0.80 && occurrences == 1,
             })
         })
         .collect::<Vec<_>>();
@@ -580,6 +580,21 @@ mod tests {
         assert!(
             !icd.selected_by_default,
             "nested ICD must not compete with the diagnosis replacement"
+        );
+    }
+
+    #[test]
+    fn filled_medical_markup_does_not_auto_select_repeated_short_value() {
+        let text = "Выписной эпикриз\nВозраст: 42\nДиагноз: F20.0\nЛабораторные исследования: показатель 42";
+        let candidates = suggest_filled_medical_template_markup(text, 2026);
+        let age = candidates
+            .iter()
+            .find(|candidate| candidate.field_id == "subject.age")
+            .expect("age candidate");
+        assert_eq!(age.occurrences, 2);
+        assert!(
+            !age.selected_by_default,
+            "a repeated short value must stay manual to avoid replacing unrelated text"
         );
     }
 

@@ -939,7 +939,10 @@ pub fn apply_template_markup_file(
                     .chars()
                     .filter(|character| !matches!(character, '\r' | '\n' | '\t'))
                     .collect::<String>();
-                let needles = if compact_value != replacement.value && !compact_value.is_empty() {
+                let needles = if replacement.action == TemplateMarkupAction::Replace
+                    && compact_value != replacement.value
+                    && !compact_value.is_empty()
+                {
                     vec![replacement.value.as_str(), compact_value.as_str()]
                 } else {
                     vec![replacement.value.as_str()]
@@ -1800,6 +1803,39 @@ mod tests {
         assert!(text.contains("{{medical.treatment}}"), "{text:?}");
         assert!(!text.contains("терапия 1"));
         assert!(!text.contains("терапия 2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn multiline_insert_after_does_not_flatten_word_structure() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-filled-insert-after-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled.docx");
+        let marked = dir.join("marked.docx");
+        write_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Лечение: терапия 1</w:t></w:r></w:p><w:p><w:r><w:t>терапия 2</w:t></w:r></w:p></w:body></w:document>"#,
+            None,
+        );
+        let value = "терапия 1\nтерапия 2";
+        let report = apply_template_markup_file(
+            &input,
+            &marked,
+            &[TemplateMarkupReplacement {
+                field_id: "medical.treatment".into(),
+                value: value.into(),
+                action: TemplateMarkupAction::InsertAfter,
+            }],
+        )
+        .expect("insert-after markup stays fail-closed");
+        assert_eq!(report.replacement_count, 0);
+        assert_eq!(report.skipped_values, vec![value.to_string()]);
+        let text = extract_docx_text(&marked).expect("marked text");
+        assert!(text.contains("терапия 1"));
+        assert!(text.contains("терапия 2"));
+        assert!(!text.contains("{{medical.treatment}}"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

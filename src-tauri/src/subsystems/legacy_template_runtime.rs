@@ -43,12 +43,23 @@ fn infer_static_template_rows(
             .domain_override
             .clone()
             .unwrap_or_else(|| dokkomplekt_core::best_domain(&row.analysis));
-        let candidates = dokkomplekt_core::infer_legacy_template_fields(
+        let blank_candidates = dokkomplekt_core::infer_legacy_template_fields(
             &template_text,
             Some(&domain),
             Some(&row.analysis.role_id),
         );
-        if candidates.is_empty() {
+        let filled_candidates = if domain == DomainKind::Medical {
+            dokkomplekt_core::suggest_filled_medical_template_markup(
+                &template_text,
+                current_year_utc(),
+            )
+            .into_iter()
+            .filter(|candidate| candidate.selected_by_default)
+            .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if blank_candidates.is_empty() && filled_candidates.is_empty() {
             summary.untouched_static_documents += 1;
             continue;
         }
@@ -91,29 +102,87 @@ fn infer_static_template_rows(
             Uuid::new_v4(),
             extension
         ));
-        let fields = candidates
-            .iter()
-            .map(|candidate| TemplateLearningMapField {
-                field_id: candidate.field_id.clone(),
-                line_index: candidate.line_index,
-                blank_line: candidate.blank_line.clone(),
-                common_prefix: candidate.common_prefix.clone(),
-                common_suffix: candidate.common_suffix.clone(),
-            })
-            .collect::<Vec<_>>();
-        let report = apply_template_learning_map_file(&input_path, &output_path, &fields)
-            .map_err(|error| {
-                format!(
-                    "Не удалось безопасно разметить старый шаблон «{}»: {error}",
-                    row.editable_button_label
-                )
-            })?;
-        if report.applied_field_ids.is_empty() {
-            return Err(format!(
-                "Шаблон «{}» содержал однозначные зоны, но ни одна не была размечена; исходный файл оставлен без изменений.",
-                row.editable_button_label
-            ));
+        let mut applied_field_ids = Vec::new();
+        let mut current_input = input_path.clone();
+
+        if !blank_candidates.is_empty() {
+            let blank_output = if filled_candidates.is_empty() {
+                output_path.clone()
+            } else {
+                root.join(format!(
+                    "{}-blank-stage-{}.{}",
+                    if safe_document_id.is_empty() {
+                        "template"
+                    } else {
+                        safe_document_id.as_str()
+                    },
+                    Uuid::new_v4(),
+                    extension
+                ))
+            };
+            let fields = blank_candidates
+                .iter()
+                .map(|candidate| TemplateLearningMapField {
+                    field_id: candidate.field_id.clone(),
+                    line_index: candidate.line_index,
+                    blank_line: candidate.blank_line.clone(),
+                    common_prefix: candidate.common_prefix.clone(),
+                    common_suffix: candidate.common_suffix.clone(),
+                })
+                .collect::<Vec<_>>();
+            let report = apply_template_learning_map_file(&current_input, &blank_output, &fields)
+                .map_err(|error| {
+                    format!(
+                        "Не удалось безопасно разметить пустые зоны шаблона «{}»: {error}",
+                        row.editable_button_label
+                    )
+                })?;
+            if !report.skipped_field_ids.is_empty()
+                || report.applied_field_ids.len() != fields.len()
+            {
+                return Err(format!(
+                    "Шаблон «{}» содержал однозначные пустые зоны, но не все поля удалось разметить: {}. Исходный файл оставлен без изменений.",
+                    row.editable_button_label,
+                    report.skipped_field_ids.join(", ")
+                ));
+            }
+            applied_field_ids.extend(report.applied_field_ids);
+            current_input = blank_output;
         }
+
+        if !filled_candidates.is_empty() {
+            let replacements = filled_candidates
+                .iter()
+                .map(|candidate| TemplateMarkupReplacement {
+                    field_id: candidate.field_id.clone(),
+                    value: candidate.value.clone(),
+                    action: Default::default(),
+                })
+                .collect::<Vec<_>>();
+            let report = apply_template_markup_file(&current_input, &output_path, &replacements)
+                .map_err(|error| {
+                    format!(
+                        "Не удалось убрать данные старого пациента из рабочей копии шаблона «{}»: {error}",
+                        row.editable_button_label
+                    )
+                })?;
+            if !report.skipped_values.is_empty()
+                || report.replacement_count != replacements.len()
+            {
+                return Err(format!(
+                    "Шаблон «{}» распознан как заполненный рабочий документ, но не все данные удалось безопасно превратить в поля. Публикация остановлена; исходный файл не изменён.",
+                    row.editable_button_label
+                ));
+            }
+            applied_field_ids.extend(
+                filled_candidates
+                    .iter()
+                    .map(|candidate| candidate.field_id.clone()),
+            );
+        }
+
+        applied_field_ids.sort();
+        applied_field_ids.dedup();
 
         let derived_text = extract_docx_text(&output_path).map_err(|error| {
             format!(
@@ -131,7 +200,7 @@ fn infer_static_template_rows(
                 row.editable_button_label
             ));
         }
-        for field_id in &report.applied_field_ids {
+        for field_id in &applied_field_ids {
             if !derived_analysis.placeholders.iter().any(|value| value == field_id) {
                 return Err(format!(
                     "Проверка размеченной копии «{}» не подтвердила поле {field_id}; публикация остановлена.",
@@ -147,7 +216,7 @@ fn infer_static_template_rows(
         row.is_static_copy = false;
         row.analysis = derived_analysis;
         summary.upgraded_documents += 1;
-        summary.inferred_fields += report.applied_field_ids.len();
+        summary.inferred_fields += applied_field_ids.len();
     }
 
     Ok((updated_rows, workspace, summary))

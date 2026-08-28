@@ -99,6 +99,107 @@ pub fn suggest_template_markup(text: &str, default_year: i32) -> Vec<TemplateMar
     out
 }
 
+/// Suggest patient/case fields that can be safely removed from a filled medical
+/// working document before it becomes a reusable template. Unlike the generic
+/// scanner above, this uses the Medical source parser so ambiguous labels such as
+/// `Должность` resolve to the medical field rather than an HR field.
+///
+/// Only values that are present verbatim in the extracted document and have
+/// strong parser evidence are selected automatically. Repeated identical values
+/// owned by different semantic fields are left for manual review. Signer fields
+/// are intentionally excluded because a doctor's name can legitimately be fixed
+/// template content.
+pub fn suggest_filled_medical_template_markup(
+    text: &str,
+    default_year: i32,
+) -> Vec<TemplateMarkupCandidate> {
+    const AUTO_FIELDS: &[&str] = &[
+        "subject.name",
+        "subject.birth_date",
+        "subject.age",
+        "subject.address",
+        "medical.case_number",
+        "medical.admission_date",
+        "medical.discharge_date",
+        "medical.complaints",
+        "medical.anamnesis_life",
+        "medical.anamnesis_disease",
+        "medical.epidemiology",
+        "medical.profile_observation",
+        "medical.disability",
+        "medical.rvk_referral",
+        "medical.profile_status",
+        "medical.somatic_status",
+        "medical.examination_plan",
+        "medical.diagnosis",
+        "medical.icd10",
+        "medical.treatment",
+        "medical.treatment_result",
+        "medical.discharge_condition",
+        "medical.recommendations",
+        "medical.labs",
+        "medical.labs_date",
+        "medical.workplace",
+        "medical.position",
+        "medical.sick_leave_number",
+    ];
+
+    let (case, _) = crate::parse_source_text(text, default_year);
+    let mut out = AUTO_FIELDS
+        .iter()
+        .filter_map(|field_id| {
+            let semantic = case.value(field_id)?;
+            let value = semantic.value.trim();
+            if value.len() < 2 {
+                return None;
+            }
+            let occurrences = text.matches(value).count();
+            if occurrences == 0 {
+                return None;
+            }
+            Some(TemplateMarkupCandidate {
+                field_id: (*field_id).to_string(),
+                title: title_for_field(field_id),
+                value: value.to_string(),
+                confidence: semantic.confidence,
+                occurrences,
+                selected_by_default: semantic.confidence >= 0.80 && occurrences == 1,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut owners = BTreeMap::<String, BTreeSet<String>>::new();
+    for candidate in &out {
+        owners
+            .entry(candidate.value.clone())
+            .or_default()
+            .insert(candidate.field_id.clone());
+    }
+    let nested_values = out
+        .iter()
+        .map(|candidate| {
+            let nested = out.iter().any(|other| {
+                candidate.field_id != other.field_id
+                    && candidate.value.len() < other.value.len()
+                    && other.value.contains(&candidate.value)
+                    && candidate.occurrences <= other.occurrences
+            });
+            (candidate.field_id.clone(), nested)
+        })
+        .collect::<BTreeMap<_, _>>();
+    for candidate in &mut out {
+        if owners
+            .get(&candidate.value)
+            .is_some_and(|field_ids| field_ids.len() > 1)
+            || nested_values.get(&candidate.field_id).copied() == Some(true)
+        {
+            candidate.selected_by_default = false;
+        }
+    }
+    out.sort_by(|left, right| left.field_id.cmp(&right.field_id));
+    out
+}
+
 /// Infer a field map by comparing a blank template with several previously
 /// completed documents. The result is always reviewable: no inferred field is
 /// silently written into the user's DOCX before explicit confirmation.
@@ -443,6 +544,71 @@ mod tests {
         assert!(candidates
             .iter()
             .all(|candidate| text.contains(&candidate.value)));
+    }
+
+    #[test]
+    fn filled_medical_discharge_suggests_basic_patient_and_case_fields() {
+        let text = "Выписной эпикриз\nФ.И.О.: Иванов Иван Иванович\nНомер истории болезни: 1234\nДата поступления: 01.09.2026\nДиагноз: F20.0 состояние стабильное\nДата выписки: 09.09.2026\nЛечение: терапия\nМесто работы: Завод\nДолжность: инженер";
+        let candidates = suggest_filled_medical_template_markup(text, 2026);
+        let selected = candidates
+            .iter()
+            .filter(|candidate| candidate.selected_by_default)
+            .map(|candidate| candidate.field_id.as_str())
+            .collect::<BTreeSet<_>>();
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.discharge_date",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                selected.contains(field_id),
+                "missing safe markup candidate: {field_id}; candidates={candidates:?}"
+            );
+        }
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate.field_id == "employee.position"));
+        let icd = candidates
+            .iter()
+            .find(|candidate| candidate.field_id == "medical.icd10")
+            .expect("ICD is recognized independently");
+        assert!(
+            !icd.selected_by_default,
+            "nested ICD must not compete with the diagnosis replacement"
+        );
+    }
+
+    #[test]
+    fn filled_medical_markup_does_not_auto_select_repeated_short_value() {
+        let text = "Выписной эпикриз\nВозраст: 42\nДиагноз: F20.0\nЛабораторные исследования: показатель 42";
+        let candidates = suggest_filled_medical_template_markup(text, 2026);
+        let age = candidates
+            .iter()
+            .find(|candidate| candidate.field_id == "subject.age")
+            .expect("age candidate");
+        assert_eq!(age.occurrences, 2);
+        assert!(
+            !age.selected_by_default,
+            "a repeated short value must stay manual to avoid replacing unrelated text"
+        );
+    }
+
+    #[test]
+    fn filled_medical_markup_does_not_auto_select_one_value_for_two_fields() {
+        let text = "Выписной эпикриз\nФ.И.О.: Иванов Иван Иванович\nДата поступления: 09.09.2026\nДата выписки: 09.09.2026\nДиагноз: F20.0";
+        let candidates = suggest_filled_medical_template_markup(text, 2026);
+        for field_id in ["medical.admission_date", "medical.discharge_date"] {
+            let candidate = candidates
+                .iter()
+                .find(|candidate| candidate.field_id == field_id)
+                .expect(field_id);
+            assert!(!candidate.selected_by_default);
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { validateRustResponse } from './runtimeValidation';
-import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, DomainKind, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
+import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, OutputPreferences, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, DomainKind, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
 
 export type InvokeFn = <T>(command: string, payload?: Record<string, unknown>) => Promise<T>;
 let invokeFn: InvokeFn = (command, payload) => tauriInvoke(command, payload);
@@ -43,6 +43,14 @@ export async function getDefaultOutputRoot(): Promise<string> {
 
 export async function ensureOutputRoot(outputRoot: string): Promise<string> {
   return callRust('ensure_output_root', { req: { output_root: outputRoot } });
+}
+
+export async function getOutputPreferences(): Promise<OutputPreferences> {
+  return callRust('get_output_preferences');
+}
+
+export async function saveOutputPreferences(preferences: OutputPreferences): Promise<OutputPreferences> {
+  return callRust('save_output_preferences', { req: preferences });
 }
 
 export async function getProcessBlueprints(): Promise<ProcessBlueprintState> {
@@ -420,8 +428,13 @@ export async function checkForUpdates(): Promise<UpdateCheckResponse> {
   return callRust('check_for_updates');
 }
 
+export async function getBackgroundWatcherState(): Promise<BackgroundWatcherPlan> {
+  return callRust('get_background_watcher_state');
+}
+
 export async function installBackgroundWatcher(
   watchFolder: string,
+  outputRoot: string,
   defaultYear?: number,
   sickLeaveEnabled = false,
   folderParts: FolderNamePartDto[] = [],
@@ -431,6 +444,7 @@ export async function installBackgroundWatcher(
   return callRust('install_background_watcher', {
     req: {
       watch_folder: watchFolder,
+      output_root: outputRoot,
       default_year: defaultYear ?? null,
       sick_leave_enabled: sickLeaveEnabled,
       folder_parts: folderParts,
@@ -441,11 +455,15 @@ export async function installBackgroundWatcher(
 }
 
 export async function updateBackgroundWatcherPreferences(
+  outputRoot: string,
+  folderParts: FolderNamePartDto[],
   autoPrint: boolean,
   printCopiesByDocument: Record<string, number>,
 ): Promise<boolean> {
   return callRust('update_background_watcher_preferences', {
     req: {
+      output_root: outputRoot,
+      folder_parts: folderParts,
       auto_print: autoPrint,
       print_copies_by_document: printCopiesByDocument,
     },
@@ -679,6 +697,8 @@ export const rustCommandNames = [
   'first_run_state',
   'get_default_output_root',
   'ensure_output_root',
+  'get_output_preferences',
+  'save_output_preferences',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',
@@ -767,6 +787,7 @@ export const rustCommandNames = [
   'validate_product_access',
   'verify_rust_license_text',
   'check_for_updates',
+  'get_background_watcher_state',
   'install_background_watcher',
   'update_background_watcher_preferences',
   'uninstall_background_watcher',

@@ -33,7 +33,7 @@ export function FolderNamingOnboarding(props: {
   const preview = useMemo(() => {
     const byId = new Map(PARTS.map(part => [part.value, part.example]));
     const chunks = selected.map(part => byId.get(part)).filter((value): value is string => Boolean(value));
-    return chunks.join(' ') || 'Созданные документы';
+    return chunks.join(' ') || 'Выберите хотя бы один компонент имени';
   }, [selected]);
   const root = props.currentRoot.trim();
 
@@ -85,13 +85,13 @@ export function FolderNamingOnboarding(props: {
         <div className="folderNamingPreview">
           <span>Пример</span>
           <strong>{preview}</strong>
-          {!selected.length && <small>Ни один компонент не выбран: программа действительно использует нейтральное имя «Созданные документы».</small>}
+          {!selected.length && <small>Пустое имя запрещено: одинаковая подпапка для разных комплектов небезопасна.</small>}
         </div>
 
         <div className="modalActions">
-          <small>{root ? 'Папка и правило будут сохранены.' : 'Сначала выберите папку на компьютере.'}</small>
+          <small>{!root ? 'Сначала выберите папку на компьютере.' : !selected.length ? 'Выберите хотя бы один компонент имени подпапки.' : 'Папка и правило будут сохранены.'}</small>
           <span className="spacer" />
-          <button type="button" className="primaryBtn" disabled={!root} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
+          <button type="button" className="primaryBtn" disabled={!root || !selected.length} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
         </div>
       </section>
     </div>

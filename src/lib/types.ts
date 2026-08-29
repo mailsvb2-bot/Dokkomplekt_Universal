@@ -511,10 +511,22 @@ export interface GeneratedOutput {
   print_items?: GeneratedPrintItem[];
 }
 
+export interface OutputPreferences {
+  output_root: string;
+  folder_parts: FolderNamePartDto[];
+  naming_confirmed: boolean;
+}
+
 export interface BackgroundWatcherPlan {
   platform: string;
   installed: boolean;
   watch_folder?: string | null;
+  output_root?: string | null;
+  folder_parts?: FolderNamePartDto[];
+  auto_print?: boolean;
+  print_copies_by_document?: Record<string, number>;
+  max_parallel_cases?: number;
+  migration_required?: boolean;
   executable?: string;
   args?: string[];
   autostart_files?: string[];

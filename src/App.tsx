@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, getBackgroundWatcherState, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
@@ -30,10 +30,10 @@ import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPic
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
-  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
+  AUTO_PRINT_KEY, PRINT_COPIES_KEY, STATE_DB,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 export function App() {
@@ -108,6 +108,7 @@ function AppContent() {
   } = useOutputDestination(run, setStatus);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
+  const [watcherPreferencesReady, setWatcherPreferencesReady] = useState(false);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
   const [guidedScanner, setGuidedScanner] = useState<GuidedScannerState | null>(null);
 
@@ -135,11 +136,32 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {
-      // No persisted watcher plan yet: local preferences remain valid and will be
-      // written when the watcher is installed.
-    });
-  }, [autoPrint, printCopies]);
+    let alive = true;
+    void getBackgroundWatcherState()
+      .then((watcher) => {
+        if (!alive) return;
+        if (watcher.installed) {
+          if (typeof watcher.auto_print === 'boolean') setAutoPrint(watcher.auto_print);
+          if (watcher.print_copies_by_document) setPrintCopies(watcher.print_copies_by_document);
+        }
+      })
+      .catch((error) => {
+        if (alive) setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
+      })
+      .finally(() => { if (alive) setWatcherPreferencesReady(true); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!watcherPreferencesReady || !outputRoot.trim() || !folderParts.length) return;
+    void updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies)
+      .then((updated) => {
+        if (!updated) return; // Agent is not installed yet; preferences remain local until install.
+      })
+      .catch((error) => {
+        setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
+      });
+  }, [watcherPreferencesReady, outputRoot, folderParts, autoPrint, printCopies]);
 
   useEffect(() => {
     let disposed = false;
@@ -342,13 +364,13 @@ function AppContent() {
   }
 
   async function parseSourceNow() {
-    const res = await run('parse_source', () => parseSource(sourceText, DEFAULT_YEAR));
+    const res = await run('parse_source', () => parseSource(sourceText, currentDefaultYear()));
     if (!res) return;
     setSourceFileName(null);
     setSourceFilePath(null);
     setWebSourceUrl('');
     clearSourceScopedUiState();
-    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, currentDefaultYear()));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -369,7 +391,7 @@ function AppContent() {
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
     setWebSourceUrl('');
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, currentDefaultYear()));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     const layoutItems = res.layout_items ?? [];
@@ -388,7 +410,7 @@ function AppContent() {
   async function pickSourceFileNative() {
     const picked = await run('pick_source_file', () => pickSourceFile());
     if (!picked || !(await ensureComponentForSource(picked.file_name))) return;
-    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, DEFAULT_YEAR));
+    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
     if (!res) return;
     await applyParsedSourceFile(res, picked.file_name);
   }
@@ -397,7 +419,7 @@ function AppContent() {
     if (!(await ensureComponentForSource(file.name))) return;
     const buffer = await readFileBytes(file);
     const res = await run('parse_source_file', () =>
-      parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
+      parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
     if (!res) return;
     await applyParsedSourceFile(res, file.name);
   }
@@ -409,13 +431,13 @@ function AppContent() {
       setStatus('Укажите HTTPS-адрес сайта или API.');
       return;
     }
-    const res = await run('parse_web_source', () => parseWebSource(url, DEFAULT_YEAR));
+    const res = await run('parse_web_source', () => parseWebSource(url, currentDefaultYear()));
     if (!res) return;
     clearSourceScopedUiState();
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
     setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, currentDefaultYear()));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -1111,7 +1133,7 @@ function AppContent() {
     if (!pack) return;
     const createdCount = pack.documents.filter((document) => !previousDocumentIds.has(document.id)).length;
     setDocuments(pack.documents);
-    setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
+    setSelectedDocIds((previous) => preserveSelectedDocumentIds(previous, pack.documents));
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]); setWorkspaceInference(null);
@@ -1145,7 +1167,7 @@ function AppContent() {
     const res = await run('get_record_series_plan', () => getRecordSeriesPlan({
       start_date: seriesStart.trim(),
       end_date: seriesEnd.trim(),
-      default_year: DEFAULT_YEAR,
+      default_year: currentDefaultYear(),
       start_offset_days: 0,
       cadence: { kind: 'daily' },
       day_start_time: null,
@@ -1231,7 +1253,7 @@ function AppContent() {
     setIntakeResult(null);
     setLastOutput(null);
     const res = await run('run_created_documents_intake', () =>
-      runCreatedDocumentsIntake(intakeSource.trim(), outputRoot, folderParts, DEFAULT_YEAR, sickLeave));
+      runCreatedDocumentsIntake(intakeSource.trim(), outputRoot, folderParts, currentDefaultYear(), sickLeave));
     if (!res) return;
     setIntakeResult(res);
     setStatus(res.message);
@@ -1243,7 +1265,7 @@ function AppContent() {
   }
 
   async function understand() {
-    const res = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    const res = await run('semantic_extract', () => semanticExtract(sourceText, currentDefaultYear(), modelOutput.trim() || undefined));
     if (!res) return;
     setSemantic(res);
     setStatus(res.model_applied
@@ -1431,10 +1453,7 @@ function AppContent() {
           currentRoot={outputRoot}
           currentParts={folderParts}
           onPickRoot={() => void chooseAndCommitOutputFolder()}
-          onConfirm={(parts) => {
-            updateFolderParts(parts);
-            setStatus(`Папка готовых документов сохранена: ${outputRoot}. Правило подпапки тоже сохранено.`);
-          }}
+          onConfirm={(parts) => { void updateFolderParts(parts); }}
         />
       )}
 

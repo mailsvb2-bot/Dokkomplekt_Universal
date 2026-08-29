@@ -7,7 +7,7 @@ import {
   learnTemplateFromExamples,
 } from './api';
 import {
-  DEFAULT_YEAR,
+  currentDefaultYear,
   arrayBufferToBase64,
   cursorMarkedTemplatePath,
   readFileBytes,
@@ -90,7 +90,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     const learned = await context.run('learn_template_from_examples_command', () => learnTemplateFromExamples({
       blankTemplatePath: current.template_path,
       completedExamplePaths,
-      defaultYear: DEFAULT_YEAR,
+      defaultYear: currentDefaultYear(),
     }));
     if (!learned) return;
     const confidentFields = learned.fields.filter((field) => field.confidence >= 0.9);

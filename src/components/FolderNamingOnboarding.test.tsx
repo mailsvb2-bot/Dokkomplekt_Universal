@@ -15,15 +15,15 @@ describe('FolderNamingOnboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить папку и правило' }));
     expect(onConfirm).toHaveBeenCalledWith(['ShortInitials', 'PeriodStartMonthName']);
   });
-  it('preserves an intentionally empty folder naming rule', () => {
+  it('blocks an empty folder naming rule so unrelated kits cannot collide', () => {
     const onConfirm = vi.fn();
     render(<FolderNamingOnboarding currentRoot="D:/Ready" currentParts={[]} onPickRoot={vi.fn()} onConfirm={onConfirm} />);
-    expect(screen.getByText('Созданные документы')).toBeTruthy();
-    expect(screen.getByText(/Ни один компонент не выбран/)).toBeTruthy();
+    expect(screen.getByText('Выберите хотя бы один компонент имени')).toBeTruthy();
+    expect(screen.getByText(/Пустое имя запрещено/)).toBeTruthy();
     const save = screen.getByRole('button', { name: 'Сохранить папку и правило' }) as HTMLButtonElement;
-    expect(save.disabled).toBe(false);
+    expect(save.disabled).toBe(true);
     fireEvent.click(save);
-    expect(onConfirm).toHaveBeenCalledWith([]);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
 });

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind } from './types';
-import { bundleSelectionFromDecision, defaultSelectedDocumentIds, loadOutputFolderParts, loadOutputRoot, OUTPUT_NAMING_CONFIRMED_KEY, OUTPUT_ROOT_KEY, saveOutputFolderParts, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
+import { bundleSelectionFromDecision, currentDefaultYear, defaultSelectedDocumentIds, loadOutputFolderParts, loadOutputRoot, OUTPUT_NAMING_CONFIRMED_KEY, OUTPUT_PREFS_KEY, OUTPUT_ROOT_KEY, preserveSelectedDocumentIds, saveOutputFolderParts, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
 
 function document(roleId: string, category: DomainKind, label = 'Переименовано пользователем'): DocumentTemplateSpec {
   return {
@@ -17,6 +17,20 @@ function document(roleId: string, category: DomainKind, label = 'Переиме�
   };
 }
 
+
+describe('dynamic default year', () => {
+  it('reads the current year at call time instead of freezing it at app startup', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-12-31T23:59:00Z'));
+      expect(currentDefaultYear()).toBe(2026);
+      vi.setSystemTime(new Date('2027-01-01T00:01:00Z'));
+      expect(currentDefaultYear()).toBe(2027);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('output root persistence', () => {
   it('remembers the user-selected generic output folder across restarts', () => {
@@ -35,9 +49,17 @@ describe('output root persistence', () => {
     expect(localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY)).toBeNull();
   });
 
-  it('persists an intentionally empty output-folder naming rule without inventing defaults', () => {
-    saveOutputFolderParts([], true);
-    expect(loadOutputFolderParts()).toEqual([]);
+  it('rejects an empty output-folder naming rule and restores identity-safe defaults', () => {
+    expect(saveOutputFolderParts([], true)).toBe(false);
+    localStorage.setItem(OUTPUT_PREFS_KEY, '[]');
+    expect(loadOutputFolderParts()).toEqual(['DocumentNumber', 'DocumentDate']);
+  });
+
+  it('rejects stale, unknown and duplicate folder naming parts from storage', () => {
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['Banana']));
+    expect(loadOutputFolderParts()).toEqual(['DocumentNumber', 'DocumentDate']);
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentNumber']));
+    expect(loadOutputFolderParts()).toEqual(['DocumentNumber', 'DocumentDate']);
   });
 
   it('migrates the old repository-relative fallback back to an unconfigured state', () => {
@@ -62,6 +84,13 @@ describe('default document selection', () => {
     ];
     expect(defaultSelectedDocumentIds(documents)).toEqual([]);
     for (const item of documents) expect(shouldSelectDocumentByDefault(item)).toBe(false);
+  });
+
+  it('preserves the current explicit selection when new buttons are added', () => {
+    const before = [document('contract', 'Legal'), document('invoice', 'Accounting')];
+    const after = [...before, document('act', 'Legal')];
+    expect(preserveSelectedDocumentIds([before[0].id], after)).toEqual([before[0].id]);
+    expect(preserveSelectedDocumentIds([before[0].id, 'removed'], after)).toEqual([before[0].id]);
   });
 
   it('does not special-case identical role ids by profession', () => {

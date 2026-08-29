@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind } from './types';
-import { bundleSelectionFromDecision, defaultSelectedDocumentIds, loadOutputRoot, OUTPUT_ROOT_KEY, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
+import { bundleSelectionFromDecision, defaultSelectedDocumentIds, loadOutputFolderParts, loadOutputRoot, OUTPUT_NAMING_CONFIRMED_KEY, OUTPUT_ROOT_KEY, saveOutputFolderParts, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
 
 function document(roleId: string, category: DomainKind, label = 'Переименовано пользователем'): DocumentTemplateSpec {
   return {
@@ -26,10 +26,18 @@ describe('output root persistence', () => {
     expect(loadOutputRoot()).toBe('D:/Работа/Готовые документы');
   });
 
-  it('does not replace a remembered folder with an empty edit', () => {
+  it('explicitly clearing the saved folder removes both the path and its confirmation flag', () => {
     localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Documents/Ready');
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
     saveOutputRoot('   ');
-    expect(loadOutputRoot()).toBe('C:/Documents/Ready');
+    expect(loadOutputRoot()).toBe('');
+    expect(localStorage.getItem(OUTPUT_ROOT_KEY)).toBeNull();
+    expect(localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY)).toBeNull();
+  });
+
+  it('persists an intentionally empty output-folder naming rule without inventing defaults', () => {
+    saveOutputFolderParts([], true);
+    expect(loadOutputFolderParts()).toEqual([]);
   });
 
   it('migrates the old repository-relative fallback back to an unconfigured state', () => {

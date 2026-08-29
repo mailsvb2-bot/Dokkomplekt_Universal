@@ -141,6 +141,8 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'update_document_template': return pack as never;
       case 'list_template_versions': return [] as never;
       case 'rollback_template_version': return pack as never;
+      case 'ensure_output_root':
+        return ((payload as { req?: { output_root?: string } })?.req?.output_root ?? 'C:/Test/Готовые документы') as never;
       case 'get_output_plan':
         return { root_folder: 'output', patient_folder: 'output/Готовые', files: ['output/Готовые/Счёт.docx'], warnings: [], exists: false } as never;
       case 'route_intake':
@@ -411,7 +413,8 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.change(screen.getByPlaceholderText('выделенный текст'), { target: { value: '148' } });
     await click(/Применить разметку/);
     fireEvent.change(screen.getByLabelText('Папка готовых документов'), { target: { value: 'C:/output' } });
-    await click(/Проверить папку/);
+    await click(/Проверить и сохранить папку/);
+    await click(/Показать путь следующего комплекта/);
     await click(/Сохранить сессию/);
     await click(/Загрузить сессию/);
     await click(/Проверить доступ/);
@@ -485,6 +488,8 @@ describe('Полный прогон пользовательских сцена�
     expect(automation).toBeTruthy();
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Выбрать' }));
     await waitFor(() => expect(parsePayload(calls, 'pick_folder')).toMatchObject({ req: { initial_path: expect.any(String) } }));
+    await click(/Включить фоновый агент/);
+    await waitFor(() => expect(calls.some((call) => call.command === 'install_background_watcher')).toBe(true));
     fireEvent.change(within(automation as HTMLElement).getByPlaceholderText('Путь к файлу'), { target: { value: 'C:/Созданные документы/Источник.docx' } });
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));
     await waitFor(() => expect(parsePayload(calls, 'run_created_documents_intake')).toMatchObject({ req: { source_path: 'C:/Созданные документы/Источник.docx', output_root: expect.any(String), folder_parts: ['DocumentNumber', 'DocumentDate'] } }));
@@ -529,10 +534,38 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_default_output_root', 'ensure_output_root', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'replace_clause_blocks', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
+    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_default_output_root', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'replace_clause_blocks', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);
+
+  it('нажатие на большую кнопку документа действительно включает документ в комплект', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { bundleMode: 'none' });
+    render(<App />);
+    const openButton = await screen.findByRole('button', { name: 'Счёт на оплату' });
+    const checkbox = screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(openButton);
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    expect(calls.some((call) => call.command === 'get_workflow_plan')).toBe(true);
+  });
+
+  it('черновик пути не сохраняется до явной проверки и подтверждения', async () => {
+    const calls: Call[] = [];
+    installMock(calls);
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    await click(/^Настройки$/);
+    const input = screen.getByLabelText('Папка готовых документов') as HTMLInputElement;
+    expect(input.value).toBe('C:/Test/Готовые документы');
+    fireEvent.change(input, { target: { value: 'C:/Draft/Новая папка' } });
+    expect(localStorage.getItem(OUTPUT_ROOT_KEY)).toBe('C:/Test/Готовые документы');
+    expect(screen.getByText(/Изменение ещё не сохранено/)).toBeTruthy();
+    await click(/Проверить и сохранить папку/);
+    await waitFor(() => expect(parsePayload(calls, 'ensure_output_root')).toMatchObject({ req: { output_root: 'C:/Draft/Новая папка' } }));
+    expect(localStorage.getItem(OUTPUT_ROOT_KEY)).toBe('C:/Draft/Новая папка');
+  });
 
   it('fail-closed блокирует работу при ошибке чтения сохранённого набора и даёт безопасный повтор', async () => {
     const calls: Call[] = [];
@@ -641,7 +674,7 @@ describe('Полный прогон пользовательских сцена�
     await waitFor(() => expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(true));
   });
 
-  it('новый источник заменяет старый комплект точным review-предложением без автогенерации', async () => {
+  it('review-предложение нового источника не стирает явный ручной выбор документов', async () => {
     const calls: Call[] = [];
     installMock(calls, { bundleMode: 'review' });
     render(<App />);
@@ -656,11 +689,11 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.change(screen.getByPlaceholderText('Вставьте текст источника'), { target: { value: 'Новый неоднозначный источник' } });
     await click(/Использовать текст/);
 
-    // Rust proposes only acc_1. The old doc_2 selection must not survive.
+    // Rust proposes only acc_1, but an explicit specialist selection wins until the user changes it.
     await waitFor(() => expect((screen.getByRole('checkbox', { name: 'Добавить Счёт на оплату в комплект' }) as HTMLInputElement).checked).toBe(true));
-    expect((screen.getByRole('checkbox', { name: 'Добавить Сопроводительное письмо в комплект' }) as HTMLInputElement).checked).toBe(false);
-    expect(screen.getByRole('button', { name: /Проверить и создать \(1\)/ })).toBeTruthy();
-    expect(screen.getByText(/Предложен комплект: Счёт на оплату/)).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Добавить Сопроводительное письмо в комплект' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('button', { name: /Проверить и создать \(2\)/ })).toBeTruthy();
+    expect(screen.getByText(/Ручной выбор документов сохранён/)).toBeTruthy();
     expect(calls.some((call) => call.command === 'render_docx_batch')).toBe(false);
   });
 

@@ -55,6 +55,24 @@ pub fn output_folder_requirement_document(
     })
 }
 
+pub fn output_file_stem_key(value: &str) -> String {
+    sanitize_path_component(value).to_lowercase()
+}
+
+pub fn validate_output_button_labels(button_labels: &[String]) -> Result<(), String> {
+    let mut seen = std::collections::BTreeMap::<String, String>::new();
+    for label in button_labels {
+        let safe = sanitize_path_component(label);
+        let key = output_file_stem_key(label);
+        if let Some(previous) = seen.insert(key, label.clone()) {
+            return Err(format!(
+                "Названия документов «{previous}» и «{label}» превращаются в одно имя файла «{safe}.docx». Переименуйте одну из кнопок до создания комплекта."
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn plan_output_paths(
     root: &Path,
     case: &SemanticCase,
@@ -68,11 +86,15 @@ pub fn plan_output_paths(
         .map(|label| patient_folder.join(format!("{}.docx", sanitize_path_component(label))))
         .collect();
     let exists = patient_folder.exists();
+    let warnings = validate_output_button_labels(button_labels)
+        .err()
+        .into_iter()
+        .collect();
     OutputPlan {
         root_folder: root.to_path_buf(),
         patient_folder,
         files,
-        warnings: vec![],
+        warnings,
         exists,
     }
 }
@@ -153,6 +175,21 @@ mod tests {
         assert_eq!(plan.patient_folder, expected_folder);
         assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "keep");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn output_file_names_reject_windows_case_and_sanitization_collisions() {
+        assert!(validate_output_button_labels(&["Выписка".into(), "выписка".into(),]).is_err());
+        assert!(
+            validate_output_button_labels(&["Акт: итоговый".into(), "Акт? итоговый".into(),])
+                .is_err()
+        );
+        let long_prefix = "Очень длинное название документа ".repeat(8);
+        assert!(validate_output_button_labels(&[
+            format!("{long_prefix}А"),
+            format!("{long_prefix}Б"),
+        ])
+        .is_err());
     }
 
     #[test]

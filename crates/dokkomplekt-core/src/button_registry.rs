@@ -65,21 +65,25 @@ pub fn rename_document_button(
     requested_label: &str,
 ) -> Result<String, ButtonRegistryError> {
     let normalized = normalize_label(requested_label);
+    let used = pack
+        .documents
+        .iter()
+        .filter(|document| document.id != document_id)
+        .map(|document| button_label_collision_key(&document.button_label))
+        .collect::<BTreeSet<_>>();
     let mut resolved = normalized.clone();
-    if pack.documents.iter().any(|document| {
-        document.id != document_id && document.button_label.eq_ignore_ascii_case(&resolved)
-    }) {
-        for index in 2..500 {
-            let candidate = format!("{normalized} ({index})");
-            if !pack.documents.iter().any(|document| {
-                document.id != document_id && document.button_label.eq_ignore_ascii_case(&candidate)
-            }) {
+    if used.contains(&button_label_collision_key(&resolved)) {
+        let max_attempt = used.len() + 2;
+        for index in 2..=max_attempt {
+            let suffix = format!(" ({index})");
+            let candidate = label_with_suffix(&normalized, &suffix);
+            if !used.contains(&button_label_collision_key(&candidate)) {
                 resolved = candidate;
                 break;
             }
         }
         if resolved == normalized {
-            resolved = format!("{normalized} ({})", pack.documents.len() + 1);
+            return Err(ButtonRegistryError::DuplicateLabel(normalized));
         }
     }
     let document = pack
@@ -150,7 +154,11 @@ pub fn prepare_template_confirmations_with_existing_pack(
         .then(|| workspace_inference.suggested_domain.clone())
         .flatten();
 
-    let mut used = BTreeSet::new();
+    let mut used = existing_pack
+        .into_iter()
+        .flat_map(|pack| pack.documents.iter())
+        .map(|document| button_label_collision_key(&document.button_label))
+        .collect::<BTreeSet<_>>();
     let mut rows = analyzed
         .into_iter()
         .map(|(candidate, initial_analysis)| {
@@ -374,7 +382,7 @@ pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) 
     let mut labels = existing
         .documents
         .iter()
-        .map(|document| document.button_label.clone())
+        .map(|document| button_label_collision_key(&document.button_label))
         .collect::<BTreeSet<_>>();
     for mut document in incoming.documents {
         if existing
@@ -439,18 +447,35 @@ fn content_addressed_template_sha256(path: &str) -> Option<String> {
         .then(|| stem.to_ascii_lowercase())
 }
 
+pub fn button_label_collision_key(label: &str) -> String {
+    crate::output_file_stem_key(&normalize_label(label))
+}
+
+fn label_with_suffix(base: &str, suffix: &str) -> String {
+    const MAX_OUTPUT_STEM_CHARS: usize = 120;
+    let base_limit = MAX_OUTPUT_STEM_CHARS.saturating_sub(suffix.chars().count());
+    let prefix = base
+        .chars()
+        .take(base_limit)
+        .collect::<String>()
+        .trim_end_matches(|character: char| character.is_whitespace() || character == '.')
+        .to_string();
+    format!("{prefix}{suffix}")
+}
+
 fn unique_label(base: &str, used: &mut BTreeSet<String>) -> String {
     let clean = normalize_label(base);
-    if used.insert(clean.clone()) {
+    if used.insert(button_label_collision_key(&clean)) {
         return clean;
     }
-    for index in 2..500 {
-        let candidate = format!("{clean} {index}");
-        if used.insert(candidate.clone()) {
+    for index in 2.. {
+        let suffix = format!(" {index}");
+        let candidate = label_with_suffix(&clean, &suffix);
+        if used.insert(button_label_collision_key(&candidate)) {
             return candidate;
         }
     }
-    format!("{} {}", clean, used.len() + 1)
+    clean
 }
 
 fn normalize_label(label: &str) -> String {
@@ -473,6 +498,31 @@ mod tests {
     fn first_run_pack_has_no_built_in_documents() {
         let pack = empty_first_run_pack("default", "Пользовательский пакет");
         assert!(pack.documents.is_empty());
+    }
+
+    #[test]
+    fn labels_are_unique_by_windows_visible_file_name_not_only_rust_string_case() {
+        let mut used = BTreeSet::new();
+        assert_eq!(unique_label("Выписка", &mut used), "Выписка");
+        assert_eq!(unique_label("выписка", &mut used), "выписка 2");
+        assert_eq!(unique_label("Акт: итоговый", &mut used), "Акт: итоговый");
+        assert_eq!(unique_label("Акт? итоговый", &mut used), "Акт? итоговый 2");
+    }
+
+    #[test]
+    fn long_label_collision_keeps_numeric_suffix_inside_windows_stem_limit() {
+        let base = "Д".repeat(140);
+        let mut used = BTreeSet::new();
+        let first = unique_label(&base, &mut used);
+        let second = unique_label(&base, &mut used);
+
+        assert!(second.ends_with(" 2"));
+        assert_ne!(
+            button_label_collision_key(&first),
+            button_label_collision_key(&second)
+        );
+        assert!(button_label_collision_key(&second).ends_with(" 2"));
+        assert!(button_label_collision_key(&second).chars().count() <= 120);
     }
 
     #[test]
@@ -989,5 +1039,20 @@ mod tests {
         assert_eq!(renamed.id, "d1");
         assert_eq!(renamed.template_path, "templates/act.docx");
         assert_eq!(renamed.required_fields, vec!["document.number"]);
+
+        let long = "Д".repeat(140);
+        pack.documents
+            .iter_mut()
+            .find(|document| document.id == "d2")
+            .unwrap()
+            .button_label = long.clone();
+        let long_label = rename_document_button(&mut pack, "d1", &long).expect("long rename");
+        assert!(long_label.ends_with(" (2)"));
+        assert_ne!(
+            button_label_collision_key(&long_label),
+            button_label_collision_key(&long)
+        );
+        assert!(button_label_collision_key(&long_label).ends_with(" (2)"));
+        assert!(button_label_collision_key(&long_label).chars().count() <= 120);
     }
 }

@@ -497,12 +497,11 @@ fn register_learned_template(
     template_snapshot.ensure_current()?;
     let (result, _) = publish_pack_with_template_versions(&app, &state, &[draft], |pack| {
         pack.documents.retain(|item| item.id != document_id);
-        if pack
-            .documents
-            .iter()
-            .any(|item| item.button_label.eq_ignore_ascii_case(button_label))
-        {
-            return Err("Кнопка с таким названием уже существует.".into());
+        let requested_key = dokkomplekt_core::button_label_collision_key(button_label);
+        if pack.documents.iter().any(|item| {
+            dokkomplekt_core::button_label_collision_key(&item.button_label) == requested_key
+        }) {
+            return Err("Кнопка с таким названием или совпадающим именем выходного файла уже существует.".into());
         }
         pack.documents.push(document);
         pack.documents
@@ -1358,10 +1357,10 @@ fn render_docx_batch(
             .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
-    let output_root = resolve_user_path(&app, &req.output_root)?;
-    // Do not create the user-visible output root before rendering succeeds. A
-    // failure in licensing, hydration, rendering, completeness validation or
-    // publication must not leave an empty “successful-looking” folder behind.
+    let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+    // Revalidate the previously confirmed destination immediately before generation.
+    // This catches deleted/unmounted/read-only folders before licensing or rendering.
+    ensure_output_root_path(&output_root)?;
     // Keep staging next to the output root so the final directory rename stays
     // on the same filesystem and remains atomic.
     let stage_parent = output_root
@@ -1374,6 +1373,7 @@ fn render_docx_batch(
         .iter()
         .map(|document| document.button_label.clone())
         .collect::<Vec<_>>();
+    validate_output_button_labels(&labels)?;
     let output_plan = plan_output_paths(&output_root, &base_case, &req.folder_parts, &labels);
     let desired_output_folder = output_plan.patient_folder;
     let permit =
@@ -2689,13 +2689,14 @@ struct OutputPlanRequest {
 fn get_output_plan(
     req: OutputPlanRequest,
     state: State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let case = state
         .semantic_case
         .lock()
         .map_err(|_| "state lock failed")?;
-    let root = resolve_user_path(&app, &req.root_folder)?;
+    let root = resolve_user_visible_absolute_path(&req.root_folder, "Папка готовых документов")?;
+    ensure_output_root_path(&root)?;
+    validate_output_button_labels(&req.button_labels)?;
     let plan = plan_output_paths(
         &root,
         &case,

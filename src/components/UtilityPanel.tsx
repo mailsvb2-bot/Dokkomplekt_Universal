@@ -16,6 +16,7 @@ interface UtilityPanelProps {
   scannerField: string;
   scannerText: string;
   outputRoot: string;
+  savedOutputRoot: string;
   folderParts: FolderNamePartDto[];
   licenseText: string;
   onSeriesStartChange(value: string): void;
@@ -25,6 +26,7 @@ interface UtilityPanelProps {
   onScannerTextChange(value: string): void;
   onOutputRootChange(value: string): void;
   onPickOutputFolder(): void;
+  onSaveOutputFolder(): void;
   onFolderPartsChange(parts: FolderNamePartDto[]): void;
   onLicenseTextChange(value: string): void;
   onSeriesPlan(): void;
@@ -84,6 +86,18 @@ export function UtilityPanel(props: UtilityPanelProps) {
             />
             <button className="softBtn" type="button" onClick={props.onPickOutputFolder}><i className="ti ti-folder" aria-hidden="true" /> Выбрать</button>
           </div>
+          <small className={props.outputRoot.trim() === props.savedOutputRoot.trim() && props.savedOutputRoot.trim() ? 'okText' : ''}>
+            {props.outputRoot.trim() === props.savedOutputRoot.trim() && props.savedOutputRoot.trim()
+              ? 'Путь проверен записью на диск и сохранён.'
+              : props.outputRoot.trim()
+                ? 'Изменение ещё не сохранено. Генерация продолжит использовать последний проверенный путь.'
+                : props.savedOutputRoot.trim()
+                  ? `Поле очищено, но сохранённый путь пока остаётся: ${props.savedOutputRoot}`
+                  : 'Папка ещё не сохранена.'}
+          </small>
+          <button className="utilBtn" onClick={props.onSaveOutputFolder}>
+            <i className="ti ti-device-floppy" aria-hidden="true" /> Проверить и сохранить папку
+          </button>
           <fieldset className="folderParts">
             <legend>Имя папки результата</legend>
             {FOLDER_PART_OPTIONS.map((option) => (
@@ -97,9 +111,9 @@ export function UtilityPanel(props: UtilityPanelProps) {
               </label>
             ))}
           </fieldset>
-          <small>По умолчанию используются номер и дата документа. Персональные данные добавляются только явно.</small>
-          <button className="utilBtn" onClick={props.onOutputPlan}>
-            <i className="ti ti-folder" aria-hidden="true" /> Проверить папку
+          <small>Если не выбрать ни одного компонента, подпапка будет называться «Созданные документы». Персональные данные добавляются только явно.</small>
+          <button className="utilBtn" onClick={props.onOutputPlan} disabled={!props.savedOutputRoot.trim()}>
+            <i className="ti ti-folder" aria-hidden="true" /> Показать путь следующего комплекта
           </button>
         </div>
 
@@ -177,9 +191,9 @@ export function UtilityPanel(props: UtilityPanelProps) {
           <button className="utilBtn" onClick={props.onLoadSession}>
             <i className="ti ti-database-import" aria-hidden="true" /> Загрузить сессию
           </button>
-          <BusinessRegistryPanel outputRoot={props.outputRoot} onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
+          <BusinessRegistryPanel outputRoot={props.savedOutputRoot} onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
           <OrganizationKnowledgePanel onStatus={props.onStatus} onCaseChanged={(semanticCase) => props.onSemanticCaseChanged?.(semanticCase)} />
-          <AdvancedToolsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} outputRoot={props.outputRoot} onStatus={props.onStatus} onDocumentsChanged={props.onDocumentsChanged} />
+          <AdvancedToolsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} outputRoot={props.savedOutputRoot} onStatus={props.onStatus} onDocumentsChanged={props.onDocumentsChanged} />
           <AutomationControlCenter onStatus={props.onStatus} />
           <LearningGovernancePanel documents={props.documents} onStatus={props.onStatus} />
         </div>

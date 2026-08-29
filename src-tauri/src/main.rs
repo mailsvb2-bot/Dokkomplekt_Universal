@@ -30,17 +30,17 @@ use dokkomplekt_core::{
     rename_document_button as rename_button_in_pack, render_text_template, route_intake_event,
     run_universal_constructor_pipeline, sanitize_path_component, segment_case_fragments,
     set_user_value, suggest_icd10, suggest_template_markup, template_counter_requests,
-    template_image_requests, validate_case_relations, validate_field_value, validate_popup_fields,
-    BundleDecision, CaseFragment, ConfiguredDocument, CorpusAcceptanceSource, CorpusEntry,
-    CorpusEntryMetrics, CorpusEntryRequest, CreatedDocumentsBatch, DocumentPack,
-    DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, ExtractedField,
-    FolderNamePart, IntakeDecision, IntakeDeduplicator, KitLearningDecision, KitPromotionPolicy,
-    KitRuleKey, MailMergeTable, ParsedSourceReport, PopupAnswer, PopupApplyResult,
-    PopupFieldConfig, PrintTriageReport, ProductPlanId, ScannerMark, SemanticCase,
-    SeriesPlanRequest, TemplateCandidate, TemplateConfirmationRow, TemplateLearningInput,
-    TemplateLearningReport, TemplateMarkupCandidate, UniversalPipelineFlags,
-    UniversalPipelineInput, ValueSource, WorkflowFlags, WorkflowPlan, EXPIRED_DEMO_WATERMARK_TEXT,
-    TRIAL_WATERMARK_TEXT,
+    template_image_requests, validate_case_relations, validate_field_value,
+    validate_output_button_labels, validate_popup_fields, BundleDecision, CaseFragment,
+    ConfiguredDocument, CorpusAcceptanceSource, CorpusEntry, CorpusEntryMetrics,
+    CorpusEntryRequest, CreatedDocumentsBatch, DocumentPack, DocumentRoutingRecommendation,
+    DocumentTemplateSpec, DomainKind, ExtractedField, FolderNamePart, IntakeDecision,
+    IntakeDeduplicator, KitLearningDecision, KitPromotionPolicy, KitRuleKey, MailMergeTable,
+    ParsedSourceReport, PopupAnswer, PopupApplyResult, PopupFieldConfig, PrintTriageReport,
+    ProductPlanId, ScannerMark, SemanticCase, SeriesPlanRequest, TemplateCandidate,
+    TemplateConfirmationRow, TemplateLearningInput, TemplateLearningReport,
+    TemplateMarkupCandidate, UniversalPipelineFlags, UniversalPipelineInput, ValueSource,
+    WorkflowFlags, WorkflowPlan, EXPIRED_DEMO_WATERMARK_TEXT, TRIAL_WATERMARK_TEXT,
 };
 use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
@@ -896,8 +896,9 @@ fn resolve_under_app_data(app: &tauri::AppHandle, raw: &str) -> Result<PathBuf, 
 }
 
 /// Resolve a user-selected input/output path. Absolute paths are intentionally
-/// allowed; relative paths are anchored under app_data. Parent traversal is
-/// rejected in both forms so a visually harmless `..` cannot escape a chosen root.
+/// allowed; relative paths are anchored under app_data for legacy/internal flows.
+/// User-visible output/watch roots must use `resolve_user_visible_absolute_path`
+/// instead so the UI can never display a relative path that silently lands in app_data.
 fn resolve_user_path(app: &tauri::AppHandle, raw: &str) -> Result<PathBuf, String> {
     let candidate = PathBuf::from(raw.trim());
     if candidate.as_os_str().is_empty() {
@@ -909,6 +910,21 @@ fn resolve_user_path(app: &tauri::AppHandle, raw: &str) -> Result<PathBuf, Strin
     } else {
         resolve_under_app_data(app, raw)
     }
+}
+
+fn resolve_user_visible_absolute_path(raw: &str, label: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(raw.trim());
+    if candidate.as_os_str().is_empty() {
+        return Err(format!("{label} не указан."));
+    }
+    reject_parent_traversal(&candidate)?;
+    if !candidate.is_absolute() {
+        return Err(format!(
+            "{label} должен быть абсолютным путём, выбранным на компьютере: {}",
+            candidate.display()
+        ));
+    }
+    Ok(candidate)
 }
 
 fn default_state_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {

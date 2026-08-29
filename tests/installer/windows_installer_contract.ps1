@@ -566,6 +566,37 @@ try {
 Write-Host "Installed end-to-end document generation OK: $($createdDoc.FullName)"
 
 if ($adversarial) {
+  # The file reaches disk before the React confirmation cycle necessarily finishes.
+  # A real user cannot click the generation action through the still-open modal, but
+  # UI Automation can invoke covered controls. Wait for the first preflight to close
+  # before testing a second user-visible generation cycle.
+  $firstPreflightClosedDeadline = [DateTime]::UtcNow.AddSeconds(30)
+  $firstPreflightStillOpen = $true
+  do {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $currentAppWindow) {
+      $firstPreflightStillOpen = $true
+    } else {
+      $firstPreflight = $currentAppWindow.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          'Проверка перед созданием'
+        )
+      )
+      $firstPreflightStillOpen = $null -ne $firstPreflight
+    }
+    if ($firstPreflightStillOpen) { Start-Sleep -Milliseconds 250 }
+  } while ($firstPreflightStillOpen -and [DateTime]::UtcNow -lt $firstPreflightClosedDeadline)
+  if ($firstPreflightStillOpen) {
+    throw 'First generation published a DOCX but its preflight did not finish closing.'
+  }
+  Start-Sleep -Milliseconds 250
+
   # Repeating the same deterministic output must not overwrite the first kit.
   # Generation/modals can rebuild WebView2's accessibility provider on hosted
   # Windows runners, so every poll must resolve the live top-level window.

@@ -844,8 +844,18 @@ fn perform_created_documents_intake(
             outputs,
         } => {
             case_run.transition("ready")?;
-            let output_root = resolve_user_path(app, &req.output_root)?;
-            std::fs::create_dir_all(&output_root).map_err(|e| e.to_string())?;
+            let output_labels = outputs
+                .iter()
+                .filter_map(|out| {
+                    pack.documents
+                        .iter()
+                        .find(|document| document.id == out.document_id)
+                        .map(|document| document.button_label.clone())
+                })
+                .collect::<Vec<_>>();
+            validate_output_button_labels(&output_labels)?;
+            let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+            ensure_output_root_path(&output_root)?;
             cleanup_stale_stage_directories(&output_root, Duration::from_secs(24 * 60 * 60))?;
             let desired_patient_dir =
                 output_root.join(sanitize_path_component(&patient_folder_name));
@@ -2553,8 +2563,8 @@ fn create_kedo_package(
     if req.paths.is_empty() {
         return Err("Для КЭДО-пакета не выбран ни один документ.".into());
     }
-    let output_root = resolve_user_path(&app, &req.output_root)?;
-    std::fs::create_dir_all(&output_root).map_err(|error| error.to_string())?;
+    let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+    ensure_output_root_path(&output_root)?;
     cleanup_stale_stage_directories(&output_root, Duration::from_secs(24 * 60 * 60))?;
     let stage = output_root.join(format!(".kedo-stage-{}", Uuid::new_v4()));
     std::fs::create_dir(&stage)

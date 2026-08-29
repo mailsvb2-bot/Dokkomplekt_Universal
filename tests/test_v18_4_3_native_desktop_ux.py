@@ -27,12 +27,14 @@ def test_daily_ui_uses_product_dialogs_not_browser_prompts() -> None:
 
 def test_folder_picker_is_wired_end_to_end_and_hidden_on_windows() -> None:
     app = text("src/App.tsx")
+    destination = text("src/hooks/useOutputDestination.ts")
     api = text("src/lib/api.ts")
     runtime = text("src-tauri/src/subsystems/automation_runtime.rs")
     main = text("src-tauri/src/main.rs")
     workspace = text("src/components/Workspace.tsx")
     settings = text("src/components/UtilityPanel.tsx")
-    assert "pickFolder" in app
+    assert "useOutputDestination" in app
+    assert "pickFolder" in destination
     assert "callRust<{ selected_path: string | null }>('pick_folder'" in api
     assert "async fn pick_folder" in runtime
     assert "CREATE_NO_WINDOW" in runtime

@@ -2,6 +2,11 @@ import type { FolderNamePartDto } from './types';
 
 export type ExistingOutputPolicy = 'version' | 'replace_with_backup';
 
+export type OpenFolderAttempt = {
+  opened: boolean;
+  error?: string;
+};
+
 type PlannedOutput = {
   exists: boolean;
   patient_folder: string;
@@ -15,17 +20,28 @@ type ConfirmOptions = {
   danger?: boolean;
 };
 
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try { return JSON.stringify(error); } catch { return 'неизвестная ошибка оболочки'; }
+}
+
+/**
+ * Opening a folder is convenience, not publication. Keep a successful generation
+ * successful, but return the shell failure to the caller so it can be shown instead
+ * of silently claiming that the folder opened.
+ */
 export async function openCreatedOutputFolderSilently(
   outputFolder: string,
   openFolder: (path: string) => Promise<unknown>,
-): Promise<void> {
+): Promise<OpenFolderAttempt> {
   const target = outputFolder.trim();
-  if (!target) return;
+  if (!target) return { opened: false, error: 'путь готового комплекта пуст' };
   try {
     await openFolder(target);
-  } catch {
-    // Donor completion UX is deliberately silent: the created-result card keeps
-    // the exact path and an explicit retry button if the OS shell cannot open it.
+    return { opened: true };
+  } catch (error) {
+    return { opened: false, error: errorText(error) };
   }
 }
 
@@ -56,8 +72,10 @@ export async function chooseExistingOutputPolicyFlow(params: {
     confirmLabel: 'Открыть существующий',
     cancelLabel: 'Другие варианты',
   })) {
-    await params.openFolder(planned.patient_folder);
-    params.onStatus('Открыт существующий комплект. Новые файлы не создавались.');
+    const opened = await openCreatedOutputFolderSilently(planned.patient_folder, params.openFolder);
+    params.onStatus(opened.opened
+      ? 'Открыт существующий комплект. Новые файлы не создавались.'
+      : `Существующий комплект не изменён, но папку не удалось открыть: ${opened.error}. Путь: ${planned.patient_folder}`);
     return null;
   }
 

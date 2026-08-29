@@ -154,8 +154,14 @@ export function loadOutputRoot(): string {
 
 export function saveOutputRoot(value: string): void {
   const normalized = value.trim();
-  if (!normalized) return;
-  try { localStorage.setItem(OUTPUT_ROOT_KEY, normalized); } catch { /* storage may be unavailable */ }
+  try {
+    if (!normalized) {
+      localStorage.removeItem(OUTPUT_ROOT_KEY);
+      localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+      return;
+    }
+    localStorage.setItem(OUTPUT_ROOT_KEY, normalized);
+  } catch { /* storage may be unavailable */ }
 }
 
 export function loadOutputNamingConfirmed(): boolean {
@@ -163,7 +169,6 @@ export function loadOutputNamingConfirmed(): boolean {
 }
 
 export function saveOutputFolderParts(parts: FolderNamePartDto[], confirmed = true): void {
-  if (!parts.length) return;
   try {
     localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(parts));
     if (confirmed) localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');

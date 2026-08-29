@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, FolderNamePartDto, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, installBackgroundWatcher, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource, ensureOutputRoot,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickFolder, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -22,6 +22,7 @@ import { bestScannerSuggestion, suggestScannerFields } from './lib/scannerSugges
 import { applyTheme, buildTheme, loadTheme, saveTheme, type ThemeState } from './theme';
 import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
+import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
@@ -31,8 +32,8 @@ import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from 
 import {
   AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
   arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
-  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference, loadOutputFolderParts, loadOutputNamingConfirmed, loadOutputRoot,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes, saveOutputFolderParts, saveOutputRoot,
+  errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 export function App() {
@@ -91,7 +92,6 @@ function AppContent() {
   const [licenseText, setLicenseText] = useState('');
   const [utilityOpen, setUtilityOpen] = useState(false);
 
-  const [watchFolder, setWatchFolder] = useState('');
   const [intakeSource, setIntakeSource] = useState('');
   const [intakeResult, setIntakeResult] = useState<CreatedDocumentsIntakeResult | null>(null);
   const [semantic, setSemantic] = useState<SemanticExtractResult | null>(null);
@@ -101,10 +101,11 @@ function AppContent() {
   const [seriesSkipWeekends, setSeriesSkipWeekends] = useState(false);
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
-  const [outputRoot, setOutputRoot] = useState(loadOutputRoot);
-  const [outputRootDraft, setOutputRootDraft] = useState(loadOutputRoot);
-  const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(loadOutputFolderParts);
-  const [folderNamingConfirmed, setFolderNamingConfirmed] = useState(loadOutputNamingConfirmed);
+  const {
+    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed,
+    setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
+    chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
+  } = useOutputDestination(run, setStatus);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
@@ -462,12 +463,6 @@ function AppContent() {
     setSelectedDocIds([]);
   }
 
-  function updateFolderParts(parts: FolderNamePartDto[]) {
-    setFolderParts(parts);
-    saveOutputFolderParts(parts, true);
-    setFolderNamingConfirmed(true);
-  }
-
   function updateAutoPrint(value: boolean) {
     setAutoPrint(value);
     try { localStorage.setItem(AUTO_PRINT_KEY, value ? 'true' : 'false'); } catch { /* private mode */ }
@@ -711,47 +706,6 @@ function AppContent() {
     setPreflightPlan(null);
     setPreview(null);
     setStatus('Документ убран из набора. Исходный шаблон сохранён.');
-  }
-
-  async function chooseFolder(currentPath: string, apply: (path: string) => void, label: string) {
-    const selected = await run('pick_folder', () => pickFolder(currentPath));
-    if (!selected) return;
-    apply(selected);
-    setStatus(`${label}: ${selected}`);
-  }
-
-  async function commitOutputRoot(rawPath: string): Promise<boolean> {
-    const candidate = rawPath.trim();
-    if (!candidate) {
-      setOutputRoot('');
-      setOutputRootDraft('');
-      saveOutputRoot('');
-      setFolderNamingConfirmed(false);
-      setStatus('Папка готовых документов очищена. Перед созданием комплекта выберите и сохраните новую папку.');
-      return true;
-    }
-    let validationError: string | null = null;
-    const validated = await run(
-      'ensure_output_root',
-      () => ensureOutputRoot(candidate),
-      (detail) => { validationError = detail; },
-    );
-    if (!validated) {
-      setStatus(`Папка не сохранена: ${validationError ?? 'проверка записи не пройдена'}. Подтверждённый путь не изменён.`);
-      return false;
-    }
-    setOutputRoot(validated);
-    setOutputRootDraft(validated);
-    saveOutputRoot(validated);
-    setStatus(`Папка готовых документов проверена и сохранена: ${validated}.`);
-    return true;
-  }
-
-  async function chooseAndCommitOutputFolder() {
-    const selected = await run('pick_folder', () => pickFolder(outputRootDraft || outputRoot));
-    if (!selected) return;
-    setOutputRootDraft(selected);
-    await commitOutputRoot(selected);
   }
 
   async function refreshPreflightPlan(documentIds = selectedDocIds) {
@@ -1232,19 +1186,6 @@ function AppContent() {
     }
     setStatus(`Разметка сохранена: принято ${res.applied_fields.length}, пропущено ${res.rejected_fields.length}.`);
   }
-  async function outputPlan() {
-    if (!outputRoot.trim()) {
-      setStatus('Укажите корневую папку вывода.');
-      return;
-    }
-    const labels = visibleDocs.map((d) => d.button_label);
-    const res = await run('get_output_plan', () => getOutputPlan(
-      outputRoot.trim(),
-      folderParts,
-      labels,
-    ));
-    if (res) setStatus(`Папка комплекта: ${res.patient_folder}`);
-  }
   async function saveSession() {
     await run('save_state', () => saveState(STATE_DB));
     setStatus('Настройки и текущий набор сохранены.');
@@ -1275,25 +1216,6 @@ function AppContent() {
     } else {
       setStatus(`${result.message}: ${result.current_version}.`);
     }
-  }
-
-  async function installWatcher() {
-    const folder = watchFolder.trim();
-    if (!folder) {
-      setStatus('Сначала выберите рабочую папку фонового агента на компьютере. Относительный путь по умолчанию больше не используется.');
-      return;
-    }
-    const res = await run('install_background_watcher', () => installBackgroundWatcher(folder, DEFAULT_YEAR, sickLeave, folderParts, autoPrint, printCopies));
-    if (res) setStatus(`Автоматическая обработка включена для папки «${res.watch_folder ?? ''}»${res.warnings?.length ? `; замечания: ${res.warnings.join('; ')}` : ''}.`);
-  }
-  async function uninstallWatcher() {
-    let uninstallError: string | null = null;
-    await run('uninstall_background_watcher', () => uninstallBackgroundWatcher(), (detail) => { uninstallError = detail; });
-    if (uninstallError) {
-      setStatus(`Фоновый агент не подтверждён как отключённый: ${uninstallError}`);
-      return;
-    }
-    setStatus('Автоматическая обработка папки отключена.');
   }
 
   async function runZeroTouch() {
@@ -1392,8 +1314,7 @@ function AppContent() {
             answers={answers}
             skippedAnswers={skippedAnswers}
             preview={preview}
-            setWatchFolder={setWatchFolder}
-            onPickWatchFolder={() => void chooseFolder(watchFolder, setWatchFolder, 'Рабочая папка')}
+            onPickWatchFolder={() => void chooseWatchFolder()}
             setIntakeSource={setIntakeSource}
             setAutoPrint={updateAutoPrint}
             setSourceText={setSourceText}
@@ -1475,13 +1396,13 @@ function AppContent() {
             onLicenseTextChange={setLicenseText}
             onSeriesPlan={seriesPlan}
             onScanMarks={() => void scanMarks(false)}
-            onOutputPlan={outputPlan}
+            onOutputPlan={() => void outputPlan(visibleDocs.map((document) => document.button_label))}
             onSaveSession={saveSession}
             onLoadSession={loadSession}
             onCheckAccess={checkAccess}
             onCheckUpdates={checkUpdates}
-            onInstallWatcher={installWatcher}
-            onUninstallWatcher={uninstallWatcher}
+            onInstallWatcher={() => void installWatcher(sickLeave, autoPrint, printCopies)}
+            onUninstallWatcher={() => void uninstallWatcher()}
             onVerifyLicense={verifyLicense}
             onSemanticCaseChanged={(semanticCase) => setSemantic({
               fields: Object.values(semanticCase.values).map((value) => ({

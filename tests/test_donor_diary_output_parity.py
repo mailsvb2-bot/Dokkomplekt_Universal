@@ -15,9 +15,11 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     assert "return '';" in support
     assert "Куда сохранять готовые документы" in onboarding
     assert "Выбрать папку на компьютере" in onboarding
-    assert "disabled={!root || !selected.length}" in onboarding
+    assert "disabled={!root}" in onboarding
+    assert "disabled={!root || !selected.length}" not in onboarding
+    assert "Созданные документы" in onboarding
     assert "currentRoot={outputRoot}" in app
-    assert "onPickRoot={() => void chooseFolder" in app
+    assert "onPickRoot={() => void chooseAndCommitOutputFolder()" in app
     assert "(!folderNamingConfirmed || !outputRoot.trim())" in app
     assert "outputRoot.trim() || 'output/Готовые документы'" not in app
     assert "Сначала выберите папку готовых документов. Ничего не создано." in output_flow
@@ -27,7 +29,7 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     assert "Открыть папку с документами" in workspace
     assert "openCreatedOutputFolderSilently(res.output_folder, openInFileManager)" in app
     assert "await openFolder(target)" in output_flow
-    assert "Donor completion UX is deliberately silent" in output_flow
+    assert "return { opened: false, error: errorText(error) };" in output_flow
 
 
 def test_diary_popup_is_fail_closed_and_donor_style_is_present():

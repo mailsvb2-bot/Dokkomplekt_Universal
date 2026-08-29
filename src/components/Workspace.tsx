@@ -55,7 +55,6 @@ interface WorkspaceProps {
   answers: Record<string, string>;
   skippedAnswers: Record<string, boolean>;
   preview: PreviewState | null;
-  setWatchFolder(value: string): void;
   onPickWatchFolder(): void;
   setIntakeSource(value: string): void;
   setAutoPrint(value: boolean): void;

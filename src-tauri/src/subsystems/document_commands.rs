@@ -2689,7 +2689,6 @@ struct OutputPlanRequest {
 fn get_output_plan(
     req: OutputPlanRequest,
     state: State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let case = state
         .semantic_case

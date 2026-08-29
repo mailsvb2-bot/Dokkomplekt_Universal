@@ -97,7 +97,8 @@ fn render_mail_merge(
         .checked_mul(table.rows.len())
         .ok_or("Слишком большой пакет")?;
     let requested_documents = count.try_into().map_err(|_| "Слишком большой пакет")?;
-    let root = resolve_user_path(&app, &req.output_root)?;
+    let root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+    ensure_output_root_path(&root)?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     cleanup_stale_stage_directories(&root, Duration::from_secs(24 * 60 * 60))?;
     let stage = root.join(format!(".mail-merge-stage-{}", Uuid::new_v4()));

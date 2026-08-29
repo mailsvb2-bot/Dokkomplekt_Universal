@@ -65,21 +65,31 @@ pub fn rename_document_button(
     requested_label: &str,
 ) -> Result<String, ButtonRegistryError> {
     let normalized = normalize_label(requested_label);
+    let used = pack
+        .documents
+        .iter()
+        .filter(|document| document.id != document_id)
+        .map(|document| button_label_collision_key(&document.button_label))
+        .collect::<BTreeSet<_>>();
     let mut resolved = normalized.clone();
-    if pack.documents.iter().any(|document| {
-        document.id != document_id && document.button_label.eq_ignore_ascii_case(&resolved)
-    }) {
+    if used.contains(&button_label_collision_key(&resolved)) {
         for index in 2..500 {
             let candidate = format!("{normalized} ({index})");
-            if !pack.documents.iter().any(|document| {
-                document.id != document_id && document.button_label.eq_ignore_ascii_case(&candidate)
-            }) {
+            if !used.contains(&button_label_collision_key(&candidate)) {
                 resolved = candidate;
                 break;
             }
         }
         if resolved == normalized {
-            resolved = format!("{normalized} ({})", pack.documents.len() + 1);
+            let mut index = pack.documents.len() + 1;
+            loop {
+                let candidate = format!("{normalized} ({index})");
+                if !used.contains(&button_label_collision_key(&candidate)) {
+                    resolved = candidate;
+                    break;
+                }
+                index += 1;
+            }
         }
     }
     let document = pack
@@ -150,7 +160,11 @@ pub fn prepare_template_confirmations_with_existing_pack(
         .then(|| workspace_inference.suggested_domain.clone())
         .flatten();
 
-    let mut used = BTreeSet::new();
+    let mut used = existing_pack
+        .into_iter()
+        .flat_map(|pack| pack.documents.iter())
+        .map(|document| button_label_collision_key(&document.button_label))
+        .collect::<BTreeSet<_>>();
     let mut rows = analyzed
         .into_iter()
         .map(|(candidate, initial_analysis)| {
@@ -374,7 +388,7 @@ pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) 
     let mut labels = existing
         .documents
         .iter()
-        .map(|document| document.button_label.clone())
+        .map(|document| button_label_collision_key(&document.button_label))
         .collect::<BTreeSet<_>>();
     for mut document in incoming.documents {
         if existing
@@ -439,18 +453,29 @@ fn content_addressed_template_sha256(path: &str) -> Option<String> {
         .then(|| stem.to_ascii_lowercase())
 }
 
+pub fn button_label_collision_key(label: &str) -> String {
+    crate::output_file_stem_key(&normalize_label(label))
+}
+
 fn unique_label(base: &str, used: &mut BTreeSet<String>) -> String {
     let clean = normalize_label(base);
-    if used.insert(clean.clone()) {
+    if used.insert(button_label_collision_key(&clean)) {
         return clean;
     }
     for index in 2..500 {
         let candidate = format!("{clean} {index}");
-        if used.insert(candidate.clone()) {
+        if used.insert(button_label_collision_key(&candidate)) {
             return candidate;
         }
     }
-    format!("{} {}", clean, used.len() + 1)
+    let mut index = used.len() + 1;
+    loop {
+        let candidate = format!("{clean} {index}");
+        if used.insert(button_label_collision_key(&candidate)) {
+            return candidate;
+        }
+        index += 1;
+    }
 }
 
 fn normalize_label(label: &str) -> String {
@@ -473,6 +498,15 @@ mod tests {
     fn first_run_pack_has_no_built_in_documents() {
         let pack = empty_first_run_pack("default", "Пользовательский пакет");
         assert!(pack.documents.is_empty());
+    }
+
+    #[test]
+    fn labels_are_unique_by_windows_visible_file_name_not_only_rust_string_case() {
+        let mut used = BTreeSet::new();
+        assert_eq!(unique_label("Выписка", &mut used), "Выписка");
+        assert_eq!(unique_label("выписка", &mut used), "выписка 2");
+        assert_eq!(unique_label("Акт: итоговый", &mut used), "Акт: итоговый");
+        assert_eq!(unique_label("Акт? итоговый", &mut used), "Акт? итоговый 2");
     }
 
     #[test]

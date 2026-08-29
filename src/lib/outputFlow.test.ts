@@ -40,6 +40,22 @@ describe('chooseExistingOutputPolicyFlow', () => {
     expect(getPlan).toHaveBeenCalledWith('D:/Ready', ['DocumentNumber'], ['Дневники']);
   });
 
+  it('does not claim that an existing folder opened when the shell failed', async () => {
+    const onStatus = vi.fn();
+    const result = await chooseExistingOutputPolicyFlow({
+      outputRoot: 'C:/Ready',
+      folderParts: [...parts],
+      labels: ['Дневники'],
+      getPlan: vi.fn().mockResolvedValue({ exists: true, patient_folder: 'C:/Ready/42' }),
+      confirm: vi.fn().mockResolvedValue(true),
+      openFolder: vi.fn().mockRejectedValue(new Error('shell unavailable')),
+      onStatus,
+      onMissingRoot: vi.fn(),
+    });
+    expect(result).toBeNull();
+    expect(onStatus).toHaveBeenCalledWith(expect.stringContaining('не удалось открыть'));
+  });
+
   it('treats a handled runner cancellation as no output action', async () => {
     const confirm = vi.fn();
     const result = await chooseExistingOutputPolicyFlow({
@@ -58,21 +74,21 @@ describe('chooseExistingOutputPolicyFlow', () => {
 });
 
 describe('openCreatedOutputFolderSilently', () => {
-  it('opens the exact published patient folder without another success popup', async () => {
+  it('opens the exact published patient folder and reports success', async () => {
     const openFolder = vi.fn().mockResolvedValue(undefined);
-    await expect(openCreatedOutputFolderSilently('  D:/Ready/Иванов И.И.  ', openFolder)).resolves.toBeUndefined();
+    await expect(openCreatedOutputFolderSilently('  D:/Ready/Иванов И.И.  ', openFolder)).resolves.toEqual({ opened: true });
     expect(openFolder).toHaveBeenCalledWith('D:/Ready/Иванов И.И.');
   });
 
-  it('keeps a successful creation successful when the OS shell cannot open the folder', async () => {
+  it('keeps publication successful but reports a shell-open failure to the caller', async () => {
     const openFolder = vi.fn().mockRejectedValue(new Error('shell unavailable'));
-    await expect(openCreatedOutputFolderSilently('D:/Ready/42', openFolder)).resolves.toBeUndefined();
+    await expect(openCreatedOutputFolderSilently('D:/Ready/42', openFolder)).resolves.toEqual({ opened: false, error: 'shell unavailable' });
     expect(openFolder).toHaveBeenCalledOnce();
   });
 
-  it('does not call the shell for an empty result path', async () => {
+  it('does not call the shell for an empty result path and reports the missing path', async () => {
     const openFolder = vi.fn();
-    await openCreatedOutputFolderSilently('   ', openFolder);
+    await expect(openCreatedOutputFolderSilently('   ', openFolder)).resolves.toEqual({ opened: false, error: 'путь готового комплекта пуст' });
     expect(openFolder).not.toHaveBeenCalled();
   });
 });

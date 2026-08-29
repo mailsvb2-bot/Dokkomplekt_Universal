@@ -1180,13 +1180,12 @@ fn install_background_watcher(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
-    let watch_folder = resolve_user_path(&app, &req.watch_folder)?;
+    let watch_folder = resolve_user_visible_absolute_path(&req.watch_folder, "Рабочая папка фонового агента")?;
+    ensure_output_root_path(&watch_folder)?;
     let default_year = req.default_year.unwrap_or_else(current_year_utc);
-    let folder_parts = if req.folder_parts.is_empty() {
-        vec![FolderNamePart::DocumentNumber, FolderNamePart::DocumentDate]
-    } else {
-        req.folder_parts.clone()
-    };
+    // An empty list is an explicit user choice: use the neutral
+    // «Созданные документы» patient-folder name. Never silently restore a preset.
+    let folder_parts = req.folder_parts.clone();
     if let Some((document_id, copies)) = req
         .print_copies_by_document
         .iter()

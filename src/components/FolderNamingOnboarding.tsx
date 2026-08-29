@@ -28,7 +28,7 @@ export function FolderNamingOnboarding(props: {
   onPickRoot(): void;
   onConfirm(parts: FolderNamePartDto[]): void;
 }) {
-  const [selected, setSelected] = useState<FolderNamePartDto[]>(props.currentParts.length ? props.currentParts : ['DocumentNumber', 'DocumentDate']);
+  const [selected, setSelected] = useState<FolderNamePartDto[]>(props.currentParts);
   const [advanced, setAdvanced] = useState(false);
   const preview = useMemo(() => {
     const byId = new Map(PARTS.map(part => [part.value, part.example]));
@@ -85,12 +85,13 @@ export function FolderNamingOnboarding(props: {
         <div className="folderNamingPreview">
           <span>Пример</span>
           <strong>{preview}</strong>
+          {!selected.length && <small>Ни один компонент не выбран: программа действительно использует нейтральное имя «Созданные документы».</small>}
         </div>
 
         <div className="modalActions">
           <small>{root ? 'Папка и правило будут сохранены.' : 'Сначала выберите папку на компьютере.'}</small>
           <span className="spacer" />
-          <button type="button" className="primaryBtn" disabled={!root || !selected.length} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
+          <button type="button" className="primaryBtn" disabled={!root} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
         </div>
       </section>
     </div>

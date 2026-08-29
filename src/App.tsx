@@ -3,8 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, getBackgroundWatcherState, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
-  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
+  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
@@ -24,6 +24,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
@@ -108,7 +109,6 @@ function AppContent() {
   } = useOutputDestination(run, setStatus);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
   const [printCopies, setPrintCopies] = useState<Record<string, number>>(loadPrintCopyPreferences);
-  const [watcherPreferencesReady, setWatcherPreferencesReady] = useState(false);
   const [lastOutput, setLastOutput] = useState<GeneratedOutput | null>(null);
   const [guidedScanner, setGuidedScanner] = useState<GuidedScannerState | null>(null);
 
@@ -135,36 +135,10 @@ function AppContent() {
     return () => { alive = false; };
   }, []);
 
-  useEffect(() => {
-    let alive = true;
-    void getBackgroundWatcherState()
-      .then((watcher) => {
-        if (!alive) return;
-        if (watcher.installed) {
-          if (typeof watcher.auto_print === 'boolean') setAutoPrint(watcher.auto_print);
-          if (watcher.print_copies_by_document) setPrintCopies(watcher.print_copies_by_document);
-        }
-        // Only a successful watcher-state read may authorize synchronization.
-        setWatcherPreferencesReady(true);
-      })
-      .catch((error) => {
-        if (!alive) return;
-        setWatcherPreferencesReady(false);
-        setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
-      });
-    return () => { alive = false; };
-  }, []);
-
-  useEffect(() => {
-    if (!watcherPreferencesReady || !outputPreferencesReady || !folderNamingConfirmed || !outputRoot.trim() || !folderParts.length) return;
-    void updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies)
-      .then((updated) => {
-        if (!updated) return; // Agent is not installed yet; preferences remain local until install.
-      })
-      .catch((error) => {
-        setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
-      });
-  }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies]);
+  useWatcherPreferenceSync({
+    outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies,
+    setAutoPrint, setPrintCopies, setStatus,
+  });
 
   useEffect(() => {
     let disposed = false;

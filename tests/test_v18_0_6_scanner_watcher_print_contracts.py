@@ -15,6 +15,7 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         cls.suggestions = (ROOT / "src/lib/scannerSuggestions.ts").read_text(encoding="utf-8")
         cls.suggestion_tests = (ROOT / "src/lib/scannerSuggestions.test.ts").read_text(encoding="utf-8")
         cls.app = (ROOT / "src/App.tsx").read_text(encoding="utf-8")
+        cls.watcher_sync = (ROOT / "src/hooks/useWatcherPreferenceSync.ts").read_text(encoding="utf-8")
         cls.api = (ROOT / "src/lib/api.ts").read_text(encoding="utf-8")
         cls.main = project_text("src-tauri/src/main.rs")
         cls.workspace = (ROOT / "src/components/Workspace.tsx").read_text(encoding="utf-8")
@@ -78,13 +79,16 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("updateBackgroundWatcherPreferences", self.api)
         self.assertIn("update_background_watcher_preferences", self.api)
         self.assertIn("fn update_background_watcher_preferences", self.main)
-        self.assertIn("getBackgroundWatcherState", self.app)
-        self.assertIn("watcherPreferencesReady", self.app)
+        self.assertIn("useWatcherPreferenceSync", self.app)
+        self.assertIn("getBackgroundWatcherState", self.watcher_sync)
+        self.assertIn("watcherPreferencesReady", self.watcher_sync)
+        self.assertIn("outputPreferencesReady", self.watcher_sync)
+        self.assertIn("folderNamingConfirmed", self.watcher_sync)
         self.assertRegex(
-            self.app,
+            self.watcher_sync,
             r"updateBackgroundWatcherPreferences\(outputRoot, folderParts, autoPrint, printCopies\)",
         )
-        self.assertIn("последнюю подтверждённую конфигурацию", self.app)
+        self.assertIn("последнюю подтверждённую конфигурацию", self.watcher_sync)
         self.assertIn("latest_runtime", self.main)
         self.assertIn("effective_copies", self.main)
 

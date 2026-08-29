@@ -78,10 +78,13 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("updateBackgroundWatcherPreferences", self.api)
         self.assertIn("update_background_watcher_preferences", self.api)
         self.assertIn("fn update_background_watcher_preferences", self.main)
+        self.assertIn("getBackgroundWatcherState", self.app)
+        self.assertIn("watcherPreferencesReady", self.app)
         self.assertRegex(
             self.app,
-            r"useEffect\(\(\) => \{\s*void updateBackgroundWatcherPreferences\(autoPrint, printCopies\)",
+            r"updateBackgroundWatcherPreferences\(outputRoot, folderParts, autoPrint, printCopies\)",
         )
+        self.assertIn("последнюю подтверждённую конфигурацию", self.app)
         self.assertIn("latest_runtime", self.main)
         self.assertIn("effective_copies", self.main)
 

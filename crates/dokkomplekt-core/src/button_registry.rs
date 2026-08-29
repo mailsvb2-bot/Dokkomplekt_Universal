@@ -468,15 +468,14 @@ fn unique_label(base: &str, used: &mut BTreeSet<String>) -> String {
     if used.insert(button_label_collision_key(&clean)) {
         return clean;
     }
-    let max_attempt = used.len() + 2;
-    for index in 2..=max_attempt {
+    for index in 2.. {
         let suffix = format!(" {index}");
         let candidate = label_with_suffix(&clean, &suffix);
         if used.insert(button_label_collision_key(&candidate)) {
             return candidate;
         }
     }
-    unreachable!("bounded unique-label search exhausted despite reserved numeric suffix")
+    clean
 }
 
 fn normalize_label(label: &str) -> String {

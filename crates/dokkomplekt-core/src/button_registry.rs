@@ -73,23 +73,17 @@ pub fn rename_document_button(
         .collect::<BTreeSet<_>>();
     let mut resolved = normalized.clone();
     if used.contains(&button_label_collision_key(&resolved)) {
-        for index in 2..500 {
-            let candidate = format!("{normalized} ({index})");
+        let max_attempt = used.len() + 2;
+        for index in 2..=max_attempt {
+            let suffix = format!(" ({index})");
+            let candidate = label_with_suffix(&normalized, &suffix);
             if !used.contains(&button_label_collision_key(&candidate)) {
                 resolved = candidate;
                 break;
             }
         }
         if resolved == normalized {
-            let mut index = pack.documents.len() + 1;
-            loop {
-                let candidate = format!("{normalized} ({index})");
-                if !used.contains(&button_label_collision_key(&candidate)) {
-                    resolved = candidate;
-                    break;
-                }
-                index += 1;
-            }
+            return Err(ButtonRegistryError::DuplicateLabel(normalized));
         }
     }
     let document = pack
@@ -457,25 +451,32 @@ pub fn button_label_collision_key(label: &str) -> String {
     crate::output_file_stem_key(&normalize_label(label))
 }
 
+fn label_with_suffix(base: &str, suffix: &str) -> String {
+    const MAX_OUTPUT_STEM_CHARS: usize = 120;
+    let base_limit = MAX_OUTPUT_STEM_CHARS.saturating_sub(suffix.chars().count());
+    let prefix = base
+        .chars()
+        .take(base_limit)
+        .collect::<String>()
+        .trim_end_matches(|character: char| character.is_whitespace() || character == '.')
+        .to_string();
+    format!("{prefix}{suffix}")
+}
+
 fn unique_label(base: &str, used: &mut BTreeSet<String>) -> String {
     let clean = normalize_label(base);
     if used.insert(button_label_collision_key(&clean)) {
         return clean;
     }
-    for index in 2..500 {
-        let candidate = format!("{clean} {index}");
+    let max_attempt = used.len() + 2;
+    for index in 2..=max_attempt {
+        let suffix = format!(" {index}");
+        let candidate = label_with_suffix(&clean, &suffix);
         if used.insert(button_label_collision_key(&candidate)) {
             return candidate;
         }
     }
-    let mut index = used.len() + 1;
-    loop {
-        let candidate = format!("{clean} {index}");
-        if used.insert(button_label_collision_key(&candidate)) {
-            return candidate;
-        }
-        index += 1;
-    }
+    unreachable!("bounded unique-label search exhausted despite reserved numeric suffix")
 }
 
 fn normalize_label(label: &str) -> String {
@@ -507,6 +508,22 @@ mod tests {
         assert_eq!(unique_label("выписка", &mut used), "выписка 2");
         assert_eq!(unique_label("Акт: итоговый", &mut used), "Акт: итоговый");
         assert_eq!(unique_label("Акт? итоговый", &mut used), "Акт? итоговый 2");
+    }
+
+    #[test]
+    fn long_label_collision_keeps_numeric_suffix_inside_windows_stem_limit() {
+        let base = "Д".repeat(140);
+        let mut used = BTreeSet::new();
+        let first = unique_label(&base, &mut used);
+        let second = unique_label(&base, &mut used);
+
+        assert!(second.ends_with(" 2"));
+        assert_ne!(
+            button_label_collision_key(&first),
+            button_label_collision_key(&second)
+        );
+        assert!(button_label_collision_key(&second).ends_with(" 2"));
+        assert!(button_label_collision_key(&second).chars().count() <= 120);
     }
 
     #[test]
@@ -1023,5 +1040,20 @@ mod tests {
         assert_eq!(renamed.id, "d1");
         assert_eq!(renamed.template_path, "templates/act.docx");
         assert_eq!(renamed.required_fields, vec!["document.number"]);
+
+        let long = "Д".repeat(140);
+        pack.documents
+            .iter_mut()
+            .find(|document| document.id == "d2")
+            .unwrap()
+            .button_label = long.clone();
+        let long_label = rename_document_button(&mut pack, "d1", &long).expect("long rename");
+        assert!(long_label.ends_with(" (2)"));
+        assert_ne!(
+            button_label_collision_key(&long_label),
+            button_label_collision_key(&long)
+        );
+        assert!(button_label_collision_key(&long_label).ends_with(" (2)"));
+        assert!(button_label_collision_key(&long_label).chars().count() <= 120);
     }
 }

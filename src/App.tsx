@@ -102,7 +102,7 @@ function AppContent() {
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
   const {
-    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed,
+    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady,
     setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
     chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
   } = useOutputDestination(run, setStatus);
@@ -144,16 +144,19 @@ function AppContent() {
           if (typeof watcher.auto_print === 'boolean') setAutoPrint(watcher.auto_print);
           if (watcher.print_copies_by_document) setPrintCopies(watcher.print_copies_by_document);
         }
+        // Only a successful watcher-state read may authorize synchronization.
+        setWatcherPreferencesReady(true);
       })
       .catch((error) => {
-        if (alive) setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
-      })
-      .finally(() => { if (alive) setWatcherPreferencesReady(true); });
+        if (!alive) return;
+        setWatcherPreferencesReady(false);
+        setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
+      });
     return () => { alive = false; };
   }, []);
 
   useEffect(() => {
-    if (!watcherPreferencesReady || !outputRoot.trim() || !folderParts.length) return;
+    if (!watcherPreferencesReady || !outputPreferencesReady || !folderNamingConfirmed || !outputRoot.trim() || !folderParts.length) return;
     void updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies)
       .then((updated) => {
         if (!updated) return; // Agent is not installed yet; preferences remain local until install.
@@ -161,7 +164,7 @@ function AppContent() {
       .catch((error) => {
         setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
       });
-  }, [watcherPreferencesReady, outputRoot, folderParts, autoPrint, printCopies]);
+  }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies]);
 
   useEffect(() => {
     let disposed = false;

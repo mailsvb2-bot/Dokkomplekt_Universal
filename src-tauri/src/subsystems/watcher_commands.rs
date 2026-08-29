@@ -409,6 +409,13 @@ fn unix_time_ms(value: std::time::SystemTime) -> u128 {
         .as_millis()
 }
 
+fn classify_watcher_configuration_error(_error: &str) -> (&'static str, UnreadableRetryPolicy) {
+    (
+        "watcher_configuration_unavailable",
+        UnreadableRetryPolicy::Timed(Duration::from_secs(60)),
+    )
+}
+
 fn classify_processing_error(error: &str) -> (&'static str, UnreadableRetryPolicy) {
     let normalized = error.to_lowercase();
     if normalized.contains("internal watcher panic") {
@@ -633,10 +640,11 @@ fn prune_file_stability_observations(
     });
 }
 
-fn write_unreadable_source_note(
+fn write_unreadable_source_note_with_classifier(
     source: &Path,
     error: &str,
     now: std::time::SystemTime,
+    classifier: fn(&str) -> (&'static str, UnreadableRetryPolicy),
 ) -> Result<PathBuf, String> {
     let stem = source
         .file_stem()
@@ -648,7 +656,7 @@ fn write_unreadable_source_note(
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let (category, retry_policy) = classify_processing_error(error);
+    let (category, retry_policy) = classifier(error);
     let source_kind = source
         .extension()
         .and_then(|value| value.to_str())
@@ -699,6 +707,27 @@ fn write_unreadable_source_note(
     Ok(note_path)
 }
 
+fn write_unreadable_source_note(
+    source: &Path,
+    error: &str,
+    now: std::time::SystemTime,
+) -> Result<PathBuf, String> {
+    write_unreadable_source_note_with_classifier(source, error, now, classify_processing_error)
+}
+
+fn write_watcher_configuration_note(
+    source: &Path,
+    error: &str,
+    now: std::time::SystemTime,
+) -> Result<PathBuf, String> {
+    write_unreadable_source_note_with_classifier(
+        source,
+        error,
+        now,
+        classify_watcher_configuration_error,
+    )
+}
+
 fn default_parallel_cases() -> usize {
     2
 }
@@ -722,7 +751,7 @@ fn process_watcher_source(
         Ok(runtime) => runtime,
         Err(error) => {
             increment_metric(&app, "failed_sources", 1);
-            let note = write_unreadable_source_note(&path, &error, std::time::SystemTime::now()).ok();
+            let note = write_watcher_configuration_note(&path, &error, std::time::SystemTime::now()).ok();
             let response = CreatedDocumentsIntakeResponse {
                 status: "attention".into(),
                 patient_folder: None,
@@ -741,7 +770,7 @@ fn process_watcher_source(
         Ok(path) => path,
         Err(error) => {
             increment_metric(&app, "failed_sources", 1);
-            let note = write_unreadable_source_note(&path, &error, std::time::SystemTime::now()).ok();
+            let note = write_watcher_configuration_note(&path, &error, std::time::SystemTime::now()).ok();
             let response = CreatedDocumentsIntakeResponse {
                 status: "attention".into(),
                 patient_folder: None,
@@ -1569,6 +1598,27 @@ mod watcher_handoff_tests {
         };
         assert_ne!(runtime.watch_folder, runtime.output_root);
         assert_eq!(runtime.output_root, "D:/Ready");
+    }
+
+    #[test]
+    fn corrupt_watcher_configuration_is_timed_retry_not_content_change() {
+        let (category, retry_policy) = classify_watcher_configuration_error(
+            "Настройки фонового агента повреждены: invalid json",
+        );
+        assert_eq!(category, "watcher_configuration_unavailable");
+        match retry_policy {
+            UnreadableRetryPolicy::Timed(delay) => assert_eq!(delay, Duration::from_secs(60)),
+            UnreadableRetryPolicy::ContentChange => {
+                panic!("watcher configuration faults must not require source-content changes")
+            }
+        }
+    }
+
+    #[test]
+    fn corrupt_source_content_remains_content_change_retry() {
+        let (category, retry_policy) = classify_processing_error("DOCX поврежден");
+        assert_eq!(category, "source_invalid");
+        assert!(matches!(retry_policy, UnreadableRetryPolicy::ContentChange));
     }
 
 }

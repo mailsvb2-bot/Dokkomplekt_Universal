@@ -32,8 +32,50 @@ describe('useOutputDestination durable output/watcher contract', () => {
     const { result } = renderHook(() => useOutputDestination(runAction, status));
     await waitFor(() => expect(result.current.outputRoot).toBe('D:/Ready'));
     await waitFor(() => expect(result.current.watchFolder).toBe('C:/Inbox'));
+    expect(result.current.outputPreferencesReady).toBe(true);
     expect(result.current.folderNamingConfirmed).toBe(true);
     expect(localStorage.getItem(OUTPUT_ROOT_KEY)).toBe('D:/Ready');
+  });
+
+  it('does not report authoritative output preferences ready while SQLite hydration is pending', async () => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Stale');
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+    const status = vi.fn();
+    let resolvePreferences!: (value: unknown) => void;
+    const preferences = new Promise((resolve) => { resolvePreferences = resolve; });
+    __setInvokeForTests(async (command) => {
+      if (command === 'get_output_preferences') return await preferences as never;
+      if (command === 'get_background_watcher_state') return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useOutputDestination(runAction, status));
+    expect(result.current.outputRoot).toBe('C:/Stale');
+    expect(result.current.outputPreferencesReady).toBe(false);
+    await act(async () => {
+      resolvePreferences({ output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true });
+      await preferences;
+    });
+    await waitFor(() => expect(result.current.outputPreferencesReady).toBe(true));
+    expect(result.current.outputRoot).toBe('D:/Ready');
+  });
+
+  it('fails closed when authoritative output preference hydration fails', async () => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Stale');
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+    const status = vi.fn();
+    __setInvokeForTests(async (command) => {
+      if (command === 'get_output_preferences') throw new Error('sqlite unavailable');
+      if (command === 'get_background_watcher_state') return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useOutputDestination(runAction, status));
+    await waitFor(() => expect(status).toHaveBeenCalled());
+    expect(result.current.outputPreferencesReady).toBe(false);
+    expect(result.current.folderNamingConfirmed).toBe(false);
   });
 
   it('does not claim a new output folder was saved when durable persistence fails', async () => {

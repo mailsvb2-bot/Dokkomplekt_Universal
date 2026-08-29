@@ -38,6 +38,7 @@ export function useOutputDestination(
   const [outputRootDraft, setOutputRootDraft] = useState(cachedRoot);
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(cachedParts);
   const [folderNamingConfirmed, setFolderNamingConfirmed] = useState(cachedConfirmed && Boolean(cachedRoot));
+  const [outputPreferencesReady, setOutputPreferencesReady] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -53,6 +54,7 @@ export function useOutputDestination(
           setFolderNamingConfirmed(stored.naming_confirmed && normalizedParts.length > 0);
           saveOutputRoot(stored.output_root);
           saveOutputFolderParts(normalizedParts, stored.naming_confirmed);
+          setOutputPreferencesReady(true);
         } else if (cachedRoot.trim() && cachedConfirmed) {
           // One-time migration: old installations used only WebView localStorage.
           // The SQLite state is now authoritative because it reports persistence errors.
@@ -66,9 +68,15 @@ export function useOutputDestination(
           setOutputRootDraft(migrated.output_root);
           setFolderParts(normalizeOutputFolderParts(migrated.folder_parts));
           setFolderNamingConfirmed(migrated.naming_confirmed);
+          setOutputPreferencesReady(true);
+        } else {
+          // A successful authoritative read with no configured destination is still hydrated.
+          // The empty outputRoot keeps generation/watcher synchronization disabled until setup.
+          setOutputPreferencesReady(true);
         }
       } catch (error) {
         if (alive) {
+          setOutputPreferencesReady(false);
           setFolderNamingConfirmed(false);
           setStatus(`Не удалось восстановить проверенную папку результата: ${error instanceof Error ? error.message : String(error)}. Подтвердите папку заново.`);
         }
@@ -261,6 +269,7 @@ export function useOutputDestination(
     outputRootDraft,
     folderParts,
     folderNamingConfirmed,
+    outputPreferencesReady,
     setOutputRootDraft,
     setFolderNamingConfirmed,
     updateFolderParts,

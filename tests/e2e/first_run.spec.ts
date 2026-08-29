@@ -32,6 +32,8 @@ async function installTauriMock(page: Page) {
             return true;
           case 'pick_folder':
             return { selected_path: '/tmp/dokkomplekt-e2e-output' };
+          case 'ensure_output_root':
+            return '/tmp/dokkomplekt-e2e-output';
           case 'pick_template_files':
             return { files: [{ file_name: 'Счёт на оплату.docx', template_path: '/app-data/user-templates/template_1.docx', extracted_text: 'Счёт на оплату № {{document.number}}' }] };
           case 'import_template_file':
@@ -100,6 +102,7 @@ test('marked DOCX becomes a button without copying example facts', async ({ page
   const commands = await page.evaluate(() =>
     ((window as unknown as Record<string, unknown>).__E2E_CALLS__ as Array<{ command: string }>).map((c) => c.command));
   expect(commands).toContain('pick_folder');
+  expect(commands).toContain('ensure_output_root');
   expect(commands).toContain('pick_template_files');
   expect(commands).toContain('analyze_template_file');
   expect(commands).toContain('confirm_template_setup');

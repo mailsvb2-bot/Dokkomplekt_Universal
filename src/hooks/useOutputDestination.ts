@@ -39,6 +39,7 @@ export function useOutputDestination(
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(cachedParts);
   const [folderNamingConfirmed, setFolderNamingConfirmed] = useState(cachedConfirmed && Boolean(cachedRoot));
   const [outputPreferencesReady, setOutputPreferencesReady] = useState(false);
+  const [watcherRefreshRevision, setWatcherRefreshRevision] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -135,6 +136,7 @@ export function useOutputDestination(
     }
     setFolderParts(saved.folder_parts);
     setFolderNamingConfirmed(saved.naming_confirmed);
+    setOutputPreferencesReady(true);
     const cacheSaved = mirrorPreferencesLocally(saved);
     setStatus(cacheSaved
       ? `Правило подпапки сохранено${saved.output_root ? ` для ${saved.output_root}` : ''}.`
@@ -158,6 +160,7 @@ export function useOutputDestination(
       setOutputRoot('');
       setOutputRootDraft('');
       setFolderNamingConfirmed(false);
+      setOutputPreferencesReady(true);
       mirrorPreferencesLocally(saved);
       setStatus('Папка готовых документов очищена. Перед созданием комплекта выберите и сохраните новую папку.');
       return true;
@@ -193,6 +196,7 @@ export function useOutputDestination(
     setOutputRootDraft(saved.output_root);
     setFolderParts(saved.folder_parts);
     setFolderNamingConfirmed(saved.naming_confirmed);
+    setOutputPreferencesReady(true);
     const cacheSaved = mirrorPreferencesLocally(saved);
     setStatus(cacheSaved
       ? `Папка готовых документов проверена и сохранена: ${saved.output_root}.`
@@ -248,6 +252,7 @@ export function useOutputDestination(
     );
     if (res) {
       setWatchFolder(res.watch_folder?.trim() || folder);
+      setWatcherRefreshRevision((revision) => revision + 1);
       setStatus(`Автоматическая обработка включена: исходники «${res.watch_folder ?? folder}» → готовые документы «${res.output_root ?? destination}»${res.warnings?.length ? `; замечания: ${res.warnings.join('; ')}` : ''}.`);
     }
   }
@@ -260,6 +265,7 @@ export function useOutputDestination(
       return;
     }
     setWatchFolder('');
+    setWatcherRefreshRevision((revision) => revision + 1);
     setStatus('Автоматическая обработка папки отключена.');
   }
 
@@ -270,6 +276,7 @@ export function useOutputDestination(
     folderParts,
     folderNamingConfirmed,
     outputPreferencesReady,
+    watcherRefreshRevision,
     setOutputRootDraft,
     setFolderNamingConfirmed,
     updateFolderParts,

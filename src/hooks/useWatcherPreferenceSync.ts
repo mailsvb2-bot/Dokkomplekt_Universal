@@ -5,6 +5,7 @@ import type { FolderNamePartDto } from '../lib/types';
 
 type WatcherPreferenceSyncOptions = {
   outputPreferencesReady: boolean;
+  watcherRefreshRevision: number;
   folderNamingConfirmed: boolean;
   outputRoot: string;
   folderParts: FolderNamePartDto[];
@@ -17,6 +18,7 @@ type WatcherPreferenceSyncOptions = {
 
 export function useWatcherPreferenceSync({
   outputPreferencesReady,
+  watcherRefreshRevision,
   folderNamingConfirmed,
   outputRoot,
   folderParts,
@@ -37,7 +39,7 @@ export function useWatcherPreferenceSync({
           if (typeof watcher.auto_print === 'boolean') setAutoPrint(watcher.auto_print);
           if (watcher.print_copies_by_document) setPrintCopies(watcher.print_copies_by_document);
         }
-        setWatcherPreferencesReady(true);
+        setWatcherPreferencesReady(!watcher.migration_required);
       })
       .catch((error) => {
         if (!alive) return;
@@ -45,7 +47,7 @@ export function useWatcherPreferenceSync({
         setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
       });
     return () => { alive = false; };
-  }, [setAutoPrint, setPrintCopies, setStatus]);
+  }, [watcherRefreshRevision, setAutoPrint, setPrintCopies, setStatus]);
 
   useEffect(() => {
     if (!watcherPreferencesReady || !outputPreferencesReady || !folderNamingConfirmed || !outputRoot.trim() || !folderParts.length) return;

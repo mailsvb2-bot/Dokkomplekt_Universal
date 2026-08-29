@@ -101,6 +101,30 @@ describe('useOutputDestination durable output/watcher contract', () => {
     expect(status.mock.calls.at(-1)?.[0]).toMatch(/настройка не сохранена/i);
   });
 
+  it('reopens authoritative hydration after a successful save following an initial SQLite read failure', async () => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Stale');
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+    let initialRead = true;
+    const status = vi.fn();
+    __setInvokeForTests(async (command, payload) => {
+      if (command === 'get_output_preferences' && initialRead) {
+        initialRead = false;
+        throw new Error('sqlite temporarily unavailable');
+      }
+      if (command === 'get_background_watcher_state') return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'C:/Old', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
+      if (command === 'ensure_output_root') return ((payload as { req?: { output_root?: string } })?.req?.output_root ?? '') as never;
+      if (command === 'save_output_preferences') return { output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: false } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useOutputDestination(runAction, status));
+    await waitFor(() => expect(result.current.outputPreferencesReady).toBe(false));
+    await act(async () => { expect(await result.current.commitOutputRoot('D:/Ready')).toBe(true); });
+    expect(result.current.outputPreferencesReady).toBe(true);
+    expect(result.current.outputRoot).toBe('D:/Ready');
+  });
+
   it('installs the watcher with a separate output root and the current year', async () => {
     localStorage.setItem(OUTPUT_ROOT_KEY, 'D:/Ready');
     localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
@@ -119,7 +143,9 @@ describe('useOutputDestination durable output/watcher contract', () => {
     const { result } = renderHook(() => useOutputDestination(runAction, status));
     await waitFor(() => expect(result.current.outputRoot).toBe('D:/Ready'));
     await act(async () => { await result.current.chooseWatchFolder(); });
+    const revisionBeforeInstall = result.current.watcherRefreshRevision;
     await act(async () => { await result.current.installWatcher(false, false, {}); });
+    expect(result.current.watcherRefreshRevision).toBe(revisionBeforeInstall + 1);
     const install = calls.find((call) => call.command === 'install_background_watcher');
     expect(install?.payload).toMatchObject({
       req: {

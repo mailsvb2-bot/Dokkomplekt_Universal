@@ -92,6 +92,25 @@ fn effective_watcher_folder_parts(runtime: &WatcherRuntimeConfig) -> Vec<FolderN
     }
 }
 
+fn watcher_directories_are_same(left: &Path, right: &Path) -> Result<bool, String> {
+    let left = std::fs::canonicalize(left).map_err(|error| {
+        format!("Не удалось определить фактический путь «{}»: {error}", left.display())
+    })?;
+    let right = std::fs::canonicalize(right).map_err(|error| {
+        format!("Не удалось определить фактический путь «{}»: {error}", right.display())
+    })?;
+    #[cfg(windows)]
+    {
+        Ok(left
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy()))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(left == right)
+    }
+}
+
 fn watcher_owner_for_executable(exe: &Path, ready: bool) -> Result<WatcherHandoffOwner, String> {
     let (_, _, executable_sha256) = file_content_signature(exe)?;
     Ok(WatcherHandoffOwner {
@@ -1297,7 +1316,7 @@ fn install_background_watcher(
     ensure_output_root_path(&watch_folder)?;
     let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
     ensure_output_root_path(&output_root)?;
-    if watch_folder == output_root {
+    if watcher_directories_are_same(&watch_folder, &output_root)? {
         return Err("Рабочая папка фонового агента и папка готовых документов должны быть разными.".into());
     }
     let default_year = req.default_year.unwrap_or_else(current_year_utc);
@@ -1476,7 +1495,12 @@ fn update_background_watcher_preferences(
         .map_err(|error| format!("Настройки фонового агента повреждены: {error}"))?;
     let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
     ensure_output_root_path(&output_root)?;
-    if Path::new(&runtime.watch_folder) == output_root.as_path() {
+    let watch_folder = resolve_user_visible_absolute_path(
+        &runtime.watch_folder,
+        "Рабочая папка фонового агента",
+    )?;
+    ensure_output_root_path(&watch_folder)?;
+    if watcher_directories_are_same(&watch_folder, &output_root)? {
         return Err("Рабочая папка фонового агента и папка готовых документов должны быть разными.".into());
     }
     runtime.output_root = output_root.display().to_string();
@@ -1619,6 +1643,37 @@ mod watcher_handoff_tests {
         let (category, retry_policy) = classify_processing_error("DOCX поврежден");
         assert_eq!(category, "source_invalid");
         assert!(matches!(retry_policy, UnreadableRetryPolicy::ContentChange));
+    }
+
+    #[test]
+    fn watcher_directory_identity_resolves_aliases_before_comparison() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-identity-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let watched = root.join("inbox");
+        let separate = root.join("ready");
+        std::fs::create_dir_all(&watched).expect("create watched folder");
+        std::fs::create_dir_all(&separate).expect("create separate folder");
+        let alias = watched.join(".");
+        assert!(watcher_directories_are_same(&watched, &alias).expect("compare alias"));
+        assert!(!watcher_directories_are_same(&watched, &separate).expect("compare distinct"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn watcher_directory_identity_is_case_insensitive_on_windows() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-case-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create watcher case folder");
+        let different_case = PathBuf::from(root.to_string_lossy().to_ascii_uppercase());
+        assert!(watcher_directories_are_same(&root, &different_case).expect("compare case alias"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
 }

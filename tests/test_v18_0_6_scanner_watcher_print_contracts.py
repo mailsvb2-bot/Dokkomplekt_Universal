@@ -84,6 +84,8 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("watcherPreferencesReady", self.watcher_sync)
         self.assertIn("outputPreferencesReady", self.watcher_sync)
         self.assertIn("folderNamingConfirmed", self.watcher_sync)
+        self.assertIn("watcherRefreshRevision", self.watcher_sync)
+        self.assertIn("!watcher.migration_required", self.watcher_sync)
         self.assertRegex(
             self.watcher_sync,
             r"updateBackgroundWatcherPreferences\(outputRoot, folderParts, autoPrint, printCopies\)",

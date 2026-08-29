@@ -22,6 +22,7 @@ describe('useWatcherPreferenceSync', () => {
     const { rerender } = renderHook(
       ({ ready }) => useWatcherPreferenceSync({
         outputPreferencesReady: ready,
+        watcherRefreshRevision: 0,
         folderNamingConfirmed: true,
         outputRoot: 'D:/Ready',
         folderParts: ['DocumentNumber', 'DocumentDate'],
@@ -54,6 +55,7 @@ describe('useWatcherPreferenceSync', () => {
     const setStatus = vi.fn();
     renderHook(() => useWatcherPreferenceSync({
       outputPreferencesReady: true,
+      watcherRefreshRevision: 0,
       folderNamingConfirmed: true,
       outputRoot: 'D:/Ready',
       folderParts: ['DocumentNumber'],
@@ -66,5 +68,76 @@ describe('useWatcherPreferenceSync', () => {
 
     await waitFor(() => expect(setStatus).toHaveBeenCalledWith(expect.stringMatching(/не удалось восстановить настройки фонового агента/i)));
     expect(calls).not.toContain('update_background_watcher_preferences');
+  });
+
+  it('keeps synchronization blocked for a legacy watcher until reinstall refreshes state', async () => {
+    const calls: string[] = [];
+    let migrated = false;
+    __setInvokeForTests(async (command) => {
+      calls.push(command);
+      if (command === 'get_background_watcher_state') {
+        return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: !migrated } as never;
+      }
+      if (command === 'update_background_watcher_preferences') return true as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+    const base = {
+      outputPreferencesReady: true,
+      folderNamingConfirmed: true,
+      outputRoot: 'D:/Ready',
+      folderParts: ['DocumentNumber'] as const,
+      autoPrint: false,
+      printCopies: {},
+      setAutoPrint: vi.fn(),
+      setPrintCopies: vi.fn(),
+      setStatus: vi.fn(),
+    };
+    const { rerender } = renderHook(
+      ({ revision }) => useWatcherPreferenceSync({ ...base, folderParts: [...base.folderParts], watcherRefreshRevision: revision }),
+      { initialProps: { revision: 0 } },
+    );
+    await waitFor(() => expect(calls.filter((call) => call === 'get_background_watcher_state')).toHaveLength(1));
+    expect(calls).not.toContain('update_background_watcher_preferences');
+
+    migrated = true;
+    rerender({ revision: 1 });
+    await waitFor(() => expect(calls.filter((call) => call === 'get_background_watcher_state')).toHaveLength(2));
+    await waitFor(() => expect(calls).toContain('update_background_watcher_preferences'));
+  });
+
+  it('rehydrates watcher state after an in-session reinstall refresh signal', async () => {
+    const calls: string[] = [];
+    let repaired = false;
+    __setInvokeForTests(async (command) => {
+      calls.push(command);
+      if (command === 'get_background_watcher_state') {
+        if (!repaired) throw new Error('watcher config unreadable');
+        return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
+      }
+      if (command === 'update_background_watcher_preferences') return true as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+    const common = {
+      outputPreferencesReady: true,
+      folderNamingConfirmed: true,
+      outputRoot: 'D:/Ready',
+      folderParts: ['DocumentNumber'] as const,
+      autoPrint: false,
+      printCopies: {},
+      setAutoPrint: vi.fn(),
+      setPrintCopies: vi.fn(),
+      setStatus: vi.fn(),
+    };
+    const { rerender } = renderHook(
+      ({ revision }) => useWatcherPreferenceSync({ ...common, folderParts: [...common.folderParts], watcherRefreshRevision: revision }),
+      { initialProps: { revision: 0 } },
+    );
+    await waitFor(() => expect(common.setStatus).toHaveBeenCalledWith(expect.stringMatching(/не удалось восстановить/i)));
+    expect(calls).not.toContain('update_background_watcher_preferences');
+
+    repaired = true;
+    rerender({ revision: 1 });
+    await waitFor(() => expect(calls.filter((call) => call === 'get_background_watcher_state')).toHaveLength(2));
+    await waitFor(() => expect(calls).toContain('update_background_watcher_preferences'));
   });
 });

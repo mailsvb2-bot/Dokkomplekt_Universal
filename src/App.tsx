@@ -103,7 +103,7 @@ function AppContent() {
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
   const {
-    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady,
+    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, watcherRefreshRevision,
     setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
     chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
   } = useOutputDestination(run, setStatus);
@@ -136,7 +136,7 @@ function AppContent() {
   }, []);
 
   useWatcherPreferenceSync({
-    outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies,
+    outputPreferencesReady, watcherRefreshRevision, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies,
     setAutoPrint, setPrintCopies, setStatus,
   });
 

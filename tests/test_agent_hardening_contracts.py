@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,19 @@ def test_trial_allows_one_complete_monthly_kit() -> None:
     assert "Err(error) if LICENSE_TRUST_ANCHOR_IS_CONFIGURED" in source
     assert "запрошено {}" in source
     assert "лимит за запуск {}" in source
+
+
+def test_required_status_workflows_emit_for_every_pull_request() -> None:
+    required_workflows = (
+        ".github/workflows/quality-gate.yml",
+        ".github/workflows/source-provenance.yml",
+        ".github/workflows/macos-smoke.yml",
+        ".github/workflows/unsigned-preview.yml",
+    )
+    for relative in required_workflows:
+        workflow = (ROOT / relative).read_text("utf-8")
+        assert re.search(r"(?m)^  pull_request:\s*$", workflow), relative
+        assert not re.search(r"(?ms)^  pull_request:\s*\n    paths:", workflow), relative
 
 
 def test_unsigned_preview_reuses_configured_license_verification_key() -> None:
@@ -57,6 +71,23 @@ def test_packaging_build_outputs_are_isolated_and_never_restored_from_cache() ->
     assert 'target_dir=commercial_target' in commercial
     assert "Require clean Windows release artifact boundary" in quality
     assert "Require clean production release artifact boundary" in production
+
+
+def test_packaging_required_check_identity_is_semantic_not_runner_bound() -> None:
+    quality = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
+    packaging = quality.split("  tauri-build:", 1)[1]
+
+    assert "name: ${{ matrix.check_name }}" in packaging
+    assert "- os: windows-2022" in packaging
+    assert "check_name: Installer build after Rust gate (Windows NSIS)" in packaging
+    assert "check_name: Installer build after Rust gate (Linux bundles)" in packaging
+    for stable_name in (
+        "Installer build after Rust gate (Windows NSIS)",
+        "Installer build after Rust gate (Linux bundles)",
+    ):
+        assert "windows-2022" not in stable_name
+        assert "windows-latest" not in stable_name
+        assert "ubuntu-latest" not in stable_name
 
 
 def test_thin_and_offline_installers_have_distinct_payloads() -> None:

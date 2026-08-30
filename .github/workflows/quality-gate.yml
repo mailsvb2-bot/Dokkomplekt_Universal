@@ -227,7 +227,8 @@ jobs:
       - run: npm run e2e
 
   tauri-build:
-    name: Installer build after Rust gate
+    # Branch protection binds to semantic check identities, never mutable runner labels.
+    name: ${{ matrix.check_name }}
     needs: [rust-compile-gate, rust-dependency-audit, python-contracts, postgres-integration, ui-thin-client, e2e]
     timeout-minutes: 90
     strategy:
@@ -236,8 +237,10 @@ jobs:
         include:
           - os: windows-2022
             artifact: windows-installer
+            check_name: Installer build after Rust gate (Windows NSIS)
           - os: ubuntu-latest
             artifact: linux-bundles
+            check_name: Installer build after Rust gate (Linux bundles)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955

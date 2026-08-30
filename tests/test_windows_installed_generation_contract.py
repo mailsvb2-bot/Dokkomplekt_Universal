@@ -18,7 +18,9 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "workflow-document-number" in source
     assert "workflow-document-date" in source
     assert "Создать документы" in source
-    assert "Проверочная кнопка.docx" in source
+    assert '$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"' in source
+    assert "-Filter $expectedGeneratedFileName" in source
+    assert "Проверочная кнопка.docx" not in source
     assert "[System.IO.Compression.ZipFile]::OpenRead" in source
     assert "Created DOCX lost the template content" in source
     assert "Installed end-to-end document generation OK" in source

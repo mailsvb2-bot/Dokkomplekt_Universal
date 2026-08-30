@@ -14,6 +14,8 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Выбрать исходный файл" in source
     assert "native source file picker" in source
     assert "Real source DOCX accepted by installed application" in source
+    assert "$coldStartDeadlineSeconds = 60" in source
+    assert "AddSeconds($coldStartDeadlineSeconds)" in source
     assert "@('Проверить и создать (1)', 'Создать документы (1)')" in source
     assert "workflow-document-number" in source
     assert "workflow-document-date" in source

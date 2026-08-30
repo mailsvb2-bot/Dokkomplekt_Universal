@@ -119,7 +119,13 @@ if ($process.HasExited) {
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
 
-$outputDeadline = [DateTime]::UtcNow.AddSeconds(20)
+# A cold hosted Windows packaging runner can spend tens of seconds bringing up
+# the Tauri/WebView2 runtime before the native setup callback begins. Keep this
+# bounded and fail-closed, but do not turn normal cold-start variance into a
+# false product failure: the process must remain alive and the real folder must
+# still physically exist before any UI automation continues.
+$coldStartDeadlineSeconds = 60
+$outputDeadline = [DateTime]::UtcNow.AddSeconds($coldStartDeadlineSeconds)
 while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and [DateTime]::UtcNow -lt $outputDeadline) {
   if ($process.HasExited) {
     throw "Installed application exited before creating the canonical Desktop output root"
@@ -128,7 +134,7 @@ while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and
 }
 if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container)) {
   Write-AppLaunchDiagnostics
-  throw "Installed application did not create the canonical Desktop output root: $defaultOutputRoot"
+  throw "Installed application did not create the canonical Desktop output root within $coldStartDeadlineSeconds seconds: $defaultOutputRoot"
 }
 Write-Host "Desktop output root created by installed application: $defaultOutputRoot"
 

@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-core"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "chrono",
  "dokkomplekt-morph",
@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-docx"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "dokkomplekt-core",
  "hex",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-license-core"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -814,21 +814,21 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-morph"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "dokkomplekt-refdata"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "dokkomplekt-storage"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-tauri"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "base64 0.22.1",
  "chrono",

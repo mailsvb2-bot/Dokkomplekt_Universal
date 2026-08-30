@@ -83,7 +83,7 @@ describe('App', () => {
     expect(calls).toContain('confirm_template_setup');
   });
 
-  it('creates an unmarked template button without blocking first run', async () => {
+  it('creates an unmarked template button without forcing optional auto-inference', async () => {
     const { calls, confirmRequests } = installTemplateMock(true);
     render(<App />);
     await selectTemplateAndCreateButton();
@@ -91,7 +91,7 @@ describe('App', () => {
     expect(calls).toContain('pick_template_files');
     expect(calls).toContain('confirm_template_setup');
     expect(confirmRequests.at(-1)).toMatchObject({
-      req: { auto_infer_static_templates: true },
+      req: { auto_infer_static_templates: false },
     });
   });
 

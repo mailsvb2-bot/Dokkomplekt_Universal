@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-license-core"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "dokkomplekt-license-server"
-version = "18.4.3"
+version = "18.4.4"
 dependencies = [
  "anyhow",
  "axum",

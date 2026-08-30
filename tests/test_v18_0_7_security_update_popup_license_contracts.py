@@ -18,7 +18,7 @@ def text(path: str) -> str:
 class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
     def test_release_version_is_synchronized(self) -> None:
         version = text("VERSION").strip()
-        self.assertEqual(version, "18.4.3")
+        self.assertEqual(version, "18.4.4")
         self.assertEqual(json.loads(text("package.json"))["version"], version)
         self.assertEqual(json.loads(text("src-tauri/tauri.conf.json"))["version"], version)
         self.assertIn(f'version = "{version}"', text("src-tauri/Cargo.toml"))

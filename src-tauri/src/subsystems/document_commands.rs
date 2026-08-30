@@ -617,15 +617,11 @@ fn confirm_template_setup(
     }
 
     let requested_rows = req.rows;
-    let (mut rows, _inference_workspace, _inference_summary) = if req.auto_infer_static_templates {
-        infer_static_template_rows(&app, &requested_rows)?
-    } else {
-        (
-            requested_rows,
-            None,
-            LegacyTemplateInferenceSummary::default(),
-        )
-    };
+    let (mut rows, _inference_workspace, _inference_summary) = infer_static_template_rows(
+        &app,
+        &requested_rows,
+        req.auto_infer_static_templates,
+    )?;
     ensure_persistence_available(&state)?;
     let _persistence_guard = state
         .persistence_gate
@@ -678,6 +674,9 @@ fn confirm_template_setup(
     template_snapshots.retain(|document_id, _| accepted_document_ids.contains(document_id));
 
     let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
+    for document in &incoming.documents {
+        validate_medical_template_output_contract(document)?;
+    }
     let mut drafts = Vec::with_capacity(rows.len());
     for row in &rows {
         let snapshot = template_snapshots
@@ -1116,7 +1115,9 @@ fn render_docx(
         &doc.template_path,
         &doc.button_label,
     )?;
-    let template_text = extract_docx_text(template_snapshot.path()).map_err(|e| e.to_string())?;
+    let prepared_template =
+        prepare_medical_template_for_render(&app, &doc, template_snapshot.path())?;
+    let template_text = prepared_template.template_text.clone();
     // Both paths are anchored: an installed app must not depend on the process CWD.
     let desired_output = resolve_user_path(&app, &req.output_path)?;
     let reservation = UniqueFileReservation::acquire(&desired_output)?;
@@ -1140,7 +1141,7 @@ fn render_docx(
     );
     let render_result = render_docx_with_assets(
         &app,
-        template_snapshot.path(),
+        &prepared_template.path,
         &reservation.path,
         &render_case,
         req.strict,
@@ -1399,7 +1400,9 @@ fn render_docx_batch(
             let template_snapshot = template_snapshots
                 .get(&document.id)
                 .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", document.button_label))?;
-            let template_text = extract_docx_text(template_snapshot.path()).map_err(|e| e.to_string())?;
+            let prepared_template =
+                prepare_medical_template_for_render(&app, document, template_snapshot.path())?;
+            let template_text = prepared_template.template_text.clone();
             let hydrated = hydrate_case_with_persistent_template_data(
                 &app,
                 &base_case,
@@ -1429,7 +1432,7 @@ fn render_docx_batch(
             );
             let proof = render_docx_with_assets(
                 &app,
-                template_snapshot.path(),
+                &prepared_template.path,
                 &reservation.path,
                 &render_case,
                 req.strict,
@@ -2808,7 +2811,7 @@ fn load_state_from_locked(
     state: &AppState,
     load_commercial_state: bool,
 ) -> Result<(), String> {
-    let repo = repository_for(db_path)?;
+    let mut repo = repository_for(db_path)?;
     repo.quick_integrity_check().map_err(|error| error.to_string())?;
 
     // Decode and validate every row before touching the live in-memory state.
@@ -2828,8 +2831,21 @@ fn load_state_from_locked(
     let loaded_pack = if let Some(mut pack) = loaded_pack {
         let rebound = bind_loaded_pack_to_published_template_versions(app, &repo, &mut pack)?;
         let canonicalized_roles = canonicalize_loaded_pack_roles(&mut pack);
-        if (rebound > 0 || canonicalized_roles > 0) && load_commercial_state {
-            repo.save_pack(&pack).map_err(|error| error.to_string())?;
+        let mut migrated_templates = 0usize;
+        if load_commercial_state {
+            if let Some(case) = loaded_case.as_ref() {
+                let license_state = loaded_license.clone().unwrap_or(None);
+                migrated_templates = migrate_loaded_medical_template_contracts(
+                    app,
+                    &mut repo,
+                    &mut pack,
+                    case,
+                    &license_state,
+                )?;
+            }
+            if migrated_templates == 0 && (rebound > 0 || canonicalized_roles > 0) {
+                repo.save_pack(&pack).map_err(|error| error.to_string())?;
+            }
         }
         Some(pack)
     } else {

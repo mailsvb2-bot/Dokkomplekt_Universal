@@ -1,5 +1,5 @@
-Dokkomplekt Universal 18.4.3 — CURRENT VERIFICATION POLICY
-Updated: 2026-08-04
+Dokkomplekt Universal 18.4.4 — CURRENT VERIFICATION POLICY
+Updated: 2026-08-30
 
 This file deliberately does not duplicate volatile test counts. Exact counts, logs, commit SHA and artifacts are recorded by GitHub Actions for the same commit; a historical number in a source file is not release evidence.
 

@@ -27,7 +27,7 @@ import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
-import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
+import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templateButtonLabelFromFileName, uniqueTemplateButtonLabel, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
@@ -84,7 +84,7 @@ function AppContent() {
   const { workspaceInference, workspaceShape, setWorkspaceInference, refreshWorkspaceInference } = useWorkspaceProfileInference(setStatus, pendingTemplates);
   const [draftPopupState, setDraftPopupState] = useState<{ fields: PopupFieldConfig[]; edited: boolean }>({ fields: [], edited: false });
   const [draftDomainOverride, setDraftDomainOverride] = useState<DomainKind | null>(null);
-  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(true);
+  const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(false);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
   const [icdQuery, setIcdQuery] = useState('');
@@ -103,7 +103,7 @@ function AppContent() {
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
   const {
-    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, watcherRefreshRevision,
+    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, outputRootRecoveryRequired, watcherRefreshRevision,
     setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
     chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
   } = useOutputDestination(run, setStatus);
@@ -757,7 +757,7 @@ function AppContent() {
   }
 
   async function openTemplateSetup() {
-    setAutoInferStaticTemplates(true);
+    setAutoInferStaticTemplates(false);
     setTemplateText(''); setButtonLabel(''); setImportedTemplatePath(null);
     setPendingTemplates([]); setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
     setSetupOpen(false);
@@ -772,9 +772,10 @@ function AppContent() {
 
     const { acceptedTemplates, rejectedTemplates, rejectedDetails } = partitionPickedTemplates(picked);
     const importedRows: PendingTemplate[] = [];
+    const usedLabels = new Set<string>();
     for (const file of acceptedTemplates) {
       const id = newDocumentId();
-      const detectedLabel = detectTitle(file.extracted_text) || file.file_name.replace(/\.doc[xm]$/i, '');
+      const detectedLabel = uniqueTemplateButtonLabel(templateButtonLabelFromFileName(file.file_name), usedLabels);
       const analyzed = await run('analyze_template_file', () => analyzeTemplateFile(file.template_path, id, detectedLabel));
       if (!analyzed) continue;
       importedRows.push({
@@ -804,7 +805,7 @@ function AppContent() {
   }
 
   function openTextTemplateSetup() {
-    setAutoInferStaticTemplates(true);
+    setAutoInferStaticTemplates(false);
     setTemplateText('');
     setButtonLabel('');
     setImportedTemplatePath(null);
@@ -826,9 +827,14 @@ function AppContent() {
         : 'Шаблоны должны быть в формате DOCX или DOCM.');
       return;
     }
-    const combinedTemplates = [...pendingTemplates, ...importedRows];
+    const usedLabels = new Set(pendingTemplates.map((item) => item.button_label.trim().replace(/\s+/g, ' ').replace(/ё/gi, 'е').toLocaleLowerCase('ru-RU')));
+    const uniqueImportedRows = importedRows.map((item) => ({
+      ...item,
+      button_label: uniqueTemplateButtonLabel(item.button_label, usedLabels),
+    }));
+    const combinedTemplates = [...pendingTemplates, ...uniqueImportedRows];
     setPendingTemplates(combinedTemplates); await refreshWorkspaceInference(combinedTemplates);
-    const last = importedRows.at(-1)!;
+    const last = uniqueImportedRows.at(-1)!;
     setImportedTemplatePath(last.template_path);
     setTemplateText(last.extracted_text);
     setButtonLabel(last.button_label);
@@ -1115,7 +1121,7 @@ function AppContent() {
     setImportedTemplatePath(null);
     setPendingTemplates([]); setWorkspaceInference(null);
     setDraftPopupState({ fields: [], edited: false }); setDraftDomainOverride(null);
-    setAutoInferStaticTemplates(true);
+    setAutoInferStaticTemplates(false);
     setSetupOpen(false);
     setStatus(templateSetupCompletionMessage(confirmedRows.length, createdCount));
   }
@@ -1417,6 +1423,10 @@ function AppContent() {
               prompt: 'business_registry_confirmed',
             })}
           />
+        )}
+
+        {outputRootRecoveryRequired && (
+          <div role="alert">Не удалось подготовить папку готовых документов</div>
         )}
 
         <footer className="statusBar">

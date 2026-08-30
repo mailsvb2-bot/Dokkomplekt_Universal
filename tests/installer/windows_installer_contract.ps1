@@ -59,11 +59,31 @@ if (-not [string]::IsNullOrWhiteSpace($productName) -and
     $app.VersionInfo.ProductName -ne $productName) {
   throw "Installed executable product name mismatch: $($app.VersionInfo.ProductName)"
 }
+$bundleIdentifier = if (-not [string]::IsNullOrWhiteSpace([string]$config.identifier)) {
+  [string]$config.identifier
+} else {
+  [string]$baseConfig.identifier
+}
+if ([string]::IsNullOrWhiteSpace($bundleIdentifier)) {
+  throw 'Tauri bundle identifier is unavailable; cannot isolate installed-app state.'
+}
 if ($env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '1') {
   $installerSignature = Get-AuthenticodeSignature -FilePath $installer.FullName
   if ($installerSignature.Status -ne 'Valid') { throw "Installer signature is invalid: $($installerSignature.Status)" }
   $appSignature = Get-AuthenticodeSignature -FilePath $app.FullName
   if ($appSignature.Status -ne 'Valid') { throw "Installed application signature is invalid: $($appSignature.Status)" }
+}
+
+# This is explicitly a first-run contract. Tauri's Windows app_data_dir is
+# %APPDATA%/<bundle identifier>; clear that exact application-owned state so a
+# previous compile/test process on the same packaging runner cannot turn this
+# into an accidental persisted-user restart. The runner itself is ephemeral.
+$roamingAppData = [Environment]::GetFolderPath('ApplicationData')
+if ([string]::IsNullOrWhiteSpace($roamingAppData)) { throw 'Windows roaming AppData path is unavailable' }
+$appDataRoot = Join-Path $roamingAppData $bundleIdentifier
+Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $appDataRoot) {
+  throw "Could not clear Dokkomplekt app data before first-run smoke: $appDataRoot"
 }
 
 # Donor-derived installed-app contract: the canonical Desktop output root must
@@ -78,14 +98,32 @@ if (Test-Path -LiteralPath $defaultOutputRoot) {
   throw "Could not remove the pre-existing Desktop output root before launch smoke: $defaultOutputRoot"
 }
 
-$process = Start-Process -FilePath $app.FullName -PassThru
+$appStdout = Join-Path $env:RUNNER_TEMP "dokkomplekt-installed-app-$PID.stdout.log"
+$appStderr = Join-Path $env:RUNNER_TEMP "dokkomplekt-installed-app-$PID.stderr.log"
+Remove-Item -LiteralPath $appStdout, $appStderr -Force -ErrorAction SilentlyContinue
+$process = Start-Process -FilePath $app.FullName -RedirectStandardOutput $appStdout -RedirectStandardError $appStderr -PassThru
+
+function Write-AppLaunchDiagnostics {
+  Write-Host "Installed app path: $($app.FullName)"
+  Write-Host "Known Desktop path: $desktopPath"
+  Write-Host "Tauri app data root: $appDataRoot"
+  Write-Host "LOCALAPPDATA: $env:LOCALAPPDATA"
+  if (Test-Path -LiteralPath $appStdout) { Write-Host "--- installed app stdout ---"; Get-Content -LiteralPath $appStdout -ErrorAction SilentlyContinue | Write-Host }
+  if (Test-Path -LiteralPath $appStderr) { Write-Host "--- installed app stderr ---"; Get-Content -LiteralPath $appStderr -ErrorAction SilentlyContinue | Write-Host }
+}
+
 Start-Sleep -Seconds 5
 if ($process.HasExited) {
   $earlyExitCode = $process.ExitCode
+  Write-AppLaunchDiagnostics
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
 
-$outputDeadline = [DateTime]::UtcNow.AddSeconds(20)
+# The canonical thin installer reaches native setup before UI automation starts.
+# Keep the first-run invariant tightly bounded: a live process without the real
+# Desktop output root is still a product failure, not a reason to wait longer.
+$coldStartDeadlineSeconds = 20
+$outputDeadline = [DateTime]::UtcNow.AddSeconds($coldStartDeadlineSeconds)
 while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and [DateTime]::UtcNow -lt $outputDeadline) {
   if ($process.HasExited) {
     throw "Installed application exited before creating the canonical Desktop output root"
@@ -93,7 +131,8 @@ while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and
   Start-Sleep -Milliseconds 250
 }
 if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container)) {
-  throw "Installed application did not create the canonical Desktop output root: $defaultOutputRoot"
+  Write-AppLaunchDiagnostics
+  throw "Installed application did not create the canonical Desktop output root within $coldStartDeadlineSeconds seconds: $defaultOutputRoot"
 }
 Write-Host "Desktop output root created by installed application: $defaultOutputRoot"
 
@@ -382,11 +421,16 @@ $createPreparedButton = Wait-UiElement -Description 'Создать кнопки
 }
 Invoke-UiElement -Element $createPreparedButton
 
-$createdDocumentButton = Wait-UiElement -Description 'created static template button' -TimeoutSeconds 40 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+$expectedTemplateButtonName = if ($adversarial) { 'исходник проверка' } else { 'button-smoke' }
+$createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds 40 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @($expectedTemplateButtonName)
 }
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
-Write-Host 'Create button from a real unmarked DOCX OK.'
+$contentDerivedButton = Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+if ($null -ne $contentDerivedButton) {
+  throw 'Template body text leaked into the reusable document button label.'
+}
+Write-Host "Create button from a real unmarked DOCX OK: '$expectedTemplateButtonName'; body text was not used as the label."
 
 # A template is not a case source. Exercise the installed source picker separately
 # so the generation stage is reached through the same order as a real user.
@@ -541,16 +585,17 @@ $generateButton = Wait-UiElement -Description 'Создать документы
 }
 Invoke-UiElement -Element $generateButton
 
+$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
 $createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
 $createdDoc = $null
 do {
   if ($process.HasExited) { throw 'Installed application exited during real document generation smoke.' }
-  $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue |
+  $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue |
     Select-Object -First 1
   if ($null -eq $createdDoc) { Start-Sleep -Milliseconds 500 }
 } while ($null -eq $createdDoc -and [DateTime]::UtcNow -lt $createdDeadline)
 if ($null -eq $createdDoc) {
-  throw "Installed application did not physically create Проверочная кнопка.docx under $defaultOutputRoot"
+  throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
 $createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
@@ -654,7 +699,7 @@ if ($adversarial) {
   Invoke-UiElement -Element $newVersion
   $versionDeadline = [DateTime]::UtcNow.AddSeconds(60)
   do {
-    $versionDocs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue)
+    $versionDocs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue)
     if ($versionDocs.Count -lt 2) { Start-Sleep -Milliseconds 500 }
   } while ($versionDocs.Count -lt 2 -and [DateTime]::UtcNow -lt $versionDeadline)
   if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
@@ -695,13 +740,17 @@ if ($adversarial) {
         $condition
       )
       if ($null -eq $currentBlockedWindow) { return $null }
-      $currentBlockedWindow.FindFirst(
+      $descendants = $currentBlockedWindow.FindAll(
         [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new(
-          [System.Windows.Automation.AutomationElement]::NameProperty,
-          'Не удалось подготовить папку готовых документов'
-        )
+        [System.Windows.Automation.Condition]::TrueCondition
       )
+      foreach ($element in $descendants) {
+        $name = [string]$element.Current.Name
+        if ($name.StartsWith('Не удалось восстановить проверенную папку результата:')) {
+          return $element
+        }
+      }
+      return $null
     }
   } catch {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -760,7 +809,7 @@ $restartState = Wait-UiElement -Description 'definitive workspace state after re
   )
   if ($null -eq $currentAppWindow) { return $null }
 
-  $persisted = Find-ButtonByNames -Root $currentAppWindow -Names @('Проверочная кнопка')
+  $persisted = Find-ButtonByNames -Root $currentAppWindow -Names @($expectedTemplateButtonName)
   if ($null -ne $persisted) { return @{ Kind = 'persisted'; Element = $persisted } }
   $recovery = $currentAppWindow.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,

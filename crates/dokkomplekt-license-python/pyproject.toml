@@ -4,6 +4,6 @@ build-backend = "maturin"
 
 [project]
 name = "dokkomplekt-license-native"
-version = "18.4.3"
+version = "18.4.4"
 requires-python = ">=3.10"
 description = "Dokkomplekt native Rust license verifier"

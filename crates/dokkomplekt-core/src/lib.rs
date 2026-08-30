@@ -170,7 +170,9 @@ pub use product_access::{
     AccessDecision, AccessMode, LicenseEntitlement, PlanLimits, ProductPlanId,
     EXPIRED_DEMO_WATERMARK_TEXT, PRODUCT_ACCESS_CONTRACT_VERSION, TRIAL_WATERMARK_TEXT,
 };
-pub use required_blocks::{required_blocks_for, BlockRequirement, RequiredBlock};
+pub use required_blocks::{
+    missing_medical_template_render_paths, required_blocks_for, BlockRequirement, RequiredBlock,
+};
 pub use semantic_engine::{extract_semantic, ExtractedField, ExtractionReport, FieldType};
 pub use semantic_llm::{
     apply_model_consensus_with_source, apply_model_output, apply_model_output_with_source,

@@ -3,10 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { App } from './App';
-import { ensureOutputRoot, getDefaultOutputRoot } from './lib/api';
-import { OUTPUT_NAMING_CONFIRMED_KEY } from './lib/appSupport';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
-import { ensureDefaultOutputRoot, getOutputRootBootstrapError } from './lib/outputRootBootstrap';
 import './styles.css';
 
 const READY_WINDOW_TITLE = 'Dokkomplekt Universal';
@@ -71,32 +68,13 @@ if (!(rootElement instanceof HTMLElement)) {
   throw new Error('Application root element is missing');
 }
 
-async function bootstrapApplication(root: HTMLElement): Promise<void> {
-  // Resolve and physically create the canonical first-run Desktop output before
-  // App's synchronous useState(loadOutputRoot) executes. Never hide a filesystem
-  // refusal: the donor applications made folder failures explicit, and Universal
-  // must preserve that user-visible guarantee.
-  await ensureDefaultOutputRoot(localStorage, getDefaultOutputRoot, ensureOutputRoot);
-  const outputRootBootstrapError = getOutputRootBootstrapError();
-  if (outputRootBootstrapError) {
-    // Preserve the user's selected path, but force the recovery/onboarding modal
-    // back open. A remembered path that Windows cannot create is not a confirmed
-    // working destination.
-    localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
-  }
-
+function bootstrapApplication(root: HTMLElement): void {
+  // Native Rust startup owns durable output-root preparation. Do not block the
+  // first React paint on filesystem IPC: a live desktop process must always be
+  // able to render recovery UI even if an early WebView bridge call is delayed.
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
       <AppErrorBoundary>
-        {outputRootBootstrapError ? (
-          <section className="startupRecovery" role="alert" aria-label="Не удалось подготовить папку готовых документов">
-            <div>
-              <strong>Не удалось подготовить папку готовых документов</strong>
-              <span>Программа не будет считать путь рабочим молча. Проверьте доступ к рабочему столу или выберите другую папку в настройке ниже.</span>
-              <small>{outputRootBootstrapError}</small>
-            </div>
-          </section>
-        ) : null}
         <App />
       </AppErrorBoundary>
     </React.StrictMode>
@@ -105,4 +83,4 @@ async function bootstrapApplication(root: HTMLElement): Promise<void> {
   signalNativeWindowWhenRendered(root);
 }
 
-void bootstrapApplication(rootElement);
+bootstrapApplication(rootElement);

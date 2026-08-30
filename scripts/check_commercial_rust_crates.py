@@ -3,9 +3,10 @@
 
 The license HTTP server and Python binding have different deployment targets from
 Tauri, so they remain outside the desktop workspace. This gate builds them in a
-throw-away source workspace while reusing only Cargo's root build target, preserving
-the source tree while still making compilation, tests, Clippy and dependency audit
-mandatory for a release.
+throw-away source workspace with its own build target, preserving the source tree
+while still making compilation, tests, Clippy and dependency audit mandatory for a
+release. Build outputs are isolated from the desktop target so a
+workspace with an independently generated lockfile can never poison the packaged app.
 """
 from __future__ import annotations
 
@@ -26,7 +27,6 @@ OUT_DIR = ROOT / ".cargo-gate"
 EVIDENCE = OUT_DIR / "COMMERCIAL_CRATES_EVIDENCE.json"
 LOCK_EVIDENCE = OUT_DIR / "COMMERCIAL_CRATES_Cargo.lock"
 AUDIT_EVIDENCE = OUT_DIR / "COMMERCIAL_CRATES_RUSTSEC_AUDIT.json"
-SHARED_TARGET_DIR = ROOT / "target"
 CRATES = (
     "dokkomplekt-license-core",
     "dokkomplekt-license-server",
@@ -38,10 +38,16 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(command: list[str], cwd: Path, *, stdout_path: Path | None = None) -> None:
+def run(
+    command: list[str],
+    cwd: Path,
+    *,
+    target_dir: Path,
+    stdout_path: Path | None = None,
+) -> None:
     print("+", " ".join(command), flush=True)
     env = os.environ.copy()
-    env["CARGO_TARGET_DIR"] = str(SHARED_TARGET_DIR)
+    env["CARGO_TARGET_DIR"] = str(target_dir)
     if stdout_path is None:
         subprocess.run(command, cwd=cwd, env=env, check=True)
         return
@@ -74,9 +80,10 @@ def main() -> int:
 
     source_before = source_fingerprint()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    SHARED_TARGET_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="dokkomplekt-commercial-rust-") as raw_temp:
         temp = Path(raw_temp)
+        commercial_target = temp / "target"
+        commercial_target.mkdir()
         (temp / "crates").mkdir()
         write_workspace_manifest(temp)
         (temp / "rust-toolchain.toml").write_bytes((ROOT / "rust-toolchain.toml").read_bytes())
@@ -91,14 +98,19 @@ def main() -> int:
             ["cargo", "test", "--workspace", "--locked"],
         ]
         for command in commands:
-            run(command, temp)
+            run(command, temp, target_dir=commercial_target)
         lock = temp / "Cargo.lock"
         shutil.copy2(lock, LOCK_EVIDENCE)
 
         audit_command: list[str] | None = None
         if not args.skip_audit:
             audit_command = ["cargo", "audit", "--deny", "warnings", "--json", "--file", str(lock)]
-            run(audit_command, temp, stdout_path=AUDIT_EVIDENCE)
+            run(
+                audit_command,
+                temp,
+                target_dir=commercial_target,
+                stdout_path=AUDIT_EVIDENCE,
+            )
         else:
             AUDIT_EVIDENCE.unlink(missing_ok=True)
 

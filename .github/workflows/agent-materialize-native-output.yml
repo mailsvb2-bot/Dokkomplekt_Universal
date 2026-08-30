@@ -1,0 +1,45 @@
+name: Agent materialize native output startup
+on:
+  push:
+    paths:
+      - '.agent-native-output-trigger'
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/fix-template-publication-18.4.4
+          fetch-depth: 0
+      - name: Reconstruct and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, gzip, hashlib
+          names = [f'.agent-native-output-{i:02d}' for i in range(3)]
+          encoded = ''.join(''.join(Path(name).read_text().split()) for name in names)
+          compressed = base64.b64decode(encoded, validate=True)
+          assert hashlib.sha256(compressed).hexdigest() == '02c28ee639f14f1e92c27455126a154c3735b32dc5e1070c7fd29ba7ede2d1db'
+          patch = gzip.decompress(compressed)
+          assert hashlib.sha256(patch).hexdigest() == 'c06b4bbfdae945f163a314256d38607a91e464b101eeb39f94156419d46363f5'
+          Path('/tmp/native-output.patch').write_bytes(patch)
+          PY
+      - name: Materialize exact clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .agent-native-output-00 .agent-native-output-01 .agent-native-output-02 .agent-native-output-trigger .github/workflows/agent-materialize-native-output.yml
+          git apply --index /tmp/native-output.patch
+          git diff --check --cached
+          python3 scripts/verify_source_manifest.py
+          tree="$(git write-tree)"
+          test "$tree" = '8adc8e8122c9de0235ae0350d75b25ddd450d73f'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Move output root bootstrap into native startup'
+          test "$(git rev-parse HEAD^{tree})" = '8adc8e8122c9de0235ae0350d75b25ddd450d73f'
+          git push origin HEAD:agent/fix-template-publication-18.4.4

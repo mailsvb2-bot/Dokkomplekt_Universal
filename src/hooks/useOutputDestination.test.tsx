@@ -26,6 +26,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
       if (command === 'get_background_watcher_state') {
         return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
       }
+      if (command === 'ensure_output_root') return 'D:/Ready' as never;
       throw new Error(`unexpected command ${command}`);
     });
 
@@ -47,6 +48,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
     __setInvokeForTests(async (command) => {
       if (command === 'get_output_preferences') return await preferences as never;
       if (command === 'get_background_watcher_state') return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
+      if (command === 'ensure_output_root') return 'D:/Ready' as never;
       throw new Error(`unexpected command ${command}`);
     });
 
@@ -86,6 +88,23 @@ describe('useOutputDestination durable output/watcher contract', () => {
     expect(calls.find((call) => call.command === 'save_output_preferences')?.payload).toMatchObject({
       req: { output_root: 'E:/Doctor/Patients', naming_confirmed: true },
     });
+  });
+
+  it('keeps the window recoverable and marks an unavailable stored root unconfirmed', async () => {
+    const status = vi.fn();
+    __setInvokeForTests(async (command) => {
+      if (command === 'get_output_preferences') return { output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true } as never;
+      if (command === 'ensure_output_root') throw new Error('path is a file');
+      if (command === 'get_background_watcher_state') return { platform: 'windows', installed: false, migration_required: false } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useOutputDestination(runAction, status));
+    await waitFor(() => expect(result.current.outputPreferencesReady).toBe(true));
+    expect(result.current.outputRoot).toBe('D:/Ready');
+    expect(result.current.folderNamingConfirmed).toBe(false);
+    expect(result.current.outputRootRecoveryRequired).toBe(true);
+    expect(status).toHaveBeenCalledWith('Не удалось подготовить папку готовых документов');
   });
 
   it('fails closed when authoritative output preference hydration fails', async () => {
@@ -162,6 +181,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
       calls.push({ command, payload });
       if (command === 'get_output_preferences') return { output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true } as never;
       if (command === 'get_background_watcher_state') return { platform: 'windows', installed: false, migration_required: false } as never;
+      if (command === 'ensure_output_root') return 'D:/Ready' as never;
       if (command === 'pick_folder') return { selected_path: 'C:/Inbox' } as never;
       if (command === 'install_background_watcher') return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false, warnings: [] } as never;
       throw new Error(`unexpected command ${command}`);

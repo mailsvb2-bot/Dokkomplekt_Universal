@@ -89,7 +89,7 @@ fn startup_output_root_candidate(
     }
 }
 
-fn ensure_startup_output_root(app: &tauri::AppHandle) -> Result<String, String> {
+fn ensure_startup_output_root_strict(app: &tauri::AppHandle) -> Result<String, String> {
     let mut preferences = load_output_preferences_from_store(app)?;
     let default_root = canonical_default_output_root(app)?;
     let candidate = startup_output_root_candidate(&preferences, default_root);
@@ -97,22 +97,39 @@ fn ensure_startup_output_root(app: &tauri::AppHandle) -> Result<String, String> 
         &candidate.display().to_string(),
         "Папка готовых документов",
     )?;
+    let candidate_text = path.display().to_string();
+    // Persist the candidate before probing it so the recovery UI can show and
+    // revalidate the exact destination that failed, including first-run Desktop
+    // collisions. It is deliberately unconfirmed until the write round-trip
+    // succeeds.
+    if preferences.output_root.trim().is_empty() {
+        preferences.output_root = candidate_text.clone();
+        preferences.naming_confirmed = false;
+        persist_output_preferences(app, &preferences)?;
+    }
+
     if let Err(error) = ensure_output_root_path(&path) {
-        if !preferences.output_root.trim().is_empty() && preferences.naming_confirmed {
+        if preferences.naming_confirmed {
             preferences.naming_confirmed = false;
             persist_output_preferences(app, &preferences)?;
         }
         return Err(error);
     }
-    let ensured = path.display().to_string();
 
-    if preferences.output_root.trim().is_empty() {
-        preferences.output_root = ensured.clone();
-        preferences.naming_confirmed = false;
-        persist_output_preferences(app, &preferences)?;
+    Ok(candidate_text)
+}
+
+fn ensure_startup_output_root(app: &tauri::AppHandle) -> Result<String, String> {
+    match ensure_startup_output_root_strict(app) {
+        Ok(path) => Ok(path),
+        Err(error) => {
+            // Output publication remains fail-closed: every generation path calls
+            // ensure_output_root_path again. Startup itself must stay recoverable
+            // so the user can see the problem and choose another destination.
+            eprintln!("Не удалось подготовить папку готовых документов: {error}");
+            Ok(String::new())
+        }
     }
-
-    Ok(ensured)
 }
 
 fn verify_output_root_round_trip(path: &Path) -> Result<(), String> {

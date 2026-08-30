@@ -1026,7 +1026,17 @@ fn apply_structural_binding_in_story(
                 continue;
             }
             let paragraph = &xml[anchor.start..anchor.end];
-            let replaced = replace_visible_text_once(paragraph, first_value, &placeholder)?;
+            // Prefer the first matching value owned by the matched label. Donor
+            // composite lines may repeat short values earlier (for example the
+            // case number `2` inside a leading date) or later (department № 2).
+            // When a donor field legitimately lives before its descriptive label
+            // (name/birth date before `зарегистрирован по адресу`), fall back to
+            // the historical first-visible-value replacement.
+            let replaced = structural_match_end(&anchor.text, &binding.label)
+                .and_then(|label_end| {
+                    replace_visible_text_once_from(paragraph, first_value, &placeholder, label_end)
+                })
+                .or_else(|| replace_visible_text_once(paragraph, first_value, &placeholder))?;
             let mut output = xml.to_string();
             output.replace_range(anchor.start..anchor.end, &replaced);
             return Some(output);
@@ -1131,6 +1141,27 @@ fn structural_remainder_after_label(text: &str, label: &str) -> Option<String> {
             .trim()
             .to_string(),
     )
+}
+
+fn structural_match_end(text: &str, needle: &str) -> Option<usize> {
+    let wanted = structural_fold(needle);
+    if wanted.is_empty() {
+        return None;
+    }
+    let boundaries = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect::<Vec<_>>();
+    for (start_position, start) in boundaries.iter().copied().enumerate() {
+        for end in boundaries.iter().copied().skip(start_position + 1) {
+            let candidate = &text[start..end];
+            if structural_fold(candidate) == wanted {
+                return Some(end);
+            }
+        }
+    }
+    None
 }
 
 fn structural_fold(value: &str) -> String {
@@ -1491,6 +1522,15 @@ fn text_nodes(xml: &str) -> Vec<TextNode> {
     nodes
 }
 fn replace_visible_text_once(xml: &str, needle: &str, replacement: &str) -> Option<String> {
+    replace_visible_text_once_from(xml, needle, replacement, 0)
+}
+
+fn replace_visible_text_once_from(
+    xml: &str,
+    needle: &str,
+    replacement: &str,
+    visible_start: usize,
+) -> Option<String> {
     if needle.is_empty() {
         return None;
     }
@@ -1499,7 +1539,10 @@ fn replace_visible_text_once(xml: &str, needle: &str, replacement: &str) -> Opti
         return None;
     }
     let visible = nodes.iter().map(|n| n.decoded.as_str()).collect::<String>();
-    let start_byte = visible.find(needle)?;
+    if visible_start > visible.len() || !visible.is_char_boundary(visible_start) {
+        return None;
+    }
+    let start_byte = visible_start + visible[visible_start..].find(needle)?;
     let end_byte = start_byte + needle.len();
     if !visible.is_char_boundary(start_byte) || !visible.is_char_boundary(end_byte) {
         return None;
@@ -2254,6 +2297,31 @@ mod tests {
         assert!(compiled_text.contains("{{medical.case_number}}"));
         assert!(compiled_text.contains("отделение № 2"));
         assert!(!compiled_text.contains("№ 4213"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn short_case_number_is_replaced_after_heading_without_corrupting_leading_date() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-short-case-number-anchor-{}",
+            std::process::id()
+        ));
+        let input = dir.join("short-number-anchor.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>02.09.2026 Выписной эпикриз № 2</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+            .expect("short case number must stay scoped to the discharge heading");
+        let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+        assert!(
+            compiled_text
+                .contains("{{medical.discharge_date}} Выписной эпикриз № {{medical.case_number}}"),
+            "{compiled_text:?}"
+        );
+        assert!(!compiled_text.contains("0{{medical.case_number}}.09.2026"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

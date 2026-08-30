@@ -581,16 +581,17 @@ $generateButton = Wait-UiElement -Description 'Создать документы
 }
 Invoke-UiElement -Element $generateButton
 
+$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
 $createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
 $createdDoc = $null
 do {
   if ($process.HasExited) { throw 'Installed application exited during real document generation smoke.' }
-  $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue |
+  $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue |
     Select-Object -First 1
   if ($null -eq $createdDoc) { Start-Sleep -Milliseconds 500 }
 } while ($null -eq $createdDoc -and [DateTime]::UtcNow -lt $createdDeadline)
 if ($null -eq $createdDoc) {
-  throw "Installed application did not physically create Проверочная кнопка.docx under $defaultOutputRoot"
+  throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
 $createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
@@ -694,7 +695,7 @@ if ($adversarial) {
   Invoke-UiElement -Element $newVersion
   $versionDeadline = [DateTime]::UtcNow.AddSeconds(60)
   do {
-    $versionDocs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter 'Проверочная кнопка.docx' -ErrorAction SilentlyContinue)
+    $versionDocs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue)
     if ($versionDocs.Count -lt 2) { Start-Sleep -Milliseconds 500 }
   } while ($versionDocs.Count -lt 2 -and [DateTime]::UtcNow -lt $versionDeadline)
   if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
@@ -804,7 +805,7 @@ $restartState = Wait-UiElement -Description 'definitive workspace state after re
   )
   if ($null -eq $currentAppWindow) { return $null }
 
-  $persisted = Find-ButtonByNames -Root $currentAppWindow -Names @('Проверочная кнопка')
+  $persisted = Find-ButtonByNames -Root $currentAppWindow -Names @($expectedTemplateButtonName)
   if ($null -ne $persisted) { return @{ Kind = 'persisted'; Element = $persisted } }
   $recovery = $currentAppWindow.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,

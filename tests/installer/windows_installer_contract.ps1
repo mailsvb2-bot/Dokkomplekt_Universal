@@ -59,11 +59,31 @@ if (-not [string]::IsNullOrWhiteSpace($productName) -and
     $app.VersionInfo.ProductName -ne $productName) {
   throw "Installed executable product name mismatch: $($app.VersionInfo.ProductName)"
 }
+$bundleIdentifier = if (-not [string]::IsNullOrWhiteSpace([string]$config.identifier)) {
+  [string]$config.identifier
+} else {
+  [string]$baseConfig.identifier
+}
+if ([string]::IsNullOrWhiteSpace($bundleIdentifier)) {
+  throw 'Tauri bundle identifier is unavailable; cannot isolate installed-app state.'
+}
 if ($env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '1') {
   $installerSignature = Get-AuthenticodeSignature -FilePath $installer.FullName
   if ($installerSignature.Status -ne 'Valid') { throw "Installer signature is invalid: $($installerSignature.Status)" }
   $appSignature = Get-AuthenticodeSignature -FilePath $app.FullName
   if ($appSignature.Status -ne 'Valid') { throw "Installed application signature is invalid: $($appSignature.Status)" }
+}
+
+# This is explicitly a first-run contract. Tauri's Windows app_data_dir is
+# %APPDATA%/<bundle identifier>; clear that exact application-owned state so a
+# previous compile/test process on the same packaging runner cannot turn this
+# into an accidental persisted-user restart. The runner itself is ephemeral.
+$roamingAppData = [Environment]::GetFolderPath('ApplicationData')
+if ([string]::IsNullOrWhiteSpace($roamingAppData)) { throw 'Windows roaming AppData path is unavailable' }
+$appDataRoot = Join-Path $roamingAppData $bundleIdentifier
+Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $appDataRoot) {
+  throw "Could not clear Dokkomplekt app data before first-run smoke: $appDataRoot"
 }
 
 # Donor-derived installed-app contract: the canonical Desktop output root must
@@ -86,6 +106,7 @@ $process = Start-Process -FilePath $app.FullName -RedirectStandardOutput $appStd
 function Write-AppLaunchDiagnostics {
   Write-Host "Installed app path: $($app.FullName)"
   Write-Host "Known Desktop path: $desktopPath"
+  Write-Host "Tauri app data root: $appDataRoot"
   Write-Host "LOCALAPPDATA: $env:LOCALAPPDATA"
   if (Test-Path -LiteralPath $appStdout) { Write-Host "--- installed app stdout ---"; Get-Content -LiteralPath $appStdout -ErrorAction SilentlyContinue | Write-Host }
   if (Test-Path -LiteralPath $appStderr) { Write-Host "--- installed app stderr ---"; Get-Content -LiteralPath $appStderr -ErrorAction SilentlyContinue | Write-Host }
@@ -709,13 +730,17 @@ if ($adversarial) {
         $condition
       )
       if ($null -eq $currentBlockedWindow) { return $null }
-      $currentBlockedWindow.FindFirst(
+      $descendants = $currentBlockedWindow.FindAll(
         [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new(
-          [System.Windows.Automation.AutomationElement]::NameProperty,
-          'Не удалось подготовить папку готовых документов'
-        )
+        [System.Windows.Automation.Condition]::TrueCondition
       )
+      foreach ($element in $descendants) {
+        $name = [string]$element.Current.Name
+        if ($name.StartsWith('Не удалось восстановить проверенную папку результата:')) {
+          return $element
+        }
+      }
+      return $null
     }
   } catch {
     $condition = [System.Windows.Automation.PropertyCondition]::new(

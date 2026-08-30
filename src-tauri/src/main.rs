@@ -2164,6 +2164,21 @@ fn main() {
             if let Err(error) = ensure_default_state_loaded(&handle, &state) {
                 eprintln!("Восстановление рабочего набора требует внимания: {error}");
             }
+
+            // Output-root availability is a native desktop startup invariant, not a
+            // WebView/React side effect. Prepare it before creating the window so a
+            // slow or failed frontend bootstrap can never leave a live process without
+            // its canonical first-run destination. Existing durable user choices win.
+            if !background_watch
+                && !e2e_uninstall_watcher
+                && e2e_install_watch_folder.is_none()
+            {
+                if let Err(error) = ensure_startup_output_root(&handle) {
+                    eprintln!(
+                        "Не удалось подготовить папку готовых документов до запуска интерфейса: {error}"
+                    );
+                }
+            }
             if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() {
                 if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {
                     return Err(std::io::Error::new(

@@ -61,6 +61,33 @@ describe('useOutputDestination durable output/watcher contract', () => {
     expect(result.current.outputRoot).toBe('D:/Ready');
   });
 
+  it('migrates a confirmed legacy user root over an unconfirmed native startup default', async () => {
+    localStorage.setItem(OUTPUT_ROOT_KEY, 'E:/Doctor/Patients');
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+    const calls: Call[] = [];
+    const status = vi.fn();
+    __setInvokeForTests(async (command, payload) => {
+      calls.push({ command, payload });
+      if (command === 'get_output_preferences') {
+        return { output_root: 'C:/Users/Doctor/Desktop/Выписанные пациенты', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: false } as never;
+      }
+      if (command === 'save_output_preferences') {
+        return { output_root: 'E:/Doctor/Patients', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true } as never;
+      }
+      if (command === 'get_background_watcher_state') return { platform: 'windows', installed: false, migration_required: false } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useOutputDestination(runAction, status));
+    await waitFor(() => expect(result.current.outputPreferencesReady).toBe(true));
+    expect(result.current.outputRoot).toBe('E:/Doctor/Patients');
+    expect(result.current.folderNamingConfirmed).toBe(true);
+    expect(calls.find((call) => call.command === 'save_output_preferences')?.payload).toMatchObject({
+      req: { output_root: 'E:/Doctor/Patients', naming_confirmed: true },
+    });
+  });
+
   it('fails closed when authoritative output preference hydration fails', async () => {
     localStorage.setItem(OUTPUT_ROOT_KEY, 'C:/Stale');
     localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));

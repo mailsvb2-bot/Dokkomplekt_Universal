@@ -47,18 +47,10 @@ export function useOutputDestination(
       try {
         const stored = await getOutputPreferences();
         if (!alive) return;
-        if (stored.output_root.trim()) {
-          const normalizedParts = normalizeOutputFolderParts(stored.folder_parts);
-          setOutputRoot(stored.output_root);
-          setOutputRootDraft(stored.output_root);
-          setFolderParts(normalizedParts);
-          setFolderNamingConfirmed(stored.naming_confirmed && normalizedParts.length > 0);
-          saveOutputRoot(stored.output_root);
-          saveOutputFolderParts(normalizedParts, stored.naming_confirmed);
-          setOutputPreferencesReady(true);
-        } else if (cachedRoot.trim() && cachedConfirmed) {
+        if (cachedRoot.trim() && cachedConfirmed && (!stored.output_root.trim() || !stored.naming_confirmed)) {
           // One-time migration: old installations used only WebView localStorage.
-          // The SQLite state is now authoritative because it reports persistence errors.
+          // Native startup may already have persisted an unconfirmed canonical default;
+          // a previously confirmed user choice must win over that bootstrap value.
           const migrated = await saveOutputPreferences({
             output_root: cachedRoot,
             folder_parts: cachedParts,
@@ -69,6 +61,15 @@ export function useOutputDestination(
           setOutputRootDraft(migrated.output_root);
           setFolderParts(normalizeOutputFolderParts(migrated.folder_parts));
           setFolderNamingConfirmed(migrated.naming_confirmed);
+          setOutputPreferencesReady(true);
+        } else if (stored.output_root.trim()) {
+          const normalizedParts = normalizeOutputFolderParts(stored.folder_parts);
+          setOutputRoot(stored.output_root);
+          setOutputRootDraft(stored.output_root);
+          setFolderParts(normalizedParts);
+          setFolderNamingConfirmed(stored.naming_confirmed && normalizedParts.length > 0);
+          saveOutputRoot(stored.output_root);
+          saveOutputFolderParts(normalizedParts, stored.naming_confirmed);
           setOutputPreferencesReady(true);
         } else {
           // A successful authoritative read with no configured destination is still hydrated.

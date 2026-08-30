@@ -886,10 +886,51 @@ struct ParagraphSpan {
     text: String,
 }
 
+fn infer_structural_bindings_by_story(
+    input_path: &Path,
+    preferred_domain: &DomainKind,
+    role_id: &str,
+) -> DocxResult<BTreeMap<String, Vec<LabeledTemplateValueCandidate>>> {
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let mut bindings_by_story = BTreeMap::new();
+    let mut found_main = false;
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        if !is_text_bearing_word_part(&name) {
+            continue;
+        }
+        ensure_text_part_size(&name, entry.size())?;
+        if name == "word/document.xml" {
+            found_main = true;
+        }
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml)?;
+        let story_text = xml_to_text(&xml);
+        let bindings = dokkomplekt_core::infer_structural_template_values(
+            &story_text,
+            Some(preferred_domain),
+            Some(role_id),
+        );
+        if !bindings.is_empty() {
+            bindings_by_story.insert(name, bindings);
+        }
+    }
+    if !found_main {
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+    Ok(bindings_by_story)
+}
+
 /// Compile an already-filled user DOCX into a semantic template by binding
 /// values to their owning labels/sections. Unlike value-global replacement,
 /// every edit is constrained to the concrete Word paragraph/block discovered by
-/// the structural core, mirroring the proven donor editor mechanics.
+/// the structural core, mirroring the proven donor editor mechanics. Inference
+/// is performed independently inside every Word story so a body section can
+/// never absorb text from a header, footer, note, or comment.
 pub fn compile_labeled_template_file(
     input_path: &Path,
     output_path: &Path,
@@ -897,12 +938,9 @@ pub fn compile_labeled_template_file(
     role_id: &str,
 ) -> DocxResult<StructuralTemplateCompilationReport> {
     validate_safe_template_file(input_path)?;
-    let extracted = extract_docx_text(input_path)?;
-    let bindings = dokkomplekt_core::infer_structural_template_values(
-        &extracted,
-        Some(preferred_domain),
-        Some(role_id),
-    );
+    let bindings_by_story =
+        infer_structural_bindings_by_story(input_path, preferred_domain, role_id)?;
+    let binding_count = bindings_by_story.values().map(Vec::len).sum();
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -911,7 +949,8 @@ pub fn compile_labeled_template_file(
     let mut archive = ZipArchive::new(input)?;
     let output = File::create(&temporary)?;
     let mut writer = ZipWriter::new(output);
-    let mut applied = vec![false; bindings.len()];
+    let mut applied_field_ids = Vec::new();
+    let mut skipped = Vec::new();
     let mut total_uncompressed = 0_u64;
 
     for index in 0..archive.len() {
@@ -928,13 +967,14 @@ pub fn compile_labeled_template_file(
             ensure_text_part_size(&name, entry.size())?;
             let mut xml = String::new();
             entry.read_to_string(&mut xml)?;
-            for (binding_index, binding) in bindings.iter().enumerate() {
-                if applied[binding_index] {
-                    continue;
-                }
-                if let Some(next) = apply_structural_binding_in_story(&xml, binding) {
-                    xml = next;
-                    applied[binding_index] = true;
+            if let Some(bindings) = bindings_by_story.get(&name) {
+                for binding in bindings {
+                    if let Some(next) = apply_structural_binding_in_story(&xml, binding) {
+                        xml = next;
+                        applied_field_ids.push(binding.field_id.clone());
+                    } else {
+                        skipped.push(format!("{}:{} ({})", name, binding.field_id, binding.label));
+                    }
                 }
             }
             writer.write_all(xml.as_bytes())?;
@@ -944,12 +984,6 @@ pub fn compile_labeled_template_file(
     }
     writer.finish()?;
 
-    let skipped = bindings
-        .iter()
-        .zip(&applied)
-        .filter(|(_, applied)| !**applied)
-        .map(|(binding, _)| format!("{} ({})", binding.field_id, binding.label))
-        .collect::<Vec<_>>();
     if !skipped.is_empty() {
         let _ = std::fs::remove_file(&temporary);
         return Err(DocxError::StructuralTemplateCompilation(format!(
@@ -961,16 +995,12 @@ pub fn compile_labeled_template_file(
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
     }
-    let mut applied_field_ids = bindings
-        .iter()
-        .map(|binding| binding.field_id.clone())
-        .collect::<Vec<_>>();
     applied_field_ids.sort();
     applied_field_ids.dedup();
     Ok(StructuralTemplateCompilationReport {
         output_path: output_path.display().to_string(),
         applied_field_ids,
-        binding_count: bindings.len(),
+        binding_count,
     })
 }
 
@@ -2147,6 +2177,83 @@ mod tests {
                 proof.visible_text
             );
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn structural_multiline_inference_never_crosses_from_body_into_header_story() {
+        let dir =
+            std::env::temp_dir().join(format!("dokkomplekt-story-boundary-{}", std::process::id()));
+        let input = dir.join("story-boundary.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Лечение:</w:t></w:r></w:p>
+<w:p><w:r><w:t>первая строка схемы</w:t></w:r></w:p>
+<w:p><w:r><w:t>вторая строка схемы</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>ГБУЗ НО «НКЦПЗ» диспансер №2</w:t></w:r></w:p></w:hdr>"#;
+        write_test_docx(&input, body, Some(header));
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("body treatment must compile without absorbing header text");
+        assert!(report
+            .applied_field_ids
+            .contains(&"medical.treatment".to_string()));
+        let file = File::open(&compiled).expect("compiled file");
+        let mut archive = ZipArchive::new(file).expect("compiled archive");
+        let document_xml = read_zip_text(&mut archive, "word/document.xml");
+        let header_xml = read_zip_text(&mut archive, "word/header1.xml");
+        assert!(document_xml.contains("{{medical.treatment}}"));
+        assert!(!document_xml.contains("первая строка схемы"));
+        assert!(!document_xml.contains("вторая строка схемы"));
+        assert!(header_xml.contains("ГБУЗ НО «НКЦПЗ» диспансер №2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partially_dynamic_same_paragraph_compiles_remaining_labeled_value() {
+        let dir =
+            std::env::temp_dir().join(format!("dokkomplekt-partial-inline-{}", std::process::id()));
+        let input = dir.join("partial-inline.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Диагноз: {{medical.diagnosis}}; Лечение: старая схема</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("remaining inline treatment must compile");
+        assert!(report
+            .applied_field_ids
+            .contains(&"medical.treatment".to_string()));
+        let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+        assert!(compiled_text.contains("{{medical.diagnosis}}"));
+        assert!(compiled_text.contains("{{medical.treatment}}"));
+        assert!(!compiled_text.contains("старая схема"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn discharge_heading_with_department_number_compiles_the_case_number_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-discharge-number-anchor-{}",
+            std::process::id()
+        ));
+        let input = dir.join("number-anchor.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>09.09.2026 Выписной эпикриз № 4213, отделение № 2</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+            .expect("case number must bind next to discharge heading");
+        let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+        assert!(compiled_text.contains("{{medical.case_number}}"));
+        assert!(compiled_text.contains("отделение № 2"));
+        assert!(!compiled_text.contains("№ 4213"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

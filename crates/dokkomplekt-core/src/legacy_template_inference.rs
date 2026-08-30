@@ -242,6 +242,45 @@ pub fn infer_labeled_template_values(
 
     // Repeated visual fields are kept as separate anchors. The DOCX compiler
     // must rewrite every owned location, not just the first identical value.
+    // A paragraph may already contain one semantic placeholder while another
+    // legacy field in the same paragraph is still literal, for example
+    // `Диагноз: {{medical.diagnosis}}; Лечение: старая схема`. The whole-line
+    // anchor intentionally fails closed on placeholders, so inspect only
+    // explicitly separated placeholder-free segments and bind them by containment.
+    for (line_index, raw_line) in lines.iter().enumerate() {
+        if !(raw_line.contains("{{") || raw_line.contains("}}")) {
+            continue;
+        }
+        for segment in raw_line.split(';') {
+            let segment = segment.trim();
+            if segment.is_empty() || segment.contains("{{") || segment.contains("}}") {
+                continue;
+            }
+            let Some(anchor) =
+                match_labeled_template_anchor(segment, &catalog, preferred_domain, role_id)
+            else {
+                continue;
+            };
+            if !anchor.replaceable {
+                continue;
+            }
+            let value = clean_structural_value(&anchor.remainder);
+            if value.is_empty() || is_blank_only(&value) {
+                continue;
+            }
+            candidates.push(LabeledTemplateValueCandidate {
+                field_id: anchor.field_id.clone(),
+                title: title_for_field(&anchor.field_id),
+                line_index,
+                label: anchor.label,
+                value,
+                anchor_mode: StructuralAnchorMode::Contains,
+                confidence: 0.995,
+                reason: "явно разделённый сегмент частично динамического абзаца сохраняет собственную подпись и старое значение".into(),
+            });
+        }
+    }
+
     candidates.sort_by(|left, right| {
         left.line_index
             .cmp(&right.line_index)
@@ -302,7 +341,8 @@ fn infer_donor_medical_role_values(
                     "donor discharge header date",
                 );
             }
-            if let Some(number) = text_after_marker(line, '№') {
+            if let Some(number) = token_after_phrase_marker(line, "Выписной эпикриз", '№')
+            {
                 push_donor_candidate(
                     &mut out,
                     "medical.case_number",
@@ -432,10 +472,25 @@ fn leading_full_date(line: &str) -> Option<String> {
     }
 }
 
-fn text_after_marker(line: &str, marker: char) -> Option<String> {
-    let (_, tail) = line.rsplit_once(marker)?;
-    let value = tail.trim().trim_start_matches([':', '-', '–', '—']).trim();
-    (!value.is_empty()).then(|| value.to_string())
+fn token_after_phrase_marker(line: &str, phrase: &str, marker: char) -> Option<String> {
+    let folded = fold_label(line);
+    let phrase_folded = fold_label(phrase);
+    let start = folded.find(&phrase_folded)?;
+    let original_start = char_boundary_for_folded_prefix(line, start);
+    let after_phrase = original_start
+        + line[original_start..]
+            .chars()
+            .take(phrase.chars().count())
+            .map(char::len_utf8)
+            .sum::<usize>();
+    let tail = line.get(after_phrase..)?;
+    let marker_index = tail.find(marker)?;
+    let after_marker = tail.get(marker_index + marker.len_utf8()..)?.trim_start();
+    let token = after_marker
+        .split_whitespace()
+        .next()?
+        .trim_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '(' | ')' | '[' | ']'));
+    (!token.is_empty()).then(|| token.to_string())
 }
 
 fn text_after_phrase(line: &str, phrase: &str) -> Option<String> {
@@ -987,6 +1042,38 @@ mod tests {
             binding.field_id == "medical.case_number"
                 && binding.anchor_mode == StructuralAnchorMode::Contains
         }));
+    }
+
+    #[test]
+    fn partially_dynamic_semicolon_paragraph_binds_remaining_literal_field() {
+        let candidates = infer_labeled_template_values(
+            "Диагноз: {{medical.diagnosis}}; Лечение: старая схема",
+            Some(&DomainKind::Medical),
+            Some("discharge"),
+        );
+        let treatment = candidates
+            .iter()
+            .find(|candidate| candidate.field_id == "medical.treatment")
+            .expect("literal treatment segment must remain bindable");
+        assert_eq!(treatment.value, "старая схема");
+        assert_eq!(treatment.anchor_mode, StructuralAnchorMode::Contains);
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate.field_id == "medical.diagnosis"));
+    }
+
+    #[test]
+    fn discharge_case_number_is_bound_to_heading_marker_not_later_department_marker() {
+        let bindings = infer_structural_template_values(
+            "09.09.2026 Выписной эпикриз № 4213, отделение № 2",
+            Some(&DomainKind::Medical),
+            Some("discharge"),
+        );
+        let case_number = bindings
+            .iter()
+            .find(|binding| binding.field_id == "medical.case_number")
+            .expect("case number binding");
+        assert_eq!(case_number.value, "4213");
     }
 
     #[test]

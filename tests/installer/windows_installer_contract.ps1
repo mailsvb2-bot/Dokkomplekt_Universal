@@ -417,11 +417,16 @@ $createPreparedButton = Wait-UiElement -Description 'Создать кнопки
 }
 Invoke-UiElement -Element $createPreparedButton
 
-$createdDocumentButton = Wait-UiElement -Description 'created static template button' -TimeoutSeconds 40 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+$expectedTemplateButtonName = if ($adversarial) { 'исходник проверка' } else { 'button-smoke' }
+$createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds 40 -Probe {
+  Find-ButtonByNames -Root $appWindow -Names @($expectedTemplateButtonName)
 }
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
-Write-Host 'Create button from a real unmarked DOCX OK.'
+$contentDerivedButton = Find-ButtonByNames -Root $appWindow -Names @('Проверочная кнопка')
+if ($null -ne $contentDerivedButton) {
+  throw 'Template body text leaked into the reusable document button label.'
+}
+Write-Host "Create button from a real unmarked DOCX OK: '$expectedTemplateButtonName'; body text was not used as the label."
 
 # A template is not a case source. Exercise the installed source picker separately
 # so the generation stage is reached through the same order as a real user.

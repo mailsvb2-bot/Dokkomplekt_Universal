@@ -8,7 +8,7 @@ import {
 
 describe('runtime backend contracts', () => {
   it('registers a fail-closed response kind for every current Tauri command', () => {
-    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(120);
+    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(123);
     expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');
     expect(COMMAND_RESPONSE_KIND.pick_source_file).toBe('nullable-object');
     expect(COMMAND_RESPONSE_KIND.parse_source_path).toBe('object');

@@ -2201,6 +2201,7 @@ fn main() {
                     let install_result = install_background_watcher(
                         WatcherInstallRequest {
                             watch_folder: watch_folder.clone(),
+                            output_root: canonical_default_output_root(&handle)?.display().to_string(),
                             default_year: Some(current_year_utc()),
                             sick_leave_enabled: false,
                             folder_parts: vec![
@@ -2264,6 +2265,8 @@ fn main() {
             first_run_state,
             get_default_output_root,
             ensure_output_root,
+            get_output_preferences,
+            save_output_preferences,
             analyze_template,
             analyze_template_file,
             prepare_template_setup,
@@ -2344,6 +2347,7 @@ fn main() {
             validate_product_access,
             verify_rust_license_text,
             check_for_updates,
+            get_background_watcher_state,
             install_background_watcher,
             update_background_watcher_preferences,
             uninstall_background_watcher,

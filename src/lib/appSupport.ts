@@ -4,13 +4,35 @@ import type { ScannerFieldSuggestion } from './scannerSuggestions';
 import { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
 export { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
 
-export const DEFAULT_YEAR = new Date().getFullYear();
+export function currentDefaultYear(): number { return new Date().getFullYear(); }
 export const STATE_DB = 'dokkomplekt-user-state.sqlite';
 export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
 export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';
 export const OUTPUT_NAMING_CONFIRMED_KEY = 'dokkomplekt.output-folder-naming-confirmed.v1';
 export const AUTO_PRINT_KEY = 'dokkomplekt.auto-print.v1';
 export const PRINT_COPIES_KEY = 'dokkomplekt.print-copies.v1';
+export const DEFAULT_OUTPUT_FOLDER_PARTS: FolderNamePartDto[] = ['DocumentNumber', 'DocumentDate'];
+const VALID_OUTPUT_FOLDER_PARTS = new Set<FolderNamePartDto>([
+  'FullSubjectName', 'ShortInitials', 'SurnameGivenName', 'OrganizationName',
+  'DocumentNumber', 'DocumentDate', 'PeriodStartDate', 'PeriodEndDate', 'PeriodRange',
+  'PeriodStartMonth', 'PeriodEndMonth', 'ShortPeriodStartDate', 'ShortPeriodEndDate',
+  'ShortPeriodRange', 'PeriodStartMonthName', 'PeriodEndMonthName', 'AdmissionDate',
+  'DischargeDate', 'AdmissionAndDischargeDates', 'AdmissionMonth', 'DischargeMonth',
+]);
+
+export function normalizeOutputFolderParts(value: unknown): FolderNamePartDto[] {
+  if (!Array.isArray(value) || value.length === 0) return [...DEFAULT_OUTPUT_FOLDER_PARTS];
+  const normalized: FolderNamePartDto[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !VALID_OUTPUT_FOLDER_PARTS.has(item as FolderNamePartDto)) {
+      return [...DEFAULT_OUTPUT_FOLDER_PARTS];
+    }
+    const part = item as FolderNamePartDto;
+    if (normalized.includes(part)) return [...DEFAULT_OUTPUT_FOLDER_PARTS];
+    normalized.push(part);
+  }
+  return normalized.length ? normalized : [...DEFAULT_OUTPUT_FOLDER_PARTS];
+}
 
 export function jobsForItems(items: GeneratedPrintItem[], printCopies: Record<string, number>): PrintJobDto[] {
   return items
@@ -29,6 +51,14 @@ export function shouldSelectDocumentByDefault(_document: DocumentTemplateSpec): 
 
 export function defaultSelectedDocumentIds(_documents: DocumentTemplateSpec[]): string[] {
   return [];
+}
+
+export function preserveSelectedDocumentIds(
+  selectedDocumentIds: string[],
+  documents: DocumentTemplateSpec[],
+): string[] {
+  const available = new Set(documents.map(document => document.id));
+  return selectedDocumentIds.filter(id => available.has(id));
 }
 
 export function bundleSelectionFromDecision(
@@ -152,37 +182,38 @@ export function loadOutputRoot(): string {
   return '';
 }
 
-export function saveOutputRoot(value: string): void {
+export function saveOutputRoot(value: string): boolean {
   const normalized = value.trim();
   try {
     if (!normalized) {
       localStorage.removeItem(OUTPUT_ROOT_KEY);
       localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
-      return;
+      return true;
     }
     localStorage.setItem(OUTPUT_ROOT_KEY, normalized);
-  } catch { /* storage may be unavailable */ }
+    return true;
+  } catch { return false; }
 }
 
 export function loadOutputNamingConfirmed(): boolean {
   try { return localStorage.getItem(OUTPUT_NAMING_CONFIRMED_KEY) === 'true'; } catch { return false; }
 }
 
-export function saveOutputFolderParts(parts: FolderNamePartDto[], confirmed = true): void {
+export function saveOutputFolderParts(parts: FolderNamePartDto[], confirmed = true): boolean {
+  const normalized = normalizeOutputFolderParts(parts);
+  if (!parts.length || normalized.length !== parts.length || normalized.some((part, index) => part !== parts[index])) return false;
   try {
-    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(parts));
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(normalized));
     if (confirmed) localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
-  } catch { /* storage may be unavailable */ }
+    else localStorage.removeItem(OUTPUT_NAMING_CONFIRMED_KEY);
+    return true;
+  } catch { return false; }
 }
 
 export function loadOutputFolderParts(): FolderNamePartDto[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null');
-    if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) {
-      return parsed as FolderNamePartDto[];
-    }
-  } catch { /* use privacy-safe default */ }
-  return ['DocumentNumber', 'DocumentDate'];
+    return normalizeOutputFolderParts(JSON.parse(localStorage.getItem(OUTPUT_PREFS_KEY) || 'null'));
+  } catch { return [...DEFAULT_OUTPUT_FOLDER_PARTS]; }
 }
 
 export function loadAutoPrintPreference(): boolean {

@@ -28,6 +28,17 @@ pub enum FolderNamePart {
     DischargeMonth,
 }
 
+const DEFAULT_OUTPUT_FOLDER_PARTS: [FolderNamePart; 2] =
+    [FolderNamePart::DocumentNumber, FolderNamePart::DocumentDate];
+
+fn effective_output_folder_parts(parts: &[FolderNamePart]) -> &[FolderNamePart] {
+    if parts.is_empty() {
+        &DEFAULT_OUTPUT_FOLDER_PARTS
+    } else {
+        parts
+    }
+}
+
 pub fn missing_output_folder_fields(case: &SemanticCase, parts: &[FolderNamePart]) -> Vec<String> {
     let mut missing = std::collections::BTreeSet::<String>::new();
     let mut require = |present: bool, field_id: &str| {
@@ -35,7 +46,7 @@ pub fn missing_output_folder_fields(case: &SemanticCase, parts: &[FolderNamePart
             missing.insert(field_id.to_string());
         }
     };
-    for part in parts {
+    for part in effective_output_folder_parts(parts) {
         match part {
             FolderNamePart::FullSubjectName
             | FolderNamePart::ShortInitials
@@ -99,7 +110,7 @@ pub fn missing_output_folder_fields(case: &SemanticCase, parts: &[FolderNamePart
 
 pub fn build_output_folder_name(case: &SemanticCase, parts: &[FolderNamePart]) -> String {
     let mut chunks = Vec::new();
-    for part in parts {
+    for part in effective_output_folder_parts(parts) {
         match part {
             FolderNamePart::FullSubjectName => push(
                 first(case, &["subject.name", "person.full_name", "patient.fio"]),
@@ -380,6 +391,25 @@ mod tests {
                 ],
             ),
             "Иванов Иван 06.2026 07.2026"
+        );
+    }
+
+    #[test]
+    fn empty_parts_use_safe_default_identity_fields() {
+        let mut case = SemanticCase::default();
+        for (id, value) in [("document.number", "42"), ("document.date", "18.06.2026")] {
+            case.values.insert(
+                id.into(),
+                SemanticValue::new(id, value, ValueSource::UserConfirmed, 1.0),
+            );
+        }
+        assert!(missing_output_folder_fields(&case, &[]).is_empty());
+        assert_eq!(build_output_folder_name(&case, &[]), "42 18.06.2026");
+
+        let empty = SemanticCase::default();
+        assert_eq!(
+            missing_output_folder_fields(&empty, &[]),
+            vec!["document.date".to_string(), "document.number".to_string()]
         );
     }
 

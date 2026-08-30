@@ -143,6 +143,10 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'rollback_template_version': return pack as never;
       case 'ensure_output_root':
         return ((payload as { req?: { output_root?: string } })?.req?.output_root ?? 'C:/Test/Готовые документы') as never;
+      case 'get_output_preferences':
+        return { output_root: '', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: false } as never;
+      case 'save_output_preferences':
+        return ((payload as { req?: unknown } | undefined)?.req ?? { output_root: '', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: false }) as never;
       case 'get_output_plan':
         return { root_folder: 'output', patient_folder: 'output/Готовые', files: ['output/Готовые/Счёт.docx'], warnings: [], exists: false } as never;
       case 'route_intake':
@@ -155,8 +159,10 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         return true as never;
       case 'check_for_updates':
         return { current_version: '18.0.7', latest_version: '18.0.8', update_available: true, artifact_path: '/app-data/verified-updates/18.0.8/app.zip', release_notes: 'Security update' } as never;
+      case 'get_background_watcher_state':
+        return { platform: 'windows', installed: false, migration_required: false } as never;
       case 'install_background_watcher':
-        return { platform: 'windows', installed: true, watch_folder: 'watch', commands: [], warnings: [] } as never;
+        return { platform: 'windows', installed: true, watch_folder: 'C:/Выбранная папка', output_root: 'C:/Test/Готовые документы', folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, warnings: [] } as never;
       case 'update_background_watcher_preferences':
         return true as never;
       case 'uninstall_background_watcher':

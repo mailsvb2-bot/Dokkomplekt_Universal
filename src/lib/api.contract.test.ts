@@ -24,6 +24,8 @@ import {
   firstRunState,
   getDefaultOutputRoot,
   ensureOutputRoot,
+  getOutputPreferences,
+  saveOutputPreferences,
   deleteLearnedScannerRule,
   getDiaryPlan,
   getIntakeCapabilities,
@@ -52,6 +54,7 @@ import {
   getWorkflowPlanBatch,
   icd10Suggest,
   importTemplateFile,
+  getBackgroundWatcherState,
   installBackgroundWatcher,
   loadState,
   openInFileManager,
@@ -104,6 +107,8 @@ export const registeredBackendCommands = [
   'first_run_state',
   'get_default_output_root',
   'ensure_output_root',
+  'get_output_preferences',
+  'save_output_preferences',
   'analyze_template',
   'analyze_template_file',
   'prepare_template_setup',
@@ -186,6 +191,7 @@ export const registeredBackendCommands = [
   'validate_product_access',
   'verify_rust_license_text',
   'check_for_updates',
+  'get_background_watcher_state',
   'install_background_watcher',
   'update_background_watcher_preferences',
   'uninstall_background_watcher',
@@ -258,6 +264,10 @@ function installContractMock(calls: Call[]) {
       case 'get_default_output_root':
       case 'ensure_output_root':
         return 'C:/Users/Test/Desktop/Выписанные пациенты' as never;
+      case 'get_output_preferences':
+        return { output_root: 'C:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true } as never;
+      case 'save_output_preferences':
+        return ((payload as { req?: unknown } | undefined)?.req ?? { output_root: '', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: false }) as never;
       case 'first_run_state':
       case 'load_state':
         return { pack, has_user_buttons: true, message: 'ok' } as never;
@@ -371,8 +381,10 @@ function installContractMock(calls: Call[]) {
         return true as never;
       case 'check_for_updates':
         return { current_version: '18.0.7', latest_version: '18.0.8', update_available: true, artifact_path: '/tmp/app.zip', release_notes: null } as never;
+      case 'get_background_watcher_state':
+        return { platform: 'windows', installed: false, migration_required: false } as never;
       case 'install_background_watcher':
-        return { platform: 'windows', installed: true, watch_folder: 'C:/x', commands: [], warnings: [] } as never;
+        return { platform: 'windows', installed: true, watch_folder: 'C:/x', output_root: 'C:/ready', commands: [], warnings: [] } as never;
       case 'update_background_watcher_preferences':
         return true as never;
       case 'uninstall_background_watcher':
@@ -635,8 +647,11 @@ describe('Tauri command DTO contracts', () => {
     await icd10Suggest('F20');
     await validateProductAccess('000000');
     await verifyRustLicenseText('license');
-    await installBackgroundWatcher('C:/watch', 2026, false, ['DocumentNumber'], true, { doc_1: 3 });
-    await updateBackgroundWatcherPreferences(false, { doc_1: 7 });
+    await getOutputPreferences();
+    await saveOutputPreferences({ output_root: 'C:/ready', folder_parts: ['DocumentNumber'], naming_confirmed: true });
+    await getBackgroundWatcherState();
+    await installBackgroundWatcher('C:/watch', 'C:/ready', 2026, false, ['DocumentNumber'], true, { doc_1: 3 });
+    await updateBackgroundWatcherPreferences('C:/ready', ['DocumentNumber'], false, { doc_1: 7 });
     await uninstallBackgroundWatcher();
     await runCreatedDocumentsIntake('C:/Desktop/Созданные документы/Первичный.docx', 'C:/Desktop/Созданные документы', ['FullSubjectName'], 2026, false);
     await printFiles([{ path: 'out.docx', copies: 3 }]);
@@ -653,8 +668,11 @@ describe('Tauri command DTO contracts', () => {
       { command: 'icd10_suggest', payload: { query: 'F20' } },
       { command: 'validate_product_access', payload: { req: { code: '000000' } } },
       { command: 'verify_rust_license_text', payload: { req: { license_text: 'license' } } },
-      { command: 'install_background_watcher', payload: { req: { watch_folder: 'C:/watch', default_year: 2026, sick_leave_enabled: false, folder_parts: ['DocumentNumber'], auto_print: true, print_copies_by_document: { doc_1: 3 } } } },
-      { command: 'update_background_watcher_preferences', payload: { req: { auto_print: false, print_copies_by_document: { doc_1: 7 } } } },
+      { command: 'get_output_preferences', payload: undefined },
+      { command: 'save_output_preferences', payload: { req: { output_root: 'C:/ready', folder_parts: ['DocumentNumber'], naming_confirmed: true } } },
+      { command: 'get_background_watcher_state', payload: undefined },
+      { command: 'install_background_watcher', payload: { req: { watch_folder: 'C:/watch', output_root: 'C:/ready', default_year: 2026, sick_leave_enabled: false, folder_parts: ['DocumentNumber'], auto_print: true, print_copies_by_document: { doc_1: 3 } } } },
+      { command: 'update_background_watcher_preferences', payload: { req: { output_root: 'C:/ready', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: { doc_1: 7 } } } },
       { command: 'uninstall_background_watcher', payload: undefined },
       { command: 'run_created_documents_intake', payload: { req: { source_path: 'C:/Desktop/Созданные документы/Первичный.docx', output_root: 'C:/Desktop/Созданные документы', folder_parts: ['FullSubjectName'], default_year: 2026, sick_leave_enabled: false } } },
       { command: 'print_files', payload: { req: { jobs: [{ path: 'out.docx', copies: 3 }] } } },

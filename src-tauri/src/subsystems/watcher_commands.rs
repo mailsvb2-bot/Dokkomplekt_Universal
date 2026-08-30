@@ -2,6 +2,7 @@
 #[derive(Debug, Deserialize)]
 struct WatcherInstallRequest {
     watch_folder: String,
+    output_root: String,
     #[serde(default)]
     default_year: Option<i32>,
     #[serde(default)]
@@ -28,6 +29,8 @@ struct WatcherHandoffOwner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WatcherRuntimeConfig {
     watch_folder: String,
+    #[serde(default)]
+    output_root: String,
     default_year: i32,
     sick_leave_enabled: bool,
     folder_parts: Vec<FolderNamePart>,
@@ -50,6 +53,62 @@ fn watcher_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("intake-agent-autostart.json"))
+}
+
+fn read_watcher_runtime_config(path: &Path) -> Result<WatcherRuntimeConfig, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("Настройки фонового агента недоступны: {error}"))?;
+    serde_json::from_slice::<WatcherRuntimeConfig>(&bytes)
+        .map_err(|error| format!("Настройки фонового агента повреждены: {error}"))
+}
+
+fn effective_watcher_output_root(
+    app: &tauri::AppHandle,
+    runtime: &WatcherRuntimeConfig,
+) -> Result<PathBuf, String> {
+    let configured = runtime.output_root.trim();
+    let raw = if configured.is_empty() {
+        let preferences = load_output_preferences_from_store(app)?;
+        if preferences.output_root.trim().is_empty() {
+            return Err(
+                "Фоновый агент создан старой версией без отдельной папки результата. Откройте Доккомплект и заново подтвердите папку готовых документов."
+                    .into(),
+            );
+        }
+        preferences.output_root
+    } else {
+        configured.to_string()
+    };
+    let output_root = resolve_user_visible_absolute_path(&raw, "Папка готовых документов")?;
+    ensure_output_root_path(&output_root)?;
+    Ok(output_root)
+}
+
+fn effective_watcher_folder_parts(runtime: &WatcherRuntimeConfig) -> Vec<FolderNamePart> {
+    if runtime.folder_parts.is_empty() {
+        default_output_folder_parts()
+    } else {
+        runtime.folder_parts.clone()
+    }
+}
+
+fn watcher_directories_are_same(left: &Path, right: &Path) -> Result<bool, String> {
+    let left = std::fs::canonicalize(left).map_err(|error| {
+        format!("Не удалось определить фактический путь «{}»: {error}", left.display())
+    })?;
+    let right = std::fs::canonicalize(right).map_err(|error| {
+        format!("Не удалось определить фактический путь «{}»: {error}", right.display())
+    })?;
+    #[cfg(windows)]
+    {
+        Ok(left
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy()))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(left == right)
+    }
 }
 
 fn watcher_owner_for_executable(exe: &Path, ready: bool) -> Result<WatcherHandoffOwner, String> {
@@ -369,6 +428,13 @@ fn unix_time_ms(value: std::time::SystemTime) -> u128 {
         .as_millis()
 }
 
+fn classify_watcher_configuration_error(_error: &str) -> (&'static str, UnreadableRetryPolicy) {
+    (
+        "watcher_configuration_unavailable",
+        UnreadableRetryPolicy::Timed(Duration::from_secs(60)),
+    )
+}
+
 fn classify_processing_error(error: &str) -> (&'static str, UnreadableRetryPolicy) {
     let normalized = error.to_lowercase();
     if normalized.contains("internal watcher panic") {
@@ -593,10 +659,11 @@ fn prune_file_stability_observations(
     });
 }
 
-fn write_unreadable_source_note(
+fn write_unreadable_source_note_with_classifier(
     source: &Path,
     error: &str,
     now: std::time::SystemTime,
+    classifier: fn(&str) -> (&'static str, UnreadableRetryPolicy),
 ) -> Result<PathBuf, String> {
     let stem = source
         .file_stem()
@@ -608,7 +675,7 @@ fn write_unreadable_source_note(
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let (category, retry_policy) = classify_processing_error(error);
+    let (category, retry_policy) = classifier(error);
     let source_kind = source
         .extension()
         .and_then(|value| value.to_str())
@@ -659,6 +726,27 @@ fn write_unreadable_source_note(
     Ok(note_path)
 }
 
+fn write_unreadable_source_note(
+    source: &Path,
+    error: &str,
+    now: std::time::SystemTime,
+) -> Result<PathBuf, String> {
+    write_unreadable_source_note_with_classifier(source, error, now, classify_processing_error)
+}
+
+fn write_watcher_configuration_note(
+    source: &Path,
+    error: &str,
+    now: std::time::SystemTime,
+) -> Result<PathBuf, String> {
+    write_unreadable_source_note_with_classifier(
+        source,
+        error,
+        now,
+        classify_watcher_configuration_error,
+    )
+}
+
 fn default_parallel_cases() -> usize {
     2
 }
@@ -667,20 +755,61 @@ fn normalize_parallel_cases(value: usize) -> usize {
     value.clamp(1, 4)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn process_watcher_source(
     app: tauri::AppHandle,
     path: PathBuf,
-    folder: PathBuf,
-    default_year: i32,
-    sick_leave_enabled: bool,
-    folder_parts: Vec<FolderNamePart>,
-    fallback_auto_print: bool,
-    fallback_copies: BTreeMap<String, u16>,
     control_path: Option<PathBuf>,
     log_path: PathBuf,
 ) {
     use std::io::Write;
+    let runtime = match control_path
+        .as_deref()
+        .ok_or_else(|| "Настройки фонового агента не найдены.".to_string())
+        .and_then(read_watcher_runtime_config)
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            increment_metric(&app, "failed_sources", 1);
+            let note = write_watcher_configuration_note(&path, &error, std::time::SystemTime::now()).ok();
+            let response = CreatedDocumentsIntakeResponse {
+                status: "attention".into(),
+                patient_folder: None,
+                created_files: Vec::new(),
+                created_documents: Vec::new(),
+                missing: Vec::new(),
+                attention_file: note.as_ref().map(|value| value.display().to_string()),
+                print_triage: None,
+                message: "Фоновая обработка остановлена: настройки агента недоступны. Исходник сохранён; исправьте настройки и повторите обработку.".into(),
+            };
+            let _ = app.emit("document-batch-ready", response);
+            return;
+        }
+    };
+    let output_root = match effective_watcher_output_root(&app, &runtime) {
+        Ok(path) => path,
+        Err(error) => {
+            increment_metric(&app, "failed_sources", 1);
+            let note = write_watcher_configuration_note(&path, &error, std::time::SystemTime::now()).ok();
+            let response = CreatedDocumentsIntakeResponse {
+                status: "attention".into(),
+                patient_folder: None,
+                created_files: Vec::new(),
+                created_documents: Vec::new(),
+                missing: Vec::new(),
+                attention_file: note.as_ref().map(|value| value.display().to_string()),
+                print_triage: None,
+                message: "Фоновая обработка остановлена: папка готовых документов не подтверждена. Исходник сохранён.".into(),
+            };
+            let _ = app.emit("document-batch-ready", response);
+            return;
+        }
+    };
+    let folder_parts = effective_watcher_folder_parts(&runtime);
+    let default_year = current_year_utc();
+    let sick_leave_enabled = runtime.sick_leave_enabled;
+    let fallback_auto_print = runtime.auto_print;
+    let fallback_copies = runtime.print_copies_by_document.clone();
+
     // Donor parity: a stable primary dropped while the main UI is closed must
     // open the program. Launch the normal singleton path, never the hidden
     // watcher window; an existing UI receives its ordinary activation request.
@@ -695,7 +824,7 @@ fn process_watcher_source(
     }
     let req = CreatedDocumentsIntakeRequest {
         source_path: path.display().to_string(),
-        output_root: folder.display().to_string(),
+        output_root: output_root.display().to_string(),
         folder_parts,
         default_year,
         sick_leave_enabled,
@@ -713,20 +842,11 @@ fn process_watcher_source(
             let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
             let _ = std::fs::remove_file(&unreadable_note);
             let _ = app.emit("document-batch-ready", response.clone());
-            let (latest_runtime, control_error) = match control_path.as_ref() {
-                None => (None, None),
-                Some(control_path) => match std::fs::read(control_path) {
-                    Ok(bytes) => match serde_json::from_slice::<WatcherRuntimeConfig>(&bytes) {
-                        Ok(runtime) => (Some(runtime), None),
-                        Err(error) => (
-                            None,
-                            Some(format!("Настройки фонового агента повреждены: {error}")),
-                        ),
-                    },
-                    Err(error) => (
-                        None,
-                        Some(format!("Настройки фонового агента недоступны: {error}")),
-                    ),
+            let (latest_runtime, control_error) = match control_path.as_deref() {
+                None => (None, Some("Настройки фонового агента не найдены.".to_string())),
+                Some(control_path) => match read_watcher_runtime_config(control_path) {
+                    Ok(runtime) => (Some(runtime), None),
+                    Err(error) => (None, Some(error)),
                 },
             };
             if let Some(error) = control_error.as_deref() {
@@ -908,16 +1028,9 @@ fn start_watcher_thread(
     config: WatcherRuntimeConfig,
     terminate_app_when_disabled: bool,
 ) -> Result<Arc<AtomicBool>, String> {
-    let WatcherRuntimeConfig {
-        watch_folder,
-        default_year,
-        sick_leave_enabled,
-        folder_parts,
-        auto_print,
-        print_copies_by_document,
-        max_parallel_cases,
-        handoff_owner,
-    } = config;
+    let watch_folder = config.watch_folder.clone();
+    let max_parallel_cases = config.max_parallel_cases;
+    let handoff_owner = config.handoff_owner.clone();
     if let Some(owner) = handoff_owner.as_ref().filter(|owner| owner.ready) {
         if !watcher_owner_matches_current(owner)? {
             return Err(
@@ -1088,9 +1201,6 @@ fn start_watcher_thread(
                 stability_observations.remove(&path);
                 let worker_app = app.clone();
                 let worker_path = path.clone();
-                let worker_folder = folder.clone();
-                let worker_folder_parts = folder_parts.clone();
-                let worker_copies = print_copies_by_document.clone();
                 let worker_control_path = control_path.clone();
                 let worker_log_path = log_path.clone();
                 let worker_in_flight = Arc::clone(&in_flight);
@@ -1100,12 +1210,6 @@ fn start_watcher_thread(
                         process_watcher_source(
                             processing_app,
                             worker_path.clone(),
-                            worker_folder,
-                            default_year,
-                            sick_leave_enabled,
-                            worker_folder_parts,
-                            auto_print,
-                            worker_copies,
                             worker_control_path,
                             worker_log_path.clone(),
                         );
@@ -1173,6 +1277,34 @@ fn start_watcher_thread(
 }
 
 #[tauri::command]
+fn get_background_watcher_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let config_path = watcher_config_path(&app)?;
+    if !config_path.exists() {
+        return Ok(serde_json::json!({
+            "platform": std::env::consts::OS,
+            "installed": false,
+            "migration_required": false,
+        }));
+    }
+    let runtime = read_watcher_runtime_config(&config_path)?;
+    let migration_required = runtime.output_root.trim().is_empty();
+    let effective_output = effective_watcher_output_root(&app, &runtime)
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "platform": std::env::consts::OS,
+        "installed": true,
+        "watch_folder": runtime.watch_folder,
+        "output_root": effective_output,
+        "folder_parts": effective_watcher_folder_parts(&runtime),
+        "auto_print": runtime.auto_print,
+        "print_copies_by_document": runtime.print_copies_by_document,
+        "max_parallel_cases": normalize_parallel_cases(runtime.max_parallel_cases),
+        "migration_required": migration_required,
+    }))
+}
+
+#[tauri::command]
 fn install_background_watcher(
     req: WatcherInstallRequest,
     app: tauri::AppHandle,
@@ -1182,9 +1314,13 @@ fn install_background_watcher(
     std::fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
     let watch_folder = resolve_user_visible_absolute_path(&req.watch_folder, "Рабочая папка фонового агента")?;
     ensure_output_root_path(&watch_folder)?;
+    let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+    ensure_output_root_path(&output_root)?;
+    if watcher_directories_are_same(&watch_folder, &output_root)? {
+        return Err("Рабочая папка фонового агента и папка готовых документов должны быть разными.".into());
+    }
     let default_year = req.default_year.unwrap_or_else(current_year_utc);
-    // An empty list is an explicit user choice: use the neutral
-    // «Созданные документы» patient-folder name. Never silently restore a preset.
+    validate_output_folder_parts(&req.folder_parts)?;
     let folder_parts = req.folder_parts.clone();
     if let Some((document_id, copies)) = req
         .print_copies_by_document
@@ -1199,6 +1335,7 @@ fn install_background_watcher(
     let mut owner = watcher_owner_for_executable(&exe, false)?;
     let mut runtime = WatcherRuntimeConfig {
         watch_folder: watch_folder.display().to_string(),
+        output_root: output_root.display().to_string(),
         default_year,
         sick_leave_enabled: req.sick_leave_enabled,
         folder_parts: folder_parts.clone(),
@@ -1309,6 +1446,10 @@ fn install_background_watcher(
         "platform": std::env::consts::OS,
         "installed": true,
         "watch_folder": watch_folder.display().to_string(),
+        "output_root": output_root.display().to_string(),
+        "folder_parts": folder_parts,
+        "auto_print": req.auto_print,
+        "print_copies_by_document": req.print_copies_by_document,
         "executable": exe.display().to_string(),
         "executable_sha256": owner.executable_sha256,
         "handoff_generation": owner.generation,
@@ -1322,6 +1463,9 @@ fn install_background_watcher(
 
 #[derive(Debug, Deserialize)]
 struct WatcherPreferencesRequest {
+    output_root: String,
+    #[serde(default)]
+    folder_parts: Vec<FolderNamePart>,
     #[serde(default)]
     auto_print: bool,
     #[serde(default)]
@@ -1349,6 +1493,20 @@ fn update_background_watcher_preferences(
     let bytes = std::fs::read(&config_path).map_err(|error| error.to_string())?;
     let mut runtime: WatcherRuntimeConfig = serde_json::from_slice(&bytes)
         .map_err(|error| format!("Настройки фонового агента повреждены: {error}"))?;
+    let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+    ensure_output_root_path(&output_root)?;
+    let watch_folder = resolve_user_visible_absolute_path(
+        &runtime.watch_folder,
+        "Рабочая папка фонового агента",
+    )?;
+    ensure_output_root_path(&watch_folder)?;
+    if watcher_directories_are_same(&watch_folder, &output_root)? {
+        return Err("Рабочая папка фонового агента и папка готовых документов должны быть разными.".into());
+    }
+    runtime.output_root = output_root.display().to_string();
+    validate_output_folder_parts(&req.folder_parts)?;
+    runtime.folder_parts = req.folder_parts;
+    runtime.default_year = current_year_utc();
     runtime.auto_print = req.auto_print;
     runtime.print_copies_by_document = req.print_copies_by_document;
     atomic_write_file(
@@ -1371,6 +1529,12 @@ fn uninstall_background_watcher(
         })
     };
     let (removed, warnings) = remove_autostart_entries();
+    if !warnings.is_empty() {
+        return Err(format!(
+            "Фоновый агент остановлен в текущем сеансе, но автозапуск не удалён: {}. Конфигурация сохранена, чтобы проблема не маскировалась как успешное отключение.",
+            warnings.join("; ")
+        ));
+    }
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let plan_file = app_data.join("intake-agent-autostart.json");
     if plan_file.exists() {
@@ -1426,4 +1590,90 @@ mod watcher_handoff_tests {
     fn legacy_watcher_can_handoff_once_ready_owner_exists() {
         assert!(watcher_owner_superseded(None, Some(&owner("B", true))));
     }
+
+    #[test]
+    fn legacy_runtime_deserializes_fail_closed_without_output_root() {
+        let runtime: WatcherRuntimeConfig = serde_json::from_value(serde_json::json!({
+            "watch_folder": "C:/Watch",
+            "default_year": 2026,
+            "sick_leave_enabled": false,
+            "folder_parts": ["DocumentNumber", "DocumentDate"],
+            "auto_print": false,
+            "print_copies_by_document": {},
+            "max_parallel_cases": 2
+        }))
+        .unwrap();
+        assert!(runtime.output_root.is_empty());
+        assert_eq!(effective_watcher_folder_parts(&runtime).len(), 2);
+    }
+
+    #[test]
+    fn watcher_runtime_keeps_source_and_destination_as_distinct_fields() {
+        let runtime = WatcherRuntimeConfig {
+            watch_folder: "C:/Inbox".into(),
+            output_root: "D:/Ready".into(),
+            default_year: 2026,
+            sick_leave_enabled: false,
+            folder_parts: default_output_folder_parts(),
+            auto_print: false,
+            print_copies_by_document: BTreeMap::new(),
+            max_parallel_cases: 2,
+            handoff_owner: None,
+        };
+        assert_ne!(runtime.watch_folder, runtime.output_root);
+        assert_eq!(runtime.output_root, "D:/Ready");
+    }
+
+    #[test]
+    fn corrupt_watcher_configuration_is_timed_retry_not_content_change() {
+        let (category, retry_policy) = classify_watcher_configuration_error(
+            "Настройки фонового агента повреждены: invalid json",
+        );
+        assert_eq!(category, "watcher_configuration_unavailable");
+        match retry_policy {
+            UnreadableRetryPolicy::Timed(delay) => assert_eq!(delay, Duration::from_secs(60)),
+            UnreadableRetryPolicy::ContentChange => {
+                panic!("watcher configuration faults must not require source-content changes")
+            }
+        }
+    }
+
+    #[test]
+    fn corrupt_source_content_remains_content_change_retry() {
+        let (category, retry_policy) = classify_processing_error("DOCX поврежден");
+        assert_eq!(category, "source_invalid");
+        assert!(matches!(retry_policy, UnreadableRetryPolicy::ContentChange));
+    }
+
+    #[test]
+    fn watcher_directory_identity_resolves_aliases_before_comparison() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-identity-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let watched = root.join("inbox");
+        let separate = root.join("ready");
+        std::fs::create_dir_all(&watched).expect("create watched folder");
+        std::fs::create_dir_all(&separate).expect("create separate folder");
+        let alias = watched.join(".");
+        assert!(watcher_directories_are_same(&watched, &alias).expect("compare alias"));
+        assert!(!watcher_directories_are_same(&watched, &separate).expect("compare distinct"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn watcher_directory_identity_is_case_insensitive_on_windows() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-case-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create watcher case folder");
+        let different_case = PathBuf::from(root.to_string_lossy().to_ascii_uppercase());
+        assert!(watcher_directories_are_same(&root, &different_case).expect("compare case alias"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
 }

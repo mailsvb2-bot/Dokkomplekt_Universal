@@ -15,9 +15,10 @@ def test_first_run_requires_visible_output_folder_and_generation_lists_files():
     assert "return '';" in support
     assert "Куда сохранять готовые документы" in onboarding
     assert "Выбрать папку на компьютере" in onboarding
-    assert "disabled={!root}" in onboarding
-    assert "disabled={!root || !selected.length}" not in onboarding
-    assert "Созданные документы" in onboarding
+    assert "disabled={!root || !selected.length}" in onboarding
+    assert "disabled={!root}" not in onboarding
+    assert "Пустое имя запрещено" in onboarding
+    assert "Выберите хотя бы один компонент имени" in onboarding
     assert "currentRoot={outputRoot}" in app
     assert "onPickRoot={() => void chooseAndCommitOutputFolder()" in app
     assert "(!folderNamingConfirmed || !outputRoot.trim())" in app

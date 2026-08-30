@@ -4,7 +4,7 @@ import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem,
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
-  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateBackgroundWatcherPreferences, updateDocumentPopupFields, updateDocumentTemplate,
+  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
@@ -24,16 +24,17 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
 import {
-  AUTO_PRINT_KEY, DEFAULT_YEAR, PRINT_COPIES_KEY, STATE_DB,
-  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, defaultSelectedDocumentIds, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
+  AUTO_PRINT_KEY, PRINT_COPIES_KEY, STATE_DB,
+  arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference,
-  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, promptToPopupField, readFileBytes,
+  loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
   replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 export function App() {
@@ -102,7 +103,7 @@ function AppContent() {
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
   const {
-    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed,
+    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, watcherRefreshRevision,
     setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
     chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
   } = useOutputDestination(run, setStatus);
@@ -134,12 +135,10 @@ function AppContent() {
     return () => { alive = false; };
   }, []);
 
-  useEffect(() => {
-    void updateBackgroundWatcherPreferences(autoPrint, printCopies).catch(() => {
-      // No persisted watcher plan yet: local preferences remain valid and will be
-      // written when the watcher is installed.
-    });
-  }, [autoPrint, printCopies]);
+  useWatcherPreferenceSync({
+    outputPreferencesReady, watcherRefreshRevision, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies,
+    setAutoPrint, setPrintCopies, setStatus,
+  });
 
   useEffect(() => {
     let disposed = false;
@@ -342,13 +341,13 @@ function AppContent() {
   }
 
   async function parseSourceNow() {
-    const res = await run('parse_source', () => parseSource(sourceText, DEFAULT_YEAR));
+    const res = await run('parse_source', () => parseSource(sourceText, currentDefaultYear()));
     if (!res) return;
     setSourceFileName(null);
     setSourceFilePath(null);
     setWebSourceUrl('');
     clearSourceScopedUiState();
-    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, currentDefaultYear()));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -369,7 +368,7 @@ function AppContent() {
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
     setWebSourceUrl('');
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, currentDefaultYear()));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     const layoutItems = res.layout_items ?? [];
@@ -388,7 +387,7 @@ function AppContent() {
   async function pickSourceFileNative() {
     const picked = await run('pick_source_file', () => pickSourceFile());
     if (!picked || !(await ensureComponentForSource(picked.file_name))) return;
-    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, DEFAULT_YEAR));
+    const res = await run('parse_source_path', () => parseSourcePath(picked.selected_path, currentDefaultYear()));
     if (!res) return;
     await applyParsedSourceFile(res, picked.file_name);
   }
@@ -397,7 +396,7 @@ function AppContent() {
     if (!(await ensureComponentForSource(file.name))) return;
     const buffer = await readFileBytes(file);
     const res = await run('parse_source_file', () =>
-      parseSourceFile(file.name, arrayBufferToBase64(buffer), DEFAULT_YEAR));
+      parseSourceFile(file.name, arrayBufferToBase64(buffer), currentDefaultYear()));
     if (!res) return;
     await applyParsedSourceFile(res, file.name);
   }
@@ -409,13 +408,13 @@ function AppContent() {
       setStatus('Укажите HTTPS-адрес сайта или API.');
       return;
     }
-    const res = await run('parse_web_source', () => parseWebSource(url, DEFAULT_YEAR));
+    const res = await run('parse_web_source', () => parseWebSource(url, currentDefaultYear()));
     if (!res) return;
     clearSourceScopedUiState();
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
     setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, DEFAULT_YEAR));
+    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, currentDefaultYear()));
     setSemantic(semanticResult ?? null);
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
@@ -1111,7 +1110,7 @@ function AppContent() {
     if (!pack) return;
     const createdCount = pack.documents.filter((document) => !previousDocumentIds.has(document.id)).length;
     setDocuments(pack.documents);
-    setSelectedDocIds(defaultSelectedDocumentIds(pack.documents));
+    setSelectedDocIds((previous) => preserveSelectedDocumentIds(previous, pack.documents));
     setActiveTemplateText(templateText);
     setImportedTemplatePath(null);
     setPendingTemplates([]); setWorkspaceInference(null);
@@ -1145,7 +1144,7 @@ function AppContent() {
     const res = await run('get_record_series_plan', () => getRecordSeriesPlan({
       start_date: seriesStart.trim(),
       end_date: seriesEnd.trim(),
-      default_year: DEFAULT_YEAR,
+      default_year: currentDefaultYear(),
       start_offset_days: 0,
       cadence: { kind: 'daily' },
       day_start_time: null,
@@ -1231,7 +1230,7 @@ function AppContent() {
     setIntakeResult(null);
     setLastOutput(null);
     const res = await run('run_created_documents_intake', () =>
-      runCreatedDocumentsIntake(intakeSource.trim(), outputRoot, folderParts, DEFAULT_YEAR, sickLeave));
+      runCreatedDocumentsIntake(intakeSource.trim(), outputRoot, folderParts, currentDefaultYear(), sickLeave));
     if (!res) return;
     setIntakeResult(res);
     setStatus(res.message);
@@ -1243,7 +1242,7 @@ function AppContent() {
   }
 
   async function understand() {
-    const res = await run('semantic_extract', () => semanticExtract(sourceText, DEFAULT_YEAR, modelOutput.trim() || undefined));
+    const res = await run('semantic_extract', () => semanticExtract(sourceText, currentDefaultYear(), modelOutput.trim() || undefined));
     if (!res) return;
     setSemantic(res);
     setStatus(res.model_applied
@@ -1431,10 +1430,7 @@ function AppContent() {
           currentRoot={outputRoot}
           currentParts={folderParts}
           onPickRoot={() => void chooseAndCommitOutputFolder()}
-          onConfirm={(parts) => {
-            updateFolderParts(parts);
-            setStatus(`Папка готовых документов сохранена: ${outputRoot}. Правило подпапки тоже сохранено.`);
-          }}
+          onConfirm={(parts) => { void updateFolderParts(parts); }}
         />
       )}
 

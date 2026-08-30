@@ -19,6 +19,11 @@ async function installTauriMock(page: Page) {
       popup_fields: [],
     };
     const calls: Array<{ command: string; payload?: unknown }> = [];
+    let outputPreferences = {
+      output_root: '',
+      folder_parts: ['DocumentNumber', 'DocumentDate'],
+      naming_confirmed: false,
+    };
     (window as unknown as Record<string, unknown>).__E2E_CALLS__ = calls;
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
       invoke: async (command: string, payload?: unknown) => {
@@ -28,6 +33,31 @@ async function installTauriMock(page: Page) {
             return { pack: pack([]), has_user_buttons: false, message: 'Встроенных кнопок нет.' };
           case 'get_intake_capabilities':
             return [];
+          case 'get_output_preferences':
+            return { ...outputPreferences, folder_parts: [...outputPreferences.folder_parts] };
+          case 'save_output_preferences': {
+            const req = (payload as { req?: typeof outputPreferences })?.req;
+            if (!req) throw new Error('e2e mock: save_output_preferences missing req');
+            outputPreferences = {
+              output_root: req.output_root,
+              folder_parts: [...req.folder_parts],
+              naming_confirmed: req.naming_confirmed,
+            };
+            return { ...outputPreferences, folder_parts: [...outputPreferences.folder_parts] };
+          }
+          case 'get_background_watcher_state':
+            return {
+              platform: 'e2e',
+              installed: false,
+              watch_folder: null,
+              output_root: null,
+              folder_parts: [...outputPreferences.folder_parts],
+              auto_print: false,
+              print_copies_by_document: {},
+              max_parallel_cases: 1,
+              migration_required: false,
+              warnings: [],
+            };
           case 'update_background_watcher_preferences':
             return true;
           case 'pick_folder':
@@ -103,6 +133,7 @@ test('marked DOCX becomes a button without copying example facts', async ({ page
     ((window as unknown as Record<string, unknown>).__E2E_CALLS__ as Array<{ command: string }>).map((c) => c.command));
   expect(commands).toContain('pick_folder');
   expect(commands).toContain('ensure_output_root');
+  expect(commands).toContain('save_output_preferences');
   expect(commands).toContain('pick_template_files');
   expect(commands).toContain('analyze_template_file');
   expect(commands).toContain('confirm_template_setup');

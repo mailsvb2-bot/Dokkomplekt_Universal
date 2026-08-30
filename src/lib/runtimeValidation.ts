@@ -161,10 +161,32 @@ function validatePopup(command: string, value: unknown): void {
   optionalStringArray(command, root.errors, 'errors');
 }
 
+function validateOutputPreferences(command: string, value: unknown): void {
+  const root = record(command, value);
+  string(command, root.output_root, 'output_root');
+  const parts = stringArray(command, root.folder_parts, 'folder_parts');
+  if (!parts.length || new Set(parts).size !== parts.length) {
+    throw new BackendContractError(command, 'folder_parts должен содержать непустой набор уникальных компонентов');
+  }
+  boolean(command, root.naming_confirmed, 'naming_confirmed');
+}
+
 function validateWatcher(command: string, value: unknown): void {
   const root = record(command, value);
   string(command, root.platform, 'platform');
   boolean(command, root.installed, 'installed');
+  if (root.watch_folder !== undefined && root.watch_folder !== null) string(command, root.watch_folder, 'watch_folder');
+  if (root.output_root !== undefined && root.output_root !== null) string(command, root.output_root, 'output_root');
+  if (root.folder_parts !== undefined && root.folder_parts !== null) {
+    const parts = stringArray(command, root.folder_parts, 'folder_parts');
+    if (!parts.length || new Set(parts).size !== parts.length) {
+      throw new BackendContractError(command, 'folder_parts должен содержать непустой набор уникальных компонентов');
+    }
+  }
+  if (root.auto_print !== undefined) boolean(command, root.auto_print, 'auto_print');
+  if (root.print_copies_by_document !== undefined) record(command, root.print_copies_by_document, 'print_copies_by_document');
+  if (root.max_parallel_cases !== undefined) number(command, root.max_parallel_cases, 'max_parallel_cases');
+  if (root.migration_required !== undefined) boolean(command, root.migration_required, 'migration_required');
   optionalStringArray(command, root.args, 'args');
   optionalStringArray(command, root.autostart_files, 'autostart_files');
   optionalStringArray(command, root.removed_files, 'removed_files');
@@ -345,6 +367,8 @@ export const COMMAND_RESPONSE_KIND = {
   'first_run_state': 'object',
   'get_default_output_root': 'string',
   'ensure_output_root': 'string',
+  'get_output_preferences': 'object',
+  'save_output_preferences': 'object',
   'get_automation_metrics': 'object',
   'get_calibrated_threshold_status': 'array',
   'get_component_statuses': 'array',
@@ -373,6 +397,7 @@ export const COMMAND_RESPONSE_KIND = {
   'import_learning_example_file': 'object',
   'import_reference_data': 'object',
   'import_template_file': 'object',
+  'get_background_watcher_state': 'object',
   'install_background_watcher': 'object',
   'install_component': 'object',
   'learn_template_from_examples_command': 'object',
@@ -514,6 +539,10 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
     case 'apply_scanner':
       validateScanner(command, value);
       break;
+    case 'get_output_preferences':
+    case 'save_output_preferences':
+      validateOutputPreferences(command, value);
+      break;
     case 'get_output_plan':
       validateOutputPlan(command, value);
       break;
@@ -554,6 +583,7 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
       if (root.selected_path !== null) string(command, root.selected_path, 'selected_path');
       break;
     }
+    case 'get_background_watcher_state':
     case 'install_background_watcher':
     case 'uninstall_background_watcher':
       validateWatcher(command, value);

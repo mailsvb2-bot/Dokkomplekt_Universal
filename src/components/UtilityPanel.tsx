@@ -111,7 +111,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
               </label>
             ))}
           </fieldset>
-          <small>Если не выбрать ни одного компонента, подпапка будет называться «Созданные документы». Персональные данные добавляются только явно.</small>
+          <small>Нужно выбрать хотя бы один компонент, чтобы разные комплекты не попадали в одну и ту же подпапку. Персональные данные добавляются только явно.</small>
           <button className="utilBtn" onClick={props.onOutputPlan} disabled={!props.savedOutputRoot.trim()}>
             <i className="ti ti-folder" aria-hidden="true" /> Показать путь следующего комплекта
           </button>

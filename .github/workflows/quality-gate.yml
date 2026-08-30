@@ -285,7 +285,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          npx tauri build --bundles nsis 2>&1 | Tee-Object -FilePath "tauri-build-${{ runner.os }}.log"
+          npx tauri build --bundles nsis --config src-tauri/tauri.thin.conf.json 2>&1 | Tee-Object -FilePath "tauri-build-${{ runner.os }}.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Linux bundles
         if: runner.os == 'Linux'
@@ -329,7 +329,7 @@ jobs:
         env:
           DOKKOMPLEKT_ADVERSARIAL: '1'
         run: |
-          tests/installer/windows_installer_contract.ps1 2>&1 | Tee-Object -FilePath "installer-smoke-${{ runner.os }}.log"
+          tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper 2>&1 | Tee-Object -FilePath "installer-smoke-${{ runner.os }}.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Linux installer smoke
         if: runner.os == 'Linux'

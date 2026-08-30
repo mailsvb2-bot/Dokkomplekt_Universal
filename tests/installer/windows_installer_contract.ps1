@@ -119,12 +119,10 @@ if ($process.HasExited) {
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
 
-# A cold hosted Windows packaging runner can spend tens of seconds bringing up
-# the Tauri/WebView2 runtime before the native setup callback begins. Keep this
-# bounded and fail-closed, but do not turn normal cold-start variance into a
-# false product failure: the process must remain alive and the real folder must
-# still physically exist before any UI automation continues.
-$coldStartDeadlineSeconds = 60
+# The canonical thin installer reaches native setup before UI automation starts.
+# Keep the first-run invariant tightly bounded: a live process without the real
+# Desktop output root is still a product failure, not a reason to wait longer.
+$coldStartDeadlineSeconds = 20
 $outputDeadline = [DateTime]::UtcNow.AddSeconds($coldStartDeadlineSeconds)
 while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and [DateTime]::UtcNow -lt $outputDeadline) {
   if ($process.HasExited) {

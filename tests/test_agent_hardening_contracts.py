@@ -26,6 +26,22 @@ def test_unsigned_preview_reuses_configured_license_verification_key() -> None:
     assert "preview remains local-trial only" in workflow
 
 
+def test_quality_gate_packages_the_canonical_thin_windows_installer() -> None:
+    workflow = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
+    canonical_build = (
+        "npx tauri build --bundles nsis --config "
+        "src-tauri/tauri.thin.conf.json"
+    )
+    canonical_smoke = (
+        "tests/installer/windows_installer_contract.ps1 "
+        "-TauriConfig src-tauri/tauri.thin.conf.json "
+        "-ExpectedWebViewMode downloadBootstrapper"
+    )
+    assert canonical_build in workflow
+    assert canonical_smoke in workflow
+    assert "npx tauri build --bundles nsis 2>&1" not in workflow
+
+
 def test_thin_and_offline_installers_have_distinct_payloads() -> None:
     thin = json.loads((ROOT / "src-tauri/tauri.thin.conf.json").read_text("utf-8"))
     offline = json.loads((ROOT / "src-tauri/tauri.offline.conf.json").read_text("utf-8"))

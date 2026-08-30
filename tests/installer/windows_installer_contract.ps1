@@ -78,10 +78,23 @@ if (Test-Path -LiteralPath $defaultOutputRoot) {
   throw "Could not remove the pre-existing Desktop output root before launch smoke: $defaultOutputRoot"
 }
 
-$process = Start-Process -FilePath $app.FullName -PassThru
+$appStdout = Join-Path $env:RUNNER_TEMP "dokkomplekt-installed-app-$PID.stdout.log"
+$appStderr = Join-Path $env:RUNNER_TEMP "dokkomplekt-installed-app-$PID.stderr.log"
+Remove-Item -LiteralPath $appStdout, $appStderr -Force -ErrorAction SilentlyContinue
+$process = Start-Process -FilePath $app.FullName -RedirectStandardOutput $appStdout -RedirectStandardError $appStderr -PassThru
+
+function Write-AppLaunchDiagnostics {
+  Write-Host "Installed app path: $($app.FullName)"
+  Write-Host "Known Desktop path: $desktopPath"
+  Write-Host "LOCALAPPDATA: $env:LOCALAPPDATA"
+  if (Test-Path -LiteralPath $appStdout) { Write-Host "--- installed app stdout ---"; Get-Content -LiteralPath $appStdout -ErrorAction SilentlyContinue | Write-Host }
+  if (Test-Path -LiteralPath $appStderr) { Write-Host "--- installed app stderr ---"; Get-Content -LiteralPath $appStderr -ErrorAction SilentlyContinue | Write-Host }
+}
+
 Start-Sleep -Seconds 5
 if ($process.HasExited) {
   $earlyExitCode = $process.ExitCode
+  Write-AppLaunchDiagnostics
   throw "Installed application exited early during launch smoke with code $earlyExitCode"
 }
 
@@ -93,6 +106,7 @@ while (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container) -and
   Start-Sleep -Milliseconds 250
 }
 if (-not (Test-Path -LiteralPath $defaultOutputRoot -PathType Container)) {
+  Write-AppLaunchDiagnostics
   throw "Installed application did not create the canonical Desktop output root: $defaultOutputRoot"
 }
 Write-Host "Desktop output root created by installed application: $defaultOutputRoot"

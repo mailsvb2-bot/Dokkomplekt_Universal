@@ -2173,11 +2173,11 @@ fn main() {
                 && !e2e_uninstall_watcher
                 && e2e_install_watch_folder.is_none()
             {
-                if let Err(error) = ensure_startup_output_root(&handle) {
-                    eprintln!(
+                ensure_startup_output_root(&handle).map_err(|error| {
+                    std::io::Error::other(format!(
                         "Не удалось подготовить папку готовых документов до запуска интерфейса: {error}"
-                    );
-                }
+                    ))
+                })?;
             }
             if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() {
                 if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {

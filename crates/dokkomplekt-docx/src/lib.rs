@@ -7,7 +7,8 @@
 mod legacy_diary_table;
 
 use dokkomplekt_core::{
-    render_docx_xml_template, render_text_template, RenderResult, SemanticCase,
+    render_docx_xml_template, render_text_template, DomainKind, LabeledTemplateValueCandidate,
+    RenderResult, SemanticCase, StructuralAnchorMode,
 };
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -49,6 +50,8 @@ pub enum DocxError {
     RelationshipPart(String),
     #[error("template learning map cannot be applied safely: {0}")]
     TemplateLearningMap(String),
+    #[error("structural template compilation cannot be applied safely: {0}")]
+    StructuralTemplateCompilation(String),
     #[error("unsafe active or externally linked content in DOCX template: {0}")]
     UnsafeActiveContent(String),
     #[error("legacy diary table cannot be rendered safely: {0}")]
@@ -867,6 +870,247 @@ pub fn promote_table_row_loops(xml: &str) -> String {
         cursor = row_start + replacement.len();
     }
     out
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StructuralTemplateCompilationReport {
+    pub output_path: String,
+    pub applied_field_ids: Vec<String>,
+    pub binding_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ParagraphSpan {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// Compile an already-filled user DOCX into a semantic template by binding
+/// values to their owning labels/sections. Unlike value-global replacement,
+/// every edit is constrained to the concrete Word paragraph/block discovered by
+/// the structural core, mirroring the proven donor editor mechanics.
+pub fn compile_labeled_template_file(
+    input_path: &Path,
+    output_path: &Path,
+    preferred_domain: &DomainKind,
+    role_id: &str,
+) -> DocxResult<StructuralTemplateCompilationReport> {
+    validate_safe_template_file(input_path)?;
+    let extracted = extract_docx_text(input_path)?;
+    let bindings = dokkomplekt_core::infer_structural_template_values(
+        &extracted,
+        Some(preferred_domain),
+        Some(role_id),
+    );
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = temporary_output_path(output_path);
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let output = File::create(&temporary)?;
+    let mut writer = ZipWriter::new(output);
+    let mut applied = vec![false; bindings.len()];
+    let mut total_uncompressed = 0_u64;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer.add_directory(name, options)?;
+            continue;
+        }
+        writer.start_file(name.as_str(), options)?;
+        if is_text_bearing_word_part(&name) {
+            ensure_text_part_size(&name, entry.size())?;
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            for (binding_index, binding) in bindings.iter().enumerate() {
+                if applied[binding_index] {
+                    continue;
+                }
+                if let Some(next) = apply_structural_binding_in_story(&xml, binding) {
+                    xml = next;
+                    applied[binding_index] = true;
+                }
+            }
+            writer.write_all(xml.as_bytes())?;
+        } else {
+            std::io::copy(&mut entry, &mut writer)?;
+        }
+    }
+    writer.finish()?;
+
+    let skipped = bindings
+        .iter()
+        .zip(&applied)
+        .filter(|(_, applied)| !**applied)
+        .map(|(binding, _)| format!("{} ({})", binding.field_id, binding.label))
+        .collect::<Vec<_>>();
+    if !skipped.is_empty() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(DocxError::StructuralTemplateCompilation(format!(
+            "structural anchors were detected but not rewritten: {}",
+            skipped.join(", ")
+        )));
+    }
+    if let Err(error) = commit_temporary_file(&temporary, output_path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    let mut applied_field_ids = bindings
+        .iter()
+        .map(|binding| binding.field_id.clone())
+        .collect::<Vec<_>>();
+    applied_field_ids.sort();
+    applied_field_ids.dedup();
+    Ok(StructuralTemplateCompilationReport {
+        output_path: output_path.display().to_string(),
+        applied_field_ids,
+        binding_count: bindings.len(),
+    })
+}
+
+fn apply_structural_binding_in_story(
+    xml: &str,
+    binding: &LabeledTemplateValueCandidate,
+) -> Option<String> {
+    let value_lines = binding
+        .value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let first_value = *value_lines.first()?;
+    let spans = paragraph_spans(xml);
+    for (anchor_index, anchor) in spans.iter().enumerate() {
+        let placeholder = format!("{{{{{}}}}}", binding.field_id);
+        if binding.anchor_mode == StructuralAnchorMode::Contains {
+            let folded_text = structural_fold(&anchor.text);
+            if !folded_text.contains(&structural_fold(&binding.label))
+                || !folded_text.contains(&structural_fold(first_value))
+            {
+                continue;
+            }
+            let paragraph = &xml[anchor.start..anchor.end];
+            let replaced = replace_visible_text_once(paragraph, first_value, &placeholder)?;
+            let mut output = xml.to_string();
+            output.replace_range(anchor.start..anchor.end, &replaced);
+            return Some(output);
+        }
+
+        let Some(remainder) = structural_remainder_after_label(&anchor.text, &binding.label) else {
+            continue;
+        };
+        if anchor.text.contains("{{") || anchor.text.contains("}}") {
+            continue;
+        }
+        let inline = !remainder.is_empty();
+        if inline && structural_fold(&remainder) != structural_fold(first_value) {
+            continue;
+        }
+
+        let mut edits = Vec::<(usize, usize, String)>::new();
+        let mut next_value_index = 0usize;
+        let mut search_index = anchor_index + 1;
+        if inline {
+            let paragraph = &xml[anchor.start..anchor.end];
+            let replaced = replace_visible_text_once(paragraph, first_value, &placeholder)?;
+            edits.push((anchor.start, anchor.end, replaced));
+            next_value_index = 1;
+        }
+
+        while next_value_index < value_lines.len() {
+            let expected = value_lines[next_value_index];
+            let mut matched = None;
+            while search_index < spans.len() {
+                let span = &spans[search_index];
+                search_index += 1;
+                if span.text.trim().is_empty() {
+                    continue;
+                }
+                if structural_fold(&span.text) == structural_fold(expected) {
+                    matched = Some(span);
+                }
+                break;
+            }
+            let span = matched?;
+            let paragraph = &xml[span.start..span.end];
+            let replacement = if next_value_index == 0 {
+                placeholder.as_str()
+            } else {
+                ""
+            };
+            let replaced = replace_visible_text_once(paragraph, expected, replacement)?;
+            edits.push((span.start, span.end, replaced));
+            next_value_index += 1;
+        }
+
+        if !inline && value_lines.is_empty() {
+            continue;
+        }
+        edits.sort_by_key(|(start, _, _)| *start);
+        let mut output = xml.to_string();
+        for (start, end, replacement) in edits.into_iter().rev() {
+            output.replace_range(start..end, &replacement);
+        }
+        return Some(output);
+    }
+    None
+}
+
+fn paragraph_spans(xml: &str) -> Vec<ParagraphSpan> {
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(start) = find_opening_element(xml, cursor, "w:p") {
+        let Some(end) = find_matching_element_end(xml, start, "w:p") else {
+            break;
+        };
+        let text = xml_to_text(&xml[start..end]);
+        spans.push(ParagraphSpan { start, end, text });
+        cursor = end;
+    }
+    spans
+}
+
+fn structural_remainder_after_label(text: &str, label: &str) -> Option<String> {
+    let text = text.trim_start();
+    let wanted = label.chars().count();
+    let prefix = text.chars().take(wanted).collect::<String>();
+    if prefix.chars().count() != wanted || structural_fold(&prefix) != structural_fold(label) {
+        return None;
+    }
+    let remainder = &text[prefix.len()..];
+    if let Some(first) = remainder.chars().next() {
+        if !(first.is_whitespace()
+            || matches!(first, ':' | ';' | ',' | '.' | '-' | '–' | '—' | '№' | '('))
+        {
+            return None;
+        }
+    }
+    Some(
+        remainder
+            .trim()
+            .trim_start_matches(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, ':' | ';' | ',' | '.' | '-' | '–' | '—' | '№')
+            })
+            .trim()
+            .to_string(),
+    )
+}
+
+fn structural_fold(value: &str) -> String {
+    value
+        .replace('\u{00a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+        .replace('ё', "е")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -1803,6 +2047,253 @@ mod tests {
         assert!(text.contains("{{medical.treatment}}"), "{text:?}");
         assert!(!text.contains("терапия 1"));
         assert!(!text.contains("терапия 2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partially_dynamic_filled_medical_template_compiles_by_structure_and_renders_new_case() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-partial-medical-compile-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled.docx");
+        let compiled = dir.join("compiled.docx");
+        let rendered = dir.join("rendered.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
+<w:p><w:r><w:t>Ф.И.О.: Иванов Иван Иванович</w:t></w:r></w:p>
+<w:p><w:r><w:t>Номер истории болезни: АБ-4213/26</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата поступления: 01.09.2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>Диагноз: F20 — авторская формулировка</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата выписки: 09.09.2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Старая схема первая строка</w:t></w:r></w:p>
+<w:p><w:r><w:t>Старая схема вторая строка</w:t></w:r></w:p>
+<w:p><w:r><w:t>Место работы: Завод</w:t></w:r></w:p>
+<w:p><w:r><w:t>Должность: инженер</w:t></w:r></w:p>
+<w:p><w:r><w:t>Состояние при выписке: {{medical.discharge_condition}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>Зав. отделением Петров П.П.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Врач-психиатр Иванов И.И.</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("donor-style structural compilation");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.diagnosis",
+            "medical.discharge_date",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing structural binding {field_id}: {report:?}"
+            );
+        }
+        let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+        assert!(compiled_text.contains("{{subject.name}}"));
+        assert!(compiled_text.contains("{{medical.treatment}}"));
+        assert!(compiled_text.contains("{{medical.discharge_condition}}"));
+        assert!(!compiled_text.contains("Старая схема первая строка"));
+        assert!(!compiled_text.contains("Старая схема вторая строка"));
+
+        let case = case_with(&[
+            ("subject.name", "Петров Пётр Петрович"),
+            ("medical.case_number", "9876"),
+            ("medical.admission_date", "02.10.2026"),
+            ("medical.diagnosis", "F21"),
+            ("medical.discharge_date", "11.10.2026"),
+            ("medical.treatment", "новая терапия"),
+            ("medical.workplace", "Фабрика"),
+            ("medical.position", "мастер"),
+            ("medical.discharge_condition", "улучшение"),
+        ]);
+        let proof = render_docx_file_with_watermark_proof(&compiled, &rendered, &case, true, None)
+            .expect("compiled medical template renders strict");
+        for expected in [
+            "Петров Пётр Петрович",
+            "9876",
+            "02.10.2026",
+            "F21",
+            "11.10.2026",
+            "новая терапия",
+            "Фабрика",
+            "мастер",
+            "улучшение",
+        ] {
+            assert!(
+                proof.visible_text.contains(expected),
+                "missing {expected:?} in {:?}",
+                proof.visible_text
+            );
+        }
+        for stale in [
+            "Иванов Иван Иванович",
+            "АБ-4213/26",
+            "01.09.2026",
+            "09.09.2026",
+            "Лечение: терапия",
+            "Завод",
+            "инженер",
+        ] {
+            assert!(
+                !proof.visible_text.contains(stale),
+                "stale donor value {stale:?} leaked into {:?}",
+                proof.visible_text
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partly_dynamic_donor_header_keeps_existing_placeholder_and_compiles_old_date() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-partial-donor-header-{}",
+            std::process::id()
+        ));
+        let input = dir.join("partial.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>09.09.2026 Выписной эпикриз № {{medical.case_number}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{subject.name}}, 01.01.1980 г.р., зарегистрирован по адресу: Н. Новгород</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("compile remaining donor values");
+        assert!(report
+            .applied_field_ids
+            .contains(&"medical.discharge_date".to_string()));
+        assert!(report
+            .applied_field_ids
+            .contains(&"subject.birth_date".to_string()));
+        assert!(report
+            .applied_field_ids
+            .contains(&"subject.address".to_string()));
+        let text = extract_docx_text(&compiled).expect("read compiled partial donor template");
+        assert!(text.contains("{{medical.case_number}}"));
+        assert!(text.contains("{{medical.discharge_date}}"));
+        assert!(text.contains("{{subject.name}}"));
+        assert!(text.contains("{{subject.birth_date}}"));
+        assert!(text.contains("{{subject.address}}"));
+        assert!(!text.contains("09.09.2026"));
+        assert!(!text.contains("01.01.1980"));
+        assert!(!text.contains("Н. Новгород"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn donor_composite_discharge_docx_compiles_and_renders_current_case() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-donor-composite-discharge-{}",
+            std::process::id()
+        ));
+        let input = dir.join("donor.docx");
+        let compiled = dir.join("compiled.docx");
+        let rendered = dir.join("rendered.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>09.09.2026      Выписной эпикриз № 4213</w:t></w:r></w:p>
+<w:p><w:r><w:t>Иванов Иван Иванович, 01.01.1980 г.р., зарегистрирован по адресу: Н. Новгород</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2 с 01.09.2026 по 09.09.2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>Диагноз: F20</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: старая терапия</w:t></w:r></w:p>
+<w:p><w:r><w:t>Экспертный анамнез: Работает в Старый завод, в должности старый инженер.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Зав. отделением Петров П.П.                    Врач-психиатр Иванов И.И.</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("compile donor composite discharge");
+        for field_id in [
+            "subject.name",
+            "subject.birth_date",
+            "subject.address",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.discharge_date",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.expert_anamnesis",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing {field_id}: {report:?}"
+            );
+        }
+        let compiled_text = extract_docx_text(&compiled).expect("compiled donor text");
+        assert!(compiled_text.contains("{{medical.case_number}}"));
+        assert_eq!(
+            compiled_text.matches("{{medical.discharge_date}}").count(),
+            2
+        );
+        assert!(compiled_text.contains("{{subject.name}}"));
+        assert!(compiled_text.contains("{{medical.expert_anamnesis}}"));
+
+        let mut case = case_with(&[
+            ("subject.name", "Сидоров Сергей Сергеевич"),
+            ("subject.birth_date", "02.02.1982"),
+            ("subject.address", "Москва"),
+            ("medical.case_number", "9001"),
+            ("medical.admission_date", "10.10.2026"),
+            ("medical.discharge_date", "20.10.2026"),
+            ("medical.diagnosis", "F21"),
+            ("medical.treatment", "новое лечение"),
+            ("medical.workplace", "Новый завод"),
+            ("medical.position", "мастер"),
+        ]);
+        dokkomplekt_core::domains::medical_semantics::set_medical_sick_leave_choice(
+            &mut case, false,
+        );
+        let render_case = dokkomplekt_core::domains::case_for_document_render(
+            &case,
+            &DomainKind::Medical,
+            "discharge",
+        );
+        let proof =
+            render_docx_file_with_watermark_proof(&compiled, &rendered, &render_case, true, None)
+                .expect("render donor composite with current semantic case");
+        for expected in [
+            "Сидоров Сергей Сергеевич",
+            "02.02.1982",
+            "Москва",
+            "9001",
+            "10.10.2026",
+            "20.10.2026",
+            "F21",
+            "новое лечение",
+            "Новый завод",
+            "мастер",
+            "В выдаче ЛН не нуждается",
+        ] {
+            assert!(
+                proof.visible_text.contains(expected),
+                "missing {expected:?}: {:?}",
+                proof.visible_text
+            );
+        }
+        for stale in [
+            "Иванов Иван Иванович",
+            "01.01.1980",
+            "4213",
+            "01.09.2026",
+            "09.09.2026",
+            "старая терапия",
+            "Старый завод",
+            "старый инженер",
+        ] {
+            assert!(
+                !proof.visible_text.contains(stale),
+                "stale {stale:?}: {:?}",
+                proof.visible_text
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

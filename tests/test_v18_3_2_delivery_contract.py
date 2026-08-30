@@ -19,7 +19,7 @@ def test_workspace_lock_versions_match_18_3_2() -> None:
         for package in lock["package"]
         if package["name"] in local
     }
-    assert versions == {name: "18.4.3" for name in local}
+    assert versions == {name: "18.4.4" for name in local}
 
 
 def test_docx_lock_entry_contains_new_direct_dependencies() -> None:

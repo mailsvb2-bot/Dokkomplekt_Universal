@@ -23,10 +23,10 @@ use dokkomplekt_core::{
     decide_document_bundle, decision_for_key, detect_field_conflict,
     document_pack_contains_template_source, empty_first_run_pack, evaluate_automation_quality,
     evaluate_print_triage_with_thresholds, extract_understanding, format_counter_value,
-    is_valid_field_id, merge_document_pack, normalize_popup_fields, parse_delimited_table,
-    parse_source_text, plan_created_documents_batch, plan_output_paths, plan_workflow_batch,
-    prepare_template_confirmations_with_existing_pack, recommend_document_bundle,
-    remove_document_button as remove_button_from_pack,
+    is_valid_field_id, merge_document_pack, missing_medical_template_render_paths,
+    normalize_popup_fields, parse_delimited_table, parse_source_text, plan_created_documents_batch,
+    plan_output_paths, plan_workflow_batch, prepare_template_confirmations_with_existing_pack,
+    recommend_document_bundle, remove_document_button as remove_button_from_pack,
     rename_document_button as rename_button_in_pack, render_text_template, route_intake_event,
     run_universal_constructor_pipeline, sanitize_path_component, segment_case_fragments,
     set_user_value, suggest_icd10, suggest_template_markup, template_counter_requests,
@@ -44,10 +44,11 @@ use dokkomplekt_core::{
 };
 use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
-    create_docx_from_text, extract_docx_text, extract_docx_text_from_bytes, inject_docx_images,
-    render_docx_file_with_watermark_proof, validate_safe_template_file, RenderedDocxProof,
-    TemplateLearningMapField, TemplateLearningMapReport, TemplateMarkupReplacement,
-    TemplateMarkupReport, TemplateRegressionReport,
+    compile_labeled_template_file, create_docx_from_text, extract_docx_text,
+    extract_docx_text_from_bytes, inject_docx_images, render_docx_file_with_watermark_proof,
+    validate_safe_template_file, RenderedDocxProof, TemplateLearningMapField,
+    TemplateLearningMapReport, TemplateMarkupReplacement, TemplateMarkupReport,
+    TemplateRegressionReport,
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,

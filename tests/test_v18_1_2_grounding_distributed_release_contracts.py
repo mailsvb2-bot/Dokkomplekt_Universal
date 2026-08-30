@@ -17,9 +17,9 @@ def read(relative: str) -> str:
 
 class V1812GroundingDistributedReleaseContracts(unittest.TestCase):
     def test_version_is_synchronized_and_rust_marker_is_not_forged(self) -> None:
-        self.assertEqual(read("VERSION").strip(), "18.4.3")
-        self.assertEqual(json.loads(read("package.json"))["version"], "18.4.3")
-        self.assertEqual(json.loads(read("src-tauri/tauri.conf.json"))["version"], "18.4.3")
+        self.assertEqual(read("VERSION").strip(), "18.4.4")
+        self.assertEqual(json.loads(read("package.json"))["version"], "18.4.4")
+        self.assertEqual(json.loads(read("src-tauri/tauri.conf.json"))["version"], "18.4.4")
         self.assertFalse((ROOT / ".cargo-gate/CARGO_GATE_PASSED.ok").exists())
 
     def test_missing_core_export_and_pdf_recursion_regressions_are_closed(self) -> None:

@@ -12,7 +12,7 @@ def text(relative: str) -> str:
 
 def test_release_identity_is_consistent() -> None:
     version = text("VERSION").strip()
-    assert version == "18.4.3"
+    assert version == "18.4.4"
     assert json.loads(text("package.json"))["version"] == version
     assert json.loads(text("src-tauri/tauri.conf.json"))["version"] == version
     assert f'version = "{version}"' in text("src-tauri/Cargo.toml")

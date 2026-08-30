@@ -90,7 +90,7 @@ class V1810ProductionPilotContracts(unittest.TestCase):
         self.assertIn("onExportLastOutputKedo", self.workspace)
 
     def test_version_and_toolchain_are_reproducible(self) -> None:
-        self.assertEqual(text("VERSION").strip(), "18.4.3")
+        self.assertEqual(text("VERSION").strip(), "18.4.4")
         toolchain = text("rust-toolchain.toml")
         self.assertIn('channel = "1.97.1"', toolchain)
         self.assertIn('"rustfmt"', toolchain)

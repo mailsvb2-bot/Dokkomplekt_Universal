@@ -442,7 +442,7 @@ describe('Tauri command DTO contracts', () => {
       { command: 'analyze_template', payload: { req: { template_text: 'Title\n{{field}}', document_id: 'doc_1', template_path: 'template.docx', button_label: 'Button' } } },
       { command: 'analyze_template_file', payload: { req: { template_path: 'template.docx', document_id: 'doc_2', button_label: null } } },
       { command: 'prepare_template_setup', payload: { req: { candidates: [{ document_id: 'doc_1', template_path: 'template.docx', extracted_text: 'Title', preferred_button_label: 'Button' }] } } },
-      { command: 'confirm_template_setup', payload: { req: { rows: [confirmationRow] } } },
+      { command: 'confirm_template_setup', payload: { req: { rows: [confirmationRow], auto_infer_static_templates: true } } },
       { command: 'rename_document_button', payload: { req: { document_id: 'doc_1', button_label: 'Новое имя' } } },
       { command: 'remove_document_button', payload: { req: { document_id: 'doc_1' } } },
       { command: 'update_document_popup_fields', payload: { req: { document_id: 'doc_1', popup_fields: [] } } },

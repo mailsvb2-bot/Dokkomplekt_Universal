@@ -1,5 +1,16 @@
 # Changelog
 
+## 18.4.4 — donor-compatible structural Word template compiler
+
+- replaced parser-first repair of filled medical DOCX templates with a donor-style structural compiler that binds values to their owning Word labels/sections;
+- ported composite discharge mechanics from the working predecessor: date + «Выписной эпикриз №», patient identity/address line and treatment-period line become explicit semantic render points;
+- made structural rewrites paragraph/block-scoped so repeated old values elsewhere in a document cannot be globally replaced by accident;
+- made partially dynamic medical templates continue through compilation instead of treating one existing placeholder as proof that the template is complete;
+- added a publication invariant: a medical button cannot be saved unless every mandatory field for its role has a real output path, including supported derived fields such as expert anamnesis;
+- added atomic startup migration of already published doctor-owned templates, preserving archived versions for rollback, plus the same compiler as a fail-closed render safety net;
+- added real DOCX regressions proving old patient values disappear and the current SemanticCase renders into both labelled and predecessor-style composite discharge templates;
+- kept production Authenticode/hardware acceptance separate and fail-closed.
+
 ## 18.4.3 — corrective release-integrity closure
 
 - repaired the Windows click launcher and added persistent launch diagnostics;

@@ -147,7 +147,7 @@ class DesktopSafetyAndPrintingContractTest(unittest.TestCase):
 
     def test_version_is_consistent_in_primary_manifests(self) -> None:
         expected = text("VERSION").strip()
-        self.assertEqual(expected, "18.4.3")
+        self.assertEqual(expected, "18.4.4")
         self.assertEqual(json.loads(text("package.json"))["version"], expected)
         self.assertEqual(json.loads(text("src-tauri/tauri.conf.json"))["version"], expected)
 

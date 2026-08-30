@@ -7,7 +7,10 @@
 //! Unknown/custom roles stay template-driven and never inherit legacy medical rules.
 
 use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
-use crate::{title_for_field, DocumentTemplateSpec, DomainKind, SemanticCase};
+use crate::{
+    canonical_storage_field_id, profession_derived_field_sources, title_for_field,
+    DocumentTemplateSpec, DomainKind, SemanticCase,
+};
 use std::collections::BTreeSet;
 
 /// How a required block is satisfied.
@@ -194,6 +197,57 @@ pub fn required_blocks_for(
 
     add_role_signature_blocks(&mut blocks, &role, signatures_required);
     blocks
+}
+
+/// Return mandatory semantic fields that the template has no render path for.
+///
+/// This is a *publication* invariant, not a runtime value check: a doctor-owned
+/// template may be saved only when every field required by its medical role can
+/// actually reach visible output through either a direct placeholder or a
+/// render-only derived placeholder (for example `medical.expert_anamnesis`).
+/// Static labels and old patient values never count as a render path.
+pub fn missing_medical_template_render_paths(spec: &DocumentTemplateSpec) -> Vec<String> {
+    if !matches!(spec.category, DomainKind::Medical) {
+        return Vec::new();
+    }
+
+    let role = MedicalDocumentRole::from_role_id(&spec.role_id);
+    let mut required = build_medical_render_plan(role, false, false)
+        .required_fields
+        .into_iter()
+        .map(|field| canonical_storage_field_id(&field))
+        .collect::<BTreeSet<_>>();
+    required.insert("subject.name".to_string());
+    required.extend(
+        spec.required_fields
+            .iter()
+            .map(|field| canonical_storage_field_id(field)),
+    );
+
+    let placeholders = spec
+        .placeholders
+        .iter()
+        .map(|field| canonical_storage_field_id(field))
+        .collect::<BTreeSet<_>>();
+    let sick_leave_enabled = required.contains("medical.sick_leave_number");
+    let mut renderable = placeholders.clone();
+    for placeholder in &placeholders {
+        renderable.extend(
+            profession_derived_field_sources(
+                &spec.category,
+                &spec.role_id,
+                placeholder,
+                sick_leave_enabled,
+            )
+            .into_iter()
+            .map(|field| canonical_storage_field_id(&field)),
+        );
+    }
+
+    required
+        .into_iter()
+        .filter(|field| !renderable.contains(field))
+        .collect()
 }
 
 fn add_role_signature_blocks(
@@ -651,6 +705,55 @@ mod tests {
 
         let both = format!("{values}\nЗаведующий отделением __________");
         assert!(unmet_blocks(&blocks, &case, &both).is_empty());
+    }
+
+    #[test]
+    fn discharge_template_publication_requires_every_role_render_path() {
+        let mut document = spec("discharge", DomainKind::Medical);
+        document.placeholders = vec![
+            "subject.name".into(),
+            "medical.case_number".into(),
+            "medical.admission_date".into(),
+            "medical.discharge_date".into(),
+            "medical.diagnosis".into(),
+            "medical.treatment".into(),
+            "medical.expert_anamnesis".into(),
+        ];
+        assert!(missing_medical_template_render_paths(&document).is_empty());
+
+        document
+            .placeholders
+            .retain(|field| field != "medical.treatment");
+        assert_eq!(
+            missing_medical_template_render_paths(&document),
+            vec!["medical.treatment".to_string()]
+        );
+    }
+
+    #[test]
+    fn derived_expert_anamnesis_is_a_real_render_path_for_work_fields() {
+        let mut document = spec("primary", DomainKind::Medical);
+        document.placeholders = vec![
+            "subject.name".into(),
+            "medical.case_number".into(),
+            "medical.admission_date".into(),
+            "medical.diagnosis".into(),
+            "medical.treatment".into(),
+            "medical.expert_anamnesis".into(),
+        ];
+        let missing = missing_medical_template_render_paths(&document);
+        assert!(!missing.contains(&"medical.workplace".to_string()));
+        assert!(!missing.contains(&"medical.position".to_string()));
+        assert!(
+            missing.is_empty(),
+            "unexpected missing render paths: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn nonmedical_templates_do_not_inherit_medical_publication_contract() {
+        let document = spec("discharge", DomainKind::Legal);
+        assert!(missing_medical_template_render_paths(&document).is_empty());
     }
 
     #[test]

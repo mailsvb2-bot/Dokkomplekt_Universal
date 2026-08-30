@@ -22,6 +22,7 @@ def test_native_startup_prepares_output_root_before_webview_creation() -> None:
     commands = (ROOT / "src-tauri" / "src" / "subsystems" / "output_root_commands.rs").read_text(encoding="utf-8")
 
     assert "fn ensure_startup_output_root" in commands
+    assert native.index("ensure_output_root_path(&default_root)") < native.index("cleanup_intake_workspace(&handle)")
     assert native.index("ensure_startup_output_root(&handle)") < native.index("tauri::WebviewWindowBuilder::from_config")
 
 

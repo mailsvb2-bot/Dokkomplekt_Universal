@@ -2096,6 +2096,33 @@ fn main() {
             let handle = app.handle().clone();
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&data_dir);
+
+                // A genuinely fresh interactive install has no durable state yet, so its
+                // output destination is unambiguously the canonical Desktop folder. Create
+                // that folder before any encrypted repository/privacy/recovery work: those
+                // startup services may be comparatively slow on a cold Windows machine,
+                // but the first user-visible filesystem invariant must not depend on them.
+                // This is deliberately best-effort. A collision/permission failure is
+                // handled later by ensure_startup_output_root(), which persists the failed
+                // candidate and keeps the UI alive for recovery. Existing installations
+                // are untouched here so a saved custom output path always wins.
+                if !background_watch
+                    && !e2e_uninstall_watcher
+                    && e2e_install_watch_folder.is_none()
+                {
+                    if let Ok(db_path) = default_state_db_path(&handle) {
+                        if !db_path.exists() {
+                            if let Ok(default_root) = canonical_default_output_root(&handle) {
+                                if let Err(error) = ensure_output_root_path(&default_root) {
+                                    eprintln!(
+                                        "Раннее создание папки готовых документов пропущено: {error}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if let Err(error) = reference_data_update::load_cached(&data_dir) {
                     eprintln!("Подписанный производственный календарь не активирован: {error}");
                 }

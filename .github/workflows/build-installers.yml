@@ -158,6 +158,12 @@ jobs:
         run: |
           if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64)) { throw 'Update signing key is required for components catalog.' }
           python scripts/build_component_packs.py --target windows-x86_64 --components ocr,office,semantic,archive --app-min-version 18.3.0 --base-url $env:DOKKOMPLEKT_COMPONENTS_BASE_URL --out release-components --require-trusted-public-key
+      - name: Require clean production release artifact boundary
+        shell: pwsh
+        run: |
+          if (Test-Path 'target/release/dokkomplekt-tauri.exe') {
+            throw 'Production packaging boundary contaminated: release application binary existed before the canonical Tauri build.'
+          }
       - name: Build unsigned application binary without bundling
         run: npx tauri build --no-bundle
       - name: Sign and verify application binary before it is embedded

@@ -42,6 +42,23 @@ def test_quality_gate_packages_the_canonical_thin_windows_installer() -> None:
     assert "npx tauri build --bundles nsis 2>&1" not in workflow
 
 
+def test_packaging_build_outputs_are_isolated_and_never_restored_from_cache() -> None:
+    quality = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
+    commercial = (ROOT / "scripts/check_commercial_rust_crates.py").read_text("utf-8")
+    production = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
+
+    packaging_cache = quality.split("- name: Restore packaging dependency cache", 1)[1].split("- name: Linux deps", 1)[0]
+    assert "target" not in packaging_cache
+    assert "cargo-package-deps-v2-" in packaging_cache
+    assert "rust-package-" not in packaging_cache
+    assert "rust-compile-" not in packaging_cache
+    assert "SHARED_TARGET_DIR" not in commercial
+    assert 'commercial_target = temp / "target"' in commercial
+    assert 'target_dir=commercial_target' in commercial
+    assert "Require clean Windows release artifact boundary" in quality
+    assert "Require clean production release artifact boundary" in production
+
+
 def test_thin_and_offline_installers_have_distinct_payloads() -> None:
     thin = json.loads((ROOT / "src-tauri/tauri.thin.conf.json").read_text("utf-8"))
     offline = json.loads((ROOT / "src-tauri/tauri.offline.conf.json").read_text("utf-8"))

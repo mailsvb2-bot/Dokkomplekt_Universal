@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templatePickerCompletionMessage, templateSetupCompletionMessage } from './templateSetupSupport';
+import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templateButtonLabelFromFileName, templatePickerCompletionMessage, templateSetupCompletionMessage, uniqueTemplateButtonLabel } from './templateSetupSupport';
 import type { PopupFieldConfig, TemplateConfirmationRowDto } from './types';
 
 function popupField(fieldId: string): PopupFieldConfig {
@@ -160,5 +160,36 @@ describe('importBrowserTemplateFiles', () => {
     expect(result.importedRows).toHaveLength(0);
     expect(result.rejectedTemplates[0].import_error).toMatch(/DOCX или DOCM/);
     expect(importTemplateFile).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('template button label safety', () => {
+  it('never leaks patient/date/time/history data from medical examples into the reusable button label', () => {
+    expect(templateButtonLabelFromFileName('Баннина Е.Г. первичный.docx')).toBe('первичный');
+    expect(templateButtonLabelFromFileName('30.08.2026 10:00 Выписной № 1642.docx')).toBe('Выписной');
+    expect(templateButtonLabelFromFileName('Первичный.docx')).toBe('Первичный');
+  });
+
+  it('keeps one visible button per selected template when cleaned names collide', () => {
+    const used = new Set<string>();
+    expect(uniqueTemplateButtonLabel('Первичный', used)).toBe('Первичный');
+    expect(uniqueTemplateButtonLabel('первичный', used)).toBe('первичный 2');
+  });
+
+  it('uses the user file name instead of the first patient-document line in browser import', async () => {
+    const analyzeTemplateFile = vi.fn(async () => ({ document: { popup_fields: [] } }));
+    const result = await importBrowserTemplateFiles([
+      new File(['x'], 'Баннина Е.Г. Выписной.docx'),
+    ], {
+      readFileBytes: async () => new ArrayBuffer(1),
+      importTemplateFile: async () => ({
+        template_path: 'safe/discharge.docx',
+        extracted_text: '30.08.2026 г. 10:00 Выписной эпикриз № 1642\nПациент Баннина Е.Г.',
+      }),
+      analyzeTemplateFile,
+    });
+    expect(result.importedRows[0].button_label).toBe('Выписной');
+    expect(analyzeTemplateFile).toHaveBeenCalledWith('safe/discharge.docx', expect.any(String), 'Выписной');
   });
 });

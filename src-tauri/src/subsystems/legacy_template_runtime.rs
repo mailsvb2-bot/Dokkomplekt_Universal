@@ -226,6 +226,13 @@ fn compile_template_contract_copy(
 fn validate_medical_template_output_contract(
     document: &DocumentTemplateSpec,
 ) -> Result<(), String> {
+    // Creating a button from an untouched user-owned Word template is always
+    // allowed. Static copies are not yet claiming to implement a semantic render
+    // contract; generation will attempt deterministic compilation later and stays
+    // fail-closed if the template cannot be made safe.
+    if document.is_static_copy {
+        return Ok(());
+    }
     let missing = missing_medical_template_render_paths(document);
     if missing.is_empty() {
         return Ok(());
@@ -410,6 +417,17 @@ fn prepare_medical_template_for_render(
     })
 }
 
+fn should_attempt_template_contract_compilation(
+    domain: &DomainKind,
+    legacy_static: bool,
+    infer_blank_zones: bool,
+) -> bool {
+    if legacy_static {
+        return infer_blank_zones;
+    }
+    matches!(domain, DomainKind::Medical)
+}
+
 fn infer_static_template_rows(
     app: &tauri::AppHandle,
     rows: &[TemplateConfirmationRow],
@@ -429,8 +447,14 @@ fn infer_static_template_rows(
             .clone()
             .unwrap_or_else(|| dokkomplekt_core::best_domain(&row.analysis));
         let legacy_static = row.is_static_copy || row.analysis.is_static;
-        let structural_medical = matches!(domain, DomainKind::Medical);
-        if !structural_medical && !(infer_blank_zones && legacy_static) {
+        if !should_attempt_template_contract_compilation(
+            &domain,
+            legacy_static,
+            infer_blank_zones,
+        ) {
+            if legacy_static {
+                summary.untouched_static_documents += 1;
+            }
             continue;
         }
         if workspace.is_none() {
@@ -462,20 +486,33 @@ fn infer_static_template_rows(
             Uuid::new_v4(),
             extension
         ));
-        let compiled = compile_template_contract_copy(
+        let compiled = match compile_template_contract_copy(
             &input_path,
             &output_path,
             root,
             &domain,
             &row.analysis.role_id,
             infer_blank_zones && legacy_static,
-        )
-        .map_err(|error| {
-            format!(
-                "Шаблон «{}» не удалось скомпилировать в рабочий semantic-template: {error}",
-                row.editable_button_label
-            )
-        })?;
+        ) {
+            Ok(compiled) => compiled,
+            Err(error) if legacy_static => {
+                // Auto-inference is optional. A failed guess must never block the
+                // primary first-run action: keep the exact user template as a
+                // static button and defer semantic compilation to generation.
+                eprintln!(
+                    "Необязательная авторазметка шаблона «{}» пропущена: {error}",
+                    row.editable_button_label
+                );
+                summary.untouched_static_documents += 1;
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Шаблон «{}» не удалось скомпилировать в рабочий semantic-template: {error}",
+                    row.editable_button_label
+                ));
+            }
+        };
         if !compiled.changed {
             if legacy_static {
                 summary.untouched_static_documents += 1;
@@ -520,6 +557,34 @@ mod legacy_template_runtime_tests {
             )],
             popup_configured: true,
         }
+    }
+
+    #[test]
+    fn untouched_static_templates_do_not_require_optional_compilation() {
+        assert!(!should_attempt_template_contract_compilation(
+            &DomainKind::Medical,
+            true,
+            false,
+        ));
+        assert!(should_attempt_template_contract_compilation(
+            &DomainKind::Medical,
+            true,
+            true,
+        ));
+        assert!(!should_attempt_template_contract_compilation(
+            &DomainKind::Generic,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn static_medical_button_can_be_registered_before_semantic_markup() {
+        let mut document = medical_document();
+        document.is_static_copy = true;
+        document.placeholders.clear();
+        document.required_fields.clear();
+        assert!(validate_medical_template_output_contract(&document).is_ok());
     }
 
     #[test]

@@ -1,5 +1,40 @@
 import type { DomainKind, PopupFieldConfig, TemplateConfirmationRowDto } from './types';
-import { arrayBufferToBase64, detectTitle, errorMessage, newDocumentId, type PendingTemplate } from './appSupport';
+import { arrayBufferToBase64, errorMessage, newDocumentId, type PendingTemplate } from './appSupport';
+
+
+export function templateButtonLabelFromFileName(fileName: string): string {
+  let stem = fileName.replace(/\.doc[xm]$/i, '').trim();
+  // Volatile date/time prefixes belong to a concrete case, not the reusable button.
+  stem = stem.replace(/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+/, '');
+  stem = stem.replace(/^\d{1,2}[:.]\d{2}\s+/, '');
+  // Patient examples are often saved as `Фамилия И.О. тип документа.docx`.
+  // The patient identity is source data, never a button name.
+  stem = stem.replace(/^[А-ЯЁ][А-ЯЁа-яё-]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.\s+/u, '');
+  stem = stem.replace(/\s+(?:№|N|#)\s*\d+\s*$/i, '');
+  stem = stem.trim().replace(/\s+/g, ' ');
+  return stem || 'Документ';
+}
+
+function templateLabelCollisionKey(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').replace(/ё/gi, 'е').toLocaleLowerCase('ru-RU');
+}
+
+export function uniqueTemplateButtonLabel(base: string, used: Set<string>): string {
+  const clean = base.trim().replace(/\s+/g, ' ') || 'Документ';
+  const key = templateLabelCollisionKey(clean);
+  if (!used.has(key)) {
+    used.add(key);
+    return clean;
+  }
+  for (let index = 2; ; index += 1) {
+    const candidate = `${clean} ${index}`;
+    const candidateKey = templateLabelCollisionKey(candidate);
+    if (!used.has(candidateKey)) {
+      used.add(candidateKey);
+      return candidate;
+    }
+  }
+}
 
 export function buildTemplateConfirmationRows(
   rows: TemplateConfirmationRowDto[],
@@ -103,7 +138,7 @@ export async function importBrowserTemplateFiles(
       const id = newDocumentId();
       const buffer = await deps.readFileBytes(file);
       const imported = await deps.importTemplateFile(id, { fileName: file.name, bytesBase64: arrayBufferToBase64(buffer) });
-      const detectedLabel = detectTitle(imported.extracted_text) || file.name.replace(/\.doc[xm]$/i, '');
+      const detectedLabel = templateButtonLabelFromFileName(file.name);
       const analyzed = await deps.analyzeTemplateFile(imported.template_path, id, detectedLabel);
       importedRows.push({
         document_id: id,

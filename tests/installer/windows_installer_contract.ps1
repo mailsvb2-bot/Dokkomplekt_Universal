@@ -182,16 +182,29 @@ function Wait-UiElement {
 
 function Invoke-UiElement {
   param([Parameter(Mandatory = $true)]$Element)
-  try {
-    $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $pattern.Invoke()
-    return
-  } catch {
-    $point = $Element.GetClickablePoint()
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
-    [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-    [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  }
+  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    try {
+      if (-not $Element.Current.IsEnabled -or $Element.Current.IsOffscreen) {
+        Start-Sleep -Milliseconds 150
+        continue
+      }
+      if ($Element.Current.IsInvokePatternAvailable) {
+        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $pattern.Invoke()
+        return
+      }
+      $point = $Element.GetClickablePoint()
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+      [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 150
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'UI element did not become enabled and invokable within 5 seconds.'
 }
 
 
@@ -313,6 +326,23 @@ function Find-ButtonByNames {
     if ($null -ne $found) { return $found }
   }
   return $null
+}
+
+function Find-ReadyButtonByNames {
+  param(
+    [Parameter(Mandatory = $true)]$Root,
+    [Parameter(Mandatory = $true)][string[]]$Names
+  )
+  $button = Find-ButtonByNames -Root $Root -Names $Names
+  if ($null -eq $button) { return $null }
+  try {
+    if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen) { return $null }
+    if ($button.Current.IsInvokePatternAvailable) { return $button }
+    $null = $button.GetClickablePoint()
+    return $button
+  } catch {
+    return $null
+  }
 }
 
 function Set-UiValue {
@@ -617,12 +647,12 @@ if ($adversarial) {
 # real preflight, fill deterministic folder fields when the backend asks for them,
 # click Create, then require a physical readable DOCX in the Desktop output subfolder.
 $selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Выбрать всё')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Выбрать всё')
 }
 Invoke-UiElement -Element $selectAllButton
 
 $preflightButton = Wait-UiElement -Description 'generation action for one selected document' -TimeoutSeconds 40 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
 }
 Invoke-UiElement -Element $preflightButton
 
@@ -650,7 +680,7 @@ if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNum
 if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
 $generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Создать документы')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
 }
 Invoke-UiElement -Element $generateButton
 
@@ -735,7 +765,7 @@ if ($adversarial) {
     )
     $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
     if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
   }
   Invoke-UiElement -Element $repeatAction
   $repeatPreflight = Wait-UiElement -Description 'repeat preflight' -TimeoutSeconds 30 -Probe {
@@ -757,7 +787,7 @@ if ($adversarial) {
     )
     $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
     if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
   }
   Invoke-UiElement -Element $repeatGenerate
   $otherVariants = Wait-UiElement -Description 'existing-kit Другие варианты' -TimeoutSeconds 30 -Probe {

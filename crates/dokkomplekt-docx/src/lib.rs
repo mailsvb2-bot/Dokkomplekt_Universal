@@ -12,7 +12,7 @@ use dokkomplekt_core::{
 };
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
@@ -353,6 +353,37 @@ pub fn render_docx_from_text_contract(
 pub fn extract_docx_text(path: &Path) -> DocxResult<String> {
     let file = File::open(path)?;
     extract_docx_text_from_archive(ZipArchive::new(file)?)
+}
+
+/// Extract each text-bearing Word story independently. Story boundaries are a
+/// safety boundary for legacy-template inference: body text must never be
+/// concatenated with headers, footers, notes, or comments before deciding what
+/// old patient value owns a semantic field.
+pub fn extract_docx_story_texts(path: &Path) -> DocxResult<BTreeMap<String, String>> {
+    let file = File::open(path)?;
+    let mut archive = ZipArchive::new(file)?;
+    let mut stories = BTreeMap::new();
+    let mut found_main = false;
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        if !is_text_bearing_word_part(&name) {
+            continue;
+        }
+        ensure_text_part_size(&name, entry.size())?;
+        if name == "word/document.xml" {
+            found_main = true;
+        }
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml)?;
+        stories.insert(name, xml_to_text(&xml));
+    }
+    if !found_main {
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+    Ok(stories)
 }
 
 /// Extract text directly from uploaded DOCX bytes without first trusting or
@@ -1197,6 +1228,138 @@ pub struct TemplateMarkupReport {
     pub skipped_values: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StoryTemplateMarkupReport {
+    pub output_path: String,
+    pub applied_field_ids: Vec<String>,
+    pub applied_binding_count: usize,
+    pub replaced_occurrences: usize,
+    pub skipped_bindings: Vec<String>,
+}
+
+fn unique_visible_needle(xml: &str, value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        return None;
+    }
+    let visible = text_nodes(xml)
+        .iter()
+        .map(|node| node.decoded.as_str())
+        .collect::<String>();
+    let compact = value
+        .chars()
+        .filter(|character| !matches!(character, '\r' | '\n' | '\t'))
+        .collect::<String>();
+    let mut variants = vec![value.to_string()];
+    if compact != value && !compact.is_empty() {
+        variants.push(compact);
+    }
+    variants
+        .into_iter()
+        .find(|needle| !needle.is_empty() && visible.match_indices(needle.as_str()).count() == 1)
+}
+
+/// Apply compatibility fallback replacements only inside the Word story that
+/// produced the inference candidate. Every candidate must have exactly one
+/// visible target inside that story; repeated or missing values are reported and
+/// never guessed. This closes the body/header/footer cross-story ambiguity that
+/// a flattened DOCX text view cannot represent safely.
+pub fn apply_story_template_markup_file(
+    input_path: &Path,
+    output_path: &Path,
+    replacements_by_story: &BTreeMap<String, Vec<TemplateMarkupReplacement>>,
+) -> DocxResult<StoryTemplateMarkupReport> {
+    validate_safe_template_file(input_path)?;
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temp = temporary_output_path(output_path);
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let output = File::create(&temp)?;
+    let mut writer = ZipWriter::new(output);
+    let mut applied_fields = BTreeSet::new();
+    let mut applied_binding_count = 0_usize;
+    let mut replaced_occurrences = 0_usize;
+    let mut skipped_bindings = Vec::new();
+    let mut seen_stories = BTreeSet::new();
+    let mut found_main = false;
+    let mut total_uncompressed = 0_u64;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer.add_directory(name, options)?;
+            continue;
+        }
+        writer.start_file(&name, options)?;
+        if is_text_bearing_word_part(&name) {
+            ensure_text_part_size(&name, entry.size())?;
+            if name == "word/document.xml" {
+                found_main = true;
+            }
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            if let Some(replacements) = replacements_by_story.get(&name) {
+                seen_stories.insert(name.clone());
+                for replacement in replacements {
+                    let binding = format!("{}:{}", name, replacement.field_id);
+                    let Some(needle) = unique_visible_needle(&xml, &replacement.value) else {
+                        skipped_bindings.push(binding);
+                        continue;
+                    };
+                    let placeholder = format!("{{{{{}}}}}", replacement.field_id.trim());
+                    let rendered = match replacement.action {
+                        TemplateMarkupAction::Replace => placeholder,
+                        TemplateMarkupAction::InsertAfter => {
+                            format!("{}{}", replacement.value, placeholder)
+                        }
+                    };
+                    let Some(next) = replace_visible_text_once(&xml, &needle, &rendered) else {
+                        skipped_bindings.push(binding);
+                        continue;
+                    };
+                    xml = next;
+                    applied_fields.insert(replacement.field_id.clone());
+                    applied_binding_count += 1;
+                    replaced_occurrences += 1;
+                }
+            }
+            writer.write_all(xml.as_bytes())?;
+        } else {
+            std::io::copy(&mut entry, &mut writer)?;
+        }
+    }
+    writer.finish()?;
+    if !found_main {
+        let _ = std::fs::remove_file(&temp);
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+    for (story, replacements) in replacements_by_story {
+        if seen_stories.contains(story) {
+            continue;
+        }
+        skipped_bindings.extend(
+            replacements
+                .iter()
+                .map(|replacement| format!("{}:{}", story, replacement.field_id)),
+        );
+    }
+    if let Err(error) = commit_temporary_file(&temp, output_path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error.into());
+    }
+    Ok(StoryTemplateMarkupReport {
+        output_path: output_path.display().to_string(),
+        applied_field_ids: applied_fields.into_iter().collect(),
+        applied_binding_count,
+        replaced_occurrences,
+        skipped_bindings,
+    })
+}
+
 /// Create a marked-up copy of an existing DOCX/DOCM. Only explicitly confirmed
 /// values are replaced; all other ZIP parts (including `vbaProject.bin`) are copied.
 pub fn apply_template_markup_file(
@@ -1306,6 +1469,115 @@ pub struct TemplateLearningMapReport {
     pub applied_field_ids: Vec<String>,
     pub skipped_field_ids: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StoryTemplateLearningMapReport {
+    pub output_path: String,
+    pub applied_field_ids: Vec<String>,
+    pub applied_binding_count: usize,
+    pub skipped_bindings: Vec<String>,
+}
+
+/// Apply inferred blank-line bindings only inside the Word story that produced
+/// each candidate. A target must occur exactly once inside that story. This
+/// preserves repeated headers/footers as separate structural owners and prevents
+/// a blank line inferred in the document body from being written elsewhere.
+pub fn apply_story_template_learning_map_file(
+    input_path: &Path,
+    output_path: &Path,
+    fields_by_story: &BTreeMap<String, Vec<TemplateLearningMapField>>,
+) -> DocxResult<StoryTemplateLearningMapReport> {
+    validate_safe_template_file(input_path)?;
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = temporary_output_path(output_path);
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let output = File::create(&temporary)?;
+    let mut writer = ZipWriter::new(output);
+    let mut applied_fields = BTreeSet::new();
+    let mut applied_binding_count = 0_usize;
+    let mut skipped_bindings = Vec::new();
+    let mut seen_stories = BTreeSet::new();
+    let mut found_main = false;
+    let mut total_uncompressed = 0_u64;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer.add_directory(name, options)?;
+            continue;
+        }
+        writer.start_file(&name, options)?;
+        if is_text_bearing_word_part(&name) {
+            ensure_text_part_size(&name, entry.size())?;
+            if name == "word/document.xml" {
+                found_main = true;
+            }
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml)?;
+            if let Some(fields) = fields_by_story.get(&name) {
+                seen_stories.insert(name.clone());
+                for field in fields {
+                    let field_id = field.field_id.trim();
+                    let target = field.blank_line.trim();
+                    let binding = format!("{}:{}", name, field_id);
+                    if field_id.is_empty() || target.is_empty() {
+                        skipped_bindings.push(binding);
+                        continue;
+                    }
+                    let Some(needle) = unique_visible_needle(&xml, target) else {
+                        skipped_bindings.push(binding);
+                        continue;
+                    };
+                    let replacement = format!(
+                        "{}{{{{{}}}}}{}",
+                        field.common_prefix, field_id, field.common_suffix
+                    );
+                    let Some(next) = replace_visible_text_once(&xml, &needle, &replacement) else {
+                        skipped_bindings.push(binding);
+                        continue;
+                    };
+                    xml = next;
+                    applied_fields.insert(field_id.to_string());
+                    applied_binding_count += 1;
+                }
+            }
+            writer.write_all(xml.as_bytes())?;
+        } else {
+            std::io::copy(&mut entry, &mut writer)?;
+        }
+    }
+    writer.finish()?;
+    if !found_main {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+    for (story, fields) in fields_by_story {
+        if seen_stories.contains(story) {
+            continue;
+        }
+        skipped_bindings.extend(
+            fields
+                .iter()
+                .map(|field| format!("{}:{}", story, field.field_id.trim())),
+        );
+    }
+    if let Err(error) = commit_temporary_file(&temporary, output_path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(StoryTemplateLearningMapReport {
+        output_path: output_path.display().to_string(),
+        applied_field_ids: applied_fields.into_iter().collect(),
+        applied_binding_count,
+        skipped_bindings,
+    })
 }
 
 /// Apply an explicitly confirmed field map inferred from several filled
@@ -2120,6 +2392,109 @@ mod tests {
         assert!(text.contains("{{medical.treatment}}"), "{text:?}");
         assert!(!text.contains("терапия 1"));
         assert!(!text.contains("терапия 2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn story_scoped_blank_binding_never_writes_same_target_in_header() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-blank-header-{}",
+            std::process::id()
+        ));
+        let input = dir.join("blank.docx");
+        let marked = dir.join("marked.docx");
+        write_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Жалобы:</w:t></w:r></w:p><w:p><w:r><w:t>________</w:t></w:r></w:p></w:body></w:document>"#,
+            Some(
+                r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>________</w:t></w:r></w:p></w:hdr>"#,
+            ),
+        );
+        let fields = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            vec![TemplateLearningMapField {
+                field_id: "medical.complaints".into(),
+                line_index: 1,
+                blank_line: "________".into(),
+                common_prefix: String::new(),
+                common_suffix: String::new(),
+            }],
+        )]);
+        let report = apply_story_template_learning_map_file(&input, &marked, &fields)
+            .expect("story-scoped blank markup");
+        assert_eq!(report.applied_binding_count, 1);
+        assert!(report.skipped_bindings.is_empty());
+        let stories = extract_docx_story_texts(&marked).expect("story texts");
+        assert!(stories["word/document.xml"].contains("{{medical.complaints}}"));
+        assert_eq!(stories["word/header1.xml"].trim(), "________");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn story_scoped_fallback_never_crosses_into_header_with_same_literal() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-fallback-header-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled.docx");
+        let marked = dir.join("marked.docx");
+        write_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Лечение: старая схема</w:t></w:r></w:p></w:body></w:document>"#,
+            Some(
+                r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>старая схема</w:t></w:r></w:p></w:hdr>"#,
+            ),
+        );
+        let replacements = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            vec![TemplateMarkupReplacement {
+                field_id: "medical.treatment".into(),
+                value: "старая схема".into(),
+                action: TemplateMarkupAction::Replace,
+            }],
+        )]);
+        let report = apply_story_template_markup_file(&input, &marked, &replacements)
+            .expect("story-scoped markup");
+        assert_eq!(report.applied_binding_count, 1);
+        assert!(report.skipped_bindings.is_empty());
+        let stories = extract_docx_story_texts(&marked).expect("story texts");
+        assert!(stories["word/document.xml"].contains("{{medical.treatment}}"));
+        assert!(stories["word/header1.xml"].contains("старая схема"));
+        assert!(!stories["word/header1.xml"].contains("{{medical.treatment}}"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn story_scoped_fallback_rejects_repeated_literal_inside_owner_story() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-fallback-duplicate-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled.docx");
+        let marked = dir.join("marked.docx");
+        write_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>42</w:t></w:r></w:p><w:p><w:r><w:t>42</w:t></w:r></w:p></w:body></w:document>"#,
+            None,
+        );
+        let replacements = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            vec![TemplateMarkupReplacement {
+                field_id: "subject.age".into(),
+                value: "42".into(),
+                action: TemplateMarkupAction::Replace,
+            }],
+        )]);
+        let report = apply_story_template_markup_file(&input, &marked, &replacements)
+            .expect("ambiguous story markup report");
+        assert_eq!(report.applied_binding_count, 0);
+        assert_eq!(
+            report.skipped_bindings,
+            vec!["word/document.xml:subject.age"]
+        );
+        let text = extract_docx_text(&marked).expect("marked text");
+        assert_eq!(text.matches("42").count(), 2);
+        assert!(!text.contains("{{subject.age}}"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

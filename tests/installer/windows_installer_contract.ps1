@@ -550,7 +550,12 @@ $createPreparedButton = Wait-UiElement -Description 'Создать кнопки
 Invoke-UiElement -Element $createPreparedButton
 
 $expectedTemplateButtonName = if ($adversarial) { 'исходник проверка' } else { 'button-smoke' }
-$createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds 40 -Probe {
+# Full packaging runners can be CPU/disk saturated after the mandatory Rust gate.
+# Registration must still complete and expose the real button, but allow bounded
+# cold-runner variance instead of treating scheduler pressure as a product failure.
+$templateRegistrationDeadlineSeconds = 90
+$createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds $templateRegistrationDeadlineSeconds -Probe {
+  if ($process.HasExited) { throw 'Installed application exited while registering the selected Word template.' }
   Find-ButtonByNames -Root $appWindow -Names @($expectedTemplateButtonName)
 }
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }

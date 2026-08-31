@@ -2,17 +2,8 @@ name: Build Free Unsigned Windows Preview
 
 on:
   workflow_dispatch:
+  # This job is a required branch-protection context, so every PR must emit it.
   pull_request:
-    paths:
-      - '.github/workflows/unsigned-preview.yml'
-      - 'src/**'
-      - 'src-tauri/**'
-      - 'crates/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'tests/installer/windows_installer_contract.ps1'
   push:
     branches: [main]
     paths:

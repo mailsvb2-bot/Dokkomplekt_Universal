@@ -222,6 +222,67 @@ function New-PlainDocxFixture {
   }
 }
 
+function New-MedicalStoryDocxFixture {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][ValidateSet('template','source')][string]$Variant
+  )
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    try {
+      if ($Variant -eq 'template') {
+        $patient = 'Иванов Иван Иванович'
+        $caseNumber = '1111'
+        $admission = '20.08.2026'
+        $diagnosis = 'F20.0 шаблонная формулировка'
+        $treatment = 'старое лечение'
+        $workplace = 'Старый завод'
+        $position = 'старый инженер'
+      } else {
+        $patient = 'Петров Пётр Петрович'
+        $caseNumber = '2222'
+        $admission = '26.08.2026'
+        $diagnosis = 'F20.0 Параноидная шизофрения'
+        $treatment = 'рисперидон 4 мг/сут'
+        $workplace = 'Новый завод'
+        $position = 'инженер'
+      }
+      $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
+        '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Лечение: ' + $treatment + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>' +
+        '<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/></w:sectPr></w:body></w:document>'
+      $parts = @{
+        '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>'
+        '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+        'word/_rels/document.xml.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>'
+        'word/document.xml' = $body
+        'word/header1.xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>ГБУЗ НО «НКЦПЗ» диспансер №2</w:t></w:r></w:p></w:hdr>'
+      }
+      foreach ($name in $parts.Keys) {
+        $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+        try { $writer.Write($parts[$name]) } finally { $writer.Dispose() }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Find-ButtonByNames {
   param(
     [Parameter(Mandatory = $true)]$Root,
@@ -404,7 +465,15 @@ if ($adversarial) {
 } else {
   $plainTemplate = Join-Path $env:RUNNER_TEMP 'button-smoke.docx'
 }
-New-PlainDocxFixture -Path $plainTemplate
+if ($adversarial) {
+  New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template'
+  $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
+  New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source'
+  $activeSourcePath = $medicalSource
+} else {
+  New-PlainDocxFixture -Path $plainTemplate
+  $activeSourcePath = $plainTemplate
+}
 $fileNameEdit = Wait-UiElement -Description 'OpenFileDialog file name field' -Probe {
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -446,7 +515,7 @@ $sourceFileNameEdit = Wait-UiElement -Description 'source OpenFileDialog file na
   )
   $sourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
 }
-Set-UiValue -Element $sourceFileNameEdit -Value $plainTemplate
+Set-UiValue -Element $sourceFileNameEdit -Value $activeSourcePath
 Submit-OpenFileDialog -Dialog $sourceDialog
 $sourceAccepted = Wait-UiElement -Description 'Источник принят after native source selection' -TimeoutSeconds 40 -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -480,7 +549,7 @@ if ($adversarial) {
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
   )
   if ($null -eq $acceptedAfterBroken) { throw 'Corrupt replacement erased the previously accepted source state.' }
-  $goodSourceName = [System.IO.Path]::GetFileName($plainTemplate)
+  $goodSourceName = [System.IO.Path]::GetFileName($activeSourcePath)
   $goodSourceAfterBroken = $appWindow.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $goodSourceName)
@@ -604,7 +673,21 @@ try {
   if ($null -eq $documentEntry) { throw "Created file is not a readable Word DOCX: $($createdDoc.FullName)" }
   $reader = [System.IO.StreamReader]::new($documentEntry.Open(), [System.Text.Encoding]::UTF8)
   try { $createdXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
-  if ($createdXml -notmatch 'Проверочная кнопка') { throw 'Created DOCX lost the template content.' }
+  if ($adversarial) {
+    if ($createdXml -notmatch 'Первичный осмотр') { throw 'Created medical DOCX lost the template heading.' }
+    if ($createdXml -notmatch 'Петров Пётр Петрович') { throw 'Installed medical generation did not render the current patient name.' }
+    if ($createdXml -match 'Иванов Иван Иванович') { throw 'Installed medical generation leaked the old template patient name.' }
+    if ($createdXml -notmatch '2222') { throw 'Installed medical generation did not render the current case number.' }
+    if ($createdXml -match '>1111<') { throw 'Installed medical generation leaked the old template case number.' }
+    $headerEntry = $createdArchive.GetEntry('word/header1.xml')
+    if ($null -eq $headerEntry) { throw 'Created medical DOCX lost its Word header story.' }
+    $headerReader = [System.IO.StreamReader]::new($headerEntry.Open(), [System.Text.Encoding]::UTF8)
+    try { $createdHeaderXml = $headerReader.ReadToEnd() } finally { $headerReader.Dispose() }
+    if ($createdHeaderXml -notmatch 'НКЦПЗ') { throw 'Medical compiler consumed or corrupted the fixed Word header.' }
+    if ($createdHeaderXml -match '\{\{') { throw 'Medical compiler incorrectly converted fixed header text into a semantic placeholder.' }
+  } elseif ($createdXml -notmatch 'Проверочная кнопка') {
+    throw 'Created DOCX lost the template content.'
+  }
 } finally {
   $createdArchive.Dispose()
 }

@@ -1,4 +1,7 @@
 use crate::core::{SourceDocument, TargetTemplate};
+use crate::domains::medical_semantics::{
+    SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_WORKPLACE, VK_MSE_POSITION, VK_MSE_WORKPLACE,
+};
 use crate::{
     canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
     profession_derived_field_sources, profession_runtime_control_fields, resolve_popup_default,
@@ -7,6 +10,21 @@ use crate::{
     UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Map document-specific storage fields to the single doctor-facing input used by
+/// the audited donor applications. Protocol/date requisites remain role-scoped,
+/// but workplace and position are one shared pair for the current patient.
+fn donor_prompt_input_field_id(document: &DocumentTemplateSpec, field_id: &str) -> String {
+    let canonical = canonical_storage_field_id(field_id);
+    if !matches!(document.category, DomainKind::Medical) {
+        return canonical;
+    }
+    match canonical.as_str() {
+        VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE => "medical.workplace".into(),
+        VK_MSE_POSITION | SICK_LEAVE_VK_POSITION => "medical.position".into(),
+        _ => canonical,
+    }
+}
 
 /// Builds one merged popup plan for a selected document.
 ///
@@ -58,7 +76,7 @@ pub fn plan_workflow(
         .chain(document.required_fields.iter())
         .chain(derived_inputs.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .collect::<BTreeSet<_>>();
@@ -67,7 +85,7 @@ pub fn plan_workflow(
         .iter()
         .chain(derived_hard_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .collect::<BTreeSet<_>>();
@@ -77,7 +95,7 @@ pub fn plan_workflow(
         .iter()
         .chain(document.placeholders.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .filter(|field_id| !required.contains(field_id))
@@ -86,7 +104,12 @@ pub fn plan_workflow(
     let mut configs = effective_popup_fields(document)
         .into_iter()
         .map(|mut config| {
-            config.field_id = canonical_storage_field_id(&config.field_id);
+            config.field_id = donor_prompt_input_field_id(document, &config.field_id);
+            config.linked_to = config
+                .linked_to
+                .take()
+                .map(|field_id| donor_prompt_input_field_id(document, &field_id))
+                .filter(|field_id| field_id != &config.field_id);
             config
         })
         .filter(|config| relevant.contains(&config.field_id))
@@ -147,7 +170,7 @@ fn selected_document_fields(
         .chain(explicit_popup_fields)
         .chain(runtime_controls.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .collect::<BTreeSet<_>>();
     replace_derived_fields_with_sources(document, flags, &mut fields);
     if matches!(document.category, DomainKind::Medical) && fields.contains("medical.labs") {
@@ -172,6 +195,7 @@ fn derived_input_fields(
                 flags.sick_leave_enabled,
             )
         })
+        .map(|field_id| donor_prompt_input_field_id(document, &field_id))
         .collect()
 }
 
@@ -190,6 +214,7 @@ fn derived_hard_required_input_fields(
                 flags.sick_leave_enabled,
             )
         })
+        .map(|field_id| donor_prompt_input_field_id(document, &field_id))
         .collect()
 }
 
@@ -205,7 +230,7 @@ pub fn document_required_input_fields(
         .iter()
         .chain(document.placeholders.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .collect::<BTreeSet<_>>();
     replace_derived_fields_with_sources(document, flags, &mut fields);
     fields
@@ -230,7 +255,11 @@ fn replace_derived_fields_with_sources(
         .collect::<Vec<_>>();
     for (derived, sources) in replacements {
         fields.remove(&derived);
-        fields.extend(sources);
+        fields.extend(
+            sources
+                .into_iter()
+                .map(|field_id| donor_prompt_input_field_id(document, &field_id)),
+        );
     }
 }
 
@@ -248,8 +277,9 @@ fn suppressed_prompt_fields(
         suppressed.insert("medical.treatment");
     }
 
-    let sick_leave_allowed =
-        role == "sick_leave_vk" || (role == "discharge" && flags.sick_leave_enabled);
+    // Donor contract: the sick-leave number belongs only to the discharge
+    // epicrisis and only when the doctor explicitly enabled sick leave.
+    let sick_leave_allowed = role == "discharge" && flags.sick_leave_enabled;
     if !sick_leave_allowed {
         suppressed.insert("medical.sick_leave_number");
     }
@@ -692,19 +722,75 @@ mod tests {
     }
 
     #[test]
-    fn combined_work_position_uses_role_scoped_sources_in_old_saved_buttons() {
+    fn combined_work_position_uses_shared_donor_sources_in_old_saved_buttons() {
         let mut doc = document("mse", crate::MEDICAL_WORK_POSITION);
         doc.category = DomainKind::Medical;
         doc.role_id = "vk_mse".into();
         let inputs = document_required_input_fields(&doc, &WorkflowFlags::default());
         assert_eq!(
             inputs,
-            BTreeSet::from([
-                crate::domains::medical_semantics::VK_MSE_POSITION.into(),
-                crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
-            ])
+            BTreeSet::from(["medical.position".into(), "medical.workplace".into()])
         );
         assert!(!inputs.contains(crate::MEDICAL_WORK_POSITION));
+    }
+
+    #[test]
+    fn medical_batch_reuses_one_shared_work_pair_for_all_vk_documents() {
+        let mut mse = document("mse", crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+        mse.category = DomainKind::Medical;
+        mse.role_id = "vk_mse".into();
+        mse.required_fields = vec![
+            crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
+            crate::domains::medical_semantics::VK_MSE_POSITION.into(),
+        ];
+        mse.placeholders = mse.required_fields.clone();
+
+        let mut sick = document(
+            "sick",
+            crate::domains::medical_semantics::SICK_LEAVE_VK_WORKPLACE,
+        );
+        sick.category = DomainKind::Medical;
+        sick.role_id = "sick_leave_vk".into();
+        sick.required_fields = vec![
+            crate::domains::medical_semantics::SICK_LEAVE_VK_WORKPLACE.into(),
+            crate::domains::medical_semantics::SICK_LEAVE_VK_POSITION.into(),
+        ];
+        sick.placeholders = sick.required_fields.clone();
+
+        let plan = plan_workflow_batch(
+            &[mse, sick],
+            &SemanticCase::default(),
+            &WorkflowFlags::default(),
+        );
+        let ids = plan
+            .prompts
+            .iter()
+            .map(|prompt| prompt.field_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ids,
+            BTreeSet::from(["medical.position", "medical.workplace"])
+        );
+    }
+
+    #[test]
+    fn sick_leave_vk_never_asks_for_discharge_sick_leave_number() {
+        let mut doc = document("sick", "medical.sick_leave_number");
+        doc.category = DomainKind::Medical;
+        doc.role_id = "sick_leave_vk".into();
+        doc.placeholders = vec!["medical.sick_leave_number".into()];
+        doc.required_fields = vec!["medical.sick_leave_number".into()];
+        let plan = plan_workflow(
+            &doc,
+            &SemanticCase::default(),
+            &WorkflowFlags {
+                sick_leave_enabled: true,
+            },
+        );
+        assert!(!plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == "medical.sick_leave_number"));
     }
 
     #[test]

@@ -1,9 +1,9 @@
 use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
 use crate::domains::medical_semantics::{
-    scope_legacy_field_for_role, MEDICAL_EXPERT_ANAMNESIS, SICK_LEAVE_VK_COMMISSION_DATE,
-    SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_PROTOCOL_DATE, SICK_LEAVE_VK_PROTOCOL_NUMBER,
-    SICK_LEAVE_VK_WORKPLACE, VK_MSE_COMMISSION_DATE, VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE,
-    VK_MSE_PROTOCOL_NUMBER, VK_MSE_WORKPLACE,
+    MEDICAL_EXPERT_ANAMNESIS, SICK_LEAVE_VK_COMMISSION_DATE, SICK_LEAVE_VK_POSITION,
+    SICK_LEAVE_VK_PROTOCOL_DATE, SICK_LEAVE_VK_PROTOCOL_NUMBER, SICK_LEAVE_VK_WORKPLACE,
+    VK_MSE_COMMISSION_DATE, VK_MSE_POSITION, VK_MSE_PROTOCOL_DATE, VK_MSE_PROTOCOL_NUMBER,
+    VK_MSE_WORKPLACE,
 };
 use crate::professional_records::{
     DIARY_DAY_END_TIME, DIARY_DAY_START_TIME, DIARY_INTRADAY_RHYTHM, DIARY_SCHEDULE_STYLE,
@@ -468,21 +468,6 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
                     "Изначально повторяет дату своей комиссии; поле можно изменить вручную".into(),
                 );
             }
-            let linked_shared_work = match id {
-                VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE => Some("medical.workplace"),
-                VK_MSE_POSITION | SICK_LEAVE_VK_POSITION => Some("medical.position"),
-                _ => None,
-            };
-            if let Some(linked_to) = linked_shared_work {
-                // Donor behaviour: role-specific VK requisites start from the
-                // shared workplace/position, but remain independently editable.
-                // In a batch popup the UI copies the shared value while it is
-                // unchanged; a specialist can still override only the VK field.
-                config.linked_to = Some(linked_to.into());
-                config.help_text = Some(
-                    "Изначально повторяет общие место работы/должность; значение для ВК можно изменить отдельно".into(),
-                );
-            }
             if role_id.contains("diar") && id == "medical.discharge_date" {
                 config.help_text = Some("Записи не будут создаваться после даты выписки".into());
             }
@@ -518,19 +503,12 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
             // Medical role plan as the universal pipeline and completeness gate.
             let plan =
                 build_medical_render_plan(MedicalDocumentRole::from_role_id(role_id), false, false);
-            if matches!(
-                plan.role,
-                MedicalDocumentRole::SickLeaveCommission | MedicalDocumentRole::VkMse
-            ) {
-                // Standalone VK/MSE popups need the shared donor values present
-                // in the same popup graph because the role-scoped fields link to
-                // them as editable defaults. Without these source prompts the
-                // designer correctly rejects the graph as dangling.
-                add("medical.workplace", false);
-                add("medical.position", false);
-            }
             for field_id in &plan.required_fields {
-                add(field_id, true);
+                match field_id.as_str() {
+                    VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE => add("medical.workplace", true),
+                    VK_MSE_POSITION | SICK_LEAVE_VK_POSITION => add("medical.position", true),
+                    _ => add(field_id, true),
+                }
             }
             for field_id in &plan.optional_fields {
                 add(field_id, false);
@@ -649,7 +627,7 @@ pub fn profession_derived_field_sources(
     if canonical == MEDICAL_WORK_POSITION {
         return ["medical.workplace", "medical.position"]
             .into_iter()
-            .map(|field| scope_legacy_field_for_role(role_id, field))
+            .map(str::to_string)
             .collect();
     }
     if canonical != MEDICAL_EXPERT_ANAMNESIS {
@@ -979,38 +957,41 @@ mod tests {
     }
 
     #[test]
-    fn role_scoped_work_fields_follow_shared_defaults_but_remain_distinct() {
-        for (role, scoped, shared) in [
-            ("vk_mse", VK_MSE_WORKPLACE, "medical.workplace"),
-            ("vk_mse", VK_MSE_POSITION, "medical.position"),
-            (
-                "sick_leave_vk",
-                SICK_LEAVE_VK_WORKPLACE,
-                "medical.workplace",
-            ),
-            ("sick_leave_vk", SICK_LEAVE_VK_POSITION, "medical.position"),
-        ] {
-            let mut configured = popup_config_for_field(scoped, true, &DomainKind::Medical, role);
-            apply_profession_defaults(&mut configured, &DomainKind::Medical, role);
-            assert_eq!(configured.linked_to.as_deref(), Some(shared));
-            assert_ne!(configured.field_id, shared);
-            assert!(configured
-                .help_text
-                .as_deref()
-                .is_some_and(|text| text.contains("можно изменить отдельно")));
+    fn default_vk_popups_use_one_shared_donor_work_pair() {
+        for role in ["vk_mse", "sick_leave_vk"] {
+            let document = DocumentTemplateSpec {
+                id: role.into(),
+                button_label: role.into(),
+                template_path: format!("{role}.docx"),
+                category: DomainKind::Medical,
+                role_id: role.into(),
+                required_fields: Vec::new(),
+                placeholders: Vec::new(),
+                is_static_copy: false,
+                popup_fields: Vec::new(),
+                popup_configured: false,
+            };
+            let fields = default_popup_fields_for_document(&document);
+            assert!(fields
+                .iter()
+                .any(|field| field.field_id == "medical.workplace" && field.required));
+            assert!(fields
+                .iter()
+                .any(|field| field.field_id == "medical.position" && field.required));
+            assert!(!fields.iter().any(|field| matches!(
+                field.field_id.as_str(),
+                VK_MSE_WORKPLACE
+                    | VK_MSE_POSITION
+                    | SICK_LEAVE_VK_WORKPLACE
+                    | SICK_LEAVE_VK_POSITION
+            )));
+            validate_popup_fields(&fields).unwrap();
         }
     }
 
     #[test]
-    fn standalone_vk_popups_include_sources_for_editable_work_defaults() {
-        for (role, scoped_workplace, scoped_position) in [
-            ("vk_mse", VK_MSE_WORKPLACE, VK_MSE_POSITION),
-            (
-                "sick_leave_vk",
-                SICK_LEAVE_VK_WORKPLACE,
-                SICK_LEAVE_VK_POSITION,
-            ),
-        ] {
+    fn standalone_vk_popups_do_not_duplicate_the_shared_work_pair() {
+        for role in ["vk_mse", "sick_leave_vk"] {
             let document = DocumentTemplateSpec {
                 id: role.into(),
                 button_label: role.into(),
@@ -1026,28 +1007,29 @@ mod tests {
             let fields = default_popup_fields_for_document(&document);
             validate_popup_fields(&fields)
                 .unwrap_or_else(|error| panic!("{role}: invalid default popup graph: {error}"));
-            assert!(fields
-                .iter()
-                .any(|field| field.field_id == "medical.workplace"));
-            assert!(fields
-                .iter()
-                .any(|field| field.field_id == "medical.position"));
             assert_eq!(
                 fields
                     .iter()
-                    .find(|field| field.field_id == scoped_workplace)
-                    .and_then(|field| field.linked_to.as_deref()),
-                Some("medical.workplace"),
-                "{role}: workplace source link"
+                    .filter(|field| field.field_id == "medical.workplace")
+                    .count(),
+                1,
+                "{role}: workplace must be asked once"
             );
             assert_eq!(
                 fields
                     .iter()
-                    .find(|field| field.field_id == scoped_position)
-                    .and_then(|field| field.linked_to.as_deref()),
-                Some("medical.position"),
-                "{role}: position source link"
+                    .filter(|field| field.field_id == "medical.position")
+                    .count(),
+                1,
+                "{role}: position must be asked once"
             );
+            assert!(!fields.iter().any(|field| matches!(
+                field.field_id.as_str(),
+                VK_MSE_WORKPLACE
+                    | VK_MSE_POSITION
+                    | SICK_LEAVE_VK_WORKPLACE
+                    | SICK_LEAVE_VK_POSITION
+            )));
         }
     }
 
@@ -1079,11 +1061,18 @@ mod tests {
             let plan =
                 build_medical_render_plan(MedicalDocumentRole::from_role_id(role), false, false);
             for required in plan.required_fields {
+                let prompt_field = match required.as_str() {
+                    VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE => "medical.workplace",
+                    VK_MSE_POSITION | SICK_LEAVE_VK_POSITION => "medical.position",
+                    _ => required.as_str(),
+                };
                 let config = fields
                     .iter()
-                    .find(|field| field.field_id == required)
-                    .unwrap_or_else(|| panic!("{role}: popup misses required {required}"));
-                assert!(config.required, "{role}: {required} is not required");
+                    .find(|field| field.field_id == prompt_field)
+                    .unwrap_or_else(|| {
+                        panic!("{role}: popup misses donor input {prompt_field} for {required}")
+                    });
+                assert!(config.required, "{role}: {prompt_field} is not required");
             }
             for optional in plan.optional_fields {
                 assert!(

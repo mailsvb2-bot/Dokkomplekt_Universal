@@ -180,7 +180,6 @@ pub fn build_medical_render_plan(
                 SICK_LEAVE_VK_PROTOCOL_NUMBER.into(),
                 SICK_LEAVE_VK_PROTOCOL_DATE.into(),
                 "medical.sick_leave_commission_date".into(),
-                "medical.sick_leave_number".into(),
                 SICK_LEAVE_VK_WORKPLACE.into(),
                 SICK_LEAVE_VK_POSITION.into(),
             ]);
@@ -302,6 +301,19 @@ mod tests {
     }
 
     #[test]
+    fn sick_leave_number_belongs_only_to_discharge_epicrisis() {
+        let vk = build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, true, false);
+        assert!(!vk
+            .required_fields
+            .contains(&"medical.sick_leave_number".to_string()));
+        let discharge =
+            build_medical_render_plan(MedicalDocumentRole::DischargeEpicrisis, true, false);
+        assert!(discharge
+            .required_fields
+            .contains(&"medical.sick_leave_number".to_string()));
+    }
+
+    #[test]
     fn diary_is_the_only_known_role_without_case_number() {
         let diary = build_medical_render_plan(MedicalDocumentRole::Diary, false, false);
         assert!(!diary
@@ -336,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn mse_and_sick_leave_vk_have_distinct_storage_fields() {
+    fn mse_and_sick_leave_vk_keep_distinct_protocol_storage_fields() {
         let mse = build_medical_render_plan(MedicalDocumentRole::VkMse, false, false);
         let sick =
             build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false);

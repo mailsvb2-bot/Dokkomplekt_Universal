@@ -189,10 +189,19 @@ fn compile_template_contract_copy(
     } else {
         BTreeMap::new()
     };
+    let primary_expert_field =
+        dokkomplekt_core::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
+    let needs_primary_expert_insertion = domain == &DomainKind::Medical
+        && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "primary"
+        && !analysis
+            .placeholders
+            .iter()
+            .any(|field| field == primary_expert_field);
 
     if blank_binding_count == 0
         && structural_binding_count == 0
         && initial_story_fallback.is_empty()
+        && !needs_primary_expert_insertion
     {
         return Ok(TemplateContractCompilation {
             changed: false,
@@ -899,6 +908,58 @@ mod legacy_template_runtime_tests {
         assert!(stories["word/document.xml"].contains("{{subject.address}}"));
         assert!(stories["word/header1.xml"].contains("ГБУЗ НО НКЦПЗ"));
         assert!(!stories["word/header1.xml"].contains("{{"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn already_semantic_primary_still_receives_role_owned_expert_anamnesis() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-semantic-primary-role-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("semantic-primary.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{subject.name}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.case_number}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.admission_date}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.diagnosis}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.treatment}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.workplace}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.position}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("already-semantic primary must not exit before role-owned insertion");
+        assert!(compiled.changed);
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.expert_anamnesis"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        let body = &stories["word/document.xml"];
+        assert!(body.contains("Экспертный анамнез: {{medical.expert_anamnesis}}"));
+        assert!(
+            body.find("Экспертный анамнез: {{medical.expert_anamnesis}}")
+                < body.find("Лечащий врач __________"),
+            "role-owned expert anamnesis must precede signatures: {body}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

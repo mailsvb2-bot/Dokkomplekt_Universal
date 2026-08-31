@@ -999,6 +999,7 @@ fn infer_structural_bindings_by_story(
     input_path: &Path,
     preferred_domain: &DomainKind,
     role_id: &str,
+    owned_table_bindings_by_story: &BTreeMap<String, Vec<OwnedTableCellBinding>>,
 ) -> DocxResult<BTreeMap<String, Vec<LabeledTemplateValueCandidate>>> {
     let input = File::open(input_path)?;
     let mut archive = ZipArchive::new(input)?;
@@ -1018,6 +1019,15 @@ fn infer_structural_bindings_by_story(
         }
         let mut xml = String::new();
         entry.read_to_string(&mut xml)?;
+        if let Some(owned) = owned_table_bindings_by_story.get(&name) {
+            xml = structural_inference_xml_without_owned_table_cells(&xml, owned).ok_or_else(
+                || {
+                    DocxError::StructuralTemplateCompilation(format!(
+                        "owned table cells could not be isolated for structural inference in {name}"
+                    ))
+                },
+            )?;
+        }
         let story_text = xml_to_text(&xml);
         let bindings = dokkomplekt_core::infer_structural_template_values(
             &story_text,
@@ -1035,8 +1045,10 @@ fn infer_structural_bindings_by_story(
 }
 
 #[derive(Debug, Clone)]
-struct BlankTableCellBinding {
+struct OwnedTableCellBinding {
     field_id: String,
+    label_cell_start: usize,
+    label_cell_end: usize,
     cell_start: usize,
     cell_end: usize,
 }
@@ -1085,11 +1097,11 @@ fn table_cells_in_row(xml: &str, row_start: usize, row_end: usize) -> Vec<TableC
     cells
 }
 
-fn infer_blank_table_cell_bindings_in_story(
+fn infer_owned_table_cell_bindings_in_story(
     xml: &str,
     preferred_domain: &DomainKind,
     role_id: &str,
-) -> Vec<BlankTableCellBinding> {
+) -> Vec<OwnedTableCellBinding> {
     let mut candidates = Vec::new();
     let mut row_cursor = 0usize;
     let mut row_index = 0usize;
@@ -1099,7 +1111,12 @@ fn infer_blank_table_cell_bindings_in_story(
         };
         let cells = table_cells_in_row(xml, row_start, row_end);
         if cells.len() >= 2 {
-            let mut token_to_cell = BTreeMap::<String, usize>::new();
+            // Preserve real, already-filled values for inference. Only physically
+            // blank cells receive a synthetic token so the core can still infer
+            // label -> value ownership. The concrete edit target is resolved
+            // below from the label cell and its immediately adjacent value cell,
+            // never from a document-global literal search.
+            let mut blank_tokens = BTreeMap::<usize, String>::new();
             let synthetic_cells = cells
                 .iter()
                 .enumerate()
@@ -1107,7 +1124,7 @@ fn infer_blank_table_cell_bindings_in_story(
                     if table_cell_is_blank(&cell.text) {
                         let token =
                             format!("DOKKOMPLEKTEMPTYCELL{}X{}", row_index + 1, cell_index + 1);
-                        token_to_cell.insert(token.clone(), cell_index);
+                        blank_tokens.insert(cell_index, token.clone());
                         token
                     } else {
                         table_cell_structural_text(&cell.text)
@@ -1120,14 +1137,43 @@ fn infer_blank_table_cell_bindings_in_story(
                 Some(preferred_domain),
                 Some(role_id),
             ) {
-                let Some(cell_index) = token_to_cell.get(binding.value.trim()).copied() else {
+                let label_cells = cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cell)| {
+                        structural_remainder_after_label(
+                            &table_cell_structural_text(&cell.text),
+                            &binding.label,
+                        )
+                        .is_some()
+                    })
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                if label_cells.len() != 1 {
+                    continue;
+                }
+                let value_cell_index = label_cells[0] + 1;
+                let Some(value_cell) = cells.get(value_cell_index) else {
                     continue;
                 };
-                let cell = &cells[cell_index];
-                candidates.push(BlankTableCellBinding {
+                let value_matches_owner = if table_cell_is_blank(&value_cell.text) {
+                    blank_tokens
+                        .get(&value_cell_index)
+                        .is_some_and(|token| binding.value.trim() == token)
+                } else {
+                    structural_fold(&table_cell_structural_text(&value_cell.text))
+                        == structural_fold(binding.value.trim())
+                };
+                if !value_matches_owner {
+                    continue;
+                }
+                let label_cell = &cells[label_cells[0]];
+                candidates.push(OwnedTableCellBinding {
                     field_id: binding.field_id,
-                    cell_start: cell.start,
-                    cell_end: cell.end,
+                    label_cell_start: label_cell.start,
+                    label_cell_end: label_cell.end,
+                    cell_start: value_cell.start,
+                    cell_end: value_cell.end,
                 });
             }
         }
@@ -1135,7 +1181,7 @@ fn infer_blank_table_cell_bindings_in_story(
         row_index += 1;
     }
 
-    // A semantic field or a physical blank cell must have exactly one owner.
+    // A semantic field or a physical value cell must have exactly one owner.
     // Duplicate labels are left untouched rather than guessed.
     let mut field_counts = BTreeMap::<String, usize>::new();
     let mut cell_counts = BTreeMap::<(usize, usize), usize>::new();
@@ -1152,11 +1198,11 @@ fn infer_blank_table_cell_bindings_in_story(
     candidates
 }
 
-fn infer_blank_table_cell_bindings_by_story(
+fn infer_owned_table_cell_bindings_by_story(
     input_path: &Path,
     preferred_domain: &DomainKind,
     role_id: &str,
-) -> DocxResult<BTreeMap<String, Vec<BlankTableCellBinding>>> {
+) -> DocxResult<BTreeMap<String, Vec<OwnedTableCellBinding>>> {
     let input = File::open(input_path)?;
     let mut archive = ZipArchive::new(input)?;
     let mut bindings_by_story = BTreeMap::new();
@@ -1175,7 +1221,7 @@ fn infer_blank_table_cell_bindings_by_story(
         }
         let mut xml = String::new();
         entry.read_to_string(&mut xml)?;
-        let bindings = infer_blank_table_cell_bindings_in_story(&xml, preferred_domain, role_id);
+        let bindings = infer_owned_table_cell_bindings_in_story(&xml, preferred_domain, role_id);
         if !bindings.is_empty() {
             bindings_by_story.insert(name, bindings);
         }
@@ -1200,12 +1246,62 @@ fn infer_blank_table_cell_bindings_by_story(
     Ok(bindings_by_story)
 }
 
-fn insert_placeholder_into_blank_table_cell(cell_xml: &str, field_id: &str) -> Option<String> {
-    let visible = xml_to_text(cell_xml);
-    if !table_cell_is_blank(&visible) {
+fn structural_inference_xml_without_owned_table_cells(
+    xml: &str,
+    bindings: &[OwnedTableCellBinding],
+) -> Option<String> {
+    let mut ranges = bindings
+        .iter()
+        .flat_map(|binding| {
+            [
+                (binding.label_cell_start, binding.label_cell_end),
+                (binding.cell_start, binding.cell_end),
+            ]
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    ranges.dedup();
+    if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0)
+        || ranges
+            .iter()
+            .any(|(start, end)| start >= end || *end > xml.len())
+    {
         return None;
     }
+    let mut output = xml.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        // Remove only the concrete label/value cells already owned by the table
+        // compiler. Other cells in the row and repeated occurrences elsewhere in
+        // the story remain available to paragraph-flow inference.
+        output.replace_range(start..end, "");
+    }
+    Some(output)
+}
+
+fn replace_owned_table_cell_with_placeholder(cell_xml: &str, field_id: &str) -> Option<String> {
+    let visible = xml_to_text(cell_xml);
     let placeholder = format!("{{{{{field_id}}}}}");
+    if !table_cell_is_blank(&visible) {
+        // Once the row establishes unique label -> adjacent-cell ownership, old
+        // sample/patient text is template data, not structure. Replace all
+        // visible text nodes in that owned cell while preserving the cell,
+        // paragraph, run properties, borders, widths, and surrounding OOXML.
+        let nodes = visible_text_nodes(cell_xml);
+        let first = nodes.first()?;
+        let mut output = cell_xml.to_string();
+        for node in nodes.iter().rev() {
+            let replacement = if node.content_start == first.content_start
+                && node.content_end == first.content_end
+            {
+                escape_xml_text(&placeholder)
+            } else {
+                String::new()
+            };
+            output.replace_range(node.content_start..node.content_end, &replacement);
+        }
+        return Some(output);
+    }
+
     let visible = visible.trim();
     if !visible.is_empty() {
         if let Some(replaced) = replace_visible_text_once(cell_xml, visible, &placeholder) {
@@ -1248,9 +1344,9 @@ fn insert_placeholder_into_blank_table_cell(cell_xml: &str, field_id: &str) -> O
     Some(output)
 }
 
-fn apply_blank_table_cell_bindings_in_story(
+fn apply_owned_table_cell_bindings_in_story(
     xml: &str,
-    bindings: &[BlankTableCellBinding],
+    bindings: &[OwnedTableCellBinding],
 ) -> Option<(String, Vec<String>)> {
     let mut ordered = bindings.to_vec();
     ordered.sort_by_key(|binding| binding.cell_start);
@@ -1258,7 +1354,7 @@ fn apply_blank_table_cell_bindings_in_story(
     let mut applied = Vec::new();
     for binding in ordered.into_iter().rev() {
         let cell = output.get(binding.cell_start..binding.cell_end)?;
-        let replacement = insert_placeholder_into_blank_table_cell(cell, &binding.field_id)?;
+        let replacement = replace_owned_table_cell_with_placeholder(cell, &binding.field_id)?;
         output.replace_range(binding.cell_start..binding.cell_end, &replacement);
         applied.push(binding.field_id);
     }
@@ -1279,24 +1375,20 @@ pub fn compile_labeled_template_file(
     role_id: &str,
 ) -> DocxResult<StructuralTemplateCompilationReport> {
     validate_safe_template_file(input_path)?;
-    let mut bindings_by_story =
-        infer_structural_bindings_by_story(input_path, preferred_domain, role_id)?;
-    let blank_table_bindings_by_story =
-        infer_blank_table_cell_bindings_by_story(input_path, preferred_domain, role_id)?;
-    let blank_table_field_ids = blank_table_bindings_by_story
-        .values()
-        .flatten()
-        .map(|binding| binding.field_id.clone())
-        .collect::<BTreeSet<_>>();
-    // A concrete label -> adjacent blank Word-cell relationship is stronger
-    // evidence than paragraph-flow inference. In particular a blank `Диагноз`
-    // cell must not absorb the first visible text from the following table row.
-    for bindings in bindings_by_story.values_mut() {
-        bindings.retain(|binding| !blank_table_field_ids.contains(&binding.field_id));
-    }
-    bindings_by_story.retain(|_, bindings| !bindings.is_empty());
+    let owned_table_bindings_by_story =
+        infer_owned_table_cell_bindings_by_story(input_path, preferred_domain, role_id)?;
+    // Concrete label -> adjacent-cell ownership is stronger than paragraph-flow
+    // inference, but only for those exact physical cells. Exclude the owned
+    // label/value cells from the structural inference view instead of suppressing
+    // every later occurrence that happens to share the same semantic field ID.
+    let bindings_by_story = infer_structural_bindings_by_story(
+        input_path,
+        preferred_domain,
+        role_id,
+        &owned_table_bindings_by_story,
+    )?;
     let binding_count = bindings_by_story.values().map(Vec::len).sum::<usize>()
-        + blank_table_bindings_by_story
+        + owned_table_bindings_by_story
             .values()
             .map(Vec::len)
             .sum::<usize>();
@@ -1326,12 +1418,12 @@ pub fn compile_labeled_template_file(
             ensure_text_part_size(&name, entry.size())?;
             let mut xml = String::new();
             entry.read_to_string(&mut xml)?;
-            if let Some(bindings) = blank_table_bindings_by_story.get(&name) {
+            if let Some(bindings) = owned_table_bindings_by_story.get(&name) {
                 let Some((next, applied)) =
-                    apply_blank_table_cell_bindings_in_story(&xml, bindings)
+                    apply_owned_table_cell_bindings_in_story(&xml, bindings)
                 else {
                     skipped.extend(bindings.iter().map(|binding| {
-                        format!("{}:{} (blank table cell)", name, binding.field_id)
+                        format!("{}:{} (owned table value cell)", name, binding.field_id)
                     }));
                     writer.write_all(xml.as_bytes())?;
                     continue;
@@ -1428,14 +1520,19 @@ fn apply_structural_binding_in_story(
         let mut edits = Vec::<(usize, usize, String)>::new();
         let mut next_value_index = 0usize;
         let mut search_index = anchor_index + 1;
+        let mut anchor_matches = true;
         if inline {
             let paragraph = &xml[anchor.start..anchor.end];
-            let replaced = replace_visible_text_once(paragraph, first_value, &placeholder)?;
-            edits.push((anchor.start, anchor.end, replaced));
-            next_value_index = 1;
+            if let Some(replaced) = replace_visible_text_once(paragraph, first_value, &placeholder)
+            {
+                edits.push((anchor.start, anchor.end, replaced));
+                next_value_index = 1;
+            } else {
+                anchor_matches = false;
+            }
         }
 
-        while next_value_index < value_lines.len() {
+        while anchor_matches && next_value_index < value_lines.len() {
             let expected = value_lines[next_value_index];
             let mut matched = None;
             while search_index < spans.len() {
@@ -1449,16 +1546,29 @@ fn apply_structural_binding_in_story(
                 }
                 break;
             }
-            let span = matched?;
+            let Some(span) = matched else {
+                // The same label may occur elsewhere (for example in a table
+                // cell already compiled by stronger table ownership). This
+                // anchor does not own the inferred value, so keep looking for
+                // the next occurrence instead of aborting the whole binding.
+                anchor_matches = false;
+                break;
+            };
             let paragraph = &xml[span.start..span.end];
             let replacement = if next_value_index == 0 {
                 placeholder.as_str()
             } else {
                 ""
             };
-            let replaced = replace_visible_text_once(paragraph, expected, replacement)?;
+            let Some(replaced) = replace_visible_text_once(paragraph, expected, replacement) else {
+                anchor_matches = false;
+                break;
+            };
             edits.push((span.start, span.end, replaced));
             next_value_index += 1;
+        }
+        if !anchor_matches {
+            continue;
         }
 
         if !inline && value_lines.is_empty() {
@@ -1582,7 +1692,7 @@ fn unique_visible_needle(xml: &str, value: &str) -> Option<String> {
     if value.trim().is_empty() {
         return None;
     }
-    let visible = text_nodes(xml)
+    let visible = visible_text_nodes(xml)
         .iter()
         .map(|node| node.decoded.as_str())
         .collect::<String>();
@@ -2134,6 +2244,21 @@ fn text_nodes(xml: &str) -> Vec<TextNode> {
     }
     nodes
 }
+fn visible_text_nodes(xml: &str) -> Vec<TextNode> {
+    const PROBE: &str = "DOKKOMPLEKTVISIBLETEXTNODEPROBE";
+    text_nodes(xml)
+        .into_iter()
+        .filter(|node| {
+            let mut probe = xml.to_string();
+            probe.replace_range(node.content_start..node.content_end, PROBE);
+            // Reuse the canonical Word-story visibility parser so w:vanish,
+            // w:webHidden, deleted ranges and field instructions have exactly
+            // the same semantics for extraction and replacement.
+            xml_to_text(&probe).contains(PROBE)
+        })
+        .collect()
+}
+
 fn replace_visible_text_once(xml: &str, needle: &str, replacement: &str) -> Option<String> {
     replace_visible_text_once_from(xml, needle, replacement, 0)
 }
@@ -2147,7 +2272,7 @@ fn replace_visible_text_once_from(
     if needle.is_empty() {
         return None;
     }
-    let nodes = text_nodes(xml);
+    let nodes = visible_text_nodes(xml);
     if nodes.is_empty() {
         return None;
     }
@@ -2885,6 +3010,121 @@ mod tests {
             assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
         }
         assert!(!text.contains("________"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn filled_medical_table_value_cells_are_owned_and_old_values_are_replaced() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-filled-medical-table-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled-table.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>Ф.И.О.</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый Пациент</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1111</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>F99 старая формулировка</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старое лечение</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый завод</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "primary")
+                .expect("filled table value cells must compile from unique label ownership");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing filled-table binding {field_id}: {report:?}"
+            );
+        }
+        let text = extract_docx_text(&compiled).expect("compiled filled table text");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
+        }
+        for stale in [
+            "Старый Пациент",
+            "1111",
+            "F99 старая формулировка",
+            "старое лечение",
+            "Старый завод",
+            "старый инженер",
+        ] {
+            assert!(
+                !text.contains(stale),
+                "stale value survived: {stale}: {text:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn filled_table_ownership_preserves_repeated_structural_binding_elsewhere() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-repeated-medical-binding-{}",
+            std::process::id()
+        ));
+        let input = dir.join("repeated.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>F99 старый диагноз в таблице</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:p><w:r><w:t>Диагноз: F99 старый диагноз в заключении</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "primary")
+                .expect("table owner must not suppress a repeated paragraph binding");
+        assert_eq!(report.binding_count, 2, "{report:?}");
+        let text = extract_docx_text(&compiled).expect("compiled repeated binding text");
+        assert_eq!(text.matches("{{medical.diagnosis}}").count(), 2, "{text:?}");
+        assert!(!text.contains("старый диагноз в таблице"), "{text:?}");
+        assert!(!text.contains("старый диагноз в заключении"), "{text:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn filled_table_placeholder_uses_visible_run_when_hidden_run_comes_first() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-visible-table-placeholder-{}",
+            std::process::id()
+        ));
+        let input = dir.join("hidden-first.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:tbl><w:tr>
+<w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t>служебное скрытое значение</w:t></w:r><w:r><w:t>F99 видимый старый диагноз</w:t></w:r></w:p></w:tc>
+</w:tr></w:tbl>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "primary")
+            .expect("visible old value must be replaced in a visible run");
+        let text = extract_docx_text(&compiled).expect("compiled visible text");
+        assert!(text.contains("{{medical.diagnosis}}"), "{text:?}");
+        assert!(!text.contains("видимый старый диагноз"), "{text:?}");
+        assert!(!text.contains("служебное скрытое значение"), "{text:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

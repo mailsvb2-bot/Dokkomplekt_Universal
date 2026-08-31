@@ -56,19 +56,34 @@ def test_quality_gate_packages_the_canonical_thin_windows_installer() -> None:
     assert "npx tauri build --bundles nsis 2>&1" not in workflow
 
 
-def test_windows_installer_smoke_uses_real_blank_medical_table_value_cells() -> None:
+def test_windows_installer_smoke_uses_real_filled_medical_table_value_cells() -> None:
     smoke = (ROOT / "tests/installer/windows_installer_contract.ps1").read_text("utf-8")
-    for label in ("История болезни №", "Диагноз", "План лечения"):
+    for label, value in (
+        ("Ф.И.О.", "$patient"),
+        ("История болезни №", "$caseNumber"),
+        ("Диагноз", "$diagnosis"),
+        ("План лечения", "$treatment"),
+    ):
         expected = (
             f"<w:tr><w:tc><w:p><w:r><w:t>{label}</w:t></w:r></w:p></w:tc>"
-            "<w:tc><w:p/></w:tc></w:tr>"
+            f"<w:tc><w:p><w:r><w:t>' + {value} + '</w:t></w:r></w:p></w:tc></w:tr>"
         )
         assert expected in smoke, label
     assert (
-        "<w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc>"
+        "<w:t>Место работы</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p><w:r><w:t>' + $workplace + '</w:t></w:r></w:p></w:tc>"
         "<w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc>"
-        "<w:tc><w:p/></w:tc>"
+        "<w:tc><w:p><w:r><w:t>' + $position + '</w:t></w:r></w:p></w:tc>"
     ) in smoke
+    for stale in (
+        "$patient = 'Иванов Иван Иванович'",
+        "$caseNumber = '1111'",
+        "$diagnosis = 'F20.0 шаблонная формулировка'",
+        "$treatment = 'старое лечение'",
+        "$workplace = 'Старый завод'",
+        "$position = 'старый инженер'",
+    ):
+        assert stale in smoke
 
 
 def test_packaging_build_outputs_are_isolated_and_never_restored_from_cache() -> None:

@@ -460,6 +460,21 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
                     "Изначально повторяет дату своей комиссии; поле можно изменить вручную".into(),
                 );
             }
+            let linked_shared_work = match id {
+                VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE => Some("medical.workplace"),
+                VK_MSE_POSITION | SICK_LEAVE_VK_POSITION => Some("medical.position"),
+                _ => None,
+            };
+            if let Some(linked_to) = linked_shared_work {
+                // Donor behaviour: role-specific VK requisites start from the
+                // shared workplace/position, but remain independently editable.
+                // In a batch popup the UI copies the shared value while it is
+                // unchanged; a specialist can still override only the VK field.
+                config.linked_to = Some(linked_to.into());
+                config.help_text = Some(
+                    "Изначально повторяет общие место работы/должность; значение для ВК можно изменить отдельно".into(),
+                );
+            }
             if role_id.contains("diar") && id == "medical.discharge_date" {
                 config.help_text = Some("Записи не будут создаваться после даты выписки".into());
             }
@@ -941,6 +956,29 @@ mod tests {
             assert_eq!(configured.linked_to.as_deref(), Some(commission_date));
             assert_eq!(configured.input_kind, PromptInputKind::Date);
             assert_eq!(configured.ask_mode, PromptAskMode::Always);
+        }
+    }
+
+    #[test]
+    fn role_scoped_work_fields_follow_shared_defaults_but_remain_distinct() {
+        for (role, scoped, shared) in [
+            ("vk_mse", VK_MSE_WORKPLACE, "medical.workplace"),
+            ("vk_mse", VK_MSE_POSITION, "medical.position"),
+            (
+                "sick_leave_vk",
+                SICK_LEAVE_VK_WORKPLACE,
+                "medical.workplace",
+            ),
+            ("sick_leave_vk", SICK_LEAVE_VK_POSITION, "medical.position"),
+        ] {
+            let mut configured = popup_config_for_field(scoped, true, &DomainKind::Medical, role);
+            apply_profession_defaults(&mut configured, &DomainKind::Medical, role);
+            assert_eq!(configured.linked_to.as_deref(), Some(shared));
+            assert_ne!(configured.field_id, shared);
+            assert!(configured
+                .help_text
+                .as_deref()
+                .is_some_and(|text| text.contains("можно изменить отдельно")));
         }
     }
 

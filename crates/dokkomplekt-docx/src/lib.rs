@@ -1035,7 +1035,7 @@ fn infer_structural_bindings_by_story(
 }
 
 #[derive(Debug, Clone)]
-struct BlankTableCellBinding {
+struct OwnedTableCellBinding {
     field_id: String,
     cell_start: usize,
     cell_end: usize,
@@ -1085,11 +1085,11 @@ fn table_cells_in_row(xml: &str, row_start: usize, row_end: usize) -> Vec<TableC
     cells
 }
 
-fn infer_blank_table_cell_bindings_in_story(
+fn infer_owned_table_cell_bindings_in_story(
     xml: &str,
     preferred_domain: &DomainKind,
     role_id: &str,
-) -> Vec<BlankTableCellBinding> {
+) -> Vec<OwnedTableCellBinding> {
     let mut candidates = Vec::new();
     let mut row_cursor = 0usize;
     let mut row_index = 0usize;
@@ -1099,7 +1099,12 @@ fn infer_blank_table_cell_bindings_in_story(
         };
         let cells = table_cells_in_row(xml, row_start, row_end);
         if cells.len() >= 2 {
-            let mut token_to_cell = BTreeMap::<String, usize>::new();
+            // Preserve real, already-filled values for inference. Only physically
+            // blank cells receive a synthetic token so the core can still infer
+            // label -> value ownership. The concrete edit target is resolved
+            // below from the label cell and its immediately adjacent value cell,
+            // never from a document-global literal search.
+            let mut blank_tokens = BTreeMap::<usize, String>::new();
             let synthetic_cells = cells
                 .iter()
                 .enumerate()
@@ -1107,7 +1112,7 @@ fn infer_blank_table_cell_bindings_in_story(
                     if table_cell_is_blank(&cell.text) {
                         let token =
                             format!("DOKKOMPLEKTEMPTYCELL{}X{}", row_index + 1, cell_index + 1);
-                        token_to_cell.insert(token.clone(), cell_index);
+                        blank_tokens.insert(cell_index, token.clone());
                         token
                     } else {
                         table_cell_structural_text(&cell.text)
@@ -1120,14 +1125,40 @@ fn infer_blank_table_cell_bindings_in_story(
                 Some(preferred_domain),
                 Some(role_id),
             ) {
-                let Some(cell_index) = token_to_cell.get(binding.value.trim()).copied() else {
+                let label_cells = cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cell)| {
+                        structural_remainder_after_label(
+                            &table_cell_structural_text(&cell.text),
+                            &binding.label,
+                        )
+                        .is_some()
+                    })
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                if label_cells.len() != 1 {
+                    continue;
+                }
+                let value_cell_index = label_cells[0] + 1;
+                let Some(value_cell) = cells.get(value_cell_index) else {
                     continue;
                 };
-                let cell = &cells[cell_index];
-                candidates.push(BlankTableCellBinding {
+                let value_matches_owner = if table_cell_is_blank(&value_cell.text) {
+                    blank_tokens
+                        .get(&value_cell_index)
+                        .is_some_and(|token| binding.value.trim() == token)
+                } else {
+                    structural_fold(&table_cell_structural_text(&value_cell.text))
+                        == structural_fold(binding.value.trim())
+                };
+                if !value_matches_owner {
+                    continue;
+                }
+                candidates.push(OwnedTableCellBinding {
                     field_id: binding.field_id,
-                    cell_start: cell.start,
-                    cell_end: cell.end,
+                    cell_start: value_cell.start,
+                    cell_end: value_cell.end,
                 });
             }
         }
@@ -1135,7 +1166,7 @@ fn infer_blank_table_cell_bindings_in_story(
         row_index += 1;
     }
 
-    // A semantic field or a physical blank cell must have exactly one owner.
+    // A semantic field or a physical value cell must have exactly one owner.
     // Duplicate labels are left untouched rather than guessed.
     let mut field_counts = BTreeMap::<String, usize>::new();
     let mut cell_counts = BTreeMap::<(usize, usize), usize>::new();
@@ -1152,11 +1183,11 @@ fn infer_blank_table_cell_bindings_in_story(
     candidates
 }
 
-fn infer_blank_table_cell_bindings_by_story(
+fn infer_owned_table_cell_bindings_by_story(
     input_path: &Path,
     preferred_domain: &DomainKind,
     role_id: &str,
-) -> DocxResult<BTreeMap<String, Vec<BlankTableCellBinding>>> {
+) -> DocxResult<BTreeMap<String, Vec<OwnedTableCellBinding>>> {
     let input = File::open(input_path)?;
     let mut archive = ZipArchive::new(input)?;
     let mut bindings_by_story = BTreeMap::new();
@@ -1175,7 +1206,7 @@ fn infer_blank_table_cell_bindings_by_story(
         }
         let mut xml = String::new();
         entry.read_to_string(&mut xml)?;
-        let bindings = infer_blank_table_cell_bindings_in_story(&xml, preferred_domain, role_id);
+        let bindings = infer_owned_table_cell_bindings_in_story(&xml, preferred_domain, role_id);
         if !bindings.is_empty() {
             bindings_by_story.insert(name, bindings);
         }
@@ -1200,12 +1231,30 @@ fn infer_blank_table_cell_bindings_by_story(
     Ok(bindings_by_story)
 }
 
-fn insert_placeholder_into_blank_table_cell(cell_xml: &str, field_id: &str) -> Option<String> {
+fn replace_owned_table_cell_with_placeholder(cell_xml: &str, field_id: &str) -> Option<String> {
     let visible = xml_to_text(cell_xml);
-    if !table_cell_is_blank(&visible) {
-        return None;
-    }
     let placeholder = format!("{{{{{field_id}}}}}");
+    if !table_cell_is_blank(&visible) {
+        // Once the row establishes unique label -> adjacent-cell ownership, old
+        // sample/patient text is template data, not structure. Replace all
+        // visible text nodes in that owned cell while preserving the cell,
+        // paragraph, run properties, borders, widths, and surrounding OOXML.
+        let nodes = text_nodes(cell_xml);
+        let first = nodes.first()?;
+        let mut output = cell_xml.to_string();
+        for node in nodes.iter().rev() {
+            let replacement = if node.content_start == first.content_start
+                && node.content_end == first.content_end
+            {
+                escape_xml_text(&placeholder)
+            } else {
+                String::new()
+            };
+            output.replace_range(node.content_start..node.content_end, &replacement);
+        }
+        return Some(output);
+    }
+
     let visible = visible.trim();
     if !visible.is_empty() {
         if let Some(replaced) = replace_visible_text_once(cell_xml, visible, &placeholder) {
@@ -1248,9 +1297,9 @@ fn insert_placeholder_into_blank_table_cell(cell_xml: &str, field_id: &str) -> O
     Some(output)
 }
 
-fn apply_blank_table_cell_bindings_in_story(
+fn apply_owned_table_cell_bindings_in_story(
     xml: &str,
-    bindings: &[BlankTableCellBinding],
+    bindings: &[OwnedTableCellBinding],
 ) -> Option<(String, Vec<String>)> {
     let mut ordered = bindings.to_vec();
     ordered.sort_by_key(|binding| binding.cell_start);
@@ -1258,7 +1307,7 @@ fn apply_blank_table_cell_bindings_in_story(
     let mut applied = Vec::new();
     for binding in ordered.into_iter().rev() {
         let cell = output.get(binding.cell_start..binding.cell_end)?;
-        let replacement = insert_placeholder_into_blank_table_cell(cell, &binding.field_id)?;
+        let replacement = replace_owned_table_cell_with_placeholder(cell, &binding.field_id)?;
         output.replace_range(binding.cell_start..binding.cell_end, &replacement);
         applied.push(binding.field_id);
     }
@@ -1281,22 +1330,22 @@ pub fn compile_labeled_template_file(
     validate_safe_template_file(input_path)?;
     let mut bindings_by_story =
         infer_structural_bindings_by_story(input_path, preferred_domain, role_id)?;
-    let blank_table_bindings_by_story =
-        infer_blank_table_cell_bindings_by_story(input_path, preferred_domain, role_id)?;
-    let blank_table_field_ids = blank_table_bindings_by_story
+    let owned_table_bindings_by_story =
+        infer_owned_table_cell_bindings_by_story(input_path, preferred_domain, role_id)?;
+    let owned_table_field_ids = owned_table_bindings_by_story
         .values()
         .flatten()
         .map(|binding| binding.field_id.clone())
         .collect::<BTreeSet<_>>();
-    // A concrete label -> adjacent blank Word-cell relationship is stronger
-    // evidence than paragraph-flow inference. In particular a blank `Диагноз`
+    // A concrete label -> adjacent Word-cell ownership relationship is stronger
+    // evidence than paragraph-flow inference. In particular a `Диагноз` value
     // cell must not absorb the first visible text from the following table row.
     for bindings in bindings_by_story.values_mut() {
-        bindings.retain(|binding| !blank_table_field_ids.contains(&binding.field_id));
+        bindings.retain(|binding| !owned_table_field_ids.contains(&binding.field_id));
     }
     bindings_by_story.retain(|_, bindings| !bindings.is_empty());
     let binding_count = bindings_by_story.values().map(Vec::len).sum::<usize>()
-        + blank_table_bindings_by_story
+        + owned_table_bindings_by_story
             .values()
             .map(Vec::len)
             .sum::<usize>();
@@ -1326,12 +1375,12 @@ pub fn compile_labeled_template_file(
             ensure_text_part_size(&name, entry.size())?;
             let mut xml = String::new();
             entry.read_to_string(&mut xml)?;
-            if let Some(bindings) = blank_table_bindings_by_story.get(&name) {
+            if let Some(bindings) = owned_table_bindings_by_story.get(&name) {
                 let Some((next, applied)) =
-                    apply_blank_table_cell_bindings_in_story(&xml, bindings)
+                    apply_owned_table_cell_bindings_in_story(&xml, bindings)
                 else {
                     skipped.extend(bindings.iter().map(|binding| {
-                        format!("{}:{} (blank table cell)", name, binding.field_id)
+                        format!("{}:{} (owned table value cell)", name, binding.field_id)
                     }));
                     writer.write_all(xml.as_bytes())?;
                     continue;
@@ -2885,6 +2934,69 @@ mod tests {
             assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
         }
         assert!(!text.contains("________"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn filled_medical_table_value_cells_are_owned_and_old_values_are_replaced() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-filled-medical-table-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled-table.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>Ф.И.О.</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый Пациент</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1111</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>F99 старая формулировка</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старое лечение</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый завод</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "primary")
+                .expect("filled table value cells must compile from unique label ownership");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing filled-table binding {field_id}: {report:?}"
+            );
+        }
+        let text = extract_docx_text(&compiled).expect("compiled filled table text");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
+        }
+        for stale in [
+            "Старый Пациент",
+            "1111",
+            "F99 старая формулировка",
+            "старое лечение",
+            "Старый завод",
+            "старый инженер",
+        ] {
+            assert!(
+                !text.contains(stale),
+                "stale value survived: {stale}: {text:?}"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

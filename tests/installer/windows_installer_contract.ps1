@@ -314,18 +314,22 @@ function New-MedicalStoryDocxFixture {
         $position = 'инженер'
       }
       if ($Variant -eq 'template') {
-        # Reproduce the real doctor-owned template shape: labels live in Word
-        # table cells while the adjacent value cells are physically empty.
-        # The installed application must compile those exact empty cells into
-        # semantic render targets before the template can be published.
+        # Reproduce the real doctor-owned template shape that escaped the old
+        # smoke: labels live in Word table cells and their adjacent value cells
+        # already contain old/sample patient data. Unique label -> adjacent-cell
+        # ownership must replace those values, not reject the template merely
+        # because the cells are non-empty.
+        $patientBlock = ''
         $structuredFields =
           '<w:tbl>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Ф.И.О.</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $patient + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $caseNumber + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $diagnosis + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $treatment + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $workplace + '</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $position + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '</w:tbl>'
       } else {
+        $patientBlock = '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>'
         $structuredFields =
           '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
@@ -335,7 +339,7 @@ function New-MedicalStoryDocxFixture {
       }
       $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
         '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>' +
+        $patientBlock +
         '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
         $structuredFields +
         '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +

@@ -577,14 +577,36 @@ Submit-OpenFileDialog -Dialog $templateDialog
 Write-Host 'Native first-run template picker OK: real DOCX selected.'
 
 $createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) button' -TimeoutSeconds 40 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
 }
 Invoke-UiElement -Element $createPreparedButton
 
 $expectedTemplateButtonName = if ($adversarial) { 'исходник проверка' } else { 'button-smoke' }
-# Full packaging runners can be CPU/disk saturated after the mandatory Rust gate.
-# Registration must still complete and expose the real button, but allow bounded
-# cold-runner variance instead of treating scheduler pressure as a product failure.
+# WebView2 can acknowledge UIA InvokePattern without dispatching the underlying DOM
+# click on a saturated hosted runner. Require an observable setup transition and,
+# if the action is still visibly idle, retry exactly once with physical input.
+$templateSetupTransitionDeadlineSeconds = 5
+$templateSetupTransitionDeadline = [DateTime]::UtcNow.AddSeconds($templateSetupTransitionDeadlineSeconds)
+$templateSetupStarted = $false
+do {
+  if ($process.HasExited) { throw 'Installed application exited while starting Word template registration.' }
+  $createdEarly = Find-ButtonByNames -Root $appWindow -Names @($expectedTemplateButtonName)
+  if ($null -ne $createdEarly) { $templateSetupStarted = $true; break }
+  $stillReady = Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  if ($null -eq $stillReady) { $templateSetupStarted = $true; break }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $templateSetupTransitionDeadline)
+
+if (-not $templateSetupStarted) {
+  Write-Host 'UIA action produced no observable template-registration transition; retrying once with physical input.'
+  $createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) physical retry' -TimeoutSeconds 10 -Probe {
+    Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  }
+  Invoke-UiElementPhysically -Element $createPreparedButton
+}
+
+# Registration still has a bounded completion deadline and must expose the real
+# filename-derived document button; a process exit remains an immediate failure.
 $templateRegistrationDeadlineSeconds = 90
 $createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds $templateRegistrationDeadlineSeconds -Probe {
   if ($process.HasExited) { throw 'Installed application exited while registering the selected Word template.' }

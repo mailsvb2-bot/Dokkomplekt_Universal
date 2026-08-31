@@ -716,13 +716,48 @@ Invoke-UiElement -Element $generateButton
 $expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
 $createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
 $createdDoc = $null
+$generationFailure = $null
 do {
   if ($process.HasExited) { throw 'Installed application exited during real document generation smoke.' }
   $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue |
     Select-Object -First 1
-  if ($null -eq $createdDoc) { Start-Sleep -Milliseconds 500 }
-} while ($null -eq $createdDoc -and [DateTime]::UtcNow -lt $createdDeadline)
+  if ($null -ne $createdDoc) { break }
+
+  # The preflight deliberately stays open when Rust rejects generation. Surface the
+  # real backend reason immediately instead of hiding it behind a 60-second file timeout.
+  $failureMarker = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Документы не созданы'
+    )
+  )
+  if ($null -ne $failureMarker) {
+    $textCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Text
+    )
+    $visibleText = @($appWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCondition) |
+      ForEach-Object { $_.Current.Name } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $markerIndex = [Array]::IndexOf($visibleText, 'Документы не созданы')
+    if ($markerIndex -ge 0 -and ($markerIndex + 1) -lt $visibleText.Count) {
+      $generationFailure = $visibleText[$markerIndex + 1]
+    } else {
+      $generationFailure = ($visibleText -join ' | ')
+    }
+    break
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $createdDeadline)
+if ($null -ne $generationFailure) {
+  Write-AppLaunchDiagnostics
+  throw "Installed application rejected real document generation: $generationFailure"
+}
 if ($null -eq $createdDoc) {
+  Write-AppLaunchDiagnostics
+  Write-Host '--- Desktop output tree after generation timeout ---'
+  Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }

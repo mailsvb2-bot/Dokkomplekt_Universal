@@ -22,6 +22,10 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "workflow-document-number" in source
     assert "workflow-document-date" in source
     assert "Создать документы" in source
+    assert "Invoke-UiElementPhysically" in source
+    assert "$generationTransitionDeadlineSeconds = 5" in source
+    assert "UIA action produced no observable generation transition; retrying once with physical input." in source
+    assert "--- installed UI snapshot after generation timeout ---" in source
     assert '$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"' in source
     assert "-Filter $expectedGeneratedFileName" in source
     assert "Проверочная кнопка.docx" not in source

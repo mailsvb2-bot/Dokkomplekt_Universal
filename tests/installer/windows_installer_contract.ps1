@@ -225,6 +225,38 @@ function Invoke-UiElement {
   throw 'UI element did not become enabled and actionable within 5 seconds.'
 }
 
+function Invoke-UiElementPhysically {
+  param([Parameter(Mandatory = $true)]$Element)
+  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    try {
+      if (-not $Element.Current.IsEnabled) {
+        Start-Sleep -Milliseconds 100
+        continue
+      }
+      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+        $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+        $scroll.ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+      try {
+        $point = $Element.GetClickablePoint()
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+      } catch {
+        $Element.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      }
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'UI element did not become physically actionable within 5 seconds.'
+}
+
 function New-PlainDocxFixture {
   param([Parameter(Mandatory = $true)][string]$Path)
   Add-Type -AssemblyName System.IO.Compression
@@ -713,12 +745,51 @@ $dateInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descend
 if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNumber }
 if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
+$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
 $generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
   Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
 }
 Invoke-UiElement -Element $generateButton
 
-$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
+# WebView2 can report a successful UIA InvokePattern call without dispatching a DOM click
+# on a saturated hosted runner. Never trust the automation method itself: require an
+# observable product transition. If nothing at all changes, retry once through real
+# mouse/keyboard input. The app's confirmation-in-flight guard makes this idempotent,
+# and the smoke still fails unless a physical readable DOCX is ultimately published.
+$generationTransitionDeadlineSeconds = 5
+$generationTransitionDeadline = [DateTime]::UtcNow.AddSeconds($generationTransitionDeadlineSeconds)
+$generationActionStarted = $false
+do {
+  if ($process.HasExited) { throw 'Installed application exited while starting real document generation.' }
+  $createdDuringTransition = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -ne $createdDuringTransition) { $generationActionStarted = $true; break }
+
+  $failureDuringTransition = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Документы не созданы')
+  )
+  if ($null -ne $failureDuringTransition) { $generationActionStarted = $true; break }
+
+  $busyGenerationButton = Find-ButtonByNames -Root $appWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
+  if ($null -ne $busyGenerationButton) { $generationActionStarted = $true; break }
+
+  $preflightStillOpen = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+  )
+  if ($null -eq $preflightStillOpen) { $generationActionStarted = $true; break }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $generationTransitionDeadline)
+
+if (-not $generationActionStarted) {
+  Write-Host 'UIA action produced no observable generation transition; retrying once with physical input.'
+  $generateButton = Wait-UiElement -Description 'Создать документы physical retry' -TimeoutSeconds 10 -Probe {
+    Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
+  }
+  Invoke-UiElementPhysically -Element $generateButton
+}
+
 $createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
 $createdDoc = $null
 $generationFailure = $null
@@ -761,6 +832,15 @@ if ($null -ne $generationFailure) {
 }
 if ($null -eq $createdDoc) {
   Write-AppLaunchDiagnostics
+  Write-Host '--- installed UI snapshot after generation timeout ---'
+  foreach ($controlType in @([System.Windows.Automation.ControlType]::Button, [System.Windows.Automation.ControlType]::Text)) {
+    $controlCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      $controlType
+    )
+    @($appWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $controlCondition)) |
+      ForEach-Object { if (-not [string]::IsNullOrWhiteSpace($_.Current.Name)) { Write-Host "UI: $($_.Current.Name)" } }
+  }
   Write-Host '--- Desktop output tree after generation timeout ---'
   Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"

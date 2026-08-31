@@ -56,6 +56,21 @@ def test_quality_gate_packages_the_canonical_thin_windows_installer() -> None:
     assert "npx tauri build --bundles nsis 2>&1" not in workflow
 
 
+def test_windows_installer_smoke_uses_real_blank_medical_table_value_cells() -> None:
+    smoke = (ROOT / "tests/installer/windows_installer_contract.ps1").read_text("utf-8")
+    for label in ("История болезни №", "Диагноз", "План лечения"):
+        expected = (
+            f"<w:tr><w:tc><w:p><w:r><w:t>{label}</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p/></w:tc></w:tr>"
+        )
+        assert expected in smoke, label
+    assert (
+        "<w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc>"
+        "<w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc>"
+        "<w:tc><w:p/></w:tc>"
+    ) in smoke
+
+
 def test_packaging_build_outputs_are_isolated_and_never_restored_from_cache() -> None:
     quality = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
     commercial = (ROOT / "scripts/check_commercial_rust_crates.py").read_text("utf-8")

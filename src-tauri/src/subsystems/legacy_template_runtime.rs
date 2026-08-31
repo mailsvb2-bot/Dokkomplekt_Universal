@@ -198,7 +198,8 @@ fn compile_template_contract_copy(
             .iter()
             .any(|field| field == primary_expert_field);
 
-    if blank_binding_count == 0
+    if domain != &DomainKind::Medical
+        && blank_binding_count == 0
         && structural_binding_count == 0
         && initial_story_fallback.is_empty()
         && !needs_primary_expert_insertion
@@ -248,12 +249,7 @@ fn compile_template_contract_copy(
         changed = true;
     }
 
-    let (current_structural_binding_count, _) = if domain == &DomainKind::Medical {
-        structural_template_bindings_by_story(&current_input, domain, role_id)?
-    } else {
-        (0, BTreeSet::new())
-    };
-    if current_structural_binding_count > 0 {
+    if domain == &DomainKind::Medical {
         let structural_output =
             scratch_root.join(format!("structural-{}.{}", Uuid::new_v4(), extension));
         let report = compile_labeled_template_file(
@@ -263,16 +259,11 @@ fn compile_template_contract_copy(
             role_id,
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
-        if report.binding_count != current_structural_binding_count {
-            return Err(format!(
-                "Структурный compiler ожидал {} story-scoped якорей после предыдущего stage, но подтвердил {}.",
-                current_structural_binding_count,
-                report.binding_count
-            ));
+        if report.binding_count > 0 {
+            applied_field_ids.extend(report.applied_field_ids);
+            current_input = structural_output;
+            changed = true;
         }
-        applied_field_ids.extend(report.applied_field_ids);
-        current_input = structural_output;
-        changed = true;
     }
 
     // Compatibility fallback is derived from the exact post-structural DOCX,
@@ -960,6 +951,73 @@ mod legacy_template_runtime_tests {
                 < body.find("Лечащий врач __________"),
             "role-owned expert anamnesis must precede signatures: {body}"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn primary_blank_table_contract_compiles_all_required_render_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-primary-blank-table-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("первичный.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:p><w:r><w:t>Ф.И.О.: {{subject.name}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата поступления: {{medical.admission_date}}</w:t></w:r></w:p>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Лечение</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("primary blank table must compile into a complete render contract");
+        assert!(compiled.changed);
+        let body = extract_docx_text(&compiled.path).expect("compiled primary text");
+        let analysis = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
+        let document = DocumentTemplateSpec {
+            id: "primary-blank-table".into(),
+            button_label: "первичный".into(),
+            template_path: compiled.path.display().to_string(),
+            category: DomainKind::Medical,
+            role_id: "primary".into(),
+            required_fields: Vec::new(),
+            placeholders: analysis.placeholders,
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        validate_medical_template_output_contract(&document)
+            .expect("blank-table primary contract must be publishable after compilation");
+        for field_id in [
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+            "medical.expert_anamnesis",
+        ] {
+            assert!(body.contains(&format!("{{{{{field_id}}}}}")), "{body:?}");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -314,16 +314,16 @@ function New-MedicalStoryDocxFixture {
         $position = 'инженер'
       }
       if ($Variant -eq 'template') {
-        # The real regression lived in doctor-owned Word tables: the extractor
-        # preserves cells with TAB separators, so the compiler must bind every
-        # label/value cell independently instead of letting the first label own
-        # the complete row.
+        # Reproduce the real doctor-owned template shape: labels live in Word
+        # table cells while the adjacent value cells are physically empty.
+        # The installed application must compile those exact empty cells into
+        # semantic render targets before the template can be published.
         $structuredFields =
           '<w:tbl>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $caseNumber + '</w:t></w:r></w:p></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $diagnosis + '</w:t></w:r></w:p></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $treatment + '</w:t></w:r></w:p></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $workplace + '</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $position + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' +
           '</w:tbl>'
       } else {
         $structuredFields =

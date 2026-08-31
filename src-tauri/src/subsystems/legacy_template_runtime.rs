@@ -44,6 +44,113 @@ fn selected_filled_medical_markup(
         .collect()
 }
 
+fn selected_filled_medical_markup_for_stories(
+    stories: &BTreeMap<String, String>,
+    excluded_fields: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<TemplateMarkupReplacement>> {
+    let mut raw = Vec::<(String, TemplateMarkupReplacement)>::new();
+    let mut owners = BTreeMap::<String, BTreeSet<String>>::new();
+    for (story, text) in stories {
+        for replacement in selected_filled_medical_markup(text, excluded_fields) {
+            owners
+                .entry(replacement.value.clone())
+                .or_default()
+                .insert(replacement.field_id.clone());
+            raw.push((story.clone(), replacement));
+        }
+    }
+
+    let mut grouped = BTreeMap::<String, Vec<TemplateMarkupReplacement>>::new();
+    for (story, replacement) in raw {
+        if owners
+            .get(&replacement.value)
+            .is_some_and(|field_ids| field_ids.len() > 1)
+        {
+            continue;
+        }
+        grouped.entry(story).or_default().push(replacement);
+    }
+    grouped
+}
+
+fn selected_filled_medical_markup_by_story(
+    template_path: &Path,
+    excluded_fields: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<TemplateMarkupReplacement>>, String> {
+    let stories = extract_docx_story_texts(template_path).map_err(|error| error.to_string())?;
+    Ok(selected_filled_medical_markup_for_stories(
+        &stories,
+        excluded_fields,
+    ))
+}
+
+fn structural_template_bindings_for_stories(
+    stories: &BTreeMap<String, String>,
+    domain: &DomainKind,
+    role_id: &str,
+) -> (usize, BTreeSet<String>) {
+    let mut binding_count = 0_usize;
+    let mut field_ids = BTreeSet::new();
+    for text in stories.values() {
+        let bindings = dokkomplekt_core::infer_structural_template_values(
+            text,
+            Some(domain),
+            Some(role_id),
+        );
+        binding_count += bindings.len();
+        field_ids.extend(bindings.into_iter().map(|binding| binding.field_id));
+    }
+    (binding_count, field_ids)
+}
+
+fn structural_template_bindings_by_story(
+    template_path: &Path,
+    domain: &DomainKind,
+    role_id: &str,
+) -> Result<(usize, BTreeSet<String>), String> {
+    let stories = extract_docx_story_texts(template_path).map_err(|error| error.to_string())?;
+    Ok(structural_template_bindings_for_stories(
+        &stories, domain, role_id,
+    ))
+}
+
+fn blank_template_fields_for_stories(
+    stories: &BTreeMap<String, String>,
+    domain: &DomainKind,
+    role_id: &str,
+) -> BTreeMap<String, Vec<TemplateLearningMapField>> {
+    let mut grouped = BTreeMap::new();
+    for (story, text) in stories {
+        let fields = dokkomplekt_core::infer_legacy_template_fields(
+            text,
+            Some(domain),
+            Some(role_id),
+        )
+        .into_iter()
+        .map(|candidate| TemplateLearningMapField {
+            field_id: candidate.field_id,
+            line_index: candidate.line_index,
+            blank_line: candidate.blank_line,
+            common_prefix: candidate.common_prefix,
+            common_suffix: candidate.common_suffix,
+        })
+        .collect::<Vec<_>>();
+        if !fields.is_empty() {
+            grouped.insert(story.clone(), fields);
+        }
+    }
+    grouped
+}
+
+fn blank_template_fields_by_story(
+    template_path: &Path,
+    domain: &DomainKind,
+    role_id: &str,
+) -> Result<BTreeMap<String, Vec<TemplateLearningMapField>>, String> {
+    let stories = extract_docx_story_texts(template_path).map_err(|error| error.to_string())?;
+    Ok(blank_template_fields_for_stories(&stories, domain, role_id))
+}
+
 fn compile_template_contract_copy(
     input_path: &Path,
     output_path: &Path,
@@ -54,48 +161,38 @@ fn compile_template_contract_copy(
 ) -> Result<TemplateContractCompilation, String> {
     let template_text = extract_docx_text(input_path).map_err(|error| error.to_string())?;
     let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
-    let blank_candidates = if infer_blank_zones {
-        dokkomplekt_core::infer_legacy_template_fields(
-            &template_text,
-            Some(domain),
-            Some(role_id),
-        )
+    let blank_candidates_by_story = if infer_blank_zones {
+        blank_template_fields_by_story(input_path, domain, role_id)?
     } else {
-        Vec::new()
+        BTreeMap::new()
     };
-    let structural_bindings = if domain == &DomainKind::Medical {
-        dokkomplekt_core::infer_structural_template_values(
-            &template_text,
-            Some(domain),
-            Some(role_id),
-        )
+    let blank_binding_count = blank_candidates_by_story.values().map(Vec::len).sum::<usize>();
+    let blank_field_ids = blank_candidates_by_story
+        .values()
+        .flatten()
+        .map(|candidate| candidate.field_id.clone())
+        .collect::<BTreeSet<_>>();
+    let (structural_binding_count, structural_field_ids) = if domain == &DomainKind::Medical {
+        structural_template_bindings_by_story(input_path, domain, role_id)?
     } else {
-        Vec::new()
+        (0, BTreeSet::new())
     };
-    let mut excluded_fields = analysis
+    let mut initial_excluded_fields = analysis
         .placeholders
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    excluded_fields.extend(
-        blank_candidates
-            .iter()
-            .map(|candidate| candidate.field_id.clone()),
-    );
-    excluded_fields.extend(
-        structural_bindings
-            .iter()
-            .map(|binding| binding.field_id.clone()),
-    );
-    let fallback_replacements = if domain == &DomainKind::Medical {
-        selected_filled_medical_markup(&template_text, &excluded_fields)
+    initial_excluded_fields.extend(blank_field_ids.iter().cloned());
+    initial_excluded_fields.extend(structural_field_ids.iter().cloned());
+    let initial_story_fallback = if domain == &DomainKind::Medical {
+        selected_filled_medical_markup_by_story(input_path, &initial_excluded_fields)?
     } else {
-        Vec::new()
+        BTreeMap::new()
     };
 
-    if blank_candidates.is_empty()
-        && structural_bindings.is_empty()
-        && fallback_replacements.is_empty()
+    if blank_binding_count == 0
+        && structural_binding_count == 0
+        && initial_story_fallback.is_empty()
     {
         return Ok(TemplateContractCompilation {
             changed: false,
@@ -121,41 +218,35 @@ fn compile_template_contract_copy(
 
     let mut current_input = input_path.to_path_buf();
     let mut applied_field_ids = Vec::new();
-    if !blank_candidates.is_empty() {
-        let more_stages = !structural_bindings.is_empty() || !fallback_replacements.is_empty();
-        let blank_output = if more_stages {
-            scratch_root.join(format!("blank-{}.{}", Uuid::new_v4(), extension))
-        } else {
-            output_path.to_path_buf()
-        };
-        let fields = blank_candidates
-            .iter()
-            .map(|candidate| TemplateLearningMapField {
-                field_id: candidate.field_id.clone(),
-                line_index: candidate.line_index,
-                blank_line: candidate.blank_line.clone(),
-                common_prefix: candidate.common_prefix.clone(),
-                common_suffix: candidate.common_suffix.clone(),
-            })
-            .collect::<Vec<_>>();
-        let report = apply_template_learning_map_file(&current_input, &blank_output, &fields)
-            .map_err(|error| format!("Не удалось разметить однозначные пустые зоны: {error}"))?;
-        if !report.skipped_field_ids.is_empty() || report.applied_field_ids.len() != fields.len() {
+    let mut changed = false;
+
+    if blank_binding_count > 0 {
+        let blank_output = scratch_root.join(format!("blank-{}.{}", Uuid::new_v4(), extension));
+        let report = apply_story_template_learning_map_file(
+            &current_input,
+            &blank_output,
+            &blank_candidates_by_story,
+        )
+        .map_err(|error| format!("Не удалось разметить однозначные пустые зоны: {error}"))?;
+        if !report.skipped_bindings.is_empty() || report.applied_binding_count != blank_binding_count {
             return Err(format!(
-                "Не все однозначные пустые зоны удалось скомпилировать: {}",
-                report.skipped_field_ids.join(", ")
+                "Не все story-scoped пустые зоны удалось скомпилировать: {}",
+                report.skipped_bindings.join(", ")
             ));
         }
         applied_field_ids.extend(report.applied_field_ids);
         current_input = blank_output;
+        changed = true;
     }
 
-    if !structural_bindings.is_empty() {
-        let structural_output = if fallback_replacements.is_empty() {
-            output_path.to_path_buf()
-        } else {
-            scratch_root.join(format!("structural-{}.{}", Uuid::new_v4(), extension))
-        };
+    let (current_structural_binding_count, _) = if domain == &DomainKind::Medical {
+        structural_template_bindings_by_story(&current_input, domain, role_id)?
+    } else {
+        (0, BTreeSet::new())
+    };
+    if current_structural_binding_count > 0 {
+        let structural_output =
+            scratch_root.join(format!("structural-{}.{}", Uuid::new_v4(), extension));
         let report = compile_labeled_template_file(
             &current_input,
             &structural_output,
@@ -163,42 +254,77 @@ fn compile_template_contract_copy(
             role_id,
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
-        if report.binding_count != structural_bindings.len() {
+        if report.binding_count != current_structural_binding_count {
             return Err(format!(
-                "Структурный compiler ожидал {} якорей, но подтвердил {}.",
-                structural_bindings.len(),
+                "Структурный compiler ожидал {} story-scoped якорей после предыдущего stage, но подтвердил {}.",
+                current_structural_binding_count,
                 report.binding_count
             ));
         }
         applied_field_ids.extend(report.applied_field_ids);
         current_input = structural_output;
+        changed = true;
     }
 
-    if !fallback_replacements.is_empty() {
-        let report = apply_template_markup_file(
+    // Compatibility fallback is derived from the exact post-structural DOCX,
+    // never from a stale flattened snapshot. Each candidate stays inside the
+    // Word story that produced it, so body/header/footer text cannot be merged
+    // into one impossible replacement target.
+    let current_text = extract_docx_text(&current_input)
+        .map_err(|error| format!("Не удалось перечитать compiler-stage шаблона: {error}"))?;
+    let current_analysis = analyze_template_text_with_domain_hint(&current_text, Some(domain));
+    let mut fallback_excluded_fields = current_analysis
+        .placeholders
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    fallback_excluded_fields.extend(applied_field_ids.iter().cloned());
+    let fallback_by_story = if domain == &DomainKind::Medical {
+        selected_filled_medical_markup_by_story(&current_input, &fallback_excluded_fields)?
+    } else {
+        BTreeMap::new()
+    };
+
+    if !fallback_by_story.is_empty() {
+        let expected_bindings = fallback_by_story.values().map(Vec::len).sum::<usize>();
+        let report = apply_story_template_markup_file(
             &current_input,
             output_path,
-            &fallback_replacements,
+            &fallback_by_story,
         )
-        .map_err(|error| format!("Не удалось применить fallback старого шаблона: {error}"))?;
-        if !report.skipped_values.is_empty()
-            || report.replacement_count != fallback_replacements.len()
+        .map_err(|error| format!("Не удалось применить story-scoped fallback старого шаблона: {error}"))?;
+        if !report.skipped_bindings.is_empty()
+            || report.applied_binding_count != expected_bindings
         {
-            return Err(
-                "Fallback старого шаблона не смог однозначно переписать все оставшиеся значения."
-                    .into(),
-            );
+            return Err(format!(
+                "Story-scoped fallback не смог безопасно привязать значения: {}",
+                report.skipped_bindings.join(", ")
+            ));
         }
-        applied_field_ids.extend(
-            fallback_replacements
-                .iter()
-                .map(|replacement| replacement.field_id.clone()),
-        );
+        applied_field_ids.extend(report.applied_field_ids);
+        current_input = output_path.to_path_buf();
+        changed = true;
+    } else if changed {
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::copy(&current_input, output_path)
+            .map_err(|error| format!("Не удалось зафиксировать compiler-копию шаблона: {error}"))?;
+        current_input = output_path.to_path_buf();
+    }
+
+    if !changed {
+        return Ok(TemplateContractCompilation {
+            changed: false,
+            path: input_path.to_path_buf(),
+            template_text,
+            applied_field_ids: Vec::new(),
+        });
     }
 
     applied_field_ids.sort();
     applied_field_ids.dedup();
-    let derived_text = extract_docx_text(output_path)
+    let derived_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось проверить скомпилированную копию: {error}"))?;
     let derived_analysis = analyze_template_text_with_domain_hint(&derived_text, Some(domain));
     if derived_analysis.is_static {
@@ -217,7 +343,7 @@ fn compile_template_contract_copy(
     }
     Ok(TemplateContractCompilation {
         changed: true,
-        path: output_path.to_path_buf(),
+        path: current_input,
         template_text: derived_text,
         applied_field_ids,
     })
@@ -540,6 +666,33 @@ fn infer_static_template_rows(
 #[cfg(test)]
 mod legacy_template_runtime_tests {
     use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    fn write_story_test_docx(path: &Path, body: &str, header: Option<&str>) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create test directory");
+        }
+        let file = std::fs::File::create(path).expect("create test DOCX");
+        let mut writer = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        writer
+            .start_file("[Content_Types].xml", options)
+            .expect("content types");
+        writer.write_all(b"<Types/>").expect("content types bytes");
+        writer
+            .start_file("word/document.xml", options)
+            .expect("document part");
+        writer.write_all(body.as_bytes()).expect("document bytes");
+        if let Some(header) = header {
+            writer
+                .start_file("word/header1.xml", options)
+                .expect("header part");
+            writer.write_all(header.as_bytes()).expect("header bytes");
+        }
+        writer.finish().expect("finish test DOCX");
+    }
 
     fn medical_document() -> DocumentTemplateSpec {
         DocumentTemplateSpec {
@@ -595,6 +748,168 @@ mod legacy_template_runtime_tests {
         let structural_medical = matches!(domain, DomainKind::Medical);
         assert!(structural_medical);
         assert!(!(infer_blank_zones && legacy_static));
+    }
+
+    #[test]
+    fn blank_inference_never_uses_a_label_from_body_with_a_blank_from_header() {
+        let body = "Первичный осмотр\nЖалобы:".to_string();
+        let header = "________".to_string();
+        let flattened = format!("{body}\n{header}");
+        let legacy_flattened = dokkomplekt_core::infer_legacy_template_fields(
+            &flattened,
+            Some(&DomainKind::Medical),
+            Some("primary"),
+        );
+        assert!(legacy_flattened
+            .iter()
+            .any(|candidate| candidate.field_id == "medical.complaints"));
+
+        let stories = BTreeMap::from([
+            ("word/document.xml".to_string(), body),
+            ("word/header1.xml".to_string(), header),
+        ]);
+        let scoped = blank_template_fields_for_stories(
+            &stories,
+            &DomainKind::Medical,
+            "primary",
+        );
+        assert!(scoped.values().flatten().all(|candidate| {
+            candidate.field_id != "medical.complaints"
+        }));
+    }
+
+    #[test]
+    fn structural_expected_count_never_crosses_word_story_boundaries() {
+        let stories = BTreeMap::from([
+            (
+                "word/document.xml".to_string(),
+                "Первичный осмотр\nЖалобы: тревога".to_string(),
+            ),
+            (
+                "word/header1.xml".to_string(),
+                "служебный колонтитул".to_string(),
+            ),
+        ]);
+        let (count, fields) = structural_template_bindings_for_stories(
+            &stories,
+            &DomainKind::Medical,
+            "primary",
+        );
+        assert_eq!(count, 1);
+        assert_eq!(fields, BTreeSet::from(["medical.complaints".to_string()]));
+    }
+
+    #[test]
+    fn parser_fallback_never_crosses_from_body_into_header_story() {
+        let body = "Первичный осмотр\nЖалобы: тревога и бессонница".to_string();
+        let header = "ГБУЗ НО НКЦПЗ".to_string();
+        let flattened = format!("{body}\n{header}");
+        let legacy_flattened = selected_filled_medical_markup(&flattened, &BTreeSet::new());
+        let old_complaints = legacy_flattened
+            .iter()
+            .find(|replacement| replacement.field_id == "medical.complaints")
+            .expect("flattened parser demonstrates the legacy cross-story bug");
+        assert!(old_complaints.value.contains("ГБУЗ НО НКЦПЗ"));
+
+        let stories = BTreeMap::from([
+            ("word/document.xml".to_string(), body),
+            ("word/header1.xml".to_string(), header),
+        ]);
+        let scoped =
+            selected_filled_medical_markup_for_stories(&stories, &BTreeSet::new());
+        let complaints = scoped["word/document.xml"]
+            .iter()
+            .find(|replacement| replacement.field_id == "medical.complaints")
+            .expect("body complaints candidate");
+        assert_eq!(complaints.value, "тревога и бессонница");
+        assert!(scoped
+            .values()
+            .flatten()
+            .all(|replacement| !replacement.value.contains("ГБУЗ НО НКЦПЗ")));
+    }
+
+    #[test]
+    fn full_contract_compiler_keeps_header_out_of_body_fallback_and_succeeds() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-runtime-story-compiler-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("filled.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p><w:p><w:r><w:t>Иванов Иван Иванович проживает: Нижний Новгород, Ленина 1</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#,
+            Some(r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>ГБУЗ НО НКЦПЗ</w:t></w:r></w:p></w:hdr>"#),
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("story-scoped compiler must succeed");
+        assert!(compiled.changed);
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field_id| field_id == "subject.address"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        assert!(stories["word/document.xml"].contains("{{subject.address}}"));
+        assert!(stories["word/header1.xml"].contains("ГБУЗ НО НКЦПЗ"));
+        assert!(!stories["word/header1.xml"].contains("{{"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn windows_primary_fixture_compiles_without_semanticizing_signature_blanks() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-windows-primary-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("исходник проверка № 1.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:p><w:r><w:t>Ф.И.О.: Иванов Иван Иванович</w:t></w:r></w:p>
+<w:p><w:r><w:t>Номер истории болезни: 1111</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата поступления: 20.08.2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>Диагноз: F20.0 шаблонная формулировка</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: старое лечение</w:t></w:r></w:p>
+<w:p><w:r><w:t>Место работы: Старый завод</w:t></w:r></w:p>
+<w:p><w:r><w:t>Должность: старый инженер</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            Some(r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>ГБУЗ НО «НКЦПЗ» диспансер №2</w:t></w:r></w:p></w:hdr>"#),
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("the installed Windows primary fixture must compile");
+        assert!(!compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.attending_doctor" || field == "medical.department_head"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        assert!(stories["word/document.xml"].contains("Лечащий врач __________"));
+        assert!(stories["word/document.xml"].contains("Заведующий отделением __________"));
+        assert!(stories["word/header1.xml"].contains("НКЦПЗ"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

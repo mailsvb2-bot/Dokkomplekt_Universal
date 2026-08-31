@@ -182,18 +182,80 @@ function Wait-UiElement {
 
 function Invoke-UiElement {
   param([Parameter(Mandatory = $true)]$Element)
-  try {
-    $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $pattern.Invoke()
-    return
-  } catch {
-    $point = $Element.GetClickablePoint()
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
-    [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-    [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  }
+  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    try {
+      if (-not $Element.Current.IsEnabled) {
+        Start-Sleep -Milliseconds 150
+        continue
+      }
+      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+        $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+        $scroll.ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      }
+      if ($Element.Current.IsInvokePatternAvailable) {
+        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $pattern.Invoke()
+        return
+      }
+      if ($Element.Current.IsLegacyIAccessiblePatternAvailable) {
+        $legacy = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        $legacy.DoDefaultAction()
+        return
+      }
+      try {
+        $point = $Element.GetClickablePoint()
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        return
+      } catch {
+        # WebView2 can temporarily omit a clickable point for a keyboard-actionable
+        # button. Focus + Enter still exercises the real installed UI action.
+        $Element.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+        return
+      }
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 150
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'UI element did not become enabled and actionable within 5 seconds.'
 }
 
+function Invoke-UiElementPhysically {
+  param([Parameter(Mandatory = $true)]$Element)
+  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    try {
+      if (-not $Element.Current.IsEnabled) {
+        Start-Sleep -Milliseconds 100
+        continue
+      }
+      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+        $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+        $scroll.ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+      try {
+        $point = $Element.GetClickablePoint()
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+      } catch {
+        $Element.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      }
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'UI element did not become physically actionable within 5 seconds.'
+}
 
 function New-PlainDocxFixture {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -208,6 +270,67 @@ function New-PlainDocxFixture {
         '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
         '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
         'word/document.xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Проверочная кнопка</w:t></w:r></w:p><w:p><w:r><w:t>Обычный статический шаблон без технической разметки.</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'
+      }
+      foreach ($name in $parts.Keys) {
+        $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+        try { $writer.Write($parts[$name]) } finally { $writer.Dispose() }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
+function New-MedicalStoryDocxFixture {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][ValidateSet('template','source')][string]$Variant
+  )
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    try {
+      if ($Variant -eq 'template') {
+        $patient = 'Иванов Иван Иванович'
+        $caseNumber = '1111'
+        $admission = '20.08.2026'
+        $diagnosis = 'F20.0 шаблонная формулировка'
+        $treatment = 'старое лечение'
+        $workplace = 'Старый завод'
+        $position = 'старый инженер'
+      } else {
+        $patient = 'Петров Пётр Петрович'
+        $caseNumber = '2222'
+        $admission = '26.08.2026'
+        $diagnosis = 'F20.0 Параноидная шизофрения'
+        $treatment = 'рисперидон 4 мг/сут'
+        $workplace = 'Новый завод'
+        $position = 'инженер'
+      }
+      $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
+        '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Лечение: ' + $treatment + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>' +
+        '<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/></w:sectPr></w:body></w:document>'
+      $parts = @{
+        '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>'
+        '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+        'word/_rels/document.xml.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdHeader1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>'
+        'word/document.xml' = $body
+        'word/header1.xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>ГБУЗ НО «НКЦПЗ» диспансер №2</w:t></w:r></w:p></w:hdr>'
       }
       foreach ($name in $parts.Keys) {
         $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
@@ -252,6 +375,35 @@ function Find-ButtonByNames {
     if ($null -ne $found) { return $found }
   }
   return $null
+}
+
+function Find-ReadyButtonByNames {
+  param(
+    [Parameter(Mandatory = $true)]$Root,
+    [Parameter(Mandatory = $true)][string[]]$Names
+  )
+  $button = Find-ButtonByNames -Root $Root -Names $Names
+  if ($null -eq $button) { return $null }
+  try {
+    if (-not $button.Current.IsEnabled) { return $null }
+    if ($button.Current.IsInvokePatternAvailable -or $button.Current.IsLegacyIAccessiblePatternAvailable) {
+      return $button
+    }
+    if ($button.Current.IsOffscreen -and $button.Current.IsScrollItemPatternAvailable) {
+      $scroll = $button.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+      $scroll.ScrollIntoView()
+      Start-Sleep -Milliseconds 100
+    }
+    try {
+      $null = $button.GetClickablePoint()
+      return $button
+    } catch {
+      $button.SetFocus()
+      return $button
+    }
+  } catch {
+    return $null
+  }
 }
 
 function Set-UiValue {
@@ -404,7 +556,15 @@ if ($adversarial) {
 } else {
   $plainTemplate = Join-Path $env:RUNNER_TEMP 'button-smoke.docx'
 }
-New-PlainDocxFixture -Path $plainTemplate
+if ($adversarial) {
+  New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template'
+  $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
+  New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source'
+  $activeSourcePath = $medicalSource
+} else {
+  New-PlainDocxFixture -Path $plainTemplate
+  $activeSourcePath = $plainTemplate
+}
 $fileNameEdit = Wait-UiElement -Description 'OpenFileDialog file name field' -Probe {
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -417,12 +577,39 @@ Submit-OpenFileDialog -Dialog $templateDialog
 Write-Host 'Native first-run template picker OK: real DOCX selected.'
 
 $createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) button' -TimeoutSeconds 40 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
 }
 Invoke-UiElement -Element $createPreparedButton
 
 $expectedTemplateButtonName = if ($adversarial) { 'исходник проверка' } else { 'button-smoke' }
-$createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds 40 -Probe {
+# WebView2 can acknowledge UIA InvokePattern without dispatching the underlying DOM
+# click on a saturated hosted runner. Require an observable setup transition and,
+# if the action is still visibly idle, retry exactly once with physical input.
+$templateSetupTransitionDeadlineSeconds = 5
+$templateSetupTransitionDeadline = [DateTime]::UtcNow.AddSeconds($templateSetupTransitionDeadlineSeconds)
+$templateSetupStarted = $false
+do {
+  if ($process.HasExited) { throw 'Installed application exited while starting Word template registration.' }
+  $createdEarly = Find-ButtonByNames -Root $appWindow -Names @($expectedTemplateButtonName)
+  if ($null -ne $createdEarly) { $templateSetupStarted = $true; break }
+  $stillReady = Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  if ($null -eq $stillReady) { $templateSetupStarted = $true; break }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $templateSetupTransitionDeadline)
+
+if (-not $templateSetupStarted) {
+  Write-Host 'UIA action produced no observable template-registration transition; retrying once with physical input.'
+  $createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) physical retry' -TimeoutSeconds 10 -Probe {
+    Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  }
+  Invoke-UiElementPhysically -Element $createPreparedButton
+}
+
+# Registration still has a bounded completion deadline and must expose the real
+# filename-derived document button; a process exit remains an immediate failure.
+$templateRegistrationDeadlineSeconds = 90
+$createdDocumentButton = Wait-UiElement -Description "created static template button '$expectedTemplateButtonName'" -TimeoutSeconds $templateRegistrationDeadlineSeconds -Probe {
+  if ($process.HasExited) { throw 'Installed application exited while registering the selected Word template.' }
   Find-ButtonByNames -Root $appWindow -Names @($expectedTemplateButtonName)
 }
 if ($null -eq $createdDocumentButton) { throw 'The real plain DOCX did not become a document button.' }
@@ -446,7 +633,7 @@ $sourceFileNameEdit = Wait-UiElement -Description 'source OpenFileDialog file na
   )
   $sourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $automationId)
 }
-Set-UiValue -Element $sourceFileNameEdit -Value $plainTemplate
+Set-UiValue -Element $sourceFileNameEdit -Value $activeSourcePath
 Submit-OpenFileDialog -Dialog $sourceDialog
 $sourceAccepted = Wait-UiElement -Description 'Источник принят after native source selection' -TimeoutSeconds 40 -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -480,7 +667,7 @@ if ($adversarial) {
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Источник принят')
   )
   if ($null -eq $acceptedAfterBroken) { throw 'Corrupt replacement erased the previously accepted source state.' }
-  $goodSourceName = [System.IO.Path]::GetFileName($plainTemplate)
+  $goodSourceName = [System.IO.Path]::GetFileName($activeSourcePath)
   $goodSourceAfterBroken = $appWindow.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $goodSourceName)
@@ -548,12 +735,12 @@ if ($adversarial) {
 # real preflight, fill deterministic folder fields when the backend asks for them,
 # click Create, then require a physical readable DOCX in the Desktop output subfolder.
 $selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Выбрать всё')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Выбрать всё')
 }
 Invoke-UiElement -Element $selectAllButton
 
 $preflightButton = Wait-UiElement -Description 'generation action for one selected document' -TimeoutSeconds 40 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
 }
 Invoke-UiElement -Element $preflightButton
 
@@ -580,21 +767,104 @@ $dateInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descend
 if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNumber }
 if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
+$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
 $generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Создать документы')
+  Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
 }
 Invoke-UiElement -Element $generateButton
 
-$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
+# WebView2 can report a successful UIA InvokePattern call without dispatching a DOM click
+# on a saturated hosted runner. Never trust the automation method itself: require an
+# observable product transition. If nothing at all changes, retry once through real
+# mouse/keyboard input. The app's confirmation-in-flight guard makes this idempotent,
+# and the smoke still fails unless a physical readable DOCX is ultimately published.
+$generationTransitionDeadlineSeconds = 5
+$generationTransitionDeadline = [DateTime]::UtcNow.AddSeconds($generationTransitionDeadlineSeconds)
+$generationActionStarted = $false
+do {
+  if ($process.HasExited) { throw 'Installed application exited while starting real document generation.' }
+  $createdDuringTransition = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -ne $createdDuringTransition) { $generationActionStarted = $true; break }
+
+  $failureDuringTransition = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Документы не созданы')
+  )
+  if ($null -ne $failureDuringTransition) { $generationActionStarted = $true; break }
+
+  $busyGenerationButton = Find-ButtonByNames -Root $appWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
+  if ($null -ne $busyGenerationButton) { $generationActionStarted = $true; break }
+
+  $preflightStillOpen = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+  )
+  if ($null -eq $preflightStillOpen) { $generationActionStarted = $true; break }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $generationTransitionDeadline)
+
+if (-not $generationActionStarted) {
+  Write-Host 'UIA action produced no observable generation transition; retrying once with physical input.'
+  $generateButton = Wait-UiElement -Description 'Создать документы physical retry' -TimeoutSeconds 10 -Probe {
+    Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
+  }
+  Invoke-UiElementPhysically -Element $generateButton
+}
+
 $createdDeadline = [DateTime]::UtcNow.AddSeconds(60)
 $createdDoc = $null
+$generationFailure = $null
 do {
   if ($process.HasExited) { throw 'Installed application exited during real document generation smoke.' }
   $createdDoc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue |
     Select-Object -First 1
-  if ($null -eq $createdDoc) { Start-Sleep -Milliseconds 500 }
-} while ($null -eq $createdDoc -and [DateTime]::UtcNow -lt $createdDeadline)
+  if ($null -ne $createdDoc) { break }
+
+  # The preflight deliberately stays open when Rust rejects generation. Surface the
+  # real backend reason immediately instead of hiding it behind a 60-second file timeout.
+  $failureMarker = $appWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Документы не созданы'
+    )
+  )
+  if ($null -ne $failureMarker) {
+    $textCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Text
+    )
+    $visibleText = @($appWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCondition) |
+      ForEach-Object { $_.Current.Name } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $markerIndex = [Array]::IndexOf($visibleText, 'Документы не созданы')
+    if ($markerIndex -ge 0 -and ($markerIndex + 1) -lt $visibleText.Count) {
+      $generationFailure = $visibleText[$markerIndex + 1]
+    } else {
+      $generationFailure = ($visibleText -join ' | ')
+    }
+    break
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $createdDeadline)
+if ($null -ne $generationFailure) {
+  Write-AppLaunchDiagnostics
+  throw "Installed application rejected real document generation: $generationFailure"
+}
 if ($null -eq $createdDoc) {
+  Write-AppLaunchDiagnostics
+  Write-Host '--- installed UI snapshot after generation timeout ---'
+  foreach ($controlType in @([System.Windows.Automation.ControlType]::Button, [System.Windows.Automation.ControlType]::Text)) {
+    $controlCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      $controlType
+    )
+    @($appWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $controlCondition)) |
+      ForEach-Object { if (-not [string]::IsNullOrWhiteSpace($_.Current.Name)) { Write-Host "UI: $($_.Current.Name)" } }
+  }
+  Write-Host '--- Desktop output tree after generation timeout ---'
+  Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
@@ -604,7 +874,21 @@ try {
   if ($null -eq $documentEntry) { throw "Created file is not a readable Word DOCX: $($createdDoc.FullName)" }
   $reader = [System.IO.StreamReader]::new($documentEntry.Open(), [System.Text.Encoding]::UTF8)
   try { $createdXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
-  if ($createdXml -notmatch 'Проверочная кнопка') { throw 'Created DOCX lost the template content.' }
+  if ($adversarial) {
+    if ($createdXml -notmatch 'Первичный осмотр') { throw 'Created medical DOCX lost the template heading.' }
+    if ($createdXml -notmatch 'Петров Пётр Петрович') { throw 'Installed medical generation did not render the current patient name.' }
+    if ($createdXml -match 'Иванов Иван Иванович') { throw 'Installed medical generation leaked the old template patient name.' }
+    if ($createdXml -notmatch '2222') { throw 'Installed medical generation did not render the current case number.' }
+    if ($createdXml -match '>1111<') { throw 'Installed medical generation leaked the old template case number.' }
+    $headerEntry = $createdArchive.GetEntry('word/header1.xml')
+    if ($null -eq $headerEntry) { throw 'Created medical DOCX lost its Word header story.' }
+    $headerReader = [System.IO.StreamReader]::new($headerEntry.Open(), [System.Text.Encoding]::UTF8)
+    try { $createdHeaderXml = $headerReader.ReadToEnd() } finally { $headerReader.Dispose() }
+    if ($createdHeaderXml -notmatch 'НКЦПЗ') { throw 'Medical compiler consumed or corrupted the fixed Word header.' }
+    if ($createdHeaderXml -match '\{\{') { throw 'Medical compiler incorrectly converted fixed header text into a semantic placeholder.' }
+  } elseif ($createdXml -notmatch 'Проверочная кнопка') {
+    throw 'Created DOCX lost the template content.'
+  }
 } finally {
   $createdArchive.Dispose()
 }
@@ -652,7 +936,7 @@ if ($adversarial) {
     )
     $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
     if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
   }
   Invoke-UiElement -Element $repeatAction
   $repeatPreflight = Wait-UiElement -Description 'repeat preflight' -TimeoutSeconds 30 -Probe {
@@ -674,7 +958,7 @@ if ($adversarial) {
     )
     $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
     if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
   }
   Invoke-UiElement -Element $repeatGenerate
   $otherVariants = Wait-UiElement -Description 'existing-kit Другие варианты' -TimeoutSeconds 30 -Probe {

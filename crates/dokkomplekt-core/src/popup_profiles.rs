@@ -449,6 +449,14 @@ fn apply_profession_defaults(config: &mut PopupFieldConfig, category: &DomainKin
             let linked_commission = match id {
                 VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE),
                 SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE),
+                "medical.sick_leave_commission_date"
+                    if matches!(
+                        MedicalDocumentRole::from_role_id(role_id),
+                        MedicalDocumentRole::SickLeaveCommission
+                    ) =>
+                {
+                    Some(SICK_LEAVE_VK_COMMISSION_DATE)
+                }
                 "medical.protocol_date" | "medical.sick_leave_commission_date" => {
                     Some("medical.commission_date")
                 }
@@ -510,6 +518,17 @@ fn profession_role_fields(category: &DomainKind, role_id: &str) -> Vec<PopupFiel
             // Medical role plan as the universal pipeline and completeness gate.
             let plan =
                 build_medical_render_plan(MedicalDocumentRole::from_role_id(role_id), false, false);
+            if matches!(
+                plan.role,
+                MedicalDocumentRole::SickLeaveCommission | MedicalDocumentRole::VkMse
+            ) {
+                // Standalone VK/MSE popups need the shared donor values present
+                // in the same popup graph because the role-scoped fields link to
+                // them as editable defaults. Without these source prompts the
+                // designer correctly rejects the graph as dangling.
+                add("medical.workplace", false);
+                add("medical.position", false);
+            }
             for field_id in &plan.required_fields {
                 add(field_id, true);
             }
@@ -979,6 +998,56 @@ mod tests {
                 .help_text
                 .as_deref()
                 .is_some_and(|text| text.contains("можно изменить отдельно")));
+        }
+    }
+
+    #[test]
+    fn standalone_vk_popups_include_sources_for_editable_work_defaults() {
+        for (role, scoped_workplace, scoped_position) in [
+            ("vk_mse", VK_MSE_WORKPLACE, VK_MSE_POSITION),
+            (
+                "sick_leave_vk",
+                SICK_LEAVE_VK_WORKPLACE,
+                SICK_LEAVE_VK_POSITION,
+            ),
+        ] {
+            let document = DocumentTemplateSpec {
+                id: role.into(),
+                button_label: role.into(),
+                template_path: format!("{role}.docx"),
+                category: DomainKind::Medical,
+                role_id: role.into(),
+                required_fields: Vec::new(),
+                placeholders: Vec::new(),
+                is_static_copy: false,
+                popup_fields: Vec::new(),
+                popup_configured: false,
+            };
+            let fields = default_popup_fields_for_document(&document);
+            validate_popup_fields(&fields)
+                .unwrap_or_else(|error| panic!("{role}: invalid default popup graph: {error}"));
+            assert!(fields
+                .iter()
+                .any(|field| field.field_id == "medical.workplace"));
+            assert!(fields
+                .iter()
+                .any(|field| field.field_id == "medical.position"));
+            assert_eq!(
+                fields
+                    .iter()
+                    .find(|field| field.field_id == scoped_workplace)
+                    .and_then(|field| field.linked_to.as_deref()),
+                Some("medical.workplace"),
+                "{role}: workplace source link"
+            );
+            assert_eq!(
+                fields
+                    .iter()
+                    .find(|field| field.field_id == scoped_position)
+                    .and_then(|field| field.linked_to.as_deref()),
+                Some("medical.position"),
+                "{role}: position source link"
+            );
         }
     }
 

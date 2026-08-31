@@ -866,6 +866,53 @@ mod legacy_template_runtime_tests {
     }
 
     #[test]
+    fn windows_primary_fixture_compiles_without_semanticizing_signature_blanks() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-windows-primary-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("исходник проверка № 1.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:p><w:r><w:t>Ф.И.О.: Иванов Иван Иванович</w:t></w:r></w:p>
+<w:p><w:r><w:t>Номер истории болезни: 1111</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата поступления: 20.08.2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>Диагноз: F20.0 шаблонная формулировка</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: старое лечение</w:t></w:r></w:p>
+<w:p><w:r><w:t>Место работы: Старый завод</w:t></w:r></w:p>
+<w:p><w:r><w:t>Должность: старый инженер</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            Some(r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>ГБУЗ НО «НКЦПЗ» диспансер №2</w:t></w:r></w:p></w:hdr>"#),
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("the installed Windows primary fixture must compile");
+        assert!(!compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.attending_doctor" || field == "medical.department_head"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        assert!(stories["word/document.xml"].contains("Лечащий врач __________"));
+        assert!(stories["word/document.xml"].contains("Заведующий отделением __________"));
+        assert!(stories["word/header1.xml"].contains("НКЦПЗ"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parser_fallback_never_competes_with_structural_bindings() {
         let text = concat!(
             "Выписной эпикриз\n",

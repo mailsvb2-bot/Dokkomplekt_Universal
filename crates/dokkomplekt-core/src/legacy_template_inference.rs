@@ -74,6 +74,9 @@ pub fn infer_legacy_template_fields(
             let Some(field_id) = resolve_label(&label, preferred_domain, role_id) else {
                 continue;
             };
+            if !template_field_is_replaceable(&field_id) {
+                continue;
+            }
             push_if_unique_target(
                 &mut candidates,
                 &target_counts,
@@ -98,6 +101,9 @@ pub fn infer_legacy_template_fields(
             let label = clean_label(prefix);
             if !label.is_empty() && !is_too_generic_label(&label) {
                 if let Some(field_id) = resolve_label(&label, preferred_domain, role_id) {
+                    if !template_field_is_replaceable(&field_id) {
+                        continue;
+                    }
                     push_if_unique_target(
                         &mut candidates,
                         &target_counts,
@@ -562,6 +568,13 @@ fn extract_period_dates(line: &str) -> Option<(String, String)> {
     })
 }
 
+fn template_field_is_replaceable(field_id: &str) -> bool {
+    !matches!(
+        field_id,
+        "medical.attending_doctor" | "medical.department_head"
+    ) && !field_id.starts_with("doctor.")
+}
+
 fn template_label_catalog(preferred_domain: Option<&DomainKind>) -> Vec<(String, bool)> {
     let mut labels = Vec::<(String, bool)>::new();
     for definition in crate::all_fields() {
@@ -577,10 +590,7 @@ fn template_label_catalog(preferred_domain: Option<&DomainKind>) -> Vec<(String,
         if !allowed {
             continue;
         }
-        let replaceable = !matches!(
-            definition.id.as_str(),
-            "medical.attending_doctor" | "medical.department_head"
-        ) && !definition.id.starts_with("doctor.");
+        let replaceable = template_field_is_replaceable(&definition.id);
         for label in std::iter::once(definition.title_ru).chain(definition.aliases) {
             let label = clean_label(&label);
             if label.is_empty()
@@ -863,6 +873,22 @@ mod tests {
         assert_eq!(fields[0].field_id, "subject.name");
         assert_eq!(fields[1].field_id, "medical.diagnosis");
         assert_eq!(fields[0].confidence, 1.0);
+    }
+
+    #[test]
+    fn signature_blanks_are_not_auto_bound_as_semantic_values() {
+        let fields = infer_legacy_template_fields(
+            "Первичный осмотр\nЛечащий врач __________\nЗаведующий отделением __________",
+            Some(&DomainKind::Medical),
+            Some("primary"),
+        );
+        assert!(
+            fields.iter().all(|candidate| !matches!(
+                candidate.field_id.as_str(),
+                "medical.attending_doctor" | "medical.department_head"
+            )),
+            "signature lines must remain literal signing zones: {fields:?}"
+        );
     }
 
     #[test]

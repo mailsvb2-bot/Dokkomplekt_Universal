@@ -838,6 +838,84 @@ pub fn create_docx_from_text(output_path: &Path, text: &str) -> DocxResult<()> {
     Ok(())
 }
 
+/// Insert one plain semantic paragraph into the main Word story immediately
+/// before the first paragraph whose visible text starts with one of `markers`.
+/// The caller owns semantic policy; the original user file is never modified.
+pub fn insert_text_paragraph_before_first_matching_file(
+    input_path: &Path,
+    output_path: &Path,
+    markers: &[&str],
+    paragraph_text: &str,
+) -> DocxResult<bool> {
+    validate_safe_template_file(input_path)?;
+    if markers.is_empty() || paragraph_text.trim().is_empty() {
+        return Ok(false);
+    }
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = temporary_output_path(output_path);
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let output = File::create(&temporary)?;
+    let mut writer = ZipWriter::new(output);
+    let mut found_main = false;
+    let mut inserted = false;
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer.add_directory(name, options)?;
+            continue;
+        }
+        writer.start_file(name.as_str(), options)?;
+        if name != "word/document.xml" {
+            std::io::copy(&mut entry, &mut writer)?;
+            continue;
+        }
+        found_main = true;
+        ensure_text_part_size(&name, entry.size())?;
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml)?;
+        if !inserted {
+            let marker_folds = markers
+                .iter()
+                .map(|marker| structural_fold(marker))
+                .collect::<Vec<_>>();
+            let target = paragraph_spans(&xml).into_iter().find(|span| {
+                let text = structural_fold(span.text.trim());
+                marker_folds.iter().any(|marker| text.starts_with(marker))
+            });
+            if let Some(target) = target {
+                let paragraph = format!(
+                    "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+                    escape_xml_text(paragraph_text)
+                );
+                xml.insert_str(target.start, &paragraph);
+                inserted = true;
+            }
+        }
+        writer.write_all(xml.as_bytes())?;
+    }
+    writer.finish()?;
+    if !found_main {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+    if !inserted {
+        let _ = std::fs::remove_file(&temporary);
+        return Ok(false);
+    }
+    if let Err(error) = commit_temporary_file(&temporary, output_path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(true)
+}
+
 fn escape_xml_attribute(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {

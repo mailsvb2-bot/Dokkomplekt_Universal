@@ -313,15 +313,31 @@ function New-MedicalStoryDocxFixture {
         $workplace = 'Новый завод'
         $position = 'инженер'
       }
+      if ($Variant -eq 'template') {
+        # The real regression lived in doctor-owned Word tables: the extractor
+        # preserves cells with TAB separators, so the compiler must bind every
+        # label/value cell independently instead of letting the first label own
+        # the complete row.
+        $structuredFields =
+          '<w:tbl>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $caseNumber + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $diagnosis + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $treatment + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $workplace + '</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $position + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '</w:tbl>'
+      } else {
+        $structuredFields =
+          '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Лечение: ' + $treatment + '</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>'
+      }
       $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
         '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Лечение: ' + $treatment + '</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>' +
+        $structuredFields +
         '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>' +
         '<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/></w:sectPr></w:body></w:document>'
@@ -880,6 +896,15 @@ try {
     if ($createdXml -match 'Иванов Иван Иванович') { throw 'Installed medical generation leaked the old template patient name.' }
     if ($createdXml -notmatch '2222') { throw 'Installed medical generation did not render the current case number.' }
     if ($createdXml -match '>1111<') { throw 'Installed medical generation leaked the old template case number.' }
+    if ($createdXml -notmatch 'F20.0 Параноидная шизофрения') { throw 'Installed medical generation did not render the current diagnosis from the tabular template.' }
+    if ($createdXml -match 'шаблонная формулировка') { throw 'Installed medical generation leaked the old tabular diagnosis.' }
+    if ($createdXml -notmatch 'рисперидон 4 мг/сут') { throw 'Installed medical generation did not render current treatment into the tabular template.' }
+    if ($createdXml -match 'старое лечение') { throw 'Installed medical generation leaked old tabular treatment.' }
+    if ($createdXml -notmatch 'Новый завод') { throw 'Installed medical generation did not render current workplace.' }
+    if ($createdXml -match 'Старый завод') { throw 'Installed medical generation leaked old workplace.' }
+    if ($createdXml -notmatch '>инженер<') { throw 'Installed medical generation did not render current position.' }
+    if ($createdXml -match 'старый инженер') { throw 'Installed medical generation leaked old position.' }
+    if ($createdXml -notmatch 'Экспертный анамнез') { throw 'Primary medical generation did not restore the role-owned expert anamnesis before signatures.' }
     $headerEntry = $createdArchive.GetEntry('word/header1.xml')
     if ($null -eq $headerEntry) { throw 'Created medical DOCX lost its Word header story.' }
     $headerReader = [System.IO.StreamReader]::new($headerEntry.Open(), [System.Text.Encoding]::UTF8)

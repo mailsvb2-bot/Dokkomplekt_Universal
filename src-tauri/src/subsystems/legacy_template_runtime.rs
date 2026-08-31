@@ -313,6 +313,43 @@ fn compile_template_contract_copy(
         current_input = output_path.to_path_buf();
     }
 
+    // Primary inspection has a role-owned expert anamnesis at the end of the
+    // document. Historical Dokkomplekt inserted it before the physician/signature
+    // block even when the doctor's Word template did not contain that section.
+    // Preserve that behaviour in the compiler copy rather than requiring users
+    // to add a technical placeholder to their own DOCX.
+    if domain == &DomainKind::Medical
+        && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "primary"
+    {
+        let expert_field =
+            dokkomplekt_core::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
+        let role_text = extract_docx_text(&current_input)
+            .map_err(|error| format!("Не удалось проверить primary role-block: {error}"))?;
+        let role_analysis = analyze_template_text_with_domain_hint(&role_text, Some(domain));
+        if !role_analysis.placeholders.iter().any(|field| field == expert_field) {
+            let role_output = scratch_root.join(format!("primary-role-{}.{}", Uuid::new_v4(), extension));
+            let inserted = insert_text_paragraph_before_first_matching_file(
+                &current_input,
+                &role_output,
+                &[
+                    "Лечащий врач",
+                    "Врач-психиатр",
+                    "Врач психиатр",
+                    "Заведующий отделением",
+                    "Зав. отделением",
+                    "Зав. отд.",
+                ],
+                "Экспертный анамнез: {{medical.expert_anamnesis}}",
+            )
+            .map_err(|error| format!("Primary expert-anamnesis insertion failed: {error}"))?;
+            if inserted {
+                current_input = role_output;
+                changed = true;
+                applied_field_ids.push(expert_field.to_string());
+            }
+        }
+    }
+
     if !changed {
         return Ok(TemplateContractCompilation {
             changed: false,
@@ -906,9 +943,38 @@ mod legacy_template_runtime_tests {
             .iter()
             .any(|field| field == "medical.attending_doctor" || field == "medical.department_head"));
         let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
-        assert!(stories["word/document.xml"].contains("Лечащий врач __________"));
-        assert!(stories["word/document.xml"].contains("Заведующий отделением __________"));
+        let body = &stories["word/document.xml"];
+        assert!(body.contains("Лечащий врач __________"));
+        assert!(body.contains("Заведующий отделением __________"));
+        assert!(body.contains("Экспертный анамнез: {{medical.expert_anamnesis}}"));
+        assert!(
+            body.find("Экспертный анамнез: {{medical.expert_anamnesis}}")
+                < body.find("Лечащий врач __________"),
+            "primary expert anamnesis must be inserted immediately before signatures: {body}"
+        );
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.expert_anamnesis"));
+        let analysis = analyze_template_text_with_domain_hint(body, Some(&DomainKind::Medical));
+        let mut document = DocumentTemplateSpec {
+            id: "primary-runtime".into(),
+            button_label: "первичный".into(),
+            template_path: compiled.path.display().to_string(),
+            category: DomainKind::Medical,
+            role_id: "primary".into(),
+            required_fields: Vec::new(),
+            placeholders: analysis.placeholders,
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        validate_medical_template_output_contract(&document)
+            .expect("compiled primary role contract must be complete");
+        apply_compiled_contract_to_document(&mut document, body)
+            .expect("compiled primary contract must persist safely");
         assert!(stories["word/header1.xml"].contains("НКЦПЗ"));
+        assert!(!stories["word/header1.xml"].contains("Экспертный анамнез"));
         let _ = std::fs::remove_dir_all(root);
     }
 

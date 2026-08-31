@@ -194,9 +194,32 @@ pub fn infer_labeled_template_values(
     let catalog = template_label_catalog(preferred_domain);
     let anchors = lines
         .iter()
-        .map(|line| match_labeled_template_anchor(line.trim(), &catalog, preferred_domain, role_id))
+        .map(|line| {
+            let line = line.trim();
+            if line.contains('\t') {
+                None
+            } else {
+                match_labeled_template_anchor(line, &catalog, preferred_domain, role_id)
+            }
+        })
         .collect::<Vec<_>>();
     let mut candidates = Vec::new();
+
+    // DOCX table rows are extracted as TAB-separated cells. Treating the whole
+    // row as one label/value stream makes the first cell accidentally own every
+    // later cell (for example `Место работы | ООО | Должность | врач`). Bind
+    // each label cell to its own inline or immediately-adjacent value cell.
+    for (line_index, raw_line) in lines.iter().enumerate() {
+        if raw_line.contains('\t') {
+            candidates.extend(infer_tabular_labeled_template_values(
+                raw_line,
+                line_index,
+                &catalog,
+                preferred_domain,
+                role_id,
+            ));
+        }
+    }
 
     for (line_index, anchor) in anchors.iter().enumerate() {
         let Some(anchor) = anchor else {
@@ -257,33 +280,35 @@ pub fn infer_labeled_template_values(
         if !(raw_line.contains("{{") || raw_line.contains("}}")) {
             continue;
         }
-        for segment in raw_line.split(';') {
-            let segment = segment.trim();
-            if segment.is_empty() || segment.contains("{{") || segment.contains("}}") {
-                continue;
+        for cell in raw_line.split('\t') {
+            for segment in cell.split(';') {
+                let segment = segment.trim();
+                if segment.is_empty() || segment.contains("{{") || segment.contains("}}") {
+                    continue;
+                }
+                let Some(anchor) =
+                    match_labeled_template_anchor(segment, &catalog, preferred_domain, role_id)
+                else {
+                    continue;
+                };
+                if !anchor.replaceable {
+                    continue;
+                }
+                let value = clean_structural_value(&anchor.remainder);
+                if value.is_empty() || is_blank_only(&value) {
+                    continue;
+                }
+                candidates.push(LabeledTemplateValueCandidate {
+                    field_id: anchor.field_id.clone(),
+                    title: title_for_field(&anchor.field_id),
+                    line_index,
+                    label: anchor.label,
+                    value,
+                    anchor_mode: StructuralAnchorMode::Contains,
+                    confidence: 0.995,
+                    reason: "явно разделённый сегмент частично динамического абзаца сохраняет собственную подпись и старое значение".into(),
+                });
             }
-            let Some(anchor) =
-                match_labeled_template_anchor(segment, &catalog, preferred_domain, role_id)
-            else {
-                continue;
-            };
-            if !anchor.replaceable {
-                continue;
-            }
-            let value = clean_structural_value(&anchor.remainder);
-            if value.is_empty() || is_blank_only(&value) {
-                continue;
-            }
-            candidates.push(LabeledTemplateValueCandidate {
-                field_id: anchor.field_id.clone(),
-                title: title_for_field(&anchor.field_id),
-                line_index,
-                label: anchor.label,
-                value,
-                anchor_mode: StructuralAnchorMode::Contains,
-                confidence: 0.995,
-                reason: "явно разделённый сегмент частично динамического абзаца сохраняет собственную подпись и старое значение".into(),
-            });
         }
     }
 
@@ -292,6 +317,79 @@ pub fn infer_labeled_template_values(
             .cmp(&right.line_index)
             .then_with(|| left.field_id.cmp(&right.field_id))
     });
+    candidates
+}
+
+fn infer_tabular_labeled_template_values(
+    raw_line: &str,
+    line_index: usize,
+    catalog: &[(String, bool)],
+    preferred_domain: Option<&DomainKind>,
+    role_id: Option<&str>,
+) -> Vec<LabeledTemplateValueCandidate> {
+    let cells = raw_line.split('\t').map(str::trim).collect::<Vec<_>>();
+    if cells.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    for (cell_index, cell) in cells.iter().enumerate() {
+        if cell.is_empty() || cell.contains("{{") || cell.contains("}}") {
+            continue;
+        }
+        let Some(anchor) = match_labeled_template_anchor(cell, catalog, preferred_domain, role_id)
+        else {
+            continue;
+        };
+        if !anchor.replaceable {
+            continue;
+        }
+
+        let inline = clean_structural_value(&anchor.remainder);
+        let (value, reason) = if !inline.is_empty() && !is_blank_only(&inline) {
+            (
+                inline,
+                "табличная ячейка содержит однозначную подпись и собственное значение",
+            )
+        } else {
+            let mut owned = None;
+            for next in cells.iter().skip(cell_index + 1) {
+                let next = next.trim();
+                if next.is_empty() {
+                    continue;
+                }
+                if next.contains("{{") || next.contains("}}") {
+                    break;
+                }
+                if match_labeled_template_anchor(next, catalog, preferred_domain, role_id).is_some()
+                {
+                    break;
+                }
+                if !is_blank_only(next) {
+                    owned = Some(next.to_string());
+                }
+                break;
+            }
+            let Some(value) = owned else {
+                continue;
+            };
+            (
+                value,
+                "табличная ячейка-подпись однозначно владеет соседней ячейкой значения",
+            )
+        };
+
+        candidates.push(LabeledTemplateValueCandidate {
+            field_id: anchor.field_id.clone(),
+            title: title_for_field(&anchor.field_id),
+            line_index,
+            label: anchor.label,
+            value,
+            anchor_mode: StructuralAnchorMode::Prefix,
+            confidence: 0.999,
+            reason: reason.into(),
+        });
+    }
     candidates
 }
 
@@ -985,6 +1083,41 @@ mod tests {
         assert_eq!(by_id.get("medical.discharge_condition"), Some(&"улучшение"));
         assert!(!by_id.contains_key("medical.department_head"));
         assert!(!by_id.contains_key("medical.attending_doctor"));
+    }
+
+    #[test]
+    fn tabular_primary_rows_bind_each_label_to_its_own_value_cell() {
+        let text = concat!(
+            "Первичный осмотр\n",
+            "Ф.И.О.: Иванов Иван Иванович\n",
+            "Дата поступления: 20.08.2026\n",
+            "История болезни №\t1111\n",
+            "Диагноз\tF20.0 шаблонная формулировка\n",
+            "План лечения\tстарое лечение\n",
+            "Место работы\tСтарый завод\tДолжность\tстарый инженер\n",
+            "Лечащий врач __________"
+        );
+        let bindings =
+            infer_structural_template_values(text, Some(&DomainKind::Medical), Some("primary"));
+        let by_id = bindings
+            .iter()
+            .map(|binding| (binding.field_id.as_str(), binding.value.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(by_id.get("medical.case_number"), Some(&"1111"));
+        assert_eq!(
+            by_id.get("medical.diagnosis"),
+            Some(&"F20.0 шаблонная формулировка")
+        );
+        assert_eq!(by_id.get("medical.treatment"), Some(&"старое лечение"));
+        assert_eq!(by_id.get("medical.workplace"), Some(&"Старый завод"));
+        assert_eq!(by_id.get("medical.position"), Some(&"старый инженер"));
+        assert!(
+            bindings
+                .iter()
+                .filter(|binding| binding.line_index == 6)
+                .count()
+                >= 2
+        );
     }
 
     #[test]

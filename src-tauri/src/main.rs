@@ -47,9 +47,10 @@ use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
     compile_labeled_template_file, create_docx_from_text, extract_docx_story_texts,
     extract_docx_text, extract_docx_text_from_bytes, inject_docx_images,
-    render_docx_file_with_watermark_proof, validate_safe_template_file, RenderedDocxProof,
-    TemplateLearningMapField, TemplateLearningMapReport, TemplateMarkupReplacement,
-    TemplateMarkupReport, TemplateRegressionReport,
+    insert_text_paragraph_before_first_matching_file, render_docx_file_with_watermark_proof,
+    validate_safe_template_file, RenderedDocxProof, TemplateLearningMapField,
+    TemplateLearningMapReport, TemplateMarkupReplacement, TemplateMarkupReport,
+    TemplateRegressionReport,
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,

@@ -189,10 +189,20 @@ fn compile_template_contract_copy(
     } else {
         BTreeMap::new()
     };
+    let primary_expert_field =
+        dokkomplekt_core::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
+    let needs_primary_expert_insertion = domain == &DomainKind::Medical
+        && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "primary"
+        && !analysis
+            .placeholders
+            .iter()
+            .any(|field| field == primary_expert_field);
 
-    if blank_binding_count == 0
+    if domain != &DomainKind::Medical
+        && blank_binding_count == 0
         && structural_binding_count == 0
         && initial_story_fallback.is_empty()
+        && !needs_primary_expert_insertion
     {
         return Ok(TemplateContractCompilation {
             changed: false,
@@ -239,12 +249,7 @@ fn compile_template_contract_copy(
         changed = true;
     }
 
-    let (current_structural_binding_count, _) = if domain == &DomainKind::Medical {
-        structural_template_bindings_by_story(&current_input, domain, role_id)?
-    } else {
-        (0, BTreeSet::new())
-    };
-    if current_structural_binding_count > 0 {
+    if domain == &DomainKind::Medical {
         let structural_output =
             scratch_root.join(format!("structural-{}.{}", Uuid::new_v4(), extension));
         let report = compile_labeled_template_file(
@@ -254,16 +259,11 @@ fn compile_template_contract_copy(
             role_id,
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
-        if report.binding_count != current_structural_binding_count {
-            return Err(format!(
-                "Структурный compiler ожидал {} story-scoped якорей после предыдущего stage, но подтвердил {}.",
-                current_structural_binding_count,
-                report.binding_count
-            ));
+        if report.binding_count > 0 {
+            applied_field_ids.extend(report.applied_field_ids);
+            current_input = structural_output;
+            changed = true;
         }
-        applied_field_ids.extend(report.applied_field_ids);
-        current_input = structural_output;
-        changed = true;
     }
 
     // Compatibility fallback is derived from the exact post-structural DOCX,
@@ -311,6 +311,43 @@ fn compile_template_contract_copy(
         std::fs::copy(&current_input, output_path)
             .map_err(|error| format!("Не удалось зафиксировать compiler-копию шаблона: {error}"))?;
         current_input = output_path.to_path_buf();
+    }
+
+    // Primary inspection has a role-owned expert anamnesis at the end of the
+    // document. Historical Dokkomplekt inserted it before the physician/signature
+    // block even when the doctor's Word template did not contain that section.
+    // Preserve that behaviour in the compiler copy rather than requiring users
+    // to add a technical placeholder to their own DOCX.
+    if domain == &DomainKind::Medical
+        && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "primary"
+    {
+        let expert_field =
+            dokkomplekt_core::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
+        let role_text = extract_docx_text(&current_input)
+            .map_err(|error| format!("Не удалось проверить primary role-block: {error}"))?;
+        let role_analysis = analyze_template_text_with_domain_hint(&role_text, Some(domain));
+        if !role_analysis.placeholders.iter().any(|field| field == expert_field) {
+            let role_output = scratch_root.join(format!("primary-role-{}.{}", Uuid::new_v4(), extension));
+            let inserted = insert_text_paragraph_before_first_matching_file(
+                &current_input,
+                &role_output,
+                &[
+                    "Лечащий врач",
+                    "Врач-психиатр",
+                    "Врач психиатр",
+                    "Заведующий отделением",
+                    "Зав. отделением",
+                    "Зав. отд.",
+                ],
+                "Экспертный анамнез: {{medical.expert_anamnesis}}",
+            )
+            .map_err(|error| format!("Primary expert-anamnesis insertion failed: {error}"))?;
+            if inserted {
+                current_input = role_output;
+                changed = true;
+                applied_field_ids.push(expert_field.to_string());
+            }
+        }
     }
 
     if !changed {
@@ -866,6 +903,125 @@ mod legacy_template_runtime_tests {
     }
 
     #[test]
+    fn already_semantic_primary_still_receives_role_owned_expert_anamnesis() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-semantic-primary-role-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("semantic-primary.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{subject.name}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.case_number}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.admission_date}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.diagnosis}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.treatment}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.workplace}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>{{medical.position}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("already-semantic primary must not exit before role-owned insertion");
+        assert!(compiled.changed);
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.expert_anamnesis"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        let body = &stories["word/document.xml"];
+        assert!(body.contains("Экспертный анамнез: {{medical.expert_anamnesis}}"));
+        assert!(
+            body.find("Экспертный анамнез: {{medical.expert_anamnesis}}")
+                < body.find("Лечащий врач __________"),
+            "role-owned expert anamnesis must precede signatures: {body}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn primary_blank_table_contract_compiles_all_required_render_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-primary-blank-table-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("первичный.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:p><w:r><w:t>Ф.И.О.: {{subject.name}}</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата поступления: {{medical.admission_date}}</w:t></w:r></w:p>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Лечение</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+</w:tbl>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "primary",
+            true,
+        )
+        .expect("primary blank table must compile into a complete render contract");
+        assert!(compiled.changed);
+        let body = extract_docx_text(&compiled.path).expect("compiled primary text");
+        let analysis = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
+        let document = DocumentTemplateSpec {
+            id: "primary-blank-table".into(),
+            button_label: "первичный".into(),
+            template_path: compiled.path.display().to_string(),
+            category: DomainKind::Medical,
+            role_id: "primary".into(),
+            required_fields: Vec::new(),
+            placeholders: analysis.placeholders,
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        validate_medical_template_output_contract(&document)
+            .expect("blank-table primary contract must be publishable after compilation");
+        for field_id in [
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+            "medical.expert_anamnesis",
+        ] {
+            assert!(body.contains(&format!("{{{{{field_id}}}}}")), "{body:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn windows_primary_fixture_compiles_without_semanticizing_signature_blanks() {
         let root = std::env::temp_dir().join(format!(
             "dokkomplekt-windows-primary-{}-{}",
@@ -906,9 +1062,38 @@ mod legacy_template_runtime_tests {
             .iter()
             .any(|field| field == "medical.attending_doctor" || field == "medical.department_head"));
         let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
-        assert!(stories["word/document.xml"].contains("Лечащий врач __________"));
-        assert!(stories["word/document.xml"].contains("Заведующий отделением __________"));
+        let body = &stories["word/document.xml"];
+        assert!(body.contains("Лечащий врач __________"));
+        assert!(body.contains("Заведующий отделением __________"));
+        assert!(body.contains("Экспертный анамнез: {{medical.expert_anamnesis}}"));
+        assert!(
+            body.find("Экспертный анамнез: {{medical.expert_anamnesis}}")
+                < body.find("Лечащий врач __________"),
+            "primary expert anamnesis must be inserted immediately before signatures: {body}"
+        );
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.expert_anamnesis"));
+        let analysis = analyze_template_text_with_domain_hint(body, Some(&DomainKind::Medical));
+        let mut document = DocumentTemplateSpec {
+            id: "primary-runtime".into(),
+            button_label: "первичный".into(),
+            template_path: compiled.path.display().to_string(),
+            category: DomainKind::Medical,
+            role_id: "primary".into(),
+            required_fields: Vec::new(),
+            placeholders: analysis.placeholders,
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        validate_medical_template_output_contract(&document)
+            .expect("compiled primary role contract must be complete");
+        apply_compiled_contract_to_document(&mut document, body)
+            .expect("compiled primary contract must persist safely");
         assert!(stories["word/header1.xml"].contains("НКЦПЗ"));
+        assert!(!stories["word/header1.xml"].contains("Экспертный анамнез"));
         let _ = std::fs::remove_dir_all(root);
     }
 

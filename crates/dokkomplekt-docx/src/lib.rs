@@ -838,6 +838,84 @@ pub fn create_docx_from_text(output_path: &Path, text: &str) -> DocxResult<()> {
     Ok(())
 }
 
+/// Insert one plain semantic paragraph into the main Word story immediately
+/// before the first paragraph whose visible text starts with one of `markers`.
+/// The caller owns semantic policy; the original user file is never modified.
+pub fn insert_text_paragraph_before_first_matching_file(
+    input_path: &Path,
+    output_path: &Path,
+    markers: &[&str],
+    paragraph_text: &str,
+) -> DocxResult<bool> {
+    validate_safe_template_file(input_path)?;
+    if markers.is_empty() || paragraph_text.trim().is_empty() {
+        return Ok(false);
+    }
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = temporary_output_path(output_path);
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let output = File::create(&temporary)?;
+    let mut writer = ZipWriter::new(output);
+    let mut found_main = false;
+    let mut inserted = false;
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer.add_directory(name, options)?;
+            continue;
+        }
+        writer.start_file(name.as_str(), options)?;
+        if name != "word/document.xml" {
+            std::io::copy(&mut entry, &mut writer)?;
+            continue;
+        }
+        found_main = true;
+        ensure_text_part_size(&name, entry.size())?;
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml)?;
+        if !inserted {
+            let marker_folds = markers
+                .iter()
+                .map(|marker| structural_fold(marker))
+                .collect::<Vec<_>>();
+            let target = paragraph_spans(&xml).into_iter().find(|span| {
+                let text = structural_fold(span.text.trim());
+                marker_folds.iter().any(|marker| text.starts_with(marker))
+            });
+            if let Some(target) = target {
+                let paragraph = format!(
+                    "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+                    escape_xml_text(paragraph_text)
+                );
+                xml.insert_str(target.start, &paragraph);
+                inserted = true;
+            }
+        }
+        writer.write_all(xml.as_bytes())?;
+    }
+    writer.finish()?;
+    if !found_main {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+    if !inserted {
+        let _ = std::fs::remove_file(&temporary);
+        return Ok(false);
+    }
+    if let Err(error) = commit_temporary_file(&temporary, output_path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(true)
+}
+
 fn escape_xml_attribute(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -956,6 +1034,238 @@ fn infer_structural_bindings_by_story(
     Ok(bindings_by_story)
 }
 
+#[derive(Debug, Clone)]
+struct BlankTableCellBinding {
+    field_id: String,
+    cell_start: usize,
+    cell_end: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TableCellSpan {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+fn table_cell_is_blank(text: &str) -> bool {
+    let normalized = text.replace('\u{00a0}', " ");
+    let trimmed = normalized.trim();
+    trimmed.is_empty()
+        || trimmed.chars().all(|character| {
+            character.is_whitespace()
+                || matches!(character, '_' | '.' | '…' | '·' | '-' | '–' | '—')
+        })
+}
+
+fn table_cell_structural_text(text: &str) -> String {
+    text.replace(['\r', '\n', '\t'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn table_cells_in_row(xml: &str, row_start: usize, row_end: usize) -> Vec<TableCellSpan> {
+    let row = &xml[row_start..row_end];
+    let mut cells = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(cell_start) = find_opening_element(row, cursor, "w:tc") {
+        let Some(cell_end) = find_matching_element_end(row, cell_start, "w:tc") else {
+            break;
+        };
+        let absolute_start = row_start + cell_start;
+        let absolute_end = row_start + cell_end;
+        cells.push(TableCellSpan {
+            start: absolute_start,
+            end: absolute_end,
+            text: xml_to_text(&xml[absolute_start..absolute_end]),
+        });
+        cursor = cell_end;
+    }
+    cells
+}
+
+fn infer_blank_table_cell_bindings_in_story(
+    xml: &str,
+    preferred_domain: &DomainKind,
+    role_id: &str,
+) -> Vec<BlankTableCellBinding> {
+    let mut candidates = Vec::new();
+    let mut row_cursor = 0usize;
+    let mut row_index = 0usize;
+    while let Some(row_start) = find_opening_element(xml, row_cursor, "w:tr") {
+        let Some(row_end) = find_matching_element_end(xml, row_start, "w:tr") else {
+            break;
+        };
+        let cells = table_cells_in_row(xml, row_start, row_end);
+        if cells.len() >= 2 {
+            let mut token_to_cell = BTreeMap::<String, usize>::new();
+            let synthetic_cells = cells
+                .iter()
+                .enumerate()
+                .map(|(cell_index, cell)| {
+                    if table_cell_is_blank(&cell.text) {
+                        let token =
+                            format!("DOKKOMPLEKTEMPTYCELL{}X{}", row_index + 1, cell_index + 1);
+                        token_to_cell.insert(token.clone(), cell_index);
+                        token
+                    } else {
+                        table_cell_structural_text(&cell.text)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let synthetic_row = synthetic_cells.join("\t");
+            for binding in dokkomplekt_core::infer_structural_template_values(
+                &synthetic_row,
+                Some(preferred_domain),
+                Some(role_id),
+            ) {
+                let Some(cell_index) = token_to_cell.get(binding.value.trim()).copied() else {
+                    continue;
+                };
+                let cell = &cells[cell_index];
+                candidates.push(BlankTableCellBinding {
+                    field_id: binding.field_id,
+                    cell_start: cell.start,
+                    cell_end: cell.end,
+                });
+            }
+        }
+        row_cursor = row_end;
+        row_index += 1;
+    }
+
+    // A semantic field or a physical blank cell must have exactly one owner.
+    // Duplicate labels are left untouched rather than guessed.
+    let mut field_counts = BTreeMap::<String, usize>::new();
+    let mut cell_counts = BTreeMap::<(usize, usize), usize>::new();
+    for candidate in &candidates {
+        *field_counts.entry(candidate.field_id.clone()).or_default() += 1;
+        *cell_counts
+            .entry((candidate.cell_start, candidate.cell_end))
+            .or_default() += 1;
+    }
+    candidates.retain(|candidate| {
+        field_counts.get(&candidate.field_id) == Some(&1)
+            && cell_counts.get(&(candidate.cell_start, candidate.cell_end)) == Some(&1)
+    });
+    candidates
+}
+
+fn infer_blank_table_cell_bindings_by_story(
+    input_path: &Path,
+    preferred_domain: &DomainKind,
+    role_id: &str,
+) -> DocxResult<BTreeMap<String, Vec<BlankTableCellBinding>>> {
+    let input = File::open(input_path)?;
+    let mut archive = ZipArchive::new(input)?;
+    let mut bindings_by_story = BTreeMap::new();
+    let mut found_main = false;
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        if !is_text_bearing_word_part(&name) {
+            continue;
+        }
+        ensure_text_part_size(&name, entry.size())?;
+        if name == "word/document.xml" {
+            found_main = true;
+        }
+        let mut xml = String::new();
+        entry.read_to_string(&mut xml)?;
+        let bindings = infer_blank_table_cell_bindings_in_story(&xml, preferred_domain, role_id);
+        if !bindings.is_empty() {
+            bindings_by_story.insert(name, bindings);
+        }
+    }
+    if !found_main {
+        return Err(DocxError::MainDocumentPartMissing);
+    }
+
+    // Do not let the same semantic field acquire owners in multiple Word
+    // stories (for example body + header). Ambiguous ownership must remain
+    // unresolved so the higher-level contract can fail closed.
+    let mut global_field_counts = BTreeMap::<String, usize>::new();
+    for binding in bindings_by_story.values().flatten() {
+        *global_field_counts
+            .entry(binding.field_id.clone())
+            .or_default() += 1;
+    }
+    for bindings in bindings_by_story.values_mut() {
+        bindings.retain(|binding| global_field_counts.get(&binding.field_id) == Some(&1));
+    }
+    bindings_by_story.retain(|_, bindings| !bindings.is_empty());
+    Ok(bindings_by_story)
+}
+
+fn insert_placeholder_into_blank_table_cell(cell_xml: &str, field_id: &str) -> Option<String> {
+    let visible = xml_to_text(cell_xml);
+    if !table_cell_is_blank(&visible) {
+        return None;
+    }
+    let placeholder = format!("{{{{{field_id}}}}}");
+    let visible = visible.trim();
+    if !visible.is_empty() {
+        if let Some(replaced) = replace_visible_text_once(cell_xml, visible, &placeholder) {
+            return Some(replaced);
+        }
+    }
+
+    if let Some(text_start) = find_opening_element(cell_xml, 0, "w:t") {
+        if let Some(text_end) = find_matching_element_end(cell_xml, text_start, "w:t") {
+            let opening_end = cell_xml[text_start..text_end].find('>')? + text_start + 1;
+            let closing_start = cell_xml[text_start..text_end].rfind("</w:t>")? + text_start;
+            if cell_xml[opening_end..closing_start].trim().is_empty() {
+                let mut output = cell_xml.to_string();
+                output.replace_range(opening_end..closing_start, &escape_xml_text(&placeholder));
+                return Some(output);
+            }
+        }
+    }
+
+    let run = format!(
+        "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+        escape_xml_text(&placeholder)
+    );
+    if let Some(paragraph_close) = cell_xml.find("</w:p>") {
+        let mut output = cell_xml.to_string();
+        output.insert_str(paragraph_close, &run);
+        return Some(output);
+    }
+    if let Some(empty_paragraph) = cell_xml.find("<w:p/>") {
+        let mut output = cell_xml.to_string();
+        output.replace_range(
+            empty_paragraph..empty_paragraph + "<w:p/>".len(),
+            &format!("<w:p>{run}</w:p>"),
+        );
+        return Some(output);
+    }
+    let cell_close = cell_xml.rfind("</w:tc>")?;
+    let mut output = cell_xml.to_string();
+    output.insert_str(cell_close, &format!("<w:p>{run}</w:p>"));
+    Some(output)
+}
+
+fn apply_blank_table_cell_bindings_in_story(
+    xml: &str,
+    bindings: &[BlankTableCellBinding],
+) -> Option<(String, Vec<String>)> {
+    let mut ordered = bindings.to_vec();
+    ordered.sort_by_key(|binding| binding.cell_start);
+    let mut output = xml.to_string();
+    let mut applied = Vec::new();
+    for binding in ordered.into_iter().rev() {
+        let cell = output.get(binding.cell_start..binding.cell_end)?;
+        let replacement = insert_placeholder_into_blank_table_cell(cell, &binding.field_id)?;
+        output.replace_range(binding.cell_start..binding.cell_end, &replacement);
+        applied.push(binding.field_id);
+    }
+    applied.reverse();
+    Some((output, applied))
+}
+
 /// Compile an already-filled user DOCX into a semantic template by binding
 /// values to their owning labels/sections. Unlike value-global replacement,
 /// every edit is constrained to the concrete Word paragraph/block discovered by
@@ -969,9 +1279,27 @@ pub fn compile_labeled_template_file(
     role_id: &str,
 ) -> DocxResult<StructuralTemplateCompilationReport> {
     validate_safe_template_file(input_path)?;
-    let bindings_by_story =
+    let mut bindings_by_story =
         infer_structural_bindings_by_story(input_path, preferred_domain, role_id)?;
-    let binding_count = bindings_by_story.values().map(Vec::len).sum();
+    let blank_table_bindings_by_story =
+        infer_blank_table_cell_bindings_by_story(input_path, preferred_domain, role_id)?;
+    let blank_table_field_ids = blank_table_bindings_by_story
+        .values()
+        .flatten()
+        .map(|binding| binding.field_id.clone())
+        .collect::<BTreeSet<_>>();
+    // A concrete label -> adjacent blank Word-cell relationship is stronger
+    // evidence than paragraph-flow inference. In particular a blank `Диагноз`
+    // cell must not absorb the first visible text from the following table row.
+    for bindings in bindings_by_story.values_mut() {
+        bindings.retain(|binding| !blank_table_field_ids.contains(&binding.field_id));
+    }
+    bindings_by_story.retain(|_, bindings| !bindings.is_empty());
+    let binding_count = bindings_by_story.values().map(Vec::len).sum::<usize>()
+        + blank_table_bindings_by_story
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -998,6 +1326,19 @@ pub fn compile_labeled_template_file(
             ensure_text_part_size(&name, entry.size())?;
             let mut xml = String::new();
             entry.read_to_string(&mut xml)?;
+            if let Some(bindings) = blank_table_bindings_by_story.get(&name) {
+                let Some((next, applied)) =
+                    apply_blank_table_cell_bindings_in_story(&xml, bindings)
+                else {
+                    skipped.extend(bindings.iter().map(|binding| {
+                        format!("{}:{} (blank table cell)", name, binding.field_id)
+                    }));
+                    writer.write_all(xml.as_bytes())?;
+                    continue;
+                };
+                xml = next;
+                applied_field_ids.extend(applied);
+            }
             if let Some(bindings) = bindings_by_story.get(&name) {
                 for binding in bindings {
                     if let Some(next) = apply_structural_binding_in_story(&xml, binding) {
@@ -2495,6 +2836,55 @@ mod tests {
         let text = extract_docx_text(&marked).expect("marked text");
         assert_eq!(text.matches("42").count(), 2);
         assert!(!text.contains("{{subject.age}}"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn blank_medical_table_value_cells_compile_into_semantic_placeholders() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-blank-medical-table-{}",
+            std::process::id()
+        ));
+        let input = dir.join("blank-table.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>________</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
+</w:tbl>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "primary")
+                .expect("blank table cells must compile from their owning labels");
+        for field_id in [
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing blank-table binding {field_id}: {report:?}"
+            );
+        }
+        assert_eq!(report.binding_count, 5, "{report:?}");
+        let text = extract_docx_text(&compiled).expect("compiled table text");
+        for field_id in [
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
+        }
+        assert!(!text.contains("________"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

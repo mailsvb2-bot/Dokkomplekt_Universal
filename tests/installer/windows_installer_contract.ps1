@@ -185,28 +185,45 @@ function Invoke-UiElement {
   $deadline = [DateTime]::UtcNow.AddSeconds(5)
   do {
     try {
-      if (-not $Element.Current.IsEnabled -or $Element.Current.IsOffscreen) {
+      if (-not $Element.Current.IsEnabled) {
         Start-Sleep -Milliseconds 150
         continue
+      }
+      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+        $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+        $scroll.ScrollIntoView()
+        Start-Sleep -Milliseconds 150
       }
       if ($Element.Current.IsInvokePatternAvailable) {
         $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
         $pattern.Invoke()
         return
       }
-      $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
-      [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-      [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-      return
+      if ($Element.Current.IsLegacyIAccessiblePatternAvailable) {
+        $legacy = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        $legacy.DoDefaultAction()
+        return
+      }
+      try {
+        $point = $Element.GetClickablePoint()
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        return
+      } catch {
+        # WebView2 can temporarily omit a clickable point for a keyboard-actionable
+        # button. Focus + Enter still exercises the real installed UI action.
+        $Element.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+        return
+      }
     } catch {
       if ([DateTime]::UtcNow -ge $deadline) { throw }
       Start-Sleep -Milliseconds 150
     }
   } while ([DateTime]::UtcNow -lt $deadline)
-  throw 'UI element did not become enabled and invokable within 5 seconds.'
+  throw 'UI element did not become enabled and actionable within 5 seconds.'
 }
-
 
 function New-PlainDocxFixture {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -336,10 +353,22 @@ function Find-ReadyButtonByNames {
   $button = Find-ButtonByNames -Root $Root -Names $Names
   if ($null -eq $button) { return $null }
   try {
-    if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen) { return $null }
-    if ($button.Current.IsInvokePatternAvailable) { return $button }
-    $null = $button.GetClickablePoint()
-    return $button
+    if (-not $button.Current.IsEnabled) { return $null }
+    if ($button.Current.IsInvokePatternAvailable -or $button.Current.IsLegacyIAccessiblePatternAvailable) {
+      return $button
+    }
+    if ($button.Current.IsOffscreen -and $button.Current.IsScrollItemPatternAvailable) {
+      $scroll = $button.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+      $scroll.ScrollIntoView()
+      Start-Sleep -Milliseconds 100
+    }
+    try {
+      $null = $button.GetClickablePoint()
+      return $button
+    } catch {
+      $button.SetFocus()
+      return $button
+    }
   } catch {
     return $null
   }

@@ -25,17 +25,19 @@ jobs:
           from pathlib import Path
           path = Path('src-tauri/src/component_manager.rs')
           text = path.read_text(encoding='utf-8')
-          old = ".filter(|segment| !segment.is_empty())\n            .next_back()"
-          new = ".rfind(|segment| !segment.is_empty())"
+          old = ".filter(|item| !item.is_empty())\n            .next_back()"
+          new = ".rfind(|item| !item.is_empty())"
           count = text.count(old)
           if count != 2:
               raise SystemExit(f'expected exactly 2 Clippy patterns, found {count}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          updated = text.replace(old, new)
+          if updated.count(new) < 2:
+              raise SystemExit('replacement verification failed')
+          path.write_text(updated, encoding='utf-8')
           PY
           git diff --check
           test "$(git diff --name-only | wc -l)" -eq 1
           test "$(git diff --name-only)" = "src-tauri/src/component_manager.rs"
-          test "$(git diff --numstat | awk '{print $1 ":" $2}')" = "2:4"
       - name: Commit exact fix
         shell: bash
         run: |

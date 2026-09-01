@@ -26,6 +26,37 @@ fn donor_prompt_input_field_id(document: &DocumentTemplateSpec, field_id: &str) 
     }
 }
 
+/// Build the read-only case view used while deciding whether donor-style shared
+/// workplace/position prompts are still missing. Older Universal builds stored
+/// those facts only in role-scoped VK fields; current donor parity stores one
+/// patient-level pair. Preserve old values and explicit skippable omissions for
+/// planning without mutating persisted case data.
+fn donor_prompt_case(document: &DocumentTemplateSpec, case: &SemanticCase) -> SemanticCase {
+    if !matches!(document.category, DomainKind::Medical) {
+        return case.clone();
+    }
+
+    let mut prompt_case = case.clone();
+    for (scoped_id, shared_id) in
+        crate::domains::medical_semantics::role_scoped_bindings(&document.role_id)
+    {
+        if !matches!(*shared_id, "medical.workplace" | "medical.position") {
+            continue;
+        }
+        if !case.values.contains_key(*shared_id) {
+            if let Some(mut legacy_value) = case.values.get(*scoped_id).cloned() {
+                legacy_value.field_id = (*shared_id).to_string();
+                prompt_case
+                    .values
+                    .insert((*shared_id).to_string(), legacy_value);
+            } else if case.skipped_fields.contains(*scoped_id) {
+                prompt_case.skipped_fields.insert((*shared_id).to_string());
+            }
+        }
+    }
+    prompt_case
+}
+
 /// Builds one merged popup plan for a selected document.
 ///
 /// The popup is profile-aware and user-configurable. Pipeline requirements, template
@@ -127,9 +158,10 @@ pub fn plan_workflow(
         });
     }
 
+    let prompt_case = donor_prompt_case(document, case);
     let mut prompts = configs
         .into_values()
-        .filter_map(|config| prompt_from_config(config, &required, &hard_required, case))
+        .filter_map(|config| prompt_from_config(config, &required, &hard_required, &prompt_case))
         .collect::<Vec<_>>();
     prompts.sort_by(|a, b| a.order.cmp(&b.order).then(a.field_id.cmp(&b.field_id)));
     prompts.dedup_by(|a, b| a.field_id == b.field_id);
@@ -331,8 +363,10 @@ fn prompt_from_config(
         return None;
     }
     let existing = case.get(&config.field_id).map(str::to_string);
+    let explicitly_skipped =
+        case.is_skipped(&config.field_id) && !hard_required_fields.contains(&config.field_id);
     let include = match config.ask_mode {
-        PromptAskMode::IfMissing => existing.is_none(),
+        PromptAskMode::IfMissing => existing.is_none() && !explicitly_skipped,
         PromptAskMode::Confirm | PromptAskMode::Always => true,
     };
     if !include {
@@ -732,6 +766,57 @@ mod tests {
             BTreeSet::from(["medical.position".into(), "medical.workplace".into()])
         );
         assert!(!inputs.contains(crate::MEDICAL_WORK_POSITION));
+    }
+
+    #[test]
+    fn legacy_vk_scoped_work_values_satisfy_shared_donor_prompts() {
+        let mut doc = document("mse", crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "vk_mse".into();
+        doc.required_fields = vec![
+            crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
+            crate::domains::medical_semantics::VK_MSE_POSITION.into(),
+        ];
+        doc.placeholders = doc.required_fields.clone();
+
+        let mut case = SemanticCase::default();
+        crate::set_user_value(
+            &mut case,
+            crate::domains::medical_semantics::VK_MSE_WORKPLACE,
+            "Старое место работы",
+        );
+        crate::set_user_value(
+            &mut case,
+            crate::domains::medical_semantics::VK_MSE_POSITION,
+            "Старая должность",
+        );
+
+        let plan = plan_workflow(&doc, &case, &WorkflowFlags::default());
+        assert!(!plan.prompts.iter().any(|prompt| {
+            matches!(
+                prompt.field_id.as_str(),
+                "medical.workplace" | "medical.position"
+            )
+        }));
+        assert!(crate::workflow_publication_blockers(&case, &plan).is_empty());
+    }
+
+    #[test]
+    fn legacy_vk_scoped_skip_is_preserved_for_skippable_shared_prompt() {
+        let mut doc = document("mse", crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "vk_mse".into();
+        doc.required_fields.clear();
+        doc.placeholders = vec![crate::domains::medical_semantics::VK_MSE_WORKPLACE.into()];
+
+        let mut case = SemanticCase::default();
+        case.skip(crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+
+        let plan = plan_workflow(&doc, &case, &WorkflowFlags::default());
+        assert!(!plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == "medical.workplace"));
     }
 
     #[test]

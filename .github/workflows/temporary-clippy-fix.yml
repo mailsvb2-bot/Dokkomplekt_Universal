@@ -25,13 +25,13 @@ jobs:
           from pathlib import Path
           path = Path('src-tauri/src/component_manager.rs')
           text = path.read_text(encoding='utf-8')
-          old = ".filter(|item| !item.is_empty())\n            .next_back()"
-          new = ".rfind(|item| !item.is_empty())"
+          old = ".and_then(|segments| segments.filter(|item| !item.is_empty()).next_back())"
+          new = ".and_then(|mut segments| segments.rfind(|item| !item.is_empty()))"
           count = text.count(old)
           if count != 2:
               raise SystemExit(f'expected exactly 2 Clippy patterns, found {count}')
           updated = text.replace(old, new)
-          if updated.count(new) < 2:
+          if updated.count(new) != 2:
               raise SystemExit('replacement verification failed')
           path.write_text(updated, encoding='utf-8')
           PY

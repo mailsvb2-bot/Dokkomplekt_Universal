@@ -27,6 +27,7 @@ const MAX_COMPONENT_CATALOG_BYTES: u64 = 256 * 1024;
 const MAX_COMPONENT_ARCHIVE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_COMPONENT_ENTRIES: usize = 50_000;
 const MAX_COMPONENT_UNPACKED_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+const MAX_OFFLINE_COMPONENT_BUNDLE_BYTES: u64 = 17 * 1024 * 1024 * 1024;
 const STALE_COMPONENT_TRANSACTION_AGE: StdDuration = StdDuration::from_secs(6 * 60 * 60);
 const TRUSTED_COMPONENTS_CATALOG_URL: &str = match option_env!("DOKKOMPLEKT_COMPONENTS_CATALOG_URL")
 {
@@ -45,6 +46,9 @@ pub(crate) struct ComponentDescriptor {
     pub size_bytes: u64,
     pub sha256: String,
     pub files_manifest_sha256: String,
+    #[serde(default)]
+    pub archive_name: String,
+    #[serde(default)]
     pub url: String,
 }
 
@@ -223,6 +227,352 @@ pub(crate) async fn install_component(
         .map_err(|error| format!("Фоновая установка компонента завершилась ошибкой: {error}"))?
 }
 
+pub(crate) fn import_offline_component_bundle(
+    app: &tauri::AppHandle,
+    selected_path: &Path,
+) -> Result<Vec<ComponentStatus>, String> {
+    if !selected_path.is_absolute() {
+        return Err("Офлайн-комплект компонентов должен быть выбран по абсолютному пути".into());
+    }
+    let metadata = std::fs::symlink_metadata(selected_path).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("Офлайн-комплект должен быть обычным ZIP-файлом, а не ссылкой".into());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_OFFLINE_COMPONENT_BUNDLE_BYTES {
+        return Err("Офлайн-комплект имеет недопустимый размер".into());
+    }
+
+    emit_progress(
+        app,
+        "offline-bundle",
+        "verify",
+        0,
+        metadata.len(),
+        "Проверяется локальный подписанный комплект",
+    );
+    let file = File::open(selected_path).map_err(|error| error.to_string())?;
+    let mut bundle =
+        ZipArchive::new(file).map_err(|error| format!("Офлайн-комплект повреждён: {error}"))?;
+    if bundle.is_empty() || bundle.len() > 64 {
+        return Err("Офлайн-комплект содержит недопустимое число файлов".into());
+    }
+
+    let mut names = BTreeSet::new();
+    let mut catalog_bytes = None;
+    for index in 0..bundle.len() {
+        let mut entry = bundle.by_index(index).map_err(|error| error.to_string())?;
+        if entry.is_dir()
+            || entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err("Папки и символические ссылки в офлайн-комплекте запрещены".into());
+        }
+        let name = entry.name().replace('\\', "/");
+        if name.contains('/') || safe_relative_path(&name)?.components().count() != 1 {
+            return Err("Офлайн-комплект должен содержать только файлы верхнего уровня".into());
+        }
+        if !names.insert(name.clone()) {
+            return Err(format!(
+                "Офлайн-комплект содержит повторяющийся файл: {name}"
+            ));
+        }
+        if name == "components-catalog.json" {
+            if entry.size() > MAX_COMPONENT_CATALOG_BYTES {
+                return Err("Подписанный каталог офлайн-комплекта превышает лимит".into());
+            }
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            (&mut entry)
+                .take(MAX_COMPONENT_CATALOG_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if bytes.len() as u64 > MAX_COMPONENT_CATALOG_BYTES {
+                return Err("Подписанный каталог офлайн-комплекта превышает лимит".into());
+            }
+            catalog_bytes = Some(bytes);
+        }
+    }
+    let catalog_bytes = catalog_bytes
+        .ok_or_else(|| "Офлайн-комплект не содержит components-catalog.json".to_string())?;
+    let catalog: SignedComponentsCatalog = serde_json::from_slice(&catalog_bytes)
+        .map_err(|error| format!("Некорректный components catalog в офлайн-комплекте: {error}"))?;
+    verify_catalog(&catalog)?;
+
+    let current_target = crate::current_update_platform();
+    if catalog.payload.components.is_empty()
+        || catalog
+            .payload
+            .components
+            .iter()
+            .any(|descriptor| descriptor.target != current_target)
+    {
+        return Err(format!(
+            "Офлайн-комплект должен содержать только компоненты для {current_target}"
+        ));
+    }
+    let mut expected_names = BTreeSet::from(["components-catalog.json".to_string()]);
+    let mut descriptors_by_name = BTreeMap::new();
+    for descriptor in &catalog.payload.components {
+        guard_descriptor(&catalog.payload, descriptor)?;
+        guard_target_matches_platform(descriptor)?;
+        let archive_name = component_archive_name(descriptor)?;
+        if !expected_names.insert(archive_name.clone())
+            || descriptors_by_name
+                .insert(archive_name.clone(), descriptor.clone())
+                .is_some()
+        {
+            return Err(format!(
+                "Подписанный каталог повторяет архив: {archive_name}"
+            ));
+        }
+    }
+    if names != expected_names {
+        let missing = expected_names
+            .difference(&names)
+            .cloned()
+            .collect::<Vec<_>>();
+        let extra = names
+            .difference(&expected_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "Содержимое офлайн-комплекта не совпадает с подписанным каталогом; missing={missing:?}; extra={extra:?}"
+        ));
+    }
+
+    let root =
+        user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    guard_catalog_not_older(&root, &catalog)?;
+
+    let mut staged = Vec::<(ComponentDescriptor, PathBuf)>::new();
+    let stage_result = (|| -> Result<(), String> {
+        for (archive_name, descriptor) in &descriptors_by_name {
+            emit_progress(
+                app,
+                &descriptor.id,
+                "import",
+                0,
+                descriptor.size_bytes,
+                "Проверяется локальный архив компонента",
+            );
+            let temp_archive = root.join(format!(
+                ".{}.{}.offline-part",
+                descriptor.id,
+                Uuid::new_v4()
+            ));
+            let copy_result = (|| -> Result<(), String> {
+                let mut entry = bundle
+                    .by_name(archive_name)
+                    .map_err(|error| format!("Архив компонента отсутствует: {error}"))?;
+                if entry.size() != descriptor.size_bytes
+                    || entry.size() > MAX_COMPONENT_ARCHIVE_BYTES
+                {
+                    return Err(format!(
+                        "Размер локального компонента {} не совпадает с подписанным каталогом",
+                        descriptor.id
+                    ));
+                }
+                let mut output = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temp_archive)
+                    .map_err(|error| error.to_string())?;
+                let mut digest = Sha256::new();
+                let mut copied = 0u64;
+                let mut buffer = [0u8; 128 * 1024];
+                loop {
+                    let read = entry.read(&mut buffer).map_err(|error| error.to_string())?;
+                    if read == 0 {
+                        break;
+                    }
+                    copied = copied.saturating_add(read as u64);
+                    if copied > descriptor.size_bytes {
+                        return Err("Локальный компонент превысил подписанный размер".into());
+                    }
+                    digest.update(&buffer[..read]);
+                    output
+                        .write_all(&buffer[..read])
+                        .map_err(|error| error.to_string())?;
+                }
+                output.sync_all().map_err(|error| error.to_string())?;
+                if copied != descriptor.size_bytes
+                    || !hex::encode(digest.finalize()).eq_ignore_ascii_case(&descriptor.sha256)
+                {
+                    return Err(format!(
+                        "SHA-256 локального компонента {} не совпал с подписанным каталогом",
+                        descriptor.id
+                    ));
+                }
+                Ok(())
+            })();
+            if let Err(error) = copy_result {
+                let _ = std::fs::remove_file(&temp_archive);
+                return Err(error);
+            }
+            let stage = match stage_verified_component_archive(&root, descriptor, &temp_archive) {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&temp_archive);
+                    return Err(error);
+                }
+            };
+            let _ = std::fs::remove_file(&temp_archive);
+            staged.push((descriptor.clone(), stage));
+        }
+        Ok(())
+    })();
+    if let Err(error) = stage_result {
+        for (_, stage) in staged {
+            let _ = std::fs::remove_dir_all(stage);
+        }
+        return Err(error);
+    }
+
+    commit_staged_offline_components(&root, &catalog, staged)?;
+    let sidecars = crate::universal_intake::sidecar_tool_statuses();
+    for descriptor in &catalog.payload.components {
+        emit_progress(
+            app,
+            &descriptor.id,
+            "complete",
+            descriptor.size_bytes,
+            descriptor.size_bytes,
+            "Компонент установлен из подписанного офлайн-комплекта",
+        );
+    }
+    Ok(catalog
+        .payload
+        .components
+        .iter()
+        .map(|descriptor| status_for_descriptor(&root, descriptor, true, &sidecars))
+        .collect())
+}
+
+fn component_archive_name(descriptor: &ComponentDescriptor) -> Result<String, String> {
+    let explicit = descriptor.archive_name.trim();
+    let name = if !explicit.is_empty() {
+        explicit.to_string()
+    } else {
+        let url = reqwest::Url::parse(&descriptor.url)
+            .map_err(|_| "Некорректный URL компонента".to_string())?;
+        url.path_segments()
+            .and_then(|segments| segments.filter(|item| !item.is_empty()).next_back())
+            .ok_or_else(|| "URL компонента не содержит имени архива".to_string())?
+            .to_string()
+    };
+    if name.len() > 180
+        || !name.to_ascii_lowercase().ends_with(".zip")
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return Err("Некорректное имя ZIP компонента".into());
+    }
+    if !descriptor.url.trim().is_empty() {
+        let url = reqwest::Url::parse(&descriptor.url)
+            .map_err(|_| "Некорректный URL компонента".to_string())?;
+        let url_name = url
+            .path_segments()
+            .and_then(|segments| segments.filter(|item| !item.is_empty()).next_back())
+            .ok_or_else(|| "URL компонента не содержит имени архива".to_string())?;
+        if url_name != name {
+            return Err("Имя архива компонента не совпадает с URL".into());
+        }
+    }
+    Ok(name)
+}
+
+fn stage_verified_component_archive(
+    root: &Path,
+    descriptor: &ComponentDescriptor,
+    archive_path: &Path,
+) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(archive_path).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() != descriptor.size_bytes
+        || !sha256_file(archive_path)?.eq_ignore_ascii_case(&descriptor.sha256)
+    {
+        return Err(format!(
+            "Локальный архив компонента {} не прошёл проверку целостности",
+            descriptor.id
+        ));
+    }
+    let stage_dir = root.join(format!(".{}.{}.installing", descriptor.id, Uuid::new_v4()));
+    let result = (|| -> Result<(), String> {
+        std::fs::create_dir(&stage_dir).map_err(|error| error.to_string())?;
+        safe_extract_zip(archive_path, &stage_dir)?;
+        let manifest = read_component_files_manifest(&stage_dir, descriptor)?;
+        validate_all_manifest_files(&stage_dir, &manifest)?;
+        let receipt = InstalledComponentReceipt {
+            schema: COMPONENT_STATUS_SCHEMA,
+            component_id: descriptor.id.clone(),
+            target: descriptor.target.clone(),
+            archive_sha256: descriptor.sha256.to_ascii_lowercase(),
+            files_manifest_sha256: descriptor.files_manifest_sha256.to_ascii_lowercase(),
+            installed_at: OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        };
+        atomic_write_json(&stage_dir.join("component-status.json"), &receipt)
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        return Err(error);
+    }
+    Ok(stage_dir)
+}
+
+fn rollback_offline_component_commits(committed: &[(PathBuf, Option<PathBuf>)]) {
+    for (final_dir, previous_dir) in committed.iter().rev() {
+        let _ = std::fs::remove_dir_all(final_dir);
+        if let Some(previous_dir) = previous_dir {
+            let _ = std::fs::rename(previous_dir, final_dir);
+        }
+    }
+}
+
+fn commit_staged_offline_components(
+    root: &Path,
+    catalog: &SignedComponentsCatalog,
+    staged: Vec<(ComponentDescriptor, PathBuf)>,
+) -> Result<(), String> {
+    let mut committed = Vec::<(PathBuf, Option<PathBuf>)>::new();
+    for (descriptor, stage_dir) in staged {
+        let final_dir = root.join(&descriptor.id);
+        let previous_dir = root.join(format!(".{}.{}.previous", descriptor.id, Uuid::new_v4()));
+        let previous = if final_dir.exists() {
+            if let Err(error) = std::fs::rename(&final_dir, &previous_dir) {
+                rollback_offline_component_commits(&committed);
+                let _ = std::fs::remove_dir_all(&stage_dir);
+                return Err(error.to_string());
+            }
+            Some(previous_dir)
+        } else {
+            None
+        };
+        if let Err(error) = std::fs::rename(&stage_dir, &final_dir) {
+            if let Some(previous_dir) = &previous {
+                let _ = std::fs::rename(previous_dir, &final_dir);
+            }
+            rollback_offline_component_commits(&committed);
+            return Err(error.to_string());
+        }
+        committed.push((final_dir, previous));
+    }
+    if let Err(error) = atomic_write_json(&root.join("components-catalog.json"), catalog) {
+        rollback_offline_component_commits(&committed);
+        return Err(error);
+    }
+    for (_, previous) in committed {
+        if let Some(previous) = previous {
+            let _ = std::fs::remove_dir_all(previous);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn remove_component(id: &str) -> Result<ComponentStatus, String> {
     let id = validate_component_id(id)?;
     let root =
@@ -268,6 +618,9 @@ fn install_component_blocking(app: &tauri::AppHandle, id: &str) -> Result<Compon
     guard_catalog_not_older(&root, &catalog)?;
     atomic_write_json(&root.join("components-catalog.json"), &catalog)?;
 
+    if descriptor.url.trim().is_empty() {
+        return Err("Компонент доступен только в подписанном офлайн-комплекте; выберите «Импортировать офлайн-комплект»".into());
+    }
     let validated = crate::validate_update_url(&descriptor.url)?;
     let host = validated.host.trim_end_matches('.').to_ascii_lowercase();
     let allowed_hosts = catalog
@@ -541,8 +894,14 @@ fn verify_catalog(catalog: &SignedComponentsCatalog) -> Result<(), String> {
             minimum, current
         ));
     }
-    if catalog.payload.allowed_hosts.is_empty() {
-        return Err("Подписанный каталог не содержит allow-list доменов".into());
+    if catalog
+        .payload
+        .components
+        .iter()
+        .any(|item| !item.url.trim().is_empty())
+        && catalog.payload.allowed_hosts.is_empty()
+    {
+        return Err("Сетевой подписанный каталог не содержит allow-list доменов".into());
     }
     let mut ids = BTreeSet::new();
     for descriptor in &catalog.payload.components {
@@ -654,9 +1013,13 @@ fn guard_descriptor(
     {
         return Err("Некорректный список unlocks компонента".into());
     }
-    // Catalog verification must be deterministic and offline: validate the URL
-    // structure here, then resolve and pin public IP addresses immediately before
-    // the actual download in `install_component_blocking`.
+    component_archive_name(descriptor)?;
+    // Catalog verification must be deterministic and offline. A descriptor may
+    // intentionally omit its URL when it is distributed only inside a signed
+    // local bundle. Network catalogs still receive the same HTTPS/allow-list checks.
+    if descriptor.url.trim().is_empty() {
+        return Ok(());
+    }
     let url = reqwest::Url::parse(&descriptor.url)
         .map_err(|_| "Некорректный URL компонента".to_string())?;
     if url.scheme() != "https" {
@@ -883,6 +1246,7 @@ fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {
             "Локальная модель понимания текста",
             vec!["llama_cpp", "semantic_model"],
         ),
+        ("archive", "Распаковка входящих архивов", vec!["7z"]),
     ]
     .into_iter()
     .map(|(id, label, unlocks)| ComponentStatus {
@@ -1171,6 +1535,7 @@ mod tests {
             size_bytes: 1024,
             sha256: "a".repeat(64),
             files_manifest_sha256: "b".repeat(64),
+            archive_name: "ocr.zip".into(),
             url: "https://downloads.dokkomplekt.ru/ocr.zip".into(),
         };
         let payload = ComponentsCatalogPayload {
@@ -1191,6 +1556,17 @@ mod tests {
         descriptor.target = "other-platform".into();
         assert!(guard_descriptor(&payload, &descriptor).is_ok());
         assert!(guard_target_matches_platform(&descriptor).is_err());
+
+        descriptor.target = super::crate_platform_for_test();
+        descriptor.url.clear();
+        let mut offline_payload = payload.clone();
+        offline_payload.allowed_hosts.clear();
+        assert!(guard_descriptor(&offline_payload, &descriptor).is_ok());
+        descriptor.archive_name = "../ocr.zip".into();
+        assert!(guard_descriptor(&offline_payload, &descriptor).is_err());
+        descriptor.archive_name = "other.zip".into();
+        descriptor.url = "https://downloads.dokkomplekt.ru/ocr.zip".into();
+        assert!(guard_descriptor(&payload, &descriptor).is_err());
     }
 
     #[test]
@@ -1228,6 +1604,7 @@ mod tests {
             size_bytes: 1,
             sha256: "a".repeat(64),
             files_manifest_sha256: manifest_hash.clone(),
+            archive_name: "ocr.zip".into(),
             url: "https://example.com/ocr.zip".into(),
         };
         let receipt = InstalledComponentReceipt {
@@ -1288,6 +1665,7 @@ mod tests {
             size_bytes: 1,
             sha256: "a".repeat(64),
             files_manifest_sha256: manifest_hash.clone(),
+            archive_name: "ocr.zip".into(),
             url: "https://example.com/ocr.zip".into(),
         };
         let receipt = InstalledComponentReceipt {

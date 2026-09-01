@@ -51,7 +51,7 @@ COMPONENTS: dict[str, dict[str, Any]] = {
         "label": "Распаковка входящих архивов",
         "description": "Проверенный локальный 7-Zip для ZIP/7Z/RAR без передачи документов в сеть.",
         "tools": {"7zip"},
-        "unlocks": ["7zip"],
+        "unlocks": ["7z"],
     },
     "semantic": {
         "label": "Локальная модель понимания текста",
@@ -159,6 +159,40 @@ def build_pack(target: str, target_dir: Path, status: dict[str, Any], component_
     }
 
 
+def build_offline_bundle(target: str, catalog: Path, descriptors: list[dict[str, Any]], out: Path) -> Path:
+    """Bundle the signed catalog and its exact component archives for local import.
+
+    The outer ZIP adds no new trust anchor: the desktop verifies the catalog with
+    its baked update key, then verifies every inner archive against the signed
+    descriptor size/SHA-256 and component-files manifest hash.
+    """
+    expected: list[Path] = []
+    for descriptor in descriptors:
+        name = str(descriptor.get("archive_name", "")).strip()
+        if not name or name != f"{descriptor['id']}-{target}.zip":
+            raise ValueError(f"component descriptor has a non-canonical archive name: {name!r}")
+        if descriptor.get("url"):
+            parsed = urlparse(str(descriptor["url"]))
+            if Path(parsed.path).name != name:
+                raise ValueError("component URL and archive_name disagree")
+        archive = out / name
+        if not archive.is_file():
+            raise FileNotFoundError(f"component archive is missing before offline bundling: {archive}")
+        expected.append(archive)
+
+    output = out / f"Dokkomplekt-components-offline-{target}.zip"
+    temporary = output.with_suffix(".zip.tmp")
+    with zipfile.ZipFile(temporary, "w", allowZip64=True) as archive:
+        archive.writestr(zip_info("components-catalog.json"), catalog.read_bytes())
+        for component in sorted(expected, key=lambda item: item.name):
+            archive.writestr(zip_info(component.name), component.read_bytes())
+    temporary.replace(output)
+    output.with_suffix(output.suffix + ".sha256").write_text(
+        f"{sha256_file(output)}  {output.name}\n", "utf-8"
+    )
+    return output
+
+
 def signing_key_from_environment() -> SigningKey:
     raw = os.environ.get("DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64", "").strip()
     if not raw:
@@ -175,9 +209,9 @@ def signing_key_from_environment() -> SigningKey:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="windows-x86_64")
-    parser.add_argument("--components", default="ocr,office,semantic")
+    parser.add_argument("--components", default="ocr,office,semantic,archive")
     parser.add_argument("--app-min-version", default="18.3.0")
-    parser.add_argument("--base-url", required=True, help="HTTPS directory URL without filename")
+    parser.add_argument("--base-url", default="", help="Optional HTTPS directory URL; omit for an offline-only signed bundle")
     parser.add_argument("--out", type=Path, default=ROOT / "release-components")
     parser.add_argument("--require-trusted-public-key", action="store_true", help="Require DOKKOMPLEKT_UPDATE_PUBKEY_B64 and verify it matches the signing key")
     args = parser.parse_args()
@@ -188,8 +222,11 @@ def main() -> int:
     selected = [item.strip() for item in args.components.split(",") if item.strip()]
     if not selected or any(not SAFE_COMPONENT.fullmatch(item) or item not in COMPONENTS for item in selected):
         raise ValueError("--components contains an unknown component")
-    base_url = validate_public_https_url(args.base_url.rstrip("/"), "--base-url")
-    parsed = urlparse(base_url)
+    base_url = args.base_url.strip().rstrip("/")
+    parsed = None
+    if base_url:
+        base_url = validate_public_https_url(base_url, "--base-url")
+        parsed = urlparse(base_url)
 
     target_dir, status = load_status(target)
     out = args.out.resolve()
@@ -208,7 +245,8 @@ def main() -> int:
                 "size_bytes": built["size_bytes"],
                 "sha256": built["sha256"],
                 "files_manifest_sha256": built["files_manifest_sha256"],
-                "url": f"{base_url}/{built['path'].name}",
+                "archive_name": built["path"].name,
+                "url": f"{base_url}/{built['path'].name}" if base_url else "",
             }
         )
 
@@ -216,7 +254,7 @@ def main() -> int:
         "schema": 1,
         "app_min_version": args.app_min_version,
         "published_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "allowed_hosts": [parsed.hostname.lower()],
+        "allowed_hosts": [parsed.hostname.lower()] if parsed and parsed.hostname else [],
         "components": sorted(descriptors, key=lambda item: (item["target"], item["id"])),
     }
     key = signing_key_from_environment()
@@ -240,7 +278,13 @@ def main() -> int:
     catalog.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", "utf-8")
     catalog.with_suffix(".json.sig").write_bytes(signature)
     catalog.with_suffix(".json.sha256").write_text(f"{sha256_file(catalog)}  {catalog.name}\n", "utf-8")
-    print(json.dumps({"catalog": str(catalog), "components": [item["id"] for item in descriptors], "public_key_b64": base64.b64encode(bytes(key.verify_key)).decode("ascii")}, ensure_ascii=False))
+    offline_bundle = build_offline_bundle(target, catalog, descriptors, out)
+    print(json.dumps({
+        "catalog": str(catalog),
+        "offline_bundle": str(offline_bundle),
+        "components": [item["id"] for item in descriptors],
+        "public_key_b64": base64.b64encode(bytes(key.verify_key)).decode("ascii"),
+    }, ensure_ascii=False))
     return 0
 
 

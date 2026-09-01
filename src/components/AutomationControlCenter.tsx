@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, CaseRunRecord, LocalSemanticModelConfig, LocalSemanticModelStatus, CorpusStatus, CalibratedThresholdStatus, ReferenceDataStatus, QueueStatus, PrinterInventory, PrivacyPreferences, SidecarToolStatus, ComponentProgress, ComponentStatus, QualityTelemetryReport } from '../lib/types';
 import { useAppDialog } from './AppDialogProvider';
 import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
-import { confirmRiskExceptionAndRetry, confirmBundleExceptionAndRetry, getAutomationMetrics, getDailyAutomationDashboard, getQualityTelemetry, getQueueStatus, getCorpusStatus, exportCorpus, getCalibratedThresholdStatus, importCalibratedThresholdsFile, getPrinterInventory, listCaseRuns, retryCaseRun, getPrivacyPreferences, getSemanticModelConfig, getReferenceDataStatus, getSidecarStatus, getComponentStatuses, installComponent, refreshComponentCatalog, removeComponent, listAuditEvents, listAutomationExceptions, resolveAutomationException, runWorkspaceHygiene, testSemanticModel, updatePrintPreferences, updatePrivacyPreferences, updateReferenceData, importReferenceDataFile, updateSemanticModelConfig } from '../lib/api';
+import { confirmRiskExceptionAndRetry, confirmBundleExceptionAndRetry, getAutomationMetrics, getDailyAutomationDashboard, getQualityTelemetry, getQueueStatus, getCorpusStatus, exportCorpus, getCalibratedThresholdStatus, importCalibratedThresholdsFile, getPrinterInventory, listCaseRuns, retryCaseRun, getPrivacyPreferences, getSemanticModelConfig, getReferenceDataStatus, getSidecarStatus, getComponentStatuses, installComponent, importComponentBundle, pickComponentBundle, refreshComponentCatalog, removeComponent, listAuditEvents, listAutomationExceptions, resolveAutomationException, runWorkspaceHygiene, testSemanticModel, updatePrintPreferences, updatePrivacyPreferences, updateReferenceData, importReferenceDataFile, updateSemanticModelConfig } from '../lib/api';
 
 interface Props { onStatus(message: string): void; }
 
@@ -209,6 +209,21 @@ export function AutomationControlCenter({ onStatus }: Props) {
     if (sidecars) setSidecars(sidecars);
   }
 
+  async function importOfflineComponents() {
+    const picked = await execute('выбор офлайн-комплекта компонентов', () => pickComponentBundle());
+    if (!picked) return;
+    if (!/\.zip$/i.test(picked.file_name)) {
+      onStatus('Офлайн-комплект компонентов должен быть ZIP-файлом Dokkomplekt.');
+      return;
+    }
+    const imported = await execute('импорт подписанного офлайн-комплекта', () => importComponentBundle(picked.selected_path));
+    if (!imported) return;
+    setComponents(imported);
+    const refreshedSidecars = await execute('состояние локальных компонентов', getSidecarStatus);
+    if (refreshedSidecars) setSidecars(refreshedSidecars);
+    onStatus(`Подписанный офлайн-комплект установлен: компонентов ${imported.length}. Интернет для их работы не требуется.`);
+  }
+
   async function downloadComponent(item: ComponentStatus) {
     const component = await execute(`компонент ${item.label}`, () => installComponent(item.id));
     if (!component) return;
@@ -341,8 +356,11 @@ export function AutomationControlCenter({ onStatus }: Props) {
 
     <section className="utilityCard advancedCard">
       <strong>Дополнительные возможности</strong>
-      <small>Дополнительные компоненты проверяются встроенной цифровой подписью и контрольной суммой. После установки они работают без интернета.</small>
-      <div className="inlineButtons"><button className="softBtn" disabled={busy} onClick={() => void reloadComponentCatalog()}>Проверить подписанный каталог</button></div>
+      <small>Дополнительные компоненты проверяются встроенной цифровой подписью и контрольной суммой. Их можно получить из подписанного каталога или установить локальным офлайн-комплектом; после установки интернет не нужен.</small>
+      <div className="inlineButtons">
+        <button className="softBtn" disabled={busy} onClick={() => void reloadComponentCatalog()}>Проверить подписанный каталог</button>
+        <button className="softBtn" disabled={busy} onClick={() => void importOfflineComponents()}>Импортировать офлайн-комплект</button>
+      </div>
       {componentProgress && componentProgress.phase !== 'complete' && <div className="componentProgress"><progress max={100} value={componentProgress.percent}/><small>{componentProgress.message} · {componentProgress.percent}%</small></div>}
       <div className="compactList sidecarList">
         {components.map(item => <div key={item.id} className={item.available ? 'sidecarReady' : 'sidecarMissing'}>

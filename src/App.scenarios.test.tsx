@@ -52,6 +52,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
           { tool: 'pdftotext', available: componentAvailable(), bundled: componentState === 'bundled', state: componentState, component_id: 'ocr', resolved_path: componentAvailable() ? 'tools/pdftotext.exe' : null, purpose: 'PDF text' },
           { tool: 'pdftoppm', available: componentAvailable(), bundled: componentState === 'bundled', state: componentState, component_id: 'ocr', resolved_path: componentAvailable() ? 'tools/pdftoppm.exe' : null, purpose: 'PDF images' },
           { tool: 'soffice', available: true, bundled: false, state: 'system', component_id: 'office', resolved_path: 'C:/Program Files/LibreOffice/program/soffice.exe', purpose: 'Office conversion' },
+          { tool: '7z', available: componentAvailable(), bundled: componentState === 'bundled', state: componentState, component_id: 'archive', resolved_path: componentAvailable() ? 'tools/7zip/7z.exe' : null, purpose: 'Archives' },
         ] as never;
       case 'get_component_statuses':
       case 'refresh_component_catalog':
@@ -59,12 +60,18 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
           { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42 * 1024 * 1024, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' },
           { id: 'office', label: 'Office', description: '', target: 'windows-x86_64', size_bytes: 210 * 1024 * 1024, size_label: '210 МБ', unlocks: ['soffice'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'ok' },
           { id: 'semantic', label: 'Semantic', description: '', target: 'windows-x86_64', size_bytes: 980 * 1024 * 1024, size_label: '980 МБ', unlocks: ['llama_cpp'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'ok' },
+          { id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 8 * 1024 * 1024, size_label: '8 МБ', unlocks: ['7z'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' },
         ] as never;
       case 'install_component':
       case 'remove_component': {
         componentState = command === 'install_component' ? 'downloaded' : 'missing';
-        return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' } as never;
+        const requestedId = (payload as { id?: string } | undefined)?.id ?? 'ocr';
+        const archive = requestedId === 'archive';
+        return { id: requestedId, label: archive ? 'Архивы' : 'OCR', description: '', target: 'windows-x86_64', size_bytes: archive ? 8 : 42, size_label: archive ? '8 МБ' : '42 МБ', unlocks: archive ? ['7z'] : ['tesseract'], state: componentState, installed: componentInstalled(), available: componentAvailable(), catalog_available: true, message: 'ok' } as never;
       }
+      case 'import_component_bundle':
+        componentState = 'downloaded';
+        return [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 8, size_label: '8 МБ', unlocks: ['7z'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }] as never;
       case 'pick_template_files':
         return { files: [
           { file_name: 'Договор.docx', template_path: '/app-data/user-templates/contract.docx', extracted_text: 'Договор\n{{org.inn}}' },
@@ -540,7 +547,7 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_default_output_root', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'replace_clause_blocks', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
+    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_default_output_root', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'pick_component_bundle', 'import_component_bundle', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'replace_clause_blocks', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 20_000);
@@ -728,6 +735,21 @@ describe('Полный прогон пользовательских сцена�
     const installDialog = await screen.findByRole('dialog', { name: 'Установить компонент «OCR»?' });
     fireEvent.click(within(installDialog).getByRole('button', { name: 'Скачать и установить' }));
     await waitFor(() => expect(calls.some(call => call.command === 'install_component')).toBe(true));
+    await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
+    expect(calls.findIndex(call => call.command === 'install_component')).toBeLessThan(calls.findIndex(call => call.command === 'parse_source_file'));
+  });
+
+  it('для 7Z/RAR заранее подключает архивный компонент, а не падает внутри backend', async () => {
+    const calls: Call[] = [];
+    installMock(calls, { componentInstalled: false });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Счёт на оплату' });
+    const archive = new File([new Uint8Array([0x52, 0x61, 0x72, 0x21])], 'documents.rar', { type: 'application/vnd.rar' });
+    const zone = screen.getByText(/Перетащите документ в эту область/).closest('.sourceStage');
+    fireEvent.drop(zone as Element, { dataTransfer: { files: [archive] } });
+    const installDialog = await screen.findByRole('dialog', { name: 'Установить компонент «Архивы»?' });
+    fireEvent.click(within(installDialog).getByRole('button', { name: 'Скачать и установить' }));
+    await waitFor(() => expect(calls.some(call => call.command === 'install_component' && (call.payload as { id?: string } | undefined)?.id === 'archive')).toBe(true));
     await waitFor(() => expect(calls.some(call => call.command === 'parse_source_file')).toBe(true));
     expect(calls.findIndex(call => call.command === 'install_component')).toBeLessThan(calls.findIndex(call => call.command === 'parse_source_file'));
   });

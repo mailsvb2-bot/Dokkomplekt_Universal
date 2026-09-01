@@ -64,11 +64,13 @@ The current source tree also includes a corrective closure pass: historical fiel
 
 ### Подписанные компоненты, сохранённые из 18.2.0
 
-- тяжёлый runtime разделён на пакеты `ocr`, `office` и `semantic`;
+- тяжёлый runtime разделён на пакеты `ocr`, `office`, `semantic` и `archive`;
 - единый `components-catalog.json` подписывается отдельным Ed25519 update-ключом;
-- докачанные компоненты устанавливаются в per-user directory и принимаются только после проверки каталога, receipt, manifest и SHA-256 каждого файла;
-- UI показывает `bundled / downloaded / system / missing`, размер и прогресс;
-- из одного проверенного staging строятся тонкий NSIS, офлайн NSIS и отдельные component ZIP.
+- component ZIP устанавливаются в per-user directory только после проверки каталога, receipt, manifest и SHA-256 каждого файла;
+- кроме HTTPS-каталога сборка создаёт `Dokkomplekt-components-offline-<target>.zip`: тот же подписанный каталог и точные component ZIP можно импортировать из интерфейса полностью без сети;
+- offline-only каталог имеет пустой URL/allow-list и остаётся fail-closed для сетевой загрузки — локальный импорт не создаёт второго trust anchor;
+- UI показывает `bundled / downloaded / system / missing`, размер и прогресс; для `.7z/.rar` заранее подключается канонический runtime tool `7z`;
+- из одного проверенного staging строятся тонкий NSIS, офлайн NSIS, отдельные component ZIP и подписанный локальный component bundle.
 
 ### Pilot Expansion, сохранённый из 18.1.3
 

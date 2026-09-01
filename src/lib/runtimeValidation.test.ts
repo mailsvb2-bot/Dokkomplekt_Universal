@@ -8,10 +8,12 @@ import {
 
 describe('runtime backend contracts', () => {
   it('registers a fail-closed response kind for every current Tauri command', () => {
-    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(123);
+    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(125);
     expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');
     expect(COMMAND_RESPONSE_KIND.pick_source_file).toBe('nullable-object');
     expect(COMMAND_RESPONSE_KIND.parse_source_path).toBe('object');
+    expect(COMMAND_RESPONSE_KIND.import_component_bundle).toBe('array');
+    expect(COMMAND_RESPONSE_KIND.pick_component_bundle).toBe('nullable-object');
     expect(COMMAND_RESPONSE_KIND.replace_clause_blocks).toBe('boolean');
     expect(() => validateRustResponse('new_unregistered_command', {})).toThrow(/не зарегистрирован контракт/);
   });

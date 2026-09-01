@@ -299,6 +299,9 @@ function AppContent() {
       if (!officeReady) return false;
       return ensureOptionalComponent('ocr', 'Извлечение текста презентаций', ['pdftotext']);
     }
+    if (['7z', 'rar'].includes(extension)) {
+      return ensureOptionalComponent('archive', 'Распаковка входящих архивов', ['7z']);
+    }
     return true;
   }
 

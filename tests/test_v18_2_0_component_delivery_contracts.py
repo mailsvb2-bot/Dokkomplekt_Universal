@@ -136,8 +136,10 @@ class ComponentDeliveryContracts(unittest.TestCase):
             subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True, text=True)
             pack = output_dir / f"ocr-{target}.zip"
             catalog_path = output_dir / "components-catalog.json"
+            offline_bundle = output_dir / f"Dokkomplekt-components-offline-{target}.zip"
             self.assertTrue(pack.is_file())
             self.assertTrue(catalog_path.is_file())
+            self.assertTrue(offline_bundle.is_file())
             with zipfile.ZipFile(pack) as archive:
                 names = set(archive.namelist())
                 self.assertIn("component-files.json", names)
@@ -149,16 +151,91 @@ class ComponentDeliveryContracts(unittest.TestCase):
             catalog = json.loads(catalog_path.read_text("utf-8"))
             self.assertRegex(catalog["payload"]["published_at"], r"^\d{4}-\d{2}-\d{2}T")
             descriptor = catalog["payload"]["components"][0]
+            self.assertEqual(descriptor["archive_name"], pack.name)
             self.assertEqual(descriptor["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
             self.assertEqual(descriptor["files_manifest_sha256"], hashlib.sha256(manifest_bytes).hexdigest())
             canonical = json.dumps(catalog["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
             Ed25519PrivateKey.from_private_bytes(seed).public_key().verify(base64.b64decode(catalog["signature"]), canonical)
+            with zipfile.ZipFile(offline_bundle) as archive:
+                self.assertEqual(archive.namelist(), ["components-catalog.json", pack.name])
+                self.assertEqual(archive.read("components-catalog.json"), catalog_path.read_bytes())
+                self.assertEqual(hashlib.sha256(archive.read(pack.name)).hexdigest(), descriptor["sha256"])
 
             first = hashlib.sha256(pack.read_bytes()).hexdigest()
             shutil.rmtree(output_dir)
             output_dir.mkdir()
             subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True, text=True)
             self.assertEqual(first, hashlib.sha256((output_dir / pack.name).read_bytes()).hexdigest())
+        finally:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_offline_import_is_signed_fail_closed_and_wired_to_the_ui(self) -> None:
+        manager = self.text("src-tauri/src/component_manager.rs")
+        commands = self.text("src-tauri/src/subsystems/source_intake_commands.rs")
+        app = self.text("src/App.tsx")
+        center = self.text("src/components/AutomationControlCenter.tsx")
+        for invariant in [
+            "import_offline_component_bundle",
+            "verify_catalog(&catalog)",
+            "guard_catalog_not_older",
+            "component_archive_name",
+            "stage_verified_component_archive",
+            "commit_staged_offline_components",
+            "SHA-256 локального компонента",
+            "Содержимое офлайн-комплекта не совпадает",
+        ]:
+            self.assertIn(invariant, manager)
+        self.assertIn("pick_component_bundle", commands)
+        self.assertIn("import_component_bundle", commands)
+        self.assertIn("Импортировать офлайн-комплект", center)
+        self.assertIn("pickComponentBundle", center)
+        self.assertIn("importComponentBundle", center)
+        self.assertIn("['7z', 'rar']", app)
+        self.assertIn("ensureOptionalComponent('archive'", app)
+        self.assertNotIn("pickSourceFile());\n    if (!/\\.zip", center)
+        self.assertIn('\"archive\"', manager)
+        self.assertIn("'archive', 'Распаковка входящих архивов', ['7z']", app)
+        self.assertIn('\"unlocks\": [\"7z\"]', self.text("scripts/build_component_packs.py"))
+
+    def test_component_builder_can_create_signed_offline_only_catalog_without_https(self) -> None:
+        target = "offline-contract-target"
+        target_dir = ROOT / "src-tauri" / "resources" / "tools" / target
+        output_dir = Path(tempfile.mkdtemp(prefix="dokkomplekt-offline-components-"))
+        try:
+            (target_dir / "7zip").mkdir(parents=True, exist_ok=True)
+            tool = target_dir / "7zip" / "7z"
+            tool.write_bytes(b"fake-7zip-v1")
+            (target_dir / "sidecar-status.json").write_text(json.dumps({
+                "schema": 1,
+                "target": target,
+                "files": [{
+                    "tool": "7zip",
+                    "path": "7zip/7z",
+                    "sha256": hashlib.sha256(tool.read_bytes()).hexdigest(),
+                    "executable": True,
+                }],
+            }), "utf-8")
+            seed = bytes(range(32))
+            env = {**os.environ,
+                "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": base64.b64encode(seed).decode("ascii"),
+                "DOKKOMPLEKT_UPDATE_PUBKEY_B64": base64.b64encode(public_key_bytes(seed)).decode("ascii"),
+            }
+            command = [
+                sys.executable, str(ROOT / "scripts" / "build_component_packs.py"),
+                "--target", target, "--components", "archive",
+                "--app-min-version", "18.3.2",
+                "--out", str(output_dir), "--require-trusted-public-key",
+            ]
+            subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True, text=True)
+            catalog = json.loads((output_dir / "components-catalog.json").read_text("utf-8"))
+            self.assertEqual(catalog["payload"]["allowed_hosts"], [])
+            descriptor = catalog["payload"]["components"][0]
+            self.assertEqual(descriptor["url"], "")
+            self.assertEqual(descriptor["archive_name"], f"archive-{target}.zip")
+            self.assertTrue((output_dir / f"Dokkomplekt-components-offline-{target}.zip").is_file())
+            canonical = json.dumps(catalog["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            Ed25519PrivateKey.from_private_bytes(seed).public_key().verify(base64.b64decode(catalog["signature"]), canonical)
         finally:
             shutil.rmtree(target_dir, ignore_errors=True)
             shutil.rmtree(output_dir, ignore_errors=True)

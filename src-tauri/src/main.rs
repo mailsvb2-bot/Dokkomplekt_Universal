@@ -2335,6 +2335,8 @@ fn main() {
             refresh_component_catalog,
             install_component,
             remove_component,
+            pick_component_bundle,
+            import_component_bundle,
             parse_web_source,
             get_document_template_text,
             get_workflow_plan,

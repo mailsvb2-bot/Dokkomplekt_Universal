@@ -400,6 +400,8 @@ export const COMMAND_RESPONSE_KIND = {
   'get_background_watcher_state': 'object',
   'install_background_watcher': 'object',
   'install_component': 'object',
+  'import_component_bundle': 'array',
+  'pick_component_bundle': 'nullable-object',
   'learn_template_from_examples_command': 'object',
   'list_audit_events': 'array',
   'list_automation_exceptions': 'array',
@@ -624,6 +626,7 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
       break;
     case 'get_component_statuses':
     case 'refresh_component_catalog':
+    case 'import_component_bundle':
       validateComponentArray(command, value);
       break;
     case 'install_component':

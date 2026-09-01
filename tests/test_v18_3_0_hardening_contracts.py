@@ -233,7 +233,7 @@ class V1830HardeningContracts(unittest.TestCase):
         self.assertIsNotNone(api_block)
         frontend = set(re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", api_block.group(1)))
         self.assertEqual(backend, frontend)
-        self.assertEqual(len(backend), 123)
+        self.assertEqual(len(backend), 125)
         self.assertTrue({
             "get_output_preferences",
             "save_output_preferences",

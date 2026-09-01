@@ -176,6 +176,14 @@ export async function removeComponent(id: string): Promise<ComponentStatus> {
   return callRust('remove_component', { id });
 }
 
+export async function pickComponentBundle(initialPath?: string | null): Promise<PickedSourceFile | null> {
+  return callRust('pick_component_bundle', { req: { initial_path: initialPath ?? null } });
+}
+
+export async function importComponentBundle(selectedPath: string): Promise<ComponentStatus[]> {
+  return callRust('import_component_bundle', { req: { selected_path: selectedPath } });
+}
+
 export async function parseWebSource(url: string, defaultYear: number): Promise<ParseWebSourceResponse> {
   return callRust('parse_web_source', { req: { url, default_year: defaultYear } });
 }
@@ -722,6 +730,8 @@ export const rustCommandNames = [
   'refresh_component_catalog',
   'install_component',
   'remove_component',
+  'pick_component_bundle',
+  'import_component_bundle',
   'parse_web_source',
   'get_document_template_text',
   'get_workflow_plan',

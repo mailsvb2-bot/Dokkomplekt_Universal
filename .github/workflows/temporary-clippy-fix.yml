@@ -1,0 +1,47 @@
+name: Temporary exact Clippy fix
+
+on:
+  push:
+    branches:
+      - agent/offline-runtime-import
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/offline-runtime-import
+          fetch-depth: 0
+      - name: Apply exact iterator fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src-tauri/src/component_manager.rs')
+          text = path.read_text(encoding='utf-8')
+          old = ".filter(|segment| !segment.is_empty())\n            .next_back()"
+          new = ".rfind(|segment| !segment.is_empty())"
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 Clippy patterns, found {count}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "src-tauri/src/component_manager.rs"
+          test "$(git diff --numstat | awk '{print $1 ":" $2}')" = "2:4"
+      - name: Commit exact fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/component_manager.rs
+          git commit -m 'Fix pinned Clippy iterator lint'
+          git push origin HEAD:agent/offline-runtime-import

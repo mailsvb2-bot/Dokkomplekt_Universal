@@ -457,7 +457,7 @@ fn component_archive_name(descriptor: &ComponentDescriptor) -> Result<String, St
         let url = reqwest::Url::parse(&descriptor.url)
             .map_err(|_| "Некорректный URL компонента".to_string())?;
         url.path_segments()
-            .and_then(|segments| segments.filter(|item| !item.is_empty()).next_back())
+            .and_then(|mut segments| segments.rfind(|item| !item.is_empty()))
             .ok_or_else(|| "URL компонента не содержит имени архива".to_string())?
             .to_string()
     };
@@ -474,7 +474,7 @@ fn component_archive_name(descriptor: &ComponentDescriptor) -> Result<String, St
             .map_err(|_| "Некорректный URL компонента".to_string())?;
         let url_name = url
             .path_segments()
-            .and_then(|segments| segments.filter(|item| !item.is_empty()).next_back())
+            .and_then(|mut segments| segments.rfind(|item| !item.is_empty()))
             .ok_or_else(|| "URL компонента не содержит имени архива".to_string())?;
         if url_name != name {
             return Err("Имя архива компонента не совпадает с URL".into());

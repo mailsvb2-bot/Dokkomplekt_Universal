@@ -580,8 +580,9 @@ describe('Полный прогон пользовательских сцена�
 
     const alert = await screen.findByRole('alert', { name: 'Не удалось загрузить рабочий набор' });
     expect(within(alert).getByText('Рабочий набор не загружен')).toBeTruthy();
-    const createButtons = screen.getByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;
-    expect(createButtons.disabled).toBe(true);
+    expect(screen.getByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Создать кнопку из текста' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Выбрать исходный файл' }) as HTMLButtonElement).disabled).toBe(true);
 
     const retry = within(alert).getByRole('button', { name: 'Повторить загрузку' }) as HTMLButtonElement;

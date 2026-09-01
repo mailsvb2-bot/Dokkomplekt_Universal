@@ -28,6 +28,7 @@ function buildProps(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
     activeDocumentId: document.id,
     selectedDocumentIds: [document.id],
     busy: false,
+    workspaceStateReady: true,
     printCopies: { [document.id]: 1 },
     onSelect: vi.fn(),
     onToggleSelected: vi.fn(),
@@ -53,6 +54,14 @@ function renderRail(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
 }
 
 describe('DocumentRail', () => {
+  it('never exposes first-run actions before durable workspace bootstrap finishes', () => {
+    renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], workspaceStateReady: false });
+    expect(screen.getByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();
+    expect(screen.getByText('Загружаем сохранённые кнопки…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Создать кнопку из текста' })).toBeNull();
+  });
+
 it('keeps the native picker primary and exposes an explicit text fallback', () => {
   const onAdd = vi.fn();
   const onAddFromText = vi.fn();

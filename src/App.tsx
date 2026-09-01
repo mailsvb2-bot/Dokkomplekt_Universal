@@ -1357,6 +1357,7 @@ function AppContent() {
             activeDocumentId={activeDoc}
             selectedDocumentIds={selectedDocIds}
             busy={interactionBusy}
+            workspaceStateReady={workspaceStateReady}
             printCopies={printCopies}
             onSelect={selectDocument}
             onToggleSelected={toggleDocumentSelected}

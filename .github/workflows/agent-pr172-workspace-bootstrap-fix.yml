@@ -1,0 +1,97 @@
+name: Agent PR172 workspace bootstrap fix
+
+on:
+  push:
+    branches:
+      - agent/donor-medical-preflight-parity
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: agent/donor-medical-preflight-parity
+          fetch-depth: 0
+      - name: Verify expected PR parent
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD^)" = "101696513c63bc05dc58561640cfa89ad94e7f4d"
+      - name: Apply workspace loading contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/components/DocumentRail.tsx')
+          s = p.read_text()
+          s = s.replace('  busy: boolean;\n  printCopies:', '  busy: boolean;\n  workspaceStateReady: boolean;\n  printCopies:')
+          s = s.replace('      {hasDocuments ? (\n', '''      {!props.workspaceStateReady ? (\n        <div className="emptyPackage workspaceLoading" role="status" aria-label="Загрузка рабочего набора">\n          <div><i className="ti ti-loader-2" /></div>\n          <h3>Загружаем сохранённые кнопки…</h3>\n          <p>Проверяем рабочий набор на этом компьютере. Создание новых кнопок станет доступно после завершения загрузки.</p>\n        </div>\n      ) : hasDocuments ? (\n''')
+          p.write_text(s)
+
+          p = Path('src/App.tsx')
+          s = p.read_text()
+          s = s.replace('            busy={interactionBusy}\n            printCopies={printCopies}', '            busy={interactionBusy}\n            workspaceStateReady={workspaceStateReady}\n            printCopies={printCopies}')
+          p.write_text(s)
+
+          p = Path('src/components/DocumentRail.test.tsx')
+          s = p.read_text()
+          s = s.replace('    busy: false,\n    printCopies:', '    busy: false,\n    workspaceStateReady: true,\n    printCopies:')
+          marker = "describe('DocumentRail', () => {\n"
+          addition = """describe('DocumentRail', () => {\n  it('never exposes first-run actions before durable workspace bootstrap finishes', () => {\n    renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], workspaceStateReady: false });\n    expect(screen.getByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();\n    expect(screen.getByText('Загружаем сохранённые кнопки…')).toBeTruthy();\n    expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();\n    expect(screen.queryByRole('button', { name: 'Создать кнопку из текста' })).toBeNull();\n  });\n\n"""
+          if marker not in s:
+              raise SystemExit('DocumentRail test marker missing')
+          s = s.replace(marker, addition, 1)
+          p.write_text(s)
+
+          p = Path('src/App.test.tsx')
+          s = p.read_text()
+          marker = "  it('starts without built-in examples and shows one clear create-buttons action', async () => {\n"
+          addition = """  it('does not advertise an empty first run while persisted workspace state is still loading', async () => {\n    let resolveFirstRun: ((value: unknown) => void) | undefined;\n    const pendingFirstRun = new Promise<unknown>((resolve) => { resolveFirstRun = resolve; });\n    __setInvokeForTests(async (name: string) => {\n      if (name === 'first_run_state') return pendingFirstRun as never;\n      if (name === 'get_intake_capabilities') return [] as never;\n      if (name === 'get_sidecar_status') return [] as never;\n      return {} as never;\n    });\n\n    render(<App />);\n    expect(await screen.findByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();\n    expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();\n\n    resolveFirstRun?.({ pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' });\n    expect(await screen.findByRole('button', { name: 'Создать свои кнопки' })).toBeTruthy();\n  });\n\n"""
+          if marker not in s:
+              raise SystemExit('App test marker missing')
+          s = s.replace(marker, addition + marker, 1)
+          p.write_text(s)
+
+          p = Path('src/App.scenarios.test.tsx')
+          s = p.read_text()
+          old = """    const createButtons = screen.getByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;\n    expect(createButtons.disabled).toBe(true);\n    expect((screen.getByRole('button', { name: 'Выбрать исходный файл' }) as HTMLButtonElement).disabled).toBe(true);\n"""
+          new = """    expect(screen.getByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();\n    expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();\n    expect(screen.queryByRole('button', { name: 'Создать кнопку из текста' })).toBeNull();\n    expect((screen.getByRole('button', { name: 'Выбрать исходный файл' }) as HTMLButtonElement).disabled).toBe(true);\n"""
+          if old not in s:
+              raise SystemExit('App scenario contract marker missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          rm .github/workflows/agent-pr172-workspace-bootstrap-fix.yml
+      - name: Refresh source manifest
+        shell: bash
+        run: |
+          python3 scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.txt SOURCE_MANIFEST_SHA256.txt
+          python3 scripts/verify_source_manifest.py
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify frontend regression
+        shell: bash
+        run: |
+          npm ci
+          npm run typecheck
+          npm test -- --run
+          npm run build
+          git diff --check
+      - name: Commit clean fix
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          test ! -e .github/workflows/agent-pr172-workspace-bootstrap-fix.yml
+          git add SOURCE_MANIFEST_SHA256.txt src/App.tsx src/App.test.tsx src/App.scenarios.test.tsx src/components/DocumentRail.tsx src/components/DocumentRail.test.tsx
+          git add -u .github/workflows/agent-pr172-workspace-bootstrap-fix.yml
+          git diff --cached --check
+          git commit -m "Hide false first-run while workspace restores"
+          git push origin HEAD:agent/donor-medical-preflight-parity

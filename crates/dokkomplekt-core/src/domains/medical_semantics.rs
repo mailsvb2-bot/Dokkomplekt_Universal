@@ -1,10 +1,11 @@
 //! Role-scoped semantic fields for medical documents whose labels are ambiguous.
 //!
 //! A single case can create both an MSE commission document and a sick-leave VK
-//! document.  Their protocol number/date and workplace requisites are independent,
-//! even though old templates often used the same human labels.  Persist the values
-//! separately and adapt them to legacy generic placeholders only for the document
-//! currently being rendered.
+//! document. Their protocol numbers/dates are independent even though old templates
+//! often used the same human labels. The audited donor applications, however, keep
+//! one patient-level workplace/position pair and synchronize it across medical
+//! dialogs. Role-scoped workplace/position ids are retained only as compatibility
+//! inputs for cases saved by older Universal builds; a current shared value wins.
 
 use crate::{SemanticCase, SemanticValue, ValueSource};
 use chrono::{Duration, NaiveDate};
@@ -64,6 +65,31 @@ pub fn scope_legacy_field_for_role(role_id: &str, field_id: &str) -> String {
 pub fn case_for_medical_document_render(case: &SemanticCase, role_id: &str) -> SemanticCase {
     let mut scoped_case = case.clone();
     for (scoped_id, legacy_id) in role_scoped_bindings(role_id) {
+        let shared_work_field = matches!(*legacy_id, "medical.workplace" | "medical.position");
+        if shared_work_field {
+            // The audited donor applications keep one patient-level workplace/position
+            // pair and synchronize it across all medical popups. Old Universal builds
+            // persisted role-scoped copies, so keep those only as a migration fallback.
+            // Once the shared value exists it is authoritative for both generic and
+            // scoped placeholders in this render clone.
+            if let Some(mut shared) = case.values.get(*legacy_id).cloned() {
+                shared.field_id = (*scoped_id).to_string();
+                scoped_case.values.insert((*scoped_id).to_string(), shared);
+            } else if let Some(mut legacy_scoped) = case.values.get(*scoped_id).cloned() {
+                legacy_scoped.field_id = (*legacy_id).to_string();
+                scoped_case
+                    .values
+                    .insert((*legacy_id).to_string(), legacy_scoped);
+            }
+            if case.skipped_fields.contains(*legacy_id) {
+                scoped_case.skipped_fields.insert((*scoped_id).to_string());
+            } else if case.skipped_fields.contains(*scoped_id)
+                && !case.values.contains_key(*legacy_id)
+            {
+                scoped_case.skipped_fields.insert((*legacy_id).to_string());
+            }
+            continue;
+        }
         if let Some(mut value) = case.values.get(*scoped_id).cloned() {
             value.field_id = (*legacy_id).to_string();
             scoped_case.values.insert((*legacy_id).to_string(), value);
@@ -344,6 +370,24 @@ mod tests {
         assert_eq!(mse.get("medical.protocol_number"), Some("MSE-10"));
         assert_eq!(sick.get("medical.protocol_number"), Some("SL-20"));
         assert_eq!(case.get("medical.protocol_number"), None);
+    }
+
+    #[test]
+    fn shared_donor_work_pair_overrides_stale_role_scoped_work_on_render() {
+        let mut case = SemanticCase::default();
+        put(&mut case, "medical.workplace", "Новый общий завод");
+        put(&mut case, "medical.position", "новая общая должность");
+        put(&mut case, VK_MSE_WORKPLACE, "Старое место МСЭ");
+        put(&mut case, VK_MSE_POSITION, "старая должность МСЭ");
+
+        let rendered = case_for_medical_document_render(&case, "vk_mse");
+        assert_eq!(rendered.get("medical.workplace"), Some("Новый общий завод"));
+        assert_eq!(rendered.get(VK_MSE_WORKPLACE), Some("Новый общий завод"));
+        assert_eq!(
+            rendered.get("medical.position"),
+            Some("новая общая должность")
+        );
+        assert_eq!(rendered.get(VK_MSE_POSITION), Some("новая общая должность"));
     }
 
     #[test]

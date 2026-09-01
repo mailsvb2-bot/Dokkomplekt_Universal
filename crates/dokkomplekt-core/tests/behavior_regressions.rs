@@ -174,11 +174,17 @@ fn discharge_sick_leave_number_requires_enabled_toggle() {
 }
 
 #[test]
-fn dedicated_sick_leave_document_keeps_its_number_prompt() {
+fn sick_leave_vk_never_reuses_the_discharge_sick_leave_number_prompt() {
     let mut spec = medical_spec("sick_leave_vk", "sick_leave_vk", vec![]);
     spec.placeholders = vec!["medical.sick_leave_number".into()];
-    let plan = plan_workflow(&spec, &SemanticCase::default(), &WorkflowFlags::default());
-    assert!(plan
+    let plan = plan_workflow(
+        &spec,
+        &SemanticCase::default(),
+        &WorkflowFlags {
+            sick_leave_enabled: true,
+        },
+    );
+    assert!(!plan
         .prompts
         .iter()
         .any(|p| p.field_id == "medical.sick_leave_number"));

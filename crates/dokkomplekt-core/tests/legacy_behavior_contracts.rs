@@ -177,6 +177,60 @@ fn popup_values_are_reused_between_documents() {
 }
 
 #[test]
+fn vk_documents_share_one_doctor_work_pair_but_keep_protocols_independent() {
+    let mut mse = doc("vk_mse", "ВК на МСЭ");
+    mse.placeholders = vec![
+        "medical.vk_mse.workplace".into(),
+        "medical.vk_mse.position".into(),
+        "medical.vk_mse.protocol_number".into(),
+    ];
+    mse.required_fields = mse.placeholders.clone();
+
+    let mut sick = doc("sick_leave_vk", "ВК больничный");
+    sick.placeholders = vec![
+        "medical.sick_leave_vk.workplace".into(),
+        "medical.sick_leave_vk.position".into(),
+        "medical.sick_leave_vk.protocol_number".into(),
+        "medical.sick_leave_number".into(),
+    ];
+    sick.required_fields = sick.placeholders.clone();
+
+    let plan = plan_workflow_batch(
+        &[mse, sick],
+        &SemanticCase::default(),
+        &WorkflowFlags {
+            sick_leave_enabled: true,
+        },
+    );
+    let ids = plan
+        .prompts
+        .iter()
+        .map(|prompt| prompt.field_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(ids.contains("medical.workplace"));
+    assert!(ids.contains("medical.position"));
+    assert!(ids.contains("medical.vk_mse.protocol_number"));
+    assert!(ids.contains("medical.sick_leave_vk.protocol_number"));
+    assert!(!ids.contains("medical.vk_mse.workplace"));
+    assert!(!ids.contains("medical.sick_leave_vk.workplace"));
+    assert!(!ids.contains("medical.sick_leave_number"));
+    assert_eq!(
+        plan.prompts
+            .iter()
+            .filter(|prompt| prompt.field_id == "medical.workplace")
+            .count(),
+        1
+    );
+    assert_eq!(
+        plan.prompts
+            .iter()
+            .filter(|prompt| prompt.field_id == "medical.position")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn diary_dates_start_admission_plus_one_and_stop_on_discharge() {
     let entries = build_diary_plan(Some("01.06.2026"), Some("03.06.2026"), 2026).unwrap();
     assert_eq!(

@@ -510,15 +510,12 @@ mod tests {
             (VK_MSE_COMMISSION_DATE, "13.06.2026"),
             (VK_MSE_PROTOCOL_NUMBER, "MSE-42"),
             (VK_MSE_PROTOCOL_DATE, "14.06.2026"),
-            (VK_MSE_WORKPLACE, "Организация МСЭ"),
-            (VK_MSE_POSITION, "Инженер МСЭ"),
+            ("medical.workplace", "Общая организация"),
+            ("medical.position", "Общая должность"),
             (SICK_LEAVE_VK_COMMISSION_DATE, "15.06.2026"),
             (SICK_LEAVE_VK_PROTOCOL_NUMBER, "BL-99"),
             (SICK_LEAVE_VK_PROTOCOL_DATE, "16.06.2026"),
-            (SICK_LEAVE_VK_WORKPLACE, "Организация БЛ"),
-            (SICK_LEAVE_VK_POSITION, "Инженер БЛ"),
             ("medical.sick_leave_commission_date", "17.06.2026"),
-            ("medical.sick_leave_number", "ЛН-123"),
         ]);
         let common = concat!(
             "{{subject.name}} | {{medical.case_number}} | {{medical.admission_date}} | ",
@@ -532,7 +529,7 @@ mod tests {
         let sick_template = format!(
             "{common}{{{{medical.commission_date}}}} | {{{{medical.protocol_number}}}} | \
              {{{{medical.protocol_date}}}} | {{{{medical.workplace}}}} | {{{{medical.position}}}} | \
-             {{{{medical.sick_leave_commission_date}}}} | {{{{medical.sick_leave_number}}}}{signatures}"
+             {{{{medical.sick_leave_commission_date}}}}{signatures}"
         );
         let docs = vec![
             medical_doc(
@@ -572,10 +569,12 @@ mod tests {
             .find(|output| output.document_id == "sick")
             .unwrap();
         assert!(mse.rendered_text.contains("MSE-42"));
-        assert!(mse.rendered_text.contains("Организация МСЭ"));
+        assert!(mse.rendered_text.contains("Общая организация"));
+        assert!(mse.rendered_text.contains("Общая должность"));
         assert!(!mse.rendered_text.contains("BL-99"));
         assert!(sick.rendered_text.contains("BL-99"));
-        assert!(sick.rendered_text.contains("Организация БЛ"));
+        assert!(sick.rendered_text.contains("Общая организация"));
+        assert!(sick.rendered_text.contains("Общая должность"));
         assert!(!sick.rendered_text.contains("MSE-42"));
     }
 

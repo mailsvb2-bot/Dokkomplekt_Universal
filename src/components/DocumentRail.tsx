@@ -6,6 +6,7 @@ interface DocumentRailProps {
   activeDocumentId: string | null;
   selectedDocumentIds: string[];
   busy: boolean;
+  workspaceStateReady: boolean;
   printCopies: Record<string, number>;
   onSelect(document: DocumentTemplateSpec): void;
   onToggleSelected(documentId: string): void;
@@ -37,7 +38,13 @@ export function DocumentRail(props: DocumentRailProps) {
         {hasDocuments && <span className="packageCount">{selectedCount}/{props.documents.length}</span>}
       </div>
 
-      {hasDocuments ? (
+      {!props.workspaceStateReady ? (
+        <div className="emptyPackage workspaceLoading" role="status" aria-label="Загрузка рабочего набора">
+          <div><i className="ti ti-loader-2" /></div>
+          <h3>Загружаем сохранённые кнопки…</h3>
+          <p>Проверяем рабочий набор на этом компьютере. Создание новых кнопок станет доступно после завершения загрузки.</p>
+        </div>
+      ) : hasDocuments ? (
         <>
           <p className="packageHint">Отметьте галочками документы, которые должны войти в этот комплект.</p>
           <div className="packageList simpleDocumentButtons">

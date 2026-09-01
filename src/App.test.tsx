@@ -68,6 +68,24 @@ describe('App', () => {
     __resetInvokeForTests();
   });
 
+  it('does not advertise an empty first run while persisted workspace state is still loading', async () => {
+    let resolveFirstRun: ((value: unknown) => void) | undefined;
+    const pendingFirstRun = new Promise<unknown>((resolve) => { resolveFirstRun = resolve; });
+    __setInvokeForTests(async (name: string) => {
+      if (name === 'first_run_state') return pendingFirstRun as never;
+      if (name === 'get_intake_capabilities') return [] as never;
+      if (name === 'get_sidecar_status') return [] as never;
+      return {} as never;
+    });
+
+    render(<App />);
+    expect(await screen.findByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();
+
+    resolveFirstRun?.({ pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' });
+    expect(await screen.findByRole('button', { name: 'Создать свои кнопки' })).toBeTruthy();
+  });
+
   it('starts without built-in examples and shows one clear create-buttons action', async () => {
     installTemplateMock(false);
     render(<App />);

@@ -1,4 +1,7 @@
 use crate::core::{SourceDocument, TargetTemplate};
+use crate::domains::medical_semantics::{
+    SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_WORKPLACE, VK_MSE_POSITION, VK_MSE_WORKPLACE,
+};
 use crate::{
     canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
     profession_derived_field_sources, profession_runtime_control_fields, resolve_popup_default,
@@ -7,6 +10,52 @@ use crate::{
     UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Map document-specific storage fields to the single doctor-facing input used by
+/// the audited donor applications. Protocol/date requisites remain role-scoped,
+/// but workplace and position are one shared pair for the current patient.
+fn donor_prompt_input_field_id(document: &DocumentTemplateSpec, field_id: &str) -> String {
+    let canonical = canonical_storage_field_id(field_id);
+    if !matches!(document.category, DomainKind::Medical) {
+        return canonical;
+    }
+    match canonical.as_str() {
+        VK_MSE_WORKPLACE | SICK_LEAVE_VK_WORKPLACE => "medical.workplace".into(),
+        VK_MSE_POSITION | SICK_LEAVE_VK_POSITION => "medical.position".into(),
+        _ => canonical,
+    }
+}
+
+/// Build the read-only case view used while deciding whether donor-style shared
+/// workplace/position prompts are still missing. Older Universal builds stored
+/// those facts only in role-scoped VK fields; current donor parity stores one
+/// patient-level pair. Preserve old values and explicit skippable omissions for
+/// planning without mutating persisted case data.
+fn donor_prompt_case(document: &DocumentTemplateSpec, case: &SemanticCase) -> SemanticCase {
+    if !matches!(document.category, DomainKind::Medical) {
+        return case.clone();
+    }
+
+    let mut prompt_case = case.clone();
+    for (scoped_id, shared_id) in
+        crate::domains::medical_semantics::role_scoped_bindings(&document.role_id)
+    {
+        if !matches!(*shared_id, "medical.workplace" | "medical.position") {
+            continue;
+        }
+        if !case.values.contains_key(*shared_id) {
+            if let Some(mut legacy_value) = case.values.get(*scoped_id).cloned() {
+                legacy_value.field_id = (*shared_id).to_string();
+                prompt_case
+                    .values
+                    .insert((*shared_id).to_string(), legacy_value);
+            } else if case.skipped_fields.contains(*scoped_id) {
+                prompt_case.skipped_fields.insert((*shared_id).to_string());
+            }
+        }
+    }
+    prompt_case
+}
 
 /// Builds one merged popup plan for a selected document.
 ///
@@ -58,7 +107,7 @@ pub fn plan_workflow(
         .chain(document.required_fields.iter())
         .chain(derived_inputs.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .collect::<BTreeSet<_>>();
@@ -67,7 +116,7 @@ pub fn plan_workflow(
         .iter()
         .chain(derived_hard_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .collect::<BTreeSet<_>>();
@@ -77,7 +126,7 @@ pub fn plan_workflow(
         .iter()
         .chain(document.placeholders.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .filter(|field_id| relevant.contains(field_id))
         .filter(|field_id| !suppressed.contains(field_id.as_str()))
         .filter(|field_id| !required.contains(field_id))
@@ -86,7 +135,12 @@ pub fn plan_workflow(
     let mut configs = effective_popup_fields(document)
         .into_iter()
         .map(|mut config| {
-            config.field_id = canonical_storage_field_id(&config.field_id);
+            config.field_id = donor_prompt_input_field_id(document, &config.field_id);
+            config.linked_to = config
+                .linked_to
+                .take()
+                .map(|field_id| donor_prompt_input_field_id(document, &field_id))
+                .filter(|field_id| field_id != &config.field_id);
             config
         })
         .filter(|config| relevant.contains(&config.field_id))
@@ -104,9 +158,10 @@ pub fn plan_workflow(
         });
     }
 
+    let prompt_case = donor_prompt_case(document, case);
     let mut prompts = configs
         .into_values()
-        .filter_map(|config| prompt_from_config(config, &required, &hard_required, case))
+        .filter_map(|config| prompt_from_config(config, &required, &hard_required, &prompt_case))
         .collect::<Vec<_>>();
     prompts.sort_by(|a, b| a.order.cmp(&b.order).then(a.field_id.cmp(&b.field_id)));
     prompts.dedup_by(|a, b| a.field_id == b.field_id);
@@ -147,7 +202,7 @@ fn selected_document_fields(
         .chain(explicit_popup_fields)
         .chain(runtime_controls.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .collect::<BTreeSet<_>>();
     replace_derived_fields_with_sources(document, flags, &mut fields);
     if matches!(document.category, DomainKind::Medical) && fields.contains("medical.labs") {
@@ -172,6 +227,7 @@ fn derived_input_fields(
                 flags.sick_leave_enabled,
             )
         })
+        .map(|field_id| donor_prompt_input_field_id(document, &field_id))
         .collect()
 }
 
@@ -190,6 +246,7 @@ fn derived_hard_required_input_fields(
                 flags.sick_leave_enabled,
             )
         })
+        .map(|field_id| donor_prompt_input_field_id(document, &field_id))
         .collect()
 }
 
@@ -205,7 +262,7 @@ pub fn document_required_input_fields(
         .iter()
         .chain(document.placeholders.iter())
         .filter(|field_id| is_valid_field_id(field_id))
-        .map(|field_id| canonical_storage_field_id(field_id))
+        .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .collect::<BTreeSet<_>>();
     replace_derived_fields_with_sources(document, flags, &mut fields);
     fields
@@ -230,7 +287,11 @@ fn replace_derived_fields_with_sources(
         .collect::<Vec<_>>();
     for (derived, sources) in replacements {
         fields.remove(&derived);
-        fields.extend(sources);
+        fields.extend(
+            sources
+                .into_iter()
+                .map(|field_id| donor_prompt_input_field_id(document, &field_id)),
+        );
     }
 }
 
@@ -248,8 +309,9 @@ fn suppressed_prompt_fields(
         suppressed.insert("medical.treatment");
     }
 
-    let sick_leave_allowed =
-        role == "sick_leave_vk" || (role == "discharge" && flags.sick_leave_enabled);
+    // Donor contract: the sick-leave number belongs only to the discharge
+    // epicrisis and only when the doctor explicitly enabled sick leave.
+    let sick_leave_allowed = role == "discharge" && flags.sick_leave_enabled;
     if !sick_leave_allowed {
         suppressed.insert("medical.sick_leave_number");
     }
@@ -301,8 +363,10 @@ fn prompt_from_config(
         return None;
     }
     let existing = case.get(&config.field_id).map(str::to_string);
+    let explicitly_skipped =
+        case.is_skipped(&config.field_id) && !hard_required_fields.contains(&config.field_id);
     let include = match config.ask_mode {
-        PromptAskMode::IfMissing => existing.is_none(),
+        PromptAskMode::IfMissing => existing.is_none() && !explicitly_skipped,
         PromptAskMode::Confirm | PromptAskMode::Always => true,
     };
     if !include {
@@ -692,19 +756,126 @@ mod tests {
     }
 
     #[test]
-    fn combined_work_position_uses_role_scoped_sources_in_old_saved_buttons() {
+    fn combined_work_position_uses_shared_donor_sources_in_old_saved_buttons() {
         let mut doc = document("mse", crate::MEDICAL_WORK_POSITION);
         doc.category = DomainKind::Medical;
         doc.role_id = "vk_mse".into();
         let inputs = document_required_input_fields(&doc, &WorkflowFlags::default());
         assert_eq!(
             inputs,
-            BTreeSet::from([
-                crate::domains::medical_semantics::VK_MSE_POSITION.into(),
-                crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
-            ])
+            BTreeSet::from(["medical.position".into(), "medical.workplace".into()])
         );
         assert!(!inputs.contains(crate::MEDICAL_WORK_POSITION));
+    }
+
+    #[test]
+    fn legacy_vk_scoped_work_values_satisfy_shared_donor_prompts() {
+        let mut doc = document("mse", crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "vk_mse".into();
+        doc.required_fields = vec![
+            crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
+            crate::domains::medical_semantics::VK_MSE_POSITION.into(),
+        ];
+        doc.placeholders = doc.required_fields.clone();
+
+        let mut case = SemanticCase::default();
+        crate::set_user_value(
+            &mut case,
+            crate::domains::medical_semantics::VK_MSE_WORKPLACE,
+            "Старое место работы",
+        );
+        crate::set_user_value(
+            &mut case,
+            crate::domains::medical_semantics::VK_MSE_POSITION,
+            "Старая должность",
+        );
+
+        let plan = plan_workflow(&doc, &case, &WorkflowFlags::default());
+        assert!(!plan.prompts.iter().any(|prompt| {
+            matches!(
+                prompt.field_id.as_str(),
+                "medical.workplace" | "medical.position"
+            )
+        }));
+        assert!(crate::workflow_publication_blockers(&case, &plan).is_empty());
+    }
+
+    #[test]
+    fn legacy_vk_scoped_skip_is_preserved_for_skippable_shared_prompt() {
+        let mut doc = document("mse", crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+        doc.category = DomainKind::Medical;
+        doc.role_id = "vk_mse".into();
+        doc.required_fields.clear();
+        doc.placeholders = vec![crate::domains::medical_semantics::VK_MSE_WORKPLACE.into()];
+
+        let mut case = SemanticCase::default();
+        case.skip(crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+
+        let plan = plan_workflow(&doc, &case, &WorkflowFlags::default());
+        assert!(!plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == "medical.workplace"));
+    }
+
+    #[test]
+    fn medical_batch_reuses_one_shared_work_pair_for_all_vk_documents() {
+        let mut mse = document("mse", crate::domains::medical_semantics::VK_MSE_WORKPLACE);
+        mse.category = DomainKind::Medical;
+        mse.role_id = "vk_mse".into();
+        mse.required_fields = vec![
+            crate::domains::medical_semantics::VK_MSE_WORKPLACE.into(),
+            crate::domains::medical_semantics::VK_MSE_POSITION.into(),
+        ];
+        mse.placeholders = mse.required_fields.clone();
+
+        let mut sick = document(
+            "sick",
+            crate::domains::medical_semantics::SICK_LEAVE_VK_WORKPLACE,
+        );
+        sick.category = DomainKind::Medical;
+        sick.role_id = "sick_leave_vk".into();
+        sick.required_fields = vec![
+            crate::domains::medical_semantics::SICK_LEAVE_VK_WORKPLACE.into(),
+            crate::domains::medical_semantics::SICK_LEAVE_VK_POSITION.into(),
+        ];
+        sick.placeholders = sick.required_fields.clone();
+
+        let plan = plan_workflow_batch(
+            &[mse, sick],
+            &SemanticCase::default(),
+            &WorkflowFlags::default(),
+        );
+        let ids = plan
+            .prompts
+            .iter()
+            .map(|prompt| prompt.field_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ids,
+            BTreeSet::from(["medical.position", "medical.workplace"])
+        );
+    }
+
+    #[test]
+    fn sick_leave_vk_never_asks_for_discharge_sick_leave_number() {
+        let mut doc = document("sick", "medical.sick_leave_number");
+        doc.category = DomainKind::Medical;
+        doc.role_id = "sick_leave_vk".into();
+        doc.placeholders = vec!["medical.sick_leave_number".into()];
+        doc.required_fields = vec!["medical.sick_leave_number".into()];
+        let plan = plan_workflow(
+            &doc,
+            &SemanticCase::default(),
+            &WorkflowFlags {
+                sick_leave_enabled: true,
+            },
+        );
+        assert!(!plan
+            .prompts
+            .iter()
+            .any(|prompt| prompt.field_id == "medical.sick_leave_number"));
     }
 
     #[test]

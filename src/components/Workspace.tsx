@@ -56,6 +56,8 @@ interface WorkspaceProps {
   skippedAnswers: Record<string, boolean>;
   preview: PreviewState | null;
   onPickWatchFolder(): void;
+  onInstallWatcher(): void;
+  onUninstallWatcher(): void;
   setIntakeSource(value: string): void;
   setAutoPrint(value: boolean): void;
   setSourceText(value: string): void;
@@ -239,9 +241,10 @@ export function Workspace(props: WorkspaceProps) {
             </div>
             <div className="sourceActions">
               <button className="softBtn fileBtn" type="button" aria-label="Заменить исходный файл" onClick={props.onPickSourceFile} disabled={props.busy}>
-                Заменить файл
+                Заменить файл этого комплекта
               </button>
-              <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Начать заново</button>
+              <button className="textBtn" onClick={props.onResetCase} disabled={props.busy}>Новый пациент / дело</button>
+              <small className="sourceCaseHint">Если это другой пациент или новое дело, начните новый комплект — так предыдущие данные и ручной выбор точно не будут считаться продолжением текущего.</small>
             </div>
           </div>
         )}
@@ -393,6 +396,15 @@ export function Workspace(props: WorkspaceProps) {
         </summary>
         <div className="automationBody">
           <label><span>Рабочая папка</span><div className="inlineInput folderPicker"><input value={props.watchFolder} readOnly placeholder="Выберите абсолютную папку на компьютере" aria-label="Рабочая папка фонового агента" /><button className="softBtn" type="button" onClick={props.onPickWatchFolder} disabled={props.busy}><i className="ti ti-folder" aria-hidden="true" /> Выбрать</button></div><small>Фоновый агент принимает только явно выбранный абсолютный путь.</small></label>
+          <div className="automationActions" aria-label="Управление автоматической обработкой">
+            <button className="primaryBtn" type="button" onClick={props.onInstallWatcher} disabled={props.busy || !props.watchFolder.trim()}>
+              <i className="ti ti-eye-cog" aria-hidden="true" /> Включить автоматическую обработку
+            </button>
+            <button className="softBtn" type="button" onClick={props.onUninstallWatcher} disabled={props.busy}>
+              <i className="ti ti-eye-off" aria-hidden="true" /> Отключить автоматическую обработку
+            </button>
+          </div>
+          <small className="automationHelp">После выбора рабочей папки нажмите «Включить автоматическую обработку». Эти же команды остаются доступны в настройках программы.</small>
           <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
           <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
           <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>

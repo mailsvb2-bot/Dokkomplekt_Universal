@@ -376,7 +376,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .sourceFileInfo span, .sourceFileInfo em { color: var(--text-2); font-size: 11px; font-style: normal; }
 .sourceFileInfo em { color: var(--warn); }
 .sourceFileInfo .okText { color: var(--ok); }
-.sourceActions { display: flex; align-items: center; gap: 8px; }
+.sourceActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; max-width: 430px; }
+.sourceCaseHint { flex: 1 0 100%; color: var(--muted); font-size: 9px; line-height: 1.35; text-align: right; }
 .alternativeSource { margin-top: 14px; }
 .alternativeSource > summary, .clientPreview > summary, .resultCopies > summary { cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; }
 .alternativeGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
@@ -437,6 +438,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .automationBody { grid-template-columns: 1fr 1fr; padding-top: 16px; }
 .automationBody > label { display: grid; gap: 6px; }
 .automationBody > label > span { color: var(--text-2); font-size: 10px; font-weight: 650; }
+.automationActions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.automationActions + .automationHelp { grid-column: 1 / -1; }
 .checkLine { display: flex !important; align-items: center; gap: 8px !important; color: var(--text-2); font-size: 11px; }
 .checkLine input { width: 17px; height: 17px; accent-color: var(--accent); }
 .automationResult { grid-column: 1 / -1; display: grid; gap: 3px; padding: 11px; border-radius: 10px; background: var(--panel); }

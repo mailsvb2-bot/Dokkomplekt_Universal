@@ -280,13 +280,28 @@ function Invoke-UiActionWithObservedTransition {
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $deadline)
 
-  # WebView2 on a saturated hosted runner can acknowledge InvokePattern without
-  # dispatching the DOM click. Never count the automation method itself as proof:
-  # resolve a fresh live element, retry once with physical input, and still require
-  # the exact product transition. A broken product therefore remains red.
-  Write-Host "UIA action '$Description' produced no observable transition; retrying once with physical input."
-  $action = Wait-UiElement -Description "$Description physical retry" -TimeoutSeconds 10 -Probe $ActionProbe
-  Invoke-UiElementPhysically -Element $action
+  # A native Tauri command can legitimately need longer than the short WebView2
+  # acknowledgement window to surface its OS dialog. If the initiating button is
+  # no longer actionable, React has already entered the shared busy state: the
+  # request is in flight and a second click would be destructive/ambiguous. Keep
+  # waiting for the exact transition instead of manufacturing a duplicate action.
+  $retryAction = $null
+  try {
+    $retryAction = & $ActionProbe
+  } catch {
+    if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+  }
+  if ($null -eq $retryAction) {
+    Write-Host "UIA action '$Description' is already in-flight; waiting for '$TransitionDescription' without a duplicate click."
+    return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+  }
+
+  # If the same action is still independently actionable, WebView2 may have
+  # acknowledged InvokePattern without dispatching the DOM click. Resolve that
+  # fresh live element, retry once with physical input, and still require the exact
+  # product transition. A broken product therefore remains red.
+  Write-Host "UIA action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
+  Invoke-UiElementPhysically -Element $retryAction
   return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
 }
 

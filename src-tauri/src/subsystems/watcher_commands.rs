@@ -441,6 +441,7 @@ fn has_supported_same_stem_sibling(source: &Path) -> bool {
         .map(|entry| entry.path())
         .any(|candidate| {
             candidate != source
+                && candidate.is_file()
                 && candidate.file_stem() == source_stem
                 && universal_intake::is_supported_path(&candidate)
         })
@@ -1739,6 +1740,24 @@ mod watcher_handoff_tests {
             .file_name()
             .and_then(|value| value.to_str())
             .is_some_and(|name| name.starts_with("Иванов.pdf")));
+    }
+
+    #[test]
+    fn supported_extension_directory_is_not_a_same_stem_source_sibling() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-directory-sibling-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create directory sibling root");
+        let source = root.join("Иванов.docx");
+        let fake_pdf = root.join("Иванов.pdf");
+        std::fs::write(&source, b"docx source").expect("write docx source");
+        std::fs::create_dir_all(&fake_pdf).expect("create pdf-named directory");
+
+        assert!(!has_supported_same_stem_sibling(&source));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

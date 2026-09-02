@@ -128,6 +128,43 @@ fn lock_component_transactions() -> Result<MutexGuard<'static, ()>, String> {
         })
 }
 
+#[derive(Debug)]
+enum AtomicWriteError {
+    BeforeCommit(String),
+    AfterCommit(String),
+}
+
+impl AtomicWriteError {
+    fn authority_committed(&self) -> bool {
+        matches!(self, Self::AfterCommit(_))
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::BeforeCommit(message) | Self::AfterCommit(message) => message,
+        }
+    }
+}
+
+fn sync_directory(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        File::open(path)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                format!(
+                    "Не удалось зафиксировать каталог {}: {error}",
+                    path.display()
+                )
+            })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ComponentProgress {
     id: String,
@@ -232,7 +269,7 @@ pub(crate) fn refresh_component_catalog(
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let _transaction_guard = lock_component_transactions()?;
     guard_catalog_not_older(&root, &catalog)?;
-    persist_verified_catalog(&root, &catalog)?;
+    persist_verified_catalog(&root, &catalog).map_err(AtomicWriteError::into_message)?;
     let descriptors = read_effective_component_descriptors(&root)?;
     recover_component_transactions(&root, Some(&descriptors))?;
     Ok(statuses_from_descriptors(&root, &descriptors))
@@ -610,8 +647,10 @@ fn commit_staged_offline_components(
         committed.push((final_dir, previous));
     }
     if let Err(error) = persist_verified_catalog(root, catalog) {
-        rollback_offline_component_commits(&committed);
-        return Err(error);
+        if !error.authority_committed() {
+            rollback_offline_component_commits(&committed);
+        }
+        return Err(error.into_message());
     }
     for (_, previous) in committed {
         if let Some(previous) = previous {
@@ -1297,16 +1336,22 @@ fn clear_catalog_overlays(root: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(overlays).map_err(|error| error.to_string())
 }
 
-fn persist_verified_catalog(root: &Path, catalog: &SignedComponentsCatalog) -> Result<(), String> {
-    verify_catalog(catalog)?;
+fn persist_verified_catalog(
+    root: &Path,
+    catalog: &SignedComponentsCatalog,
+) -> Result<(), AtomicWriteError> {
+    verify_catalog(catalog).map_err(AtomicWriteError::BeforeCommit)?;
     if catalog_is_partial(catalog) {
-        let overlays = ensure_catalog_overlays_dir(root)?;
+        let overlays = ensure_catalog_overlays_dir(root).map_err(AtomicWriteError::BeforeCommit)?;
         let fingerprint = sha256_bytes(catalog.signature.as_bytes());
         let path = overlays.join(format!("{fingerprint}.json"));
         if !path.exists() {
             let mut count = 0usize;
-            for entry in std::fs::read_dir(&overlays).map_err(|error| error.to_string())? {
-                let entry = entry.map_err(|error| error.to_string())?;
+            for entry in std::fs::read_dir(&overlays)
+                .map_err(|error| AtomicWriteError::BeforeCommit(error.to_string()))?
+            {
+                let entry =
+                    entry.map_err(|error| AtomicWriteError::BeforeCommit(error.to_string()))?;
                 if entry
                     .file_name()
                     .to_str()
@@ -1316,19 +1361,27 @@ fn persist_verified_catalog(root: &Path, catalog: &SignedComponentsCatalog) -> R
                 }
             }
             if count >= MAX_COMPONENT_CATALOG_OVERLAYS {
-                return Err("Достигнут лимит partial components catalog".into());
+                return Err(AtomicWriteError::BeforeCommit(
+                    "Достигнут лимит partial components catalog".into(),
+                ));
             }
         }
-        atomic_write_json(&path, catalog)
+        // Component swaps and the overlay directory live in `root`, while the
+        // signed partial authority is published one directory below it. Flush the
+        // root *before* publishing that authority so a surviving overlay can never
+        // describe component directory renames that were still only in cache.
+        sync_directory(root).map_err(AtomicWriteError::BeforeCommit)?;
+        atomic_write_json_with_commit_state(&path, catalog)
     } else {
         // The signed complete catalog is the authority commit point. Older/equal
         // partial overlays cannot override it: effective ordering applies partial
         // catalogs before a complete catalog at the same timestamp, and production
         // callers reject catalog rollback before persistence. Cleanup is therefore
-        // post-commit hygiene, not part of the transaction. Returning an error after
-        // the authority changed would make callers roll component directories back
-        // under a catalog that already describes the new versions.
-        atomic_write_json(&root.join("components-catalog.json"), catalog)?;
+        // post-commit hygiene, not part of the transaction. A post-rename durability
+        // failure is reported as `AfterCommit`; callers must keep the new component
+        // directories and their `.previous` recovery copies instead of rolling back
+        // under a catalog that is already authoritative in the live namespace.
+        atomic_write_json_with_commit_state(&root.join("components-catalog.json"), catalog)?;
         let _ = clear_catalog_overlays(root);
         Ok(())
     }
@@ -1773,11 +1826,14 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex::encode(digest.finalize()))
 }
 
-fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), String> {
+fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), AtomicWriteError> {
     if destination.exists() {
-        let metadata = std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?;
+        let metadata = std::fs::symlink_metadata(destination)
+            .map_err(|error| AtomicWriteError::BeforeCommit(error.to_string()))?;
         if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-            return Err("Целевой JSON имеет небезопасный тип".into());
+            return Err(AtomicWriteError::BeforeCommit(
+                "Целевой JSON имеет небезопасный тип".into(),
+            ));
         }
     }
     #[cfg(target_os = "windows")]
@@ -1804,46 +1860,49 @@ fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), S
             )
         };
         if moved == 0 {
-            return Err(format!(
+            return Err(AtomicWriteError::BeforeCommit(format!(
                 "Не удалось атомарно заменить {}: {}",
                 destination.display(),
                 std::io::Error::last_os_error()
-            ));
+            )));
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
         std::fs::rename(temporary, destination).map_err(|error| {
-            format!(
+            AtomicWriteError::BeforeCommit(format!(
                 "Не удалось атомарно заменить {}: {error}",
                 destination.display()
-            )
+            ))
         })?;
-        // `rename` makes the directory entry atomic but not necessarily durable.
-        // fsync the containing directory before callers delete rollback copies.
+        // From this instruction onward the destination is authoritative in the
+        // live namespace. A directory-sync failure is therefore *after commit*:
+        // callers may report durability uncertainty, but must never restore old
+        // components underneath the already replaced catalog.
         #[cfg(unix)]
         {
-            let parent = destination
-                .parent()
-                .ok_or_else(|| "Некорректный путь JSON".to_string())?;
-            File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| {
-                    format!(
-                        "Не удалось зафиксировать каталог {} после атомарной замены: {error}",
-                        parent.display()
-                    )
-                })?;
+            let parent = destination.parent().ok_or_else(|| {
+                AtomicWriteError::AfterCommit("Некорректный путь JSON".to_string())
+            })?;
+            sync_directory(parent).map_err(|error| {
+                AtomicWriteError::AfterCommit(format!(
+                    "{error}. Каталог уже опубликован; откат компонентов запрещён, резервная предыдущая версия сохранена."
+                ))
+            })?;
         }
     }
     Ok(())
 }
 
-fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+fn atomic_write_json_with_commit_state<T: Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<(), AtomicWriteError> {
     let parent = path
         .parent()
-        .ok_or_else(|| "Некорректный путь JSON".to_string())?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        .ok_or_else(|| AtomicWriteError::BeforeCommit("Некорректный путь JSON".to_string()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| AtomicWriteError::BeforeCommit(error.to_string()))?;
     let temporary = parent.join(format!(
         ".{}.{}.tmp",
         path.file_name()
@@ -1851,12 +1910,13 @@ fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
             .unwrap_or("component"),
         Uuid::new_v4()
     ));
-    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| AtomicWriteError::BeforeCommit(error.to_string()))?;
     let mut output = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AtomicWriteError::BeforeCommit(error.to_string()))?;
     let write_result = (|| -> Result<(), String> {
         output
             .write_all(&bytes)
@@ -1868,13 +1928,21 @@ fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
     drop(output);
     if let Err(error) = write_result {
         let _ = std::fs::remove_file(&temporary);
-        return Err(error);
+        return Err(AtomicWriteError::BeforeCommit(error));
     }
-    if let Err(error) = replace_file_atomically(&temporary, path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
+    match replace_file_atomically(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if !error.authority_committed() {
+                let _ = std::fs::remove_file(&temporary);
+            }
+            Err(error)
+        }
     }
-    Ok(())
+}
+
+fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    atomic_write_json_with_commit_state(path, value).map_err(AtomicWriteError::into_message)
 }
 
 fn emit_progress(
@@ -2316,6 +2384,16 @@ mod tests {
         let target = super::crate_platform_for_test();
         assert!(validate_offline_catalog_component_set(&catalog("complete"), &target).is_ok());
         assert!(validate_offline_catalog_component_set(&catalog("partial"), &target).is_err());
+    }
+
+    #[test]
+    fn atomic_catalog_error_distinguishes_precommit_from_postcommit_failure() {
+        use super::AtomicWriteError;
+
+        let before = AtomicWriteError::BeforeCommit("before".into());
+        let after = AtomicWriteError::AfterCommit("after".into());
+        assert!(!before.authority_committed());
+        assert!(after.authority_committed());
     }
 
     #[test]

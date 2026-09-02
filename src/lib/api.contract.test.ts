@@ -34,6 +34,8 @@ import {
   refreshComponentCatalog,
   installComponent,
   removeComponent,
+  pickComponentBundle,
+  importComponentBundle,
   getPrivacyPreferences,
   updatePrivacyPreferences,
   runWorkspaceHygiene,
@@ -132,6 +134,8 @@ export const registeredBackendCommands = [
   'refresh_component_catalog',
   'install_component',
   'remove_component',
+  'pick_component_bundle',
+  'import_component_bundle',
   'parse_web_source',
   'get_document_template_text',
   'get_workflow_plan',
@@ -303,6 +307,10 @@ function installContractMock(calls: Call[]) {
       case 'install_component':
       case 'remove_component':
         return { id: 'ocr', label: 'OCR', description: '', target: 'windows-x86_64', size_bytes: 42, size_label: '42 МБ', unlocks: ['tesseract'], state: command === 'install_component' ? 'downloaded' : 'missing', installed: command === 'install_component', available: command === 'install_component', catalog_available: true, message: 'ok' } as never;
+      case 'pick_component_bundle':
+        return { file_name: 'Dokkomplekt-components-offline-windows-x86_64.zip', selected_path: 'C:/offline/Dokkomplekt-components-offline-windows-x86_64.zip' } as never;
+      case 'import_component_bundle':
+        return { components: [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 84, size_label: '84 МБ', unlocks: ['7zip'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }], imported_component_ids: ['archive'], catalog_scope: 'partial' } as never;
       case 'pick_template_files':
         return { files: [{ file_name: 'Договор.docx', template_path: 'C:/AppData/user-templates/Договор.docx', extracted_text: 'Договор {{document.number}}' }] } as never;
       case 'pick_folder':
@@ -466,6 +474,8 @@ describe('Tauri command DTO contracts', () => {
     await refreshComponentCatalog();
     await installComponent('ocr');
     await removeComponent('ocr');
+    await pickComponentBundle('C:/offline');
+    await importComponentBundle('C:/offline/Dokkomplekt-components-offline-windows-x86_64.zip');
     await parseWebSource('https://example.com/doc', 2026);
     await getDocumentTemplateText('doc_1');
     await setField('person.full_name', 'Иванов Иван');
@@ -500,6 +510,8 @@ describe('Tauri command DTO contracts', () => {
       { command: 'refresh_component_catalog', payload: undefined },
       { command: 'install_component', payload: { id: 'ocr' } },
       { command: 'remove_component', payload: { id: 'ocr' } },
+      { command: 'pick_component_bundle', payload: { req: { initial_path: 'C:/offline' } } },
+      { command: 'import_component_bundle', payload: { req: { selected_path: 'C:/offline/Dokkomplekt-components-offline-windows-x86_64.zip' } } },
       { command: 'parse_web_source', payload: { req: { url: 'https://example.com/doc', default_year: 2026 } } },
       { command: 'get_document_template_text', payload: { req: { document_id: 'doc_1' } } },
       { command: 'set_field', payload: { req: { field_id: 'person.full_name', value: 'Иванов Иван' } } },

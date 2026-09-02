@@ -257,6 +257,94 @@ function Invoke-UiElementPhysically {
   throw 'UI element did not become physically actionable within 5 seconds.'
 }
 
+function Invoke-UiActionFromProbe {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$ActionProbe,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    try {
+      $action = & $ActionProbe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $action = $null
+    }
+    if ($null -eq $action) {
+      Start-Sleep -Milliseconds 100
+      continue
+    }
+    try {
+      # Never keep polling a stale WebView2 AutomationElement. If React remounts
+      # the button between discovery and invocation, resolve a fresh live element
+      # from the action probe and retry within the same bounded action deadline.
+      Invoke-UiElement -Element $action
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) {
+        throw "UI smoke timeout invoking live action: $Description. Last error: $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "UI smoke timeout invoking live action: $Description"
+}
+
+function Invoke-UiActionWithObservedTransition {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$ActionProbe,
+    [Parameter(Mandatory = $true)][scriptblock]$TransitionProbe,
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)][string]$TransitionDescription,
+    [int]$TransitionSeconds = 5
+  )
+  Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description
+
+  $deadline = [DateTime]::UtcNow.AddSeconds($TransitionSeconds)
+  do {
+    try {
+      $transition = & $TransitionProbe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $transition = $null
+    }
+    if ($null -ne $transition) { return $transition }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  # A native Tauri command can legitimately need longer than the short WebView2
+  # acknowledgement window to surface its OS dialog. If the initiating button is
+  # no longer actionable, React has already entered the shared busy state: the
+  # request is in flight and a second click would be destructive/ambiguous. Keep
+  # waiting for the exact transition instead of manufacturing a duplicate action.
+  $retryAction = $null
+  $actionUnavailableSince = $null
+  $actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  do {
+    try {
+      $retryAction = & $ActionProbe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $retryAction = $null
+    }
+    if ($null -ne $retryAction) { break }
+    if ($null -eq $actionUnavailableSince) { $actionUnavailableSince = [DateTime]::UtcNow }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $actionStateDeadline)
+  if ($null -eq $retryAction) {
+    Write-Host "UIA action '$Description' remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click."
+    return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+  }
+
+  # If the same action is still independently actionable, WebView2 may have
+  # acknowledged InvokePattern without dispatching the DOM click. Resolve that
+  # fresh live element, retry once with physical input, and still require the exact
+  # product transition. A broken product therefore remains red.
+  Write-Host "UIA action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
+  Invoke-UiElementPhysically -Element $retryAction
+  return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+}
+
 function New-PlainDocxFixture {
   param([Parameter(Mandatory = $true)][string]$Path)
   Add-Type -AssemblyName System.IO.Compression
@@ -455,27 +543,32 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
-function Wait-FileDialog {
-  param([Parameter(Mandatory = $true)][string]$Description)
-
-  return Wait-UiElement -Description $Description -TimeoutSeconds 30 -Probe {
-    $fileNameCondition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-      '1148'
-    )
-    $windows = $desktop.FindAll(
-      [System.Windows.Automation.TreeScope]::Children,
-      [System.Windows.Automation.Condition]::TrueCondition
-    )
-    foreach ($candidate in $windows) {
+function Find-FileDialog {
+  $fileNameCondition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+  $windows = $desktop.FindAll(
+    [System.Windows.Automation.TreeScope]::Children,
+    [System.Windows.Automation.Condition]::TrueCondition
+  )
+  foreach ($candidate in $windows) {
+    try {
       $fileNameControl = $candidate.FindFirst(
         [System.Windows.Automation.TreeScope]::Descendants,
         $fileNameCondition
       )
       if ($null -ne $fileNameControl) { return $candidate }
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
     }
-    return $null
   }
+  return $null
+}
+
+function Wait-FileDialog {
+  param([Parameter(Mandatory = $true)][string]$Description)
+  return Wait-UiElement -Description $Description -TimeoutSeconds 30 -Probe { Find-FileDialog }
 }
 
 function Submit-OpenFileDialog {
@@ -514,6 +607,13 @@ function Submit-OpenFileDialog {
 }
 
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+function Find-LiveAppWindow {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  return $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
 $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
@@ -546,27 +646,21 @@ if ($null -ne $saveFolderRule) {
   Write-Host 'Default output folder and subfolder naming rule confirmed.'
 }
 
-$createButton = Wait-UiElement -Description 'Создать свои кнопки button' -Probe {
-  $name = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    'Создать свои кнопки'
-  )
-  $kind = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Button
-  )
-  $condition = [System.Windows.Automation.AndCondition]::new($name, $kind)
-  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-}
-Invoke-UiElement -Element $createButton
-
-$templateDialog = Wait-UiElement -Description 'native Word template picker' -Probe {
-  $condition = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    'Выберите шаблоны Word'
-  )
-  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-}
+$templateDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'Создать свои кнопки button' `
+  -TransitionDescription 'native Word template picker' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать свои кнопки')
+  } `
+  -TransitionProbe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Выберите шаблоны Word'
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
 
 # Create button from a real unmarked DOCX through the installed application's native picker.
 if ($adversarial) {
@@ -641,11 +735,15 @@ Write-Host "Create button from a real unmarked DOCX OK: '$expectedTemplateButton
 
 # A template is not a case source. Exercise the installed source picker separately
 # so the generation stage is reached through the same order as a real user.
-$sourceButton = Wait-UiElement -Description 'Выбрать исходный файл button' -TimeoutSeconds 30 -Probe {
-  Find-ButtonByNames -Root $appWindow -Names @('Выбрать исходный файл')
-}
-Invoke-UiElement -Element $sourceButton
-$sourceDialog = Wait-FileDialog -Description 'native source file picker'
+$sourceDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'Выбрать исходный файл button' `
+  -TransitionDescription 'native source file picker' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать исходный файл')
+  } `
+  -TransitionProbe { Find-FileDialog }
 $sourceFileNameEdit = Wait-UiElement -Description 'source OpenFileDialog file name field' -Probe {
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -669,11 +767,15 @@ if ($adversarial) {
   # A failed replacement must never erase the already accepted good source.
   $brokenSource = Join-Path $fixtureDir 'повреждённый источник.docx'
   [System.IO.File]::WriteAllText($brokenSource, 'this is deliberately not a DOCX archive')
-  $replaceSource = Wait-UiElement -Description 'Заменить исходный файл button' -Probe {
-    Find-ButtonByNames -Root $appWindow -Names @('Заменить исходный файл')
-  }
-  Invoke-UiElement -Element $replaceSource
-  $brokenDialog = Wait-FileDialog -Description 'native picker for broken source'
+  $brokenDialog = Invoke-UiActionWithObservedTransition `
+    -Description 'Заменить исходный файл button for broken source' `
+    -TransitionDescription 'native picker for broken source' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
+    } `
+    -TransitionProbe { Find-FileDialog }
   $brokenEdit = $brokenDialog.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
@@ -702,9 +804,15 @@ if ($adversarial) {
   Write-Host 'ADVERSARIAL OK: corrupt DOCX rejected without losing previous source.'
 
   # Cancelling the native picker is a no-op, not a destructive source reset.
-  $replaceSource = Find-ButtonByNames -Root $appWindow -Names @('Заменить исходный файл')
-  Invoke-UiElement -Element $replaceSource
-  $cancelDialog = Wait-FileDialog -Description 'native picker cancellation'
+  $cancelDialog = Invoke-UiActionWithObservedTransition `
+    -Description 'Заменить исходный файл button for cancellation' `
+    -TransitionDescription 'native picker cancellation' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
+    } `
+    -TransitionProbe { Find-FileDialog }
   $cancelHandle = [IntPtr]$cancelDialog.Current.NativeWindowHandle
   if ($cancelHandle -eq [IntPtr]::Zero) { throw 'Cancellation dialog has no native HWND.' }
   $null = [DokkomplektNativeMouse]::SendMessagePtr($cancelHandle, 0x0111, [IntPtr]2, [IntPtr]::Zero)
@@ -721,9 +829,15 @@ if ($adversarial) {
   $oversizedSource = Join-Path $fixtureDir 'слишком большой источник.docx'
   $oversizedStream = [System.IO.File]::Open($oversizedSource, [System.IO.FileMode]::Create)
   try { $oversizedStream.SetLength(101MB) } finally { $oversizedStream.Dispose() }
-  $replaceSource = Find-ButtonByNames -Root $appWindow -Names @('Заменить исходный файл')
-  Invoke-UiElement -Element $replaceSource
-  $oversizedDialog = Wait-FileDialog -Description 'native picker for oversized source'
+  $oversizedDialog = Invoke-UiActionWithObservedTransition `
+    -Description 'Заменить исходный файл button for oversized source' `
+    -TransitionDescription 'native picker for oversized source' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
+    } `
+    -TransitionProbe { Find-FileDialog }
   $oversizedEdit = $oversizedDialog.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
@@ -754,23 +868,38 @@ if ($adversarial) {
 # End-to-end installed generation proof: select the real created button, open the
 # real preflight, fill deterministic folder fields when the backend asks for them,
 # click Create, then require a physical readable DOCX in the Desktop output subfolder.
-$selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
-  Find-ReadyButtonByNames -Root $appWindow -Names @('Выбрать всё')
-}
-Invoke-UiElement -Element $selectAllButton
+$generationAction = Invoke-UiActionWithObservedTransition `
+  -Description 'Выбрать всё button' `
+  -TransitionDescription 'generation action for one selected document' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать всё')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  }
+if ($null -eq $generationAction) { throw 'Selecting all documents did not expose the one-document generation action.' }
 
-$preflightButton = Wait-UiElement -Description 'generation action for one selected document' -TimeoutSeconds 40 -Probe {
-  Find-ReadyButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
-}
-Invoke-UiElement -Element $preflightButton
-
-$preflightTitle = Wait-UiElement -Description 'Проверка перед созданием dialog' -TimeoutSeconds 30 -Probe {
-  $condition = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    'Проверка перед созданием'
-  )
-  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-}
+$preflightTitle = Invoke-UiActionWithObservedTransition `
+  -Description 'generation action for one selected document' `
+  -TransitionDescription 'Проверка перед созданием dialog' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Проверка перед созданием'
+    )
+    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
 if ($null -eq $preflightTitle) { throw 'Generation action did not open the real preflight.' }
 
 $smokeNumber = "WIN-SMOKE-$PID"
@@ -958,58 +1087,92 @@ if ($adversarial) {
   # Repeating the same deterministic output must not overwrite the first kit.
   # Generation/modals can rebuild WebView2's accessibility provider on hosted
   # Windows runners, so every poll must resolve the live top-level window.
-  $repeatAction = Wait-UiElement -Description 'repeat generation action' -TimeoutSeconds 30 -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-      [int]$process.Id
-    )
-    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
-  }
-  Invoke-UiElement -Element $repeatAction
-  $repeatPreflight = Wait-UiElement -Description 'repeat preflight' -TimeoutSeconds 30 -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-      [int]$process.Id
-    )
-    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-    if ($null -eq $currentAppWindow) { return $null }
-    $currentAppWindow.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
-    )
-  }
-  $repeatGenerate = Wait-UiElement -Description 'repeat Создать документы' -TimeoutSeconds 30 -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-      [int]$process.Id
-    )
-    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
-  }
-  Invoke-UiElement -Element $repeatGenerate
-  $otherVariants = Wait-UiElement -Description 'existing-kit Другие варианты' -TimeoutSeconds 30 -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-      [int]$process.Id
-    )
-    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
-  }
-  Invoke-UiElement -Element $otherVariants
-  $newVersion = Wait-UiElement -Description 'Создать новую версию' -TimeoutSeconds 30 -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-      [int]$process.Id
-    )
-    $currentAppWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
-  }
-  Invoke-UiElement -Element $newVersion
+  $repeatPreflight = Invoke-UiActionWithObservedTransition `
+    -Description 'repeat generation action' `
+    -TransitionDescription 'repeat preflight' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      $currentAppWindow.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+      )
+    }
+  $otherVariants = Invoke-UiActionWithObservedTransition `
+    -Description 'repeat Создать документы' `
+    -TransitionDescription 'existing-kit Другие варианты' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
+    }
+  $newVersion = Invoke-UiActionWithObservedTransition `
+    -Description 'existing-kit Другие варианты' `
+    -TransitionDescription 'Создать новую версию' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+    }
+
+  # The final version action gets the same observed-transition guarantee. A
+  # physical second file or visible generation-busy state is a positive signal.
+  # Dialog disappearance is accepted only when it remains absent continuously,
+  # because a single WebView2/UIA provider miss is not proof of a product transition.
+  $newVersionAbsence = [pscustomobject]@{ Since = $null }
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description 'Создать новую версию' `
+    -TransitionDescription 'second-version generation transition' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+    } `
+    -TransitionProbe {
+      $versionDocsNow = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue)
+      if ($versionDocsNow.Count -ge 2) {
+        $newVersionAbsence.Since = $null
+        return $versionDocsNow[1]
+      }
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) {
+        $newVersionAbsence.Since = $null
+        return $null
+      }
+      $busy = Find-ButtonByNames -Root $currentAppWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
+      if ($null -ne $busy) {
+        $newVersionAbsence.Since = $null
+        return $busy
+      }
+      $stillOpen = Find-ButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+      if ($null -ne $stillOpen) {
+        $newVersionAbsence.Since = $null
+        return $null
+      }
+      if ($null -eq $newVersionAbsence.Since) {
+        $newVersionAbsence.Since = [DateTime]::UtcNow
+        return $null
+      }
+      if (([DateTime]::UtcNow - [DateTime]$newVersionAbsence.Since).TotalSeconds -ge 2) {
+        return $currentAppWindow
+      }
+      return $null
+    }
   $versionDeadline = [DateTime]::UtcNow.AddSeconds(60)
   do {
     $versionDocs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue)

@@ -313,6 +313,12 @@ export interface ComponentStatus {
   message: string;
 }
 
+export interface OfflineComponentImportResult {
+  components: ComponentStatus[];
+  imported_component_ids: string[];
+  catalog_scope: 'complete' | 'partial';
+}
+
 export interface ComponentProgress {
   id: string;
   phase: string;

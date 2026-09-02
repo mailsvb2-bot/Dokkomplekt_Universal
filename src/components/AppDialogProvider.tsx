@@ -46,9 +46,9 @@ interface AppDialogApi {
 }
 
 type Request =
-  | { kind: 'confirm'; options: AppConfirmOptions; resolve(value: boolean): void }
-  | { kind: 'prompt'; options: AppPromptOptions; resolve(value: string | null): void }
-  | { kind: 'form'; options: AppFormOptions; resolve(value: Record<string, string> | null): void };
+  | { id: number; kind: 'confirm'; options: AppConfirmOptions; resolve(value: boolean): void }
+  | { id: number; kind: 'prompt'; options: AppPromptOptions; resolve(value: string | null): void }
+  | { id: number; kind: 'form'; options: AppFormOptions; resolve(value: Record<string, string> | null): void };
 
 const unavailableApi: AppDialogApi = {
   confirm: async () => false,
@@ -68,6 +68,8 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
   const queue = useRef<Request[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [acknowledged, setAcknowledged] = useState(false);
+  const nextRequestId = useRef(0);
+  const confirmDialogRef = useRef<HTMLDivElement | null>(null);
 
   const activate = useCallback((next: Request | null) => {
     active.current = next;
@@ -97,9 +99,9 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
   }, [activate]);
 
   const api = useMemo<AppDialogApi>(() => ({
-    confirm: options => new Promise(resolve => enqueue({ kind: 'confirm', options, resolve })),
-    prompt: options => new Promise(resolve => enqueue({ kind: 'prompt', options, resolve })),
-    form: options => new Promise(resolve => enqueue({ kind: 'form', options, resolve })),
+    confirm: options => new Promise(resolve => enqueue({ id: ++nextRequestId.current, kind: 'confirm', options, resolve })),
+    prompt: options => new Promise(resolve => enqueue({ id: ++nextRequestId.current, kind: 'prompt', options, resolve })),
+    form: options => new Promise(resolve => enqueue({ id: ++nextRequestId.current, kind: 'form', options, resolve })),
   }), [enqueue]);
 
   useEffect(() => {
@@ -110,6 +112,14 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [finish, request]);
+
+  useEffect(() => {
+    // Prompt/form controls already own autofocus. Confirmation dialogs have no
+    // input, so explicitly transfer focus to the newly mounted dialog instance.
+    // This keeps keyboard and screen-reader position intact when one queued
+    // confirmation immediately replaces another.
+    if (request?.kind === 'confirm') confirmDialogRef.current?.focus();
+  }, [request?.id, request?.kind]);
 
   const canSubmit = request?.kind === 'prompt'
     ? (!request.options.required || Boolean(values.value?.trim()))
@@ -130,8 +140,8 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
     <AppDialogContext.Provider value={api}>
       {children}
       {request && (
-        <div className="backdrop appDialogBackdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancel(); }}>
-          <div className="modal appDialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+        <div key={request.id} className="backdrop appDialogBackdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancel(); }}>
+          <div ref={confirmDialogRef} tabIndex={-1} className="modal appDialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
             <h2 id="app-dialog-title">{request.options.title}</h2>
             {'message' in request.options && request.options.message ? <p className="hint appDialogMessage">{request.options.message}</p> : null}
 

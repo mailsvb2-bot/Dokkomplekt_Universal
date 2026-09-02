@@ -43,3 +43,11 @@ def test_windows_installer_smoke_clicks_real_button_and_requires_native_dialog()
     assert "Создать свои кнопки" in smoke
     assert "Выберите шаблоны Word" in smoke
     assert "Native first-run template picker OK" in smoke
+    assert "Invoke-UiActionWithObservedTransition" in smoke
+    assert "$actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)" in smoke
+    assert "remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click" in smoke
+    assert "remains actionable; retrying once with physical input" in smoke
+    assert "-Description 'Создать свои кнопки button'" in smoke
+    assert "-TransitionDescription 'native Word template picker'" in smoke
+    assert 'Invoke-UiElementPhysically -Element $retryAction' in smoke
+    assert "if ($null -eq $retryAction)" in smoke

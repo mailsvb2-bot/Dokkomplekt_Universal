@@ -26,11 +26,30 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "workflow-document-date" in source
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
+    assert "Invoke-UiActionWithObservedTransition" in source
+    assert "function Invoke-UiActionFromProbe" in source
+    assert "Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description" in source
+    assert "-Description 'Выбрать всё button'" in source
+    assert "-TransitionDescription 'generation action for one selected document'" in source
+    assert "Selecting all documents did not expose the one-document generation action." in source
+    assert "$selectAllButton = Wait-UiElement" not in source
+    assert "$actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)" in source
+    assert "remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click" in source
+    assert "remains actionable; retrying once with physical input" in source
+    assert "-Description 'repeat generation action'" in source
+    assert "-TransitionDescription 'repeat preflight'" in source
+    assert "-Description 'existing-kit Другие варианты'" in source
+    assert "-TransitionDescription 'Создать новую версию'" in source
+    assert "-Description 'Создать новую версию'" in source
+    assert 'Invoke-UiElementPhysically -Element $retryAction' in source
     assert "$generationTransitionDeadlineSeconds = 5" in source
     assert "UIA action produced no observable generation transition; retrying once with physical input." in source
     assert "--- installed UI snapshot after generation timeout ---" in source
     assert '$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"' in source
     assert "-Filter $expectedGeneratedFileName" in source
+    assert "$newVersionAbsence = [pscustomobject]@{ Since = $null }" in source
+    assert "$newVersionAbsence.Since = [DateTime]::UtcNow" in source
+    assert ".TotalSeconds -ge 2" in source
     assert "Проверочная кнопка.docx" not in source
     assert "[System.IO.Compression.ZipFile]::OpenRead" in source
     assert "Created DOCX lost the template content" in source

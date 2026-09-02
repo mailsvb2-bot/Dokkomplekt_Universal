@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { validateRustResponse } from './runtimeValidation';
-import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, OutputPreferences, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, DomainKind, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
+import type { BusinessRegistryImportResult, BusinessRegistryRecord, OrganizationKnowledgeRecord, OrganizationKnowledgeCategory, CalibratedThresholdStatus, AuditEventRecord, AutomationExceptionRecord, AutomationMetrics, DailyAutomationDashboard, QueueStatus, CorpusStatus, QualityTelemetryReport, CorpusExportResponse, CaseRunRecord, PrivacyPreferences, WorkspaceHygieneReport, LocalSemanticModelConfig, LocalSemanticModelStatus, SemanticModelConfigurationResponse, ReferenceDataStatus, ClauseBlockRecord, MailMergeTable, PrepareMailMergeFileResult, RenderMailMergeResult, TemplateMarkupCandidate, TemplateVersionRecord, TemplateMarkupReplacement, TemplateMarkupReport, ImportLearningExampleFileResult, TemplateLearningReport, TemplateLearningMapField, TemplateLearningMapReport, TemplateRegressionReport, BackgroundWatcherPlan, OutputPreferences, ImportTemplateFileResult, PrintFilesResponse, PrintJobDto, PrintPreferences, PrinterInventory, PrintTriageReport, TemplateApprovalRecord, ExportPdfResponse, CreateKedoPackageResponse, DiaryEntryPlanDto, DocumentPack, DocumentTemplateSpec, DomainKind, FirstRunStateResponse, ProcessBlueprintState, FolderNamePartDto, Icd10Suggestion, IntakeRouteResponse, IntakeCapability, SidecarToolStatus, ComponentStatus, OfflineComponentImportResult, ParseWebSourceResponse, OutputPlanDto, ParseSourceResponse, ParseSourceFileResponse, DocumentTemplateTextResponse, PopupAnswerDto, PopupApplyResult, PopupFieldConfig, ProductAccessResponse, RenderDocxBatchResult, RenderResult, ScannerApplyReportDto, ScannerMarkDto, SemanticCase, TemplateCandidateDto, TemplateConfirmationRowDto, WorkflowPlan, CreatedDocumentsIntakeResult, SemanticExtractResult, SeriesEntryPlanDto, SeriesPlanRequestDto, GuidedScannerMarkupAction, GuidedScannerMode, LearnedScannerRule, PromptInputKind, UpdateCheckResponse, WordScannerApplyResult, WordScannerCapture, WordScannerSession } from './types';
 
 export type InvokeFn = <T>(command: string, payload?: Record<string, unknown>) => Promise<T>;
 let invokeFn: InvokeFn = (command, payload) => tauriInvoke(command, payload);
@@ -174,6 +174,14 @@ export async function installComponent(id: string): Promise<ComponentStatus> {
 
 export async function removeComponent(id: string): Promise<ComponentStatus> {
   return callRust('remove_component', { id });
+}
+
+export async function pickComponentBundle(initialPath?: string | null): Promise<PickedSourceFile | null> {
+  return callRust('pick_component_bundle', { req: { initial_path: initialPath ?? null } });
+}
+
+export async function importComponentBundle(selectedPath: string): Promise<OfflineComponentImportResult> {
+  return callRust('import_component_bundle', { req: { selected_path: selectedPath } });
 }
 
 export async function parseWebSource(url: string, defaultYear: number): Promise<ParseWebSourceResponse> {
@@ -722,6 +730,8 @@ export const rustCommandNames = [
   'refresh_component_catalog',
   'install_component',
   'remove_component',
+  'pick_component_bundle',
+  'import_component_bundle',
   'parse_web_source',
   'get_document_template_text',
   'get_workflow_plan',

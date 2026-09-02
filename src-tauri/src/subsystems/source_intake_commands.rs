@@ -358,6 +358,68 @@ fn remove_component(id: String) -> Result<component_manager::ComponentStatus, St
 }
 
 #[derive(Debug, Deserialize)]
+struct PickComponentBundleRequest {
+    #[serde(default)]
+    initial_path: Option<String>,
+}
+
+#[tauri::command]
+async fn pick_component_bundle(
+    req: PickComponentBundleRequest,
+) -> Result<Option<PickedSourceFileResponse>, String> {
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        pick_component_bundle_file_blocking(req.initial_path)
+    })
+    .await
+    .map_err(|error| format!("Не удалось открыть выбор офлайн-комплекта: {error}"))??;
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let absolute = if selected.is_absolute() {
+        selected
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(selected)
+    };
+    let metadata = std::fs::symlink_metadata(&absolute).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("Офлайн-комплект должен быть обычным ZIP-файлом, а не ссылкой".into());
+    }
+    if absolute.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("zip")) != Some(true) {
+        return Err("Офлайн-комплект Dokkomplekt должен быть ZIP-файлом".into());
+    }
+    let file_name = absolute
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Имя офлайн-комплекта не поддерживается системой".to_string())?
+        .to_string();
+    Ok(Some(PickedSourceFileResponse {
+        file_name,
+        selected_path: absolute.display().to_string(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportComponentBundleRequest {
+    selected_path: String,
+}
+
+#[tauri::command]
+async fn import_component_bundle(
+    app: tauri::AppHandle,
+    req: ImportComponentBundleRequest,
+) -> Result<component_manager::OfflineComponentImportResult, String> {
+    let path = PathBuf::from(req.selected_path);
+    tauri::async_runtime::spawn_blocking(move || {
+        component_manager::import_offline_component_bundle(&app, &path)
+    })
+    .await
+    .map_err(|error| format!("Импорт офлайн-комплекта завершился ошибкой: {error}"))?
+}
+
+
+#[derive(Debug, Deserialize)]
 struct ParseWebSourceRequest {
     url: String,
     default_year: i32,

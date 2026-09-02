@@ -294,12 +294,12 @@ function validateReferenceData(command: string, value: unknown): void {
   string(command, root.message, 'message');
 }
 
-function validateComponentArray(command: string, value: unknown): void {
-  objectArray(command, value, 'ответ').forEach((item, index) => {
-    string(command, item.id, `ответ[${index}].id`);
-    string(command, item.label, `ответ[${index}].label`);
-    boolean(command, item.installed, `ответ[${index}].installed`);
-    boolean(command, item.available, `ответ[${index}].available`);
+function validateComponentArray(command: string, value: unknown, label = 'ответ'): void {
+  objectArray(command, value, label).forEach((item, index) => {
+    string(command, item.id, `${label}[${index}].id`);
+    string(command, item.label, `${label}[${index}].label`);
+    boolean(command, item.installed, `${label}[${index}].installed`);
+    boolean(command, item.available, `${label}[${index}].available`);
   });
 }
 
@@ -400,6 +400,8 @@ export const COMMAND_RESPONSE_KIND = {
   'get_background_watcher_state': 'object',
   'install_background_watcher': 'object',
   'install_component': 'object',
+  'import_component_bundle': 'object',
+  'pick_component_bundle': 'nullable-object',
   'learn_template_from_examples_command': 'object',
   'list_audit_events': 'array',
   'list_automation_exceptions': 'array',
@@ -626,6 +628,16 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
     case 'refresh_component_catalog':
       validateComponentArray(command, value);
       break;
+    case 'import_component_bundle': {
+      const root = record(command, value);
+      validateComponentArray(command, root.components, 'components');
+      stringArray(command, root.imported_component_ids, 'imported_component_ids');
+      const scope = string(command, root.catalog_scope, 'catalog_scope');
+      if (scope !== 'complete' && scope !== 'partial') {
+        throw new BackendContractError(command, `неизвестный catalog_scope: ${scope}`);
+      }
+      break;
+    }
     case 'install_component':
     case 'remove_component':
       validateComponentArray(command, [value]);

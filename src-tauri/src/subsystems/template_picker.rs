@@ -380,6 +380,112 @@ end try
     }
 }
 
+fn pick_component_bundle_file_blocking(initial_path: Option<String>) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "macos")]
+    let _ = initial_path;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Выберите офлайн-комплект Dokkomplekt'
+$dialog.Filter = 'Офлайн-комплект Dokkomplekt (*.zip)|*.zip|Все файлы (*.*)|*.*'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$dialog.RestoreDirectory = $true
+if ($env:DOKKOMPLEKT_COMPONENT_BUNDLE_INITIAL -and (Test-Path -LiteralPath $env:DOKKOMPLEKT_COMPONENT_BUNDLE_INITIAL -PathType Container)) {
+  $dialog.InitialDirectory = $env:DOKKOMPLEKT_COMPONENT_BUNDLE_INITIAL
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.WriteLine($dialog.FileName)
+}
+"#;
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-STA", "-Command", script])
+            .env(
+                "DOKKOMPLEKT_COMPONENT_BUNDLE_INITIAL",
+                initial_path.as_deref().unwrap_or_default(),
+            )
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| format!("Не удалось открыть выбор офлайн-комплекта: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор офлайн-комплекта завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_source_picker_path(&output.stdout)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+try
+  set chosenFile to choose file with prompt "Выберите офлайн-комплект Dokkomplekt" of type {"zip"}
+  return POSIX path of chosenFile
+on error number -128
+  return ""
+end try
+"#;
+        let output = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|error| format!("Не удалось открыть выбор офлайн-комплекта: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор офлайн-комплекта завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_source_picker_path(&output.stdout)
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let initial = initial_path.filter(|value| Path::new(value).is_dir());
+        let output = if picker_command_exists("zenity") {
+            let mut command = std::process::Command::new("zenity");
+            command.args([
+                "--file-selection",
+                "--title=Выберите офлайн-комплект Dokkomplekt",
+                "--file-filter=Dokkomplekt offline bundle | *.zip",
+            ]);
+            if let Some(path) = initial.as_deref() {
+                command.arg(format!("--filename={}/", path.trim_end_matches('/')));
+            }
+            command.output()
+        } else if picker_command_exists("kdialog") {
+            let mut command = std::process::Command::new("kdialog");
+            command.args([
+                "--getopenfilename",
+                initial.as_deref().unwrap_or("."),
+                "*.zip|Dokkomplekt offline bundle",
+            ]);
+            command.output()
+        } else {
+            return Err(
+                "Системный выбор файла недоступен: установите zenity или kdialog.".into(),
+            );
+        }
+        .map_err(|error| format!("Не удалось открыть выбор офлайн-комплекта: {error}"))?;
+        if !output.status.success() {
+            if output.status.code() == Some(1) {
+                return Ok(None);
+            }
+            return Err(format!(
+                "Системный выбор офлайн-комплекта завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_source_picker_path(&output.stdout)
+    }
+}
+
 fn parse_source_picker_path(output: &[u8]) -> Result<Option<PathBuf>, String> {
     let text = String::from_utf8(output.to_vec())
         .map_err(|_| "Системный выбор исходника вернул некорректный UTF-8.".to_string())?;

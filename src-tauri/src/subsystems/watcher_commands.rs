@@ -404,10 +404,6 @@ fn remove_autostart_entries() -> (Vec<PathBuf>, Vec<String>) {
     (removed, warnings)
 }
 
-fn unreadable_note_file_name(source_note_key: &str) -> String {
-    format!("{source_note_key} — НЕ ПРОЧИТАН.txt")
-}
-
 fn legacy_source_service_note_key(source: &Path) -> String {
     source
         .file_stem()
@@ -450,7 +446,12 @@ fn has_supported_same_stem_sibling(source: &Path) -> bool {
         })
 }
 
-fn remove_source_service_notes(source: &Path) {
+fn remove_source_service_notes(
+    source: &Path,
+    source_sha256: &str,
+    source_size: u64,
+    source_modified_unix_ms: u128,
+) {
     for note in [attention_note_path(source), unreadable_note_path(source)] {
         let _ = std::fs::remove_file(note);
     }
@@ -458,7 +459,12 @@ fn remove_source_service_notes(source: &Path) {
         return;
     }
     for note in [legacy_attention_note_path(source), legacy_unreadable_note_path(source)] {
-        if note_matches_source_content(&note, source) {
+        if note_matches_source_signature(
+            &note,
+            source_sha256,
+            source_size,
+            source_modified_unix_ms,
+        ) {
             let _ = std::fs::remove_file(note);
         }
     }
@@ -593,7 +599,12 @@ fn note_with_source_metadata(
     format!("{}\n---\n[dokkomplekt]\n{metadata}", body.trim_end())
 }
 
-fn note_matches_source_content(note_path: &Path, source: &Path) -> bool {
+fn note_matches_source_signature(
+    note_path: &Path,
+    source_sha256: &str,
+    source_size: u64,
+    source_modified_unix_ms: u128,
+) -> bool {
     if !note_path.is_file() {
         return false;
     }
@@ -605,9 +616,7 @@ fn note_matches_source_content(note_path: &Path, source: &Path) -> bool {
         .find_map(|line| line.trim().strip_prefix(NOTE_SOURCE_SHA256_PREFIX))
         .filter(|digest| digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit()))
     {
-        return file_content_signature(source)
-            .map(|(_, _, actual)| actual.eq_ignore_ascii_case(expected))
-            .unwrap_or(false);
+        return source_sha256.eq_ignore_ascii_case(expected);
     }
     let expected_size = note
         .lines()
@@ -617,16 +626,15 @@ fn note_matches_source_content(note_path: &Path, source: &Path) -> bool {
         .lines()
         .find_map(|line| line.trim().strip_prefix(NOTE_SOURCE_MTIME_PREFIX))
         .and_then(|value| value.parse::<u128>().ok());
-    let Ok(metadata) = std::fs::metadata(source) else {
-        return false;
-    };
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|value| value.as_millis())
-        .unwrap_or_default();
-    expected_size == Some(metadata.len()) && expected_modified == Some(modified)
+    expected_size == Some(source_size) && expected_modified == Some(source_modified_unix_ms)
+}
+
+fn note_matches_source_content(note_path: &Path, source: &Path) -> bool {
+    file_content_signature(source)
+        .map(|(size, modified, sha256)| {
+            note_matches_source_signature(note_path, &sha256, size, modified)
+        })
+        .unwrap_or(false)
 }
 
 fn unreadable_note_blocks_retry(
@@ -1753,6 +1761,70 @@ mod watcher_handoff_tests {
         assert!(migrate_matching_legacy_note(&docx, &exact, &legacy).is_none());
         assert!(legacy.exists());
         assert!(!exact.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn successful_archive_cleanup_removes_matching_legacy_note_by_captured_signature() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-legacy-cleanup-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create legacy cleanup root");
+        let source = root.join("Иванов.docx");
+        std::fs::write(&source, b"source bytes").expect("write source");
+        let (size, modified, sha256) = file_content_signature(&source).expect("source signature");
+        let legacy = legacy_attention_note_path(&source);
+        std::fs::write(
+            &legacy,
+            note_with_source_fingerprint(
+                "legacy attention",
+                &sha256,
+                None,
+                None,
+                std::time::SystemTime::now(),
+            ),
+        )
+        .expect("write legacy note");
+        std::fs::remove_file(&source).expect("simulate archived source");
+
+        remove_source_service_notes(&source, &sha256, size, modified);
+
+        assert!(!legacy.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archived_source_cleanup_keeps_ambiguous_legacy_note_for_same_stem_sibling() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-legacy-ambiguous-cleanup-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create ambiguous cleanup root");
+        let source = root.join("Иванов.docx");
+        let sibling = root.join("Иванов.pdf");
+        std::fs::write(&source, b"source bytes").expect("write source");
+        std::fs::write(&sibling, b"pdf bytes").expect("write sibling");
+        let (size, modified, sha256) = file_content_signature(&source).expect("source signature");
+        let legacy = legacy_attention_note_path(&source);
+        std::fs::write(
+            &legacy,
+            note_with_source_fingerprint(
+                "legacy ambiguous attention",
+                &sha256,
+                None,
+                None,
+                std::time::SystemTime::now(),
+            ),
+        )
+        .expect("write legacy note");
+        std::fs::remove_file(&source).expect("simulate archived source");
+
+        remove_source_service_notes(&source, &sha256, size, modified);
+
+        assert!(legacy.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

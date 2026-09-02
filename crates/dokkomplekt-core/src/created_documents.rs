@@ -15,7 +15,9 @@ use crate::{
 };
 
 pub const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";
+pub const UNREADABLE_SUFFIX: &str = " — НЕ ПРОЧИТАН.txt";
 pub const ATTENTION_TITLE: &str = "НЕ ХВАТАЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ";
+const MAX_SERVICE_NOTE_COMPONENT_UNITS: usize = 240;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlannedOutput {
@@ -66,8 +68,48 @@ fn source_name_digest(file_name: &std::ffi::OsStr) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn service_char_units(ch: char) -> usize {
+    #[cfg(unix)]
+    {
+        ch.len_utf8()
+    }
+    #[cfg(windows)]
+    {
+        ch.len_utf16()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        1
+    }
+}
+
+fn service_component_units(value: &str) -> usize {
+    value.chars().map(service_char_units).sum()
+}
+
+fn truncate_to_service_units(value: &str, max_units: usize) -> String {
+    let mut used = 0usize;
+    value
+        .chars()
+        .take_while(|ch| {
+            let next = used.saturating_add(service_char_units(*ch));
+            if next > max_units {
+                false
+            } else {
+                used = next;
+                true
+            }
+        })
+        .collect()
+}
+
+fn service_note_key_budget_units() -> usize {
+    let suffix_units =
+        service_component_units(ATTENTION_SUFFIX).max(service_component_units(UNREADABLE_SUFFIX));
+    MAX_SERVICE_NOTE_COMPONENT_UNITS.saturating_sub(suffix_units)
+}
+
 pub fn source_service_note_key(source: &Path) -> String {
-    const MAX_KEY_CHARS: usize = 120;
     const HASH_CHARS: usize = 12;
 
     let Some(file_name) = source.file_name() else {
@@ -75,7 +117,8 @@ pub fn source_service_note_key(source: &Path) -> String {
     };
     let raw = file_name.to_string_lossy();
     let direct = sanitize_path_component(&raw);
-    if raw.chars().count() <= MAX_KEY_CHARS && direct == raw.as_ref() {
+    let key_budget = service_note_key_budget_units();
+    if direct == raw.as_ref() && service_component_units(&direct) <= key_budget {
         return direct;
     }
 
@@ -84,24 +127,19 @@ pub fn source_service_note_key(source: &Path) -> String {
     let extension = source
         .extension()
         .map(|value| sanitize_path_component(&value.to_string_lossy()))
-        .unwrap_or_default()
-        .chars()
-        .take(16)
-        .collect::<String>();
+        .unwrap_or_default();
+    let extension = truncate_to_service_units(&extension, 24);
     let suffix = if extension.is_empty() {
         format!("~{hash}")
     } else {
         format!("~{hash}.{extension}")
     };
-    let prefix_budget = MAX_KEY_CHARS.saturating_sub(suffix.chars().count());
+    let prefix_budget = key_budget.saturating_sub(service_component_units(&suffix));
     let stem = source
         .file_stem()
         .map(|value| sanitize_path_component(&value.to_string_lossy()))
         .unwrap_or_else(|| "Документ".into());
-    let prefix = stem
-        .chars()
-        .take(prefix_budget)
-        .collect::<String>()
+    let prefix = truncate_to_service_units(&stem, prefix_budget)
         .trim_end_matches([' ', '.'])
         .to_string();
     format!(
@@ -116,6 +154,10 @@ pub fn source_service_note_key(source: &Path) -> String {
 
 pub fn attention_file_name(source_note_key: &str) -> String {
     format!("{source_note_key}{ATTENTION_SUFFIX}")
+}
+
+pub fn unreadable_note_file_name(source_note_key: &str) -> String {
+    format!("{source_note_key}{UNREADABLE_SUFFIX}")
 }
 
 fn dedup_preserve(items: Vec<String>) -> Vec<String> {
@@ -430,6 +472,24 @@ mod tests {
     }
 
     #[test]
+    fn multibyte_service_note_names_fit_the_final_component_budget() {
+        let source = PathBuf::from(format!("{}.docx", "я".repeat(111)));
+        let key = source_service_note_key(&source);
+        let attention = attention_file_name(&key);
+        let unreadable = unreadable_note_file_name(&key);
+        assert!(
+            service_component_units(&attention) <= MAX_SERVICE_NOTE_COMPONENT_UNITS,
+            "attention units={} key={key:?} name={attention:?}",
+            service_component_units(&attention)
+        );
+        assert!(
+            service_component_units(&unreadable) <= MAX_SERVICE_NOTE_COMPONENT_UNITS,
+            "unreadable units={} key={key:?} name={unreadable:?}",
+            service_component_units(&unreadable)
+        );
+    }
+
+    #[test]
     fn long_service_note_keys_are_bounded_and_collision_resistant() {
         let common = "а".repeat(150);
         let first = PathBuf::from(format!("{common}1.docx"));
@@ -438,9 +498,16 @@ mod tests {
         let first_key = source_service_note_key(&first);
         let second_key = source_service_note_key(&second);
         let pdf_key = source_service_note_key(&pdf);
-        assert!(first_key.chars().count() <= 120);
-        assert!(second_key.chars().count() <= 120);
-        assert!(pdf_key.chars().count() <= 120);
+        for key in [&first_key, &second_key, &pdf_key] {
+            assert!(
+                service_component_units(&attention_file_name(key))
+                    <= MAX_SERVICE_NOTE_COMPONENT_UNITS
+            );
+            assert!(
+                service_component_units(&unreadable_note_file_name(key))
+                    <= MAX_SERVICE_NOTE_COMPONENT_UNITS
+            );
+        }
         assert_ne!(first_key, second_key);
         assert_ne!(first_key, pdf_key);
         assert!(first_key.ends_with(".docx"));

@@ -7,9 +7,9 @@ use std::time::{Duration, SystemTime};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use dokkomplekt_core::{ATTENTION_SUFFIX, UNREADABLE_SUFFIX};
+
 const PROCESSED_SUFFIX: &str = ".dokkomplekt-processed";
-const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";
-const UNREADABLE_SUFFIX: &str = " — НЕ ПРОЧИТАН.txt";
 const FINALIZING_PREFIX: &str = ".dokkomplekt-finalizing-";
 const FINALIZING_SUFFIX: &str = ".pending";
 const FINALIZING_CLAIM_GRACE: Duration = Duration::from_secs(30 * 60);

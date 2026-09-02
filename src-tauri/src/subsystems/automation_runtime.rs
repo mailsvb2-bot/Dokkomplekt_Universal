@@ -1474,7 +1474,12 @@ fn perform_created_documents_intake(
             // the same stem but different formats cannot overwrite or clear each
             // other's failures. Remove both the canonical names and pre-18.4.4
             // stem-only names after this exact source succeeds.
-            remove_source_service_notes(&source);
+            remove_source_service_notes(
+                &source,
+                &source_sha256,
+                source_size,
+                source_modified_ms,
+            );
             let triage_document_ids = outputs
                 .iter()
                 .map(|output| output.document_id.clone())

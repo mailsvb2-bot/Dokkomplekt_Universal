@@ -159,8 +159,8 @@ pub use workspace_workflow_shape::*;
 pub use corpus_recorder::*;
 pub use created_documents::{
     attention_file_name, build_attention_text, plan_created_documents_batch,
-    source_service_note_key, ConfiguredDocument, CreatedDocumentsBatch, PlannedOutput,
-    ATTENTION_SUFFIX, ATTENTION_TITLE,
+    source_service_note_key, unreadable_note_file_name, ConfiguredDocument, CreatedDocumentsBatch,
+    PlannedOutput, ATTENTION_SUFFIX, ATTENTION_TITLE, UNREADABLE_SUFFIX,
 };
 pub use domains::medical_document_plan::{
     build_deep_diary_calendar, build_medical_render_plan, normalize_institution_text,

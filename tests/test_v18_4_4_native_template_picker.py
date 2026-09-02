@@ -43,3 +43,8 @@ def test_windows_installer_smoke_clicks_real_button_and_requires_native_dialog()
     assert "Создать свои кнопки" in smoke
     assert "Выберите шаблоны Word" in smoke
     assert "Native first-run template picker OK" in smoke
+    assert "Invoke-UiActionWithObservedTransition" in smoke
+    assert "-Description 'Создать свои кнопки button'" in smoke
+    assert "-TransitionDescription 'native Word template picker'" in smoke
+    assert 'Wait-UiElement -Description "$Description physical retry"' in smoke
+    assert "Never count the automation method itself as proof" in smoke

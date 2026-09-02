@@ -26,6 +26,13 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "workflow-document-date" in source
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
+    assert "Invoke-UiActionWithObservedTransition" in source
+    assert "-Description 'repeat generation action'" in source
+    assert "-TransitionDescription 'repeat preflight'" in source
+    assert "-Description 'existing-kit Другие варианты'" in source
+    assert "-TransitionDescription 'Создать новую версию'" in source
+    assert "-Description 'Создать новую версию'" in source
+    assert 'Wait-UiElement -Description "$Description physical retry"' in source
     assert "$generationTransitionDeadlineSeconds = 5" in source
     assert "UIA action produced no observable generation transition; retrying once with physical input." in source
     assert "--- installed UI snapshot after generation timeout ---" in source

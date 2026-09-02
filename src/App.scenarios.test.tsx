@@ -71,7 +71,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       }
       case 'import_component_bundle':
         componentState = 'downloaded';
-        return [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 8, size_label: '8 МБ', unlocks: ['7z'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }] as never;
+        return { components: [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 8, size_label: '8 МБ', unlocks: ['7z'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }], imported_component_ids: ['archive'], catalog_scope: 'partial' } as never;
       case 'pick_template_files':
         return { files: [
           { file_name: 'Договор.docx', template_path: '/app-data/user-templates/contract.docx', extracted_text: 'Договор\n{{org.inn}}' },

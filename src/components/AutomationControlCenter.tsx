@@ -218,10 +218,14 @@ export function AutomationControlCenter({ onStatus }: Props) {
     }
     const imported = await execute('импорт подписанного офлайн-комплекта', () => importComponentBundle(picked.selected_path));
     if (!imported) return;
-    setComponents(imported);
+    setComponents(imported.components);
     const refreshedSidecars = await execute('состояние локальных компонентов', getSidecarStatus);
     if (refreshedSidecars) setSidecars(refreshedSidecars);
-    onStatus(`Подписанный офлайн-комплект установлен: компонентов ${imported.length}. Интернет для их работы не требуется.`);
+    if (imported.catalog_scope === 'complete' && imported.imported_component_ids.length === 0) {
+      onStatus('Подписанный полный каталог применён: все необязательные компоненты отозваны.');
+    } else {
+      onStatus(`Подписанный офлайн-комплект применён: компонентов в комплекте ${imported.imported_component_ids.length}. Интернет для их работы не требуется.`);
+    }
   }
 
   async function downloadComponent(item: ComponentStatus) {

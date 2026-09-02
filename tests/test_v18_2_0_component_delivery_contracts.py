@@ -187,8 +187,12 @@ class ComponentDeliveryContracts(unittest.TestCase):
             "COMPONENT_CATALOG_OVERLAYS_DIR",
             "read_effective_component_descriptors",
             "persist_verified_catalog",
+            "lock_component_transactions",
+            "OfflineComponentImportResult",
+            "imported_component_ids",
             "read_verified_component_manifest",
             "replace_file_atomically",
+            "directory.sync_all()",
             ".interrupted",
             "resolve_component_tool_candidate",
             "SHA-256 локального компонента",
@@ -200,6 +204,8 @@ class ComponentDeliveryContracts(unittest.TestCase):
         self.assertIn("Импортировать офлайн-комплект", center)
         self.assertIn("pickComponentBundle", center)
         self.assertIn("importComponentBundle", center)
+        self.assertIn("imported.imported_component_ids.length", center)
+        self.assertNotIn("компонентов ${imported.length}", center)
         self.assertIn("['7z', 'rar']", app)
         self.assertIn("ensureOptionalComponent('archive'", app)
         self.assertNotIn("pickSourceFile());\n    if (!/\\.zip", center)
@@ -248,6 +254,31 @@ class ComponentDeliveryContracts(unittest.TestCase):
             Ed25519PrivateKey.from_private_bytes(seed).public_key().verify(base64.b64decode(catalog["signature"]), canonical)
         finally:
             shutil.rmtree(target_dir, ignore_errors=True)
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_builder_can_create_signed_complete_revocation_bundle_without_staged_components(self) -> None:
+        target = "revocation-contract-target"
+        output_dir = Path(tempfile.mkdtemp(prefix="dokkomplekt-revocation-components-"))
+        try:
+            seed = bytes(range(32))
+            env = {**os.environ,
+                "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": base64.b64encode(seed).decode("ascii"),
+                "DOKKOMPLEKT_UPDATE_PUBKEY_B64": base64.b64encode(public_key_bytes(seed)).decode("ascii"),
+            }
+            command = [
+                sys.executable, str(ROOT / "scripts" / "build_component_packs.py"),
+                "--target", target, "--revoke-all",
+                "--app-min-version", "18.4.4",
+                "--out", str(output_dir), "--require-trusted-public-key",
+            ]
+            subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True, text=True)
+            catalog = json.loads((output_dir / "components-catalog.json").read_text("utf-8"))
+            self.assertEqual(catalog["payload"]["catalog_scope"], "complete")
+            self.assertEqual(catalog["payload"]["components"], [])
+            bundle = output_dir / f"Dokkomplekt-components-offline-{target}.zip"
+            with zipfile.ZipFile(bundle) as archive:
+                self.assertEqual(archive.namelist(), ["components-catalog.json"])
+        finally:
             shutil.rmtree(output_dir, ignore_errors=True)
 
     def test_builder_rejects_tampered_staged_file(self) -> None:

@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration as StdDuration, SystemTime};
 use tauri::Emitter as _;
 use time::OffsetDateTime;
@@ -31,6 +32,7 @@ const MAX_COMPONENT_ENTRIES: usize = 50_000;
 const MAX_COMPONENT_UNPACKED_BYTES: u64 = 12 * 1024 * 1024 * 1024;
 const MAX_OFFLINE_COMPONENT_BUNDLE_BYTES: u64 = 17 * 1024 * 1024 * 1024;
 const STALE_COMPONENT_TRANSACTION_AGE: StdDuration = StdDuration::from_secs(6 * 60 * 60);
+static COMPONENT_TRANSACTION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const TRUSTED_COMPONENTS_CATALOG_URL: &str = match option_env!("DOKKOMPLEKT_COMPONENTS_CATALOG_URL")
 {
     Some(url) => url,
@@ -108,6 +110,22 @@ pub(crate) struct ComponentStatus {
     pub available: bool,
     pub catalog_available: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct OfflineComponentImportResult {
+    pub components: Vec<ComponentStatus>,
+    pub imported_component_ids: Vec<String>,
+    pub catalog_scope: String,
+}
+
+fn lock_component_transactions() -> Result<MutexGuard<'static, ()>, String> {
+    COMPONENT_TRANSACTION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| {
+            "Блокировка транзакций компонентов повреждена; изменение остановлено".to_string()
+        })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,6 +209,10 @@ pub(crate) fn component_statuses() -> Vec<ComponentStatus> {
         Some(value) => value,
         None => return fallback_statuses("Пользовательская папка компонентов недоступна."),
     };
+    let _transaction_guard = match lock_component_transactions() {
+        Ok(value) => value,
+        Err(error) => return fallback_statuses(&error),
+    };
     let descriptors = match read_effective_component_descriptors(&root) {
         Ok(value) => value,
         Err(error) => {
@@ -208,6 +230,7 @@ pub(crate) fn refresh_component_catalog(
     let root =
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let _transaction_guard = lock_component_transactions()?;
     guard_catalog_not_older(&root, &catalog)?;
     persist_verified_catalog(&root, &catalog)?;
     let descriptors = read_effective_component_descriptors(&root)?;
@@ -225,10 +248,30 @@ pub(crate) async fn install_component(
         .map_err(|error| format!("Фоновая установка компонента завершилась ошибкой: {error}"))?
 }
 
+fn validate_offline_catalog_component_set(
+    catalog: &SignedComponentsCatalog,
+    current_target: &str,
+) -> Result<(), String> {
+    if catalog.payload.components.is_empty() && catalog_is_partial(catalog) {
+        return Err("Partial офлайн-каталог должен содержать хотя бы один компонент".into());
+    }
+    if catalog
+        .payload
+        .components
+        .iter()
+        .any(|descriptor| descriptor.target != current_target)
+    {
+        return Err(format!(
+            "Офлайн-комплект должен содержать только компоненты для {current_target}"
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn import_offline_component_bundle(
     app: &tauri::AppHandle,
     selected_path: &Path,
-) -> Result<Vec<ComponentStatus>, String> {
+) -> Result<OfflineComponentImportResult, String> {
     if !selected_path.is_absolute() {
         return Err("Офлайн-комплект компонентов должен быть выбран по абсолютному пути".into());
     }
@@ -297,17 +340,7 @@ pub(crate) fn import_offline_component_bundle(
     verify_catalog(&catalog)?;
 
     let current_target = crate::current_update_platform();
-    if catalog.payload.components.is_empty()
-        || catalog
-            .payload
-            .components
-            .iter()
-            .any(|descriptor| descriptor.target != current_target)
-    {
-        return Err(format!(
-            "Офлайн-комплект должен содержать только компоненты для {current_target}"
-        ));
-    }
+    validate_offline_catalog_component_set(&catalog, current_target)?;
     let mut expected_names = BTreeSet::from(["components-catalog.json".to_string()]);
     let mut descriptors_by_name = BTreeMap::new();
     for descriptor in &catalog.payload.components {
@@ -341,7 +374,6 @@ pub(crate) fn import_offline_component_bundle(
     let root =
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    guard_catalog_not_older(&root, &catalog)?;
 
     let mut staged = Vec::<(ComponentDescriptor, PathBuf)>::new();
     let stage_result = (|| -> Result<(), String> {
@@ -427,6 +459,24 @@ pub(crate) fn import_offline_component_bundle(
         return Err(error);
     }
 
+    let imported_component_ids = catalog
+        .payload
+        .components
+        .iter()
+        .map(|descriptor| descriptor.id.clone())
+        .collect::<Vec<_>>();
+    let catalog_scope = if catalog_is_partial(&catalog) {
+        "partial".to_string()
+    } else {
+        "complete".to_string()
+    };
+    let _transaction_guard = lock_component_transactions()?;
+    if let Err(error) = guard_catalog_not_older(&root, &catalog) {
+        for (_, stage) in staged {
+            let _ = std::fs::remove_dir_all(stage);
+        }
+        return Err(error);
+    }
     commit_staged_offline_components(&root, &catalog, staged)?;
     let sidecars = crate::universal_intake::sidecar_tool_statuses();
     for descriptor in &catalog.payload.components {
@@ -440,11 +490,11 @@ pub(crate) fn import_offline_component_bundle(
         );
     }
     let descriptors = read_effective_component_descriptors(&root)?;
-    Ok(statuses_from_descriptors_with_sidecars(
-        &root,
-        &descriptors,
-        &sidecars,
-    ))
+    Ok(OfflineComponentImportResult {
+        components: statuses_from_descriptors_with_sidecars(&root, &descriptors, &sidecars),
+        imported_component_ids,
+        catalog_scope,
+    })
 }
 
 fn component_archive_name(descriptor: &ComponentDescriptor) -> Result<String, String> {
@@ -575,6 +625,7 @@ pub(crate) fn remove_component(id: &str) -> Result<ComponentStatus, String> {
     let id = validate_component_id(id)?;
     let root =
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
+    let _transaction_guard = lock_component_transactions()?;
     let descriptors = read_effective_component_descriptors(&root)?;
     let descriptor = descriptors
         .iter()
@@ -611,8 +662,6 @@ fn install_component_blocking(app: &tauri::AppHandle, id: &str) -> Result<Compon
     let root =
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    guard_catalog_not_older(&root, &catalog)?;
-    persist_verified_catalog(&root, &catalog)?;
 
     if descriptor.url.trim().is_empty() {
         return Err("Компонент доступен только в подписанном офлайн-комплекте; выберите «Импортировать офлайн-комплект»".into());
@@ -707,41 +756,29 @@ fn install_component_blocking(app: &tauri::AppHandle, id: &str) -> Result<Compon
         descriptor.size_bytes,
         "Компонент проверен; выполняется атомарная распаковка",
     );
-    let stage_dir = root.join(format!(".{}.{}.installing", id, Uuid::new_v4()));
-    let result = (|| -> Result<(), String> {
-        std::fs::create_dir(&stage_dir).map_err(|error| error.to_string())?;
-        safe_extract_zip(&temp_archive, &stage_dir)?;
-        let manifest = read_component_files_manifest(&stage_dir, &descriptor)?;
-        validate_all_manifest_files(&stage_dir, &manifest)?;
-        let receipt = InstalledComponentReceipt {
-            schema: COMPONENT_STATUS_SCHEMA,
-            component_id: descriptor.id.clone(),
-            target: descriptor.target.clone(),
-            archive_sha256: descriptor.sha256.to_ascii_lowercase(),
-            files_manifest_sha256: descriptor.files_manifest_sha256.to_ascii_lowercase(),
-            installed_at: OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?,
-        };
-        atomic_write_json(&stage_dir.join("component-status.json"), &receipt)?;
-        let final_dir = root.join(id);
-        let previous_dir = root.join(format!(".{}.{}.previous", id, Uuid::new_v4()));
-        if final_dir.exists() {
-            std::fs::rename(&final_dir, &previous_dir).map_err(|error| error.to_string())?;
+    let stage_dir = match stage_verified_component_archive(&root, &descriptor, &temp_archive) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp_archive);
+            return Err(error);
         }
-        if let Err(error) = std::fs::rename(&stage_dir, &final_dir) {
-            if previous_dir.exists() {
-                let _ = std::fs::rename(&previous_dir, &final_dir);
-            }
-            return Err(error.to_string());
-        }
-        if previous_dir.exists() {
-            let _ = std::fs::remove_dir_all(previous_dir);
-        }
-        Ok(())
-    })();
+    };
     let _ = std::fs::remove_file(&temp_archive);
-    if let Err(error) = result {
+
+    // Network transfer and extraction use unique staging paths and do not mutate
+    // authoritative component state. Serialize only the final transaction: a
+    // competing newer catalog must be visible to the rollback check before this
+    // directory/catalog pair can commit.
+    let _transaction_guard = lock_component_transactions()?;
+    if let Err(error) = guard_catalog_not_older(&root, &catalog) {
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        return Err(error);
+    }
+    if let Err(error) = commit_staged_offline_components(
+        &root,
+        &catalog,
+        vec![(descriptor.clone(), stage_dir.clone())],
+    ) {
         let _ = std::fs::remove_dir_all(&stage_dir);
         return Err(error);
     }
@@ -1782,6 +1819,22 @@ fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), S
                 destination.display()
             )
         })?;
+        // `rename` makes the directory entry atomic but not necessarily durable.
+        // fsync the containing directory before callers delete rollback copies.
+        #[cfg(unix)]
+        {
+            let parent = destination
+                .parent()
+                .ok_or_else(|| "Некорректный путь JSON".to_string())?;
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| {
+                    format!(
+                        "Не удалось зафиксировать каталог {} после атомарной замены: {error}",
+                        parent.display()
+                    )
+                })?;
+        }
     }
     Ok(())
 }
@@ -2236,5 +2289,50 @@ mod tests {
             .map(|item| item.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["office"]);
+    }
+
+    #[test]
+    fn empty_complete_catalog_is_a_valid_full_revocation_but_empty_partial_is_not() {
+        use super::{
+            validate_offline_catalog_component_set, ComponentsCatalogPayload,
+            SignedComponentsCatalog,
+        };
+
+        fn catalog(scope: &str) -> SignedComponentsCatalog {
+            SignedComponentsCatalog {
+                payload: ComponentsCatalogPayload {
+                    schema: 1,
+                    app_min_version: env!("CARGO_PKG_VERSION").into(),
+                    published_at: "2026-09-02T00:00:00Z".into(),
+                    catalog_scope: Some(scope.into()),
+                    allowed_hosts: vec![],
+                    components: vec![],
+                },
+                signature_alg: "Ed25519".into(),
+                signature: "test-signature".into(),
+            }
+        }
+
+        let target = super::crate_platform_for_test();
+        assert!(validate_offline_catalog_component_set(&catalog("complete"), &target).is_ok());
+        assert!(validate_offline_catalog_component_set(&catalog("partial"), &target).is_err());
+    }
+
+    #[test]
+    fn component_transaction_lock_serializes_mutating_commit_boundaries() {
+        use super::lock_component_transactions;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let first = lock_component_transactions().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _second = lock_component_transactions().unwrap();
+            sender.send(()).unwrap();
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(first);
+        receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        worker.join().unwrap();
     }
 }

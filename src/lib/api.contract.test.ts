@@ -310,7 +310,7 @@ function installContractMock(calls: Call[]) {
       case 'pick_component_bundle':
         return { file_name: 'Dokkomplekt-components-offline-windows-x86_64.zip', selected_path: 'C:/offline/Dokkomplekt-components-offline-windows-x86_64.zip' } as never;
       case 'import_component_bundle':
-        return [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 84, size_label: '84 МБ', unlocks: ['7zip'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }] as never;
+        return { components: [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 84, size_label: '84 МБ', unlocks: ['7zip'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }], imported_component_ids: ['archive'], catalog_scope: 'partial' } as never;
       case 'pick_template_files':
         return { files: [{ file_name: 'Договор.docx', template_path: 'C:/AppData/user-templates/Договор.docx', extracted_text: 'Договор {{document.number}}' }] } as never;
       case 'pick_folder':

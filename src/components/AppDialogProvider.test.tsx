@@ -44,6 +44,7 @@ describe('AppDialogProvider', () => {
     fireEvent.click(within(firstDialog).getByRole('button', { name: 'Другие варианты' }));
     const secondDialog = await screen.findByRole('dialog', { name: 'Создать новую версию?' });
     expect(secondDialog).not.toBe(firstDialog);
+    expect(document.activeElement).toBe(secondDialog);
     expect(within(secondDialog).getByRole('button', { name: 'Создать новую версию' })).toBeTruthy();
     fireEvent.click(within(secondDialog).getByRole('button', { name: 'Создать новую версию' }));
     expect(await screen.findByText('version')).toBeTruthy();

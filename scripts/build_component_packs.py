@@ -209,7 +209,8 @@ def signing_key_from_environment() -> SigningKey:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="windows-x86_64")
-    parser.add_argument("--components", default="ocr,office,semantic,archive")
+    parser.add_argument("--components", default=None, help="Comma-separated component IDs; defaults to the complete component set")
+    parser.add_argument("--revoke-all", action="store_true", help="Build a signed complete catalog with zero components for emergency offline revocation")
     parser.add_argument("--app-min-version", default="18.3.0")
     parser.add_argument("--base-url", default="", help="Optional HTTPS directory URL; omit for an offline-only signed bundle")
     parser.add_argument("--out", type=Path, default=ROOT / "release-components")
@@ -219,22 +220,32 @@ def main() -> int:
     target = args.target.strip()
     if not SAFE_TARGET.fullmatch(target):
         raise ValueError("unsafe target")
-    selected = [item.strip() for item in args.components.split(",") if item.strip()]
-    if not selected or any(not SAFE_COMPONENT.fullmatch(item) or item not in COMPONENTS for item in selected):
-        raise ValueError("--components contains an unknown component")
-    if len(selected) != len(set(selected)):
-        raise ValueError("--components contains duplicate component ids")
+    if args.revoke_all:
+        if args.components not in (None, ""):
+            raise ValueError("--revoke-all cannot be combined with --components")
+        selected: list[str] = []
+    else:
+        raw_components = args.components or ",".join(COMPONENTS)
+        selected = [item.strip() for item in raw_components.split(",") if item.strip()]
+        if not selected or any(not SAFE_COMPONENT.fullmatch(item) or item not in COMPONENTS for item in selected):
+            raise ValueError("--components contains an unknown component")
+        if len(selected) != len(set(selected)):
+            raise ValueError("--components contains duplicate component ids")
     base_url = args.base_url.strip().rstrip("/")
     parsed = None
     if base_url:
         base_url = validate_public_https_url(base_url, "--base-url")
         parsed = urlparse(base_url)
 
-    target_dir, status = load_status(target)
+    target_dir: Path | None = None
+    status: dict[str, Any] | None = None
+    if selected:
+        target_dir, status = load_status(target)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     descriptors: list[dict[str, Any]] = []
     for component_id in selected:
+        assert target_dir is not None and status is not None
         built = build_pack(target, target_dir, status, component_id, out)
         spec = COMPONENTS[component_id]
         descriptors.append(
@@ -256,7 +267,7 @@ def main() -> int:
         "schema": 1,
         "app_min_version": args.app_min_version,
         "published_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "catalog_scope": "complete" if set(selected) == set(COMPONENTS) else "partial",
+        "catalog_scope": "complete" if args.revoke_all or set(selected) == set(COMPONENTS) else "partial",
         "allowed_hosts": [parsed.hostname.lower()] if parsed and parsed.hostname else [],
         "components": sorted(descriptors, key=lambda item: (item["target"], item["id"])),
     }

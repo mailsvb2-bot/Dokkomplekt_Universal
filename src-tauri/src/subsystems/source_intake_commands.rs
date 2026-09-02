@@ -409,7 +409,7 @@ struct ImportComponentBundleRequest {
 async fn import_component_bundle(
     app: tauri::AppHandle,
     req: ImportComponentBundleRequest,
-) -> Result<Vec<component_manager::ComponentStatus>, String> {
+) -> Result<component_manager::OfflineComponentImportResult, String> {
     let path = PathBuf::from(req.selected_path);
     tauri::async_runtime::spawn_blocking(move || {
         component_manager::import_offline_component_bundle(&app, &path)

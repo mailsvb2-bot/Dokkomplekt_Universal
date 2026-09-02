@@ -12,10 +12,23 @@ describe('runtime backend contracts', () => {
     expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');
     expect(COMMAND_RESPONSE_KIND.pick_source_file).toBe('nullable-object');
     expect(COMMAND_RESPONSE_KIND.parse_source_path).toBe('object');
-    expect(COMMAND_RESPONSE_KIND.import_component_bundle).toBe('array');
+    expect(COMMAND_RESPONSE_KIND.import_component_bundle).toBe('object');
     expect(COMMAND_RESPONSE_KIND.pick_component_bundle).toBe('nullable-object');
     expect(COMMAND_RESPONSE_KIND.replace_clause_blocks).toBe('boolean');
     expect(() => validateRustResponse('new_unregistered_command', {})).toThrow(/не зарегистрирован контракт/);
+  });
+
+  it('validates offline component import metadata separately from effective statuses', () => {
+    expect(validateRustResponse('import_component_bundle', {
+      components: [],
+      imported_component_ids: [],
+      catalog_scope: 'complete',
+    })).toBeTruthy();
+    expect(() => validateRustResponse('import_component_bundle', {
+      components: [],
+      imported_component_ids: ['archive'],
+      catalog_scope: 'unknown',
+    })).toThrow(/catalog_scope/);
   });
 
   it('rejects null where the UI expects an array', () => {

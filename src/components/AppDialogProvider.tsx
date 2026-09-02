@@ -69,6 +69,7 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [acknowledged, setAcknowledged] = useState(false);
   const nextRequestId = useRef(0);
+  const confirmDialogRef = useRef<HTMLDivElement | null>(null);
 
   const activate = useCallback((next: Request | null) => {
     active.current = next;
@@ -112,6 +113,14 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [finish, request]);
 
+  useEffect(() => {
+    // Prompt/form controls already own autofocus. Confirmation dialogs have no
+    // input, so explicitly transfer focus to the newly mounted dialog instance.
+    // This keeps keyboard and screen-reader position intact when one queued
+    // confirmation immediately replaces another.
+    if (request?.kind === 'confirm') confirmDialogRef.current?.focus();
+  }, [request?.id, request?.kind]);
+
   const canSubmit = request?.kind === 'prompt'
     ? (!request.options.required || Boolean(values.value?.trim()))
     : request?.kind === 'form'
@@ -132,7 +141,7 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
       {children}
       {request && (
         <div key={request.id} className="backdrop appDialogBackdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancel(); }}>
-          <div className="modal appDialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+          <div ref={confirmDialogRef} tabIndex={-1} className="modal appDialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
             <h2 id="app-dialog-title">{request.options.title}</h2>
             {'message' in request.options && request.options.message ? <p className="hint appDialogMessage">{request.options.message}</p> : null}
 

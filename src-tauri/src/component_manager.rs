@@ -165,6 +165,50 @@ fn sync_directory(path: &Path) -> Result<(), String> {
     }
 }
 
+fn sync_cached_catalog_authority_directories(root: &Path) -> Result<(), String> {
+    sync_directory(root)?;
+    let overlays = root.join(COMPONENT_CATALOG_OVERLAYS_DIR);
+    if overlays.exists() {
+        let metadata = std::fs::symlink_metadata(&overlays).map_err(|error| error.to_string())?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err("Каталог partial components catalog имеет небезопасный тип".into());
+        }
+        sync_directory(&overlays)?;
+    }
+    Ok(())
+}
+
+fn uncertain_previous_path(previous: &Path) -> Option<PathBuf> {
+    let name = previous.file_name()?.to_str()?;
+    let stem = name.strip_suffix(".previous")?;
+    Some(previous.with_file_name(format!("{stem}.durability-uncertain")))
+}
+
+fn mark_uncertain_previous_backups(committed: &[(PathBuf, Option<PathBuf>)]) {
+    for (_, previous) in committed {
+        let Some(previous) = previous else { continue };
+        let Some(uncertain) = uncertain_previous_path(previous) else {
+            continue;
+        };
+        // This rename is best effort because the catalog directory already failed
+        // its durability sync. Recovery also protects plain `.previous` entries
+        // while durability is unconfirmed, so a failed/lost marker is fail-safe.
+        let _ = std::fs::rename(previous, uncertain);
+    }
+}
+
+fn stale_component_transaction_removal_allowed(
+    name: &str,
+    age: StdDuration,
+    catalog_durability_confirmed: bool,
+) -> bool {
+    if age < STALE_COMPONENT_TRANSACTION_AGE {
+        return false;
+    }
+    let is_catalog_backup = name.ends_with(".previous") || name.ends_with(".durability-uncertain");
+    !is_catalog_backup || catalog_durability_confirmed
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ComponentProgress {
     id: String,
@@ -647,7 +691,9 @@ fn commit_staged_offline_components(
         committed.push((final_dir, previous));
     }
     if let Err(error) = persist_verified_catalog(root, catalog) {
-        if !error.authority_committed() {
+        if error.authority_committed() {
+            mark_uncertain_previous_backups(&committed);
+        } else {
             rollback_offline_component_commits(&committed);
         }
         return Err(error.into_message());
@@ -868,6 +914,11 @@ fn recover_component_transactions(
                 .filter(|entry| {
                     entry.file_name().to_str().is_some_and(|name| {
                         transaction_name_matches(name, &descriptor.id, "previous")
+                            || transaction_name_matches(
+                                name,
+                                &descriptor.id,
+                                "durability-uncertain",
+                            )
                     })
                 })
                 .filter_map(|entry| {
@@ -926,6 +977,12 @@ fn recover_component_transactions(
         }
     }
 
+    // A post-rename fsync failure leaves the catalog authoritative in the live
+    // namespace but not yet proven durable across power loss. Do not age-delete
+    // any old component backup until a later sync of every catalog authority
+    // directory succeeds. This also protects a plain `.previous` if the best-effort
+    // durability marker itself could not be persisted.
+    let catalog_durability_confirmed = sync_cached_catalog_authority_directories(root).is_ok();
     let now = SystemTime::now();
     for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -935,6 +992,7 @@ fn recover_component_transactions(
             && (name.ends_with(".download-part")
                 || name.ends_with(".installing")
                 || name.ends_with(".previous")
+                || name.ends_with(".durability-uncertain")
                 || name.ends_with(".interrupted"));
         if !is_transaction {
             continue;
@@ -943,7 +1001,7 @@ fn recover_component_transactions(
             std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let age = now.duration_since(modified).unwrap_or_default();
-        if age < STALE_COMPONENT_TRANSACTION_AGE {
+        if !stale_component_transaction_removal_allowed(name, age, catalog_durability_confirmed) {
             continue;
         }
         if metadata.file_type().is_symlink() {
@@ -2394,6 +2452,39 @@ mod tests {
         let after = AtomicWriteError::AfterCommit("after".into());
         assert!(!before.authority_committed());
         assert!(after.authority_committed());
+    }
+
+    #[test]
+    fn stale_previous_cleanup_requires_confirmed_catalog_durability() {
+        use super::{stale_component_transaction_removal_allowed, STALE_COMPONENT_TRANSACTION_AGE};
+        use std::time::Duration;
+
+        let stale = STALE_COMPONENT_TRANSACTION_AGE + Duration::from_secs(1);
+        assert!(!stale_component_transaction_removal_allowed(
+            ".ocr.example.previous",
+            stale,
+            false,
+        ));
+        assert!(!stale_component_transaction_removal_allowed(
+            ".ocr.example.durability-uncertain",
+            stale,
+            false,
+        ));
+        assert!(stale_component_transaction_removal_allowed(
+            ".ocr.example.previous",
+            stale,
+            true,
+        ));
+        assert!(stale_component_transaction_removal_allowed(
+            ".ocr.example.durability-uncertain",
+            stale,
+            true,
+        ));
+        assert!(stale_component_transaction_removal_allowed(
+            ".ocr.example.installing",
+            stale,
+            false,
+        ));
     }
 
     #[test]

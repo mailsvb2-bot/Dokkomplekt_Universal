@@ -286,13 +286,21 @@ function Invoke-UiActionWithObservedTransition {
   # request is in flight and a second click would be destructive/ambiguous. Keep
   # waiting for the exact transition instead of manufacturing a duplicate action.
   $retryAction = $null
-  try {
-    $retryAction = & $ActionProbe
-  } catch {
-    if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
-  }
+  $actionUnavailableSince = $null
+  $actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  do {
+    try {
+      $retryAction = & $ActionProbe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $retryAction = $null
+    }
+    if ($null -ne $retryAction) { break }
+    if ($null -eq $actionUnavailableSince) { $actionUnavailableSince = [DateTime]::UtcNow }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $actionStateDeadline)
   if ($null -eq $retryAction) {
-    Write-Host "UIA action '$Description' is already in-flight; waiting for '$TransitionDescription' without a duplicate click."
+    Write-Host "UIA action '$Description' remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click."
     return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
   }
 
@@ -1075,9 +1083,11 @@ if ($adversarial) {
       Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
     }
 
-  # The final version action gets the same observed-transition guarantee: a
-  # disappearing dialog or visible generation-busy state proves that the click
-  # reached the product; the physical second version remains the final oracle.
+  # The final version action gets the same observed-transition guarantee. A
+  # physical second file or visible generation-busy state is a positive signal.
+  # Dialog disappearance is accepted only when it remains absent continuously,
+  # because a single WebView2/UIA provider miss is not proof of a product transition.
+  $newVersionAbsence = [pscustomobject]@{ Since = $null }
   $null = Invoke-UiActionWithObservedTransition `
     -Description 'Создать новую версию' `
     -TransitionDescription 'second-version generation transition' `
@@ -1088,13 +1098,32 @@ if ($adversarial) {
     } `
     -TransitionProbe {
       $versionDocsNow = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $expectedGeneratedFileName -ErrorAction SilentlyContinue)
-      if ($versionDocsNow.Count -ge 2) { return $versionDocsNow[1] }
+      if ($versionDocsNow.Count -ge 2) {
+        $newVersionAbsence.Since = $null
+        return $versionDocsNow[1]
+      }
       $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
+      if ($null -eq $currentAppWindow) {
+        $newVersionAbsence.Since = $null
+        return $null
+      }
       $busy = Find-ButtonByNames -Root $currentAppWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
-      if ($null -ne $busy) { return $busy }
+      if ($null -ne $busy) {
+        $newVersionAbsence.Since = $null
+        return $busy
+      }
       $stillOpen = Find-ButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
-      if ($null -eq $stillOpen) { return $currentAppWindow }
+      if ($null -ne $stillOpen) {
+        $newVersionAbsence.Since = $null
+        return $null
+      }
+      if ($null -eq $newVersionAbsence.Since) {
+        $newVersionAbsence.Since = [DateTime]::UtcNow
+        return $null
+      }
+      if (([DateTime]::UtcNow - [DateTime]$newVersionAbsence.Since).TotalSeconds -ge 2) {
+        return $currentAppWindow
+      }
       return $null
     }
   $versionDeadline = [DateTime]::UtcNow.AddSeconds(60)

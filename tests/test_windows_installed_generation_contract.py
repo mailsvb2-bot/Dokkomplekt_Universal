@@ -27,7 +27,8 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
     assert "Invoke-UiActionWithObservedTransition" in source
-    assert "is already in-flight; waiting for '$TransitionDescription' without a duplicate click" in source
+    assert "$actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)" in source
+    assert "remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click" in source
     assert "remains actionable; retrying once with physical input" in source
     assert "-Description 'repeat generation action'" in source
     assert "-TransitionDescription 'repeat preflight'" in source
@@ -40,6 +41,9 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "--- installed UI snapshot after generation timeout ---" in source
     assert '$expectedGeneratedFileName = "$expectedTemplateButtonName.docx"' in source
     assert "-Filter $expectedGeneratedFileName" in source
+    assert "$newVersionAbsence = [pscustomobject]@{ Since = $null }" in source
+    assert "$newVersionAbsence.Since = [DateTime]::UtcNow" in source
+    assert ".TotalSeconds -ge 2" in source
     assert "Проверочная кнопка.docx" not in source
     assert "[System.IO.Compression.ZipFile]::OpenRead" in source
     assert "Created DOCX lost the template content" in source

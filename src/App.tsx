@@ -1323,6 +1323,8 @@ function AppContent() {
             skippedAnswers={skippedAnswers}
             preview={preview}
             onPickWatchFolder={() => void chooseWatchFolder()}
+            onInstallWatcher={() => void installWatcher(sickLeave, autoPrint, printCopies)}
+            onUninstallWatcher={() => void uninstallWatcher()}
             setIntakeSource={setIntakeSource}
             setAutoPrint={updateAutoPrint}
             setSourceText={setSourceText}

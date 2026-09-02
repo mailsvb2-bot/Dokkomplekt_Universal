@@ -261,6 +261,7 @@ describe('Полный прогон пользовательских сцена�
     expect(parsePayload(calls, 'parse_source')).toMatchObject({ req: { default_year: expect.any(Number) } });
 
     // Packaged desktop button uses the native OS picker and then parses the selected path.
+    expect(screen.getByText(/Если это другой пациент или новое дело/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Заменить исходный файл' }));
     await waitFor(() => expect(calls.some((c) => c.command === 'pick_source_file')).toBe(true));
     await waitFor(() => expect(parsePayload(calls, 'parse_source_path')).toMatchObject({ req: { selected_path: 'C:/fixtures/Источник.docx', default_year: expect.any(Number) } }));
@@ -501,7 +502,7 @@ describe('Полный прогон пользовательских сцена�
     expect(automation).toBeTruthy();
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Выбрать' }));
     await waitFor(() => expect(parsePayload(calls, 'pick_folder')).toMatchObject({ req: { initial_path: expect.any(String) } }));
-    await click(/Включить фоновый агент/);
+    fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: /Включить автоматическую обработку/ }));
     await waitFor(() => expect(calls.some((call) => call.command === 'install_background_watcher')).toBe(true));
     fireEvent.change(within(automation as HTMLElement).getByPlaceholderText('Путь к файлу'), { target: { value: 'C:/Созданные документы/Источник.docx' } });
     fireEvent.click(within(automation as HTMLElement).getByRole('button', { name: 'Создать комплект' }));

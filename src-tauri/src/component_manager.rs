@@ -1704,6 +1704,71 @@ fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {
     .collect()
 }
 
+fn sanitized_component_file_mode(unix_mode: Option<u32>) -> u32 {
+    // Component archives are signed, but permission metadata still must not be
+    // allowed to introduce setuid/setgid/sticky or broader write permissions.
+    // Official packs encode regular data as 0644 and executables as 0755; retain
+    // only the execute intent and use the application's safe read/write baseline.
+    0o644 | unix_mode.unwrap_or(0) & 0o111
+}
+
+fn apply_sanitized_component_file_mode(path: &Path, unix_mode: Option<u32>) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(path)
+            .map_err(|error| error.to_string())?
+            .permissions();
+        permissions.set_mode(sanitized_component_file_mode(unix_mode));
+        std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, unix_mode);
+    }
+    Ok(())
+}
+
+fn sync_extracted_directory_tree(root: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let mut pending = vec![root.to_path_buf()];
+        let mut directories = Vec::<PathBuf>::new();
+        while let Some(directory) = pending.pop() {
+            let metadata =
+                std::fs::symlink_metadata(&directory).map_err(|error| error.to_string())?;
+            if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+                return Err("Папка распакованного компонента имеет небезопасный тип".into());
+            }
+            directories.push(directory.clone());
+            for entry in std::fs::read_dir(&directory).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                let metadata =
+                    std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+                if metadata.file_type().is_symlink() {
+                    return Err("Символические ссылки в распакованном компоненте запрещены".into());
+                }
+                if metadata.file_type().is_dir() {
+                    pending.push(entry.path());
+                }
+            }
+        }
+        // A file fsync does not persist the directory entry that names it. Flush
+        // deepest directories first so every nested file/child directory name is
+        // durable before its parent, the staging root, and finally the component
+        // root are published by the transaction/catalog commit.
+        directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+        for directory in directories {
+            sync_directory(&directory)?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+    }
+    Ok(())
+}
+
 fn safe_extract_zip(archive_path: &Path, stage_dir: &Path) -> Result<(), String> {
     let file = File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
@@ -1714,6 +1779,7 @@ fn safe_extract_zip(archive_path: &Path, stage_dir: &Path) -> Result<(), String>
     let mut seen = BTreeSet::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let unix_mode = entry.unix_mode();
         let name = entry.name().replace('\\', "/");
         let relative = safe_relative_path(&name)?;
         let key =
@@ -1745,8 +1811,12 @@ fn safe_extract_zip(archive_path: &Path, stage_dir: &Path) -> Result<(), String>
             .open(&destination)
             .map_err(|error| error.to_string())?;
         std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+        apply_sanitized_component_file_mode(&destination, unix_mode)?;
+        // Persist file contents and the sanitized executable metadata before the
+        // containing directory entry is made durable below.
         output.sync_all().map_err(|error| error.to_string())?;
     }
+    sync_extracted_directory_tree(stage_dir)?;
     Ok(())
 }
 
@@ -2452,6 +2522,53 @@ mod tests {
         let after = AtomicWriteError::AfterCommit("after".into());
         assert!(!before.authority_committed());
         assert!(after.authority_committed());
+    }
+
+    #[test]
+    fn component_zip_modes_strip_privilege_bits_but_keep_execute_intent() {
+        use super::sanitized_component_file_mode;
+
+        assert_eq!(sanitized_component_file_mode(Some(0o644)), 0o644);
+        assert_eq!(sanitized_component_file_mode(Some(0o755)), 0o755);
+        assert_eq!(sanitized_component_file_mode(Some(0o4777)), 0o755);
+        assert_eq!(sanitized_component_file_mode(None), 0o644);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_extract_restores_executable_mode_for_nested_component_tool() {
+        use super::safe_extract_zip;
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        use uuid::Uuid;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-component-exec-mode-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let archive_path = root.join("component.zip");
+        let archive_file = std::fs::File::create(&archive_path).unwrap();
+        let mut writer = ZipWriter::new(archive_file);
+        writer
+            .start_file(
+                "nested/bin/tool",
+                SimpleFileOptions::default().unix_permissions(0o755),
+            )
+            .unwrap();
+        writer.write_all(b"trusted-tool").unwrap();
+        writer.finish().unwrap();
+
+        let stage = root.join("stage");
+        std::fs::create_dir(&stage).unwrap();
+        safe_extract_zip(&archive_path, &stage).unwrap();
+        let tool = stage.join("nested/bin/tool");
+        let mode = std::fs::metadata(&tool).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
+        assert_eq!(std::fs::read(&tool).unwrap(), b"trusted-tool");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

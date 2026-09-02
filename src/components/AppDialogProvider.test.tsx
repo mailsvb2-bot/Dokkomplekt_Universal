@@ -9,6 +9,10 @@ function Harness() {
   return <>
     <button onClick={async () => setResult(await dialogs.confirm({ title: 'Удалить?', message: 'Последствие', confirmLabel: 'Удалить', danger: true }) ? 'yes' : 'no')}>confirm</button>
     <button onClick={async () => setResult(await dialogs.prompt({ title: 'Переименовать', label: 'Название', required: true, confirmLabel: 'Сохранить' }) ?? 'cancel')}>prompt</button>
+    <button onClick={async () => {
+      if (await dialogs.confirm({ title: 'Комплект уже существует', message: 'Первый шаг', confirmLabel: 'Открыть существующий', cancelLabel: 'Другие варианты' })) return;
+      setResult(await dialogs.confirm({ title: 'Создать новую версию?', message: 'Второй шаг', confirmLabel: 'Создать новую версию', cancelLabel: 'Другие варианты' }) ? 'version' : 'cancel');
+    }}>sequence</button>
     <output>{result}</output>
   </>;
 }
@@ -32,4 +36,17 @@ describe('AppDialogProvider', () => {
     fireEvent.click(save);
     expect(await screen.findByText('Новый документ')).toBeTruthy();
   });
+
+  it('remounts sequential confirmations so native accessibility sees the new action', async () => {
+    render(<AppDialogProvider><Harness /></AppDialogProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'sequence' }));
+    const firstDialog = screen.getByRole('dialog', { name: 'Комплект уже существует' });
+    fireEvent.click(within(firstDialog).getByRole('button', { name: 'Другие варианты' }));
+    const secondDialog = await screen.findByRole('dialog', { name: 'Создать новую версию?' });
+    expect(secondDialog).not.toBe(firstDialog);
+    expect(within(secondDialog).getByRole('button', { name: 'Создать новую версию' })).toBeTruthy();
+    fireEvent.click(within(secondDialog).getByRole('button', { name: 'Создать новую версию' }));
+    expect(await screen.findByText('version')).toBeTruthy();
+  });
+
 });

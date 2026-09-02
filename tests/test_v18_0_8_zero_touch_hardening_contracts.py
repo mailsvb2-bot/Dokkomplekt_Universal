@@ -26,7 +26,10 @@ class V1808ZeroTouchHardeningContracts(unittest.TestCase):
         self.assertIn("attention_note_path(&source)", self.main)
         self.assertIn("&source_note_key,", self.main)
         self.assertIn("legacy_source_service_note_key", self.main)
-        self.assertIn("remove_source_service_notes(&source)", self.main)
+        self.assertIn("remove_source_service_notes(", self.main)
+        self.assertIn("&source_sha256,", self.main)
+        self.assertIn("source_modified_ms,", self.main)
+        self.assertIn("note_matches_source_signature", self.main)
         self.assertNotIn("remove_source_service_notes(&path)", self.main)
         self.assertNotIn("attention_file_name(&stem)", self.main)
 

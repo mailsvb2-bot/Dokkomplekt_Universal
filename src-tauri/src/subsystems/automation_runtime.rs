@@ -693,11 +693,6 @@ fn perform_created_documents_intake(
             req.sick_leave_enabled,
         );
     }
-    let stem = source
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("source")
-        .to_string();
     let file_name = source
         .file_name()
         .and_then(|s| s.to_str())

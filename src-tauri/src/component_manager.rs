@@ -171,10 +171,7 @@ pub(crate) fn resolve_trusted_component_tool(
         .filter(|component| component.unlocks.iter().any(|item| item == program))
     {
         let component_dir = root.join(&descriptor.id);
-        if validate_installed_component(&component_dir, descriptor).is_err() {
-            continue;
-        }
-        let manifest = match read_component_files_manifest(&component_dir, descriptor) {
+        let manifest = match read_verified_component_manifest(&component_dir, descriptor) {
             Ok(value) => value,
             Err(_) => continue,
         };
@@ -778,7 +775,15 @@ fn recover_component_transactions(
                 continue;
             }
             let final_dir = root.join(&descriptor.id);
-            if final_dir.exists() {
+            // The cached signed descriptor defines which side of a component swap
+            // committed. If the final directory already matches it, the catalog
+            // commit happened (or no swap was interrupted) and `.previous` is only
+            // cleanup. If it does not match, a crash may have occurred after the
+            // directory rename but before catalog publication; recover the newest
+            // fully verified previous installation instead of discarding it later.
+            if final_dir.exists()
+                && read_verified_component_manifest(&final_dir, descriptor).is_ok()
+            {
                 continue;
             }
             let mut previous = std::fs::read_dir(root)
@@ -800,19 +805,47 @@ fn recover_component_transactions(
                 })
                 .collect::<Vec<_>>();
             previous.sort_by_key(|item| std::cmp::Reverse(item.0));
-            for (_, candidate) in previous {
-                let valid = validate_installed_component(&candidate, descriptor)
-                    .and_then(|_| read_component_files_manifest(&candidate, descriptor))
-                    .and_then(|manifest| validate_all_manifest_files(&candidate, &manifest));
-                if valid.is_ok() {
-                    std::fs::rename(&candidate, &final_dir).map_err(|error| {
-                        format!(
-                            "Не удалось восстановить предыдущую версию компонента {}: {error}",
-                            descriptor.id
-                        )
-                    })?;
-                    break;
+            let verified_previous = previous.into_iter().find_map(|(_, candidate)| {
+                read_verified_component_manifest(&candidate, descriptor)
+                    .is_ok()
+                    .then_some(candidate)
+            });
+            let Some(previous_dir) = verified_previous else {
+                continue;
+            };
+
+            if final_dir.exists() {
+                let metadata =
+                    std::fs::symlink_metadata(&final_dir).map_err(|error| error.to_string())?;
+                if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "Небезопасный финальный путь прерванной установки компонента {}",
+                        descriptor.id
+                    ));
                 }
+                let interrupted =
+                    root.join(format!(".{}.{}.interrupted", descriptor.id, Uuid::new_v4()));
+                std::fs::rename(&final_dir, &interrupted).map_err(|error| {
+                    format!(
+                        "Не удалось изолировать незавершённую версию компонента {}: {error}",
+                        descriptor.id
+                    )
+                })?;
+                if let Err(error) = std::fs::rename(&previous_dir, &final_dir) {
+                    let _ = std::fs::rename(&interrupted, &final_dir);
+                    return Err(format!(
+                        "Не удалось восстановить предыдущую версию компонента {}: {error}",
+                        descriptor.id
+                    ));
+                }
+                let _ = std::fs::remove_dir_all(interrupted);
+            } else {
+                std::fs::rename(&previous_dir, &final_dir).map_err(|error| {
+                    format!(
+                        "Не удалось восстановить предыдущую версию компонента {}: {error}",
+                        descriptor.id
+                    )
+                })?;
             }
         }
     }
@@ -825,7 +858,8 @@ fn recover_component_transactions(
         let is_transaction = name.starts_with('.')
             && (name.ends_with(".download-part")
                 || name.ends_with(".installing")
-                || name.ends_with(".previous"));
+                || name.ends_with(".previous")
+                || name.ends_with(".interrupted"));
         if !is_transaction {
             continue;
         }
@@ -1250,8 +1284,16 @@ fn persist_verified_catalog(root: &Path, catalog: &SignedComponentsCatalog) -> R
         }
         atomic_write_json(&path, catalog)
     } else {
+        // The signed complete catalog is the authority commit point. Older/equal
+        // partial overlays cannot override it: effective ordering applies partial
+        // catalogs before a complete catalog at the same timestamp, and production
+        // callers reject catalog rollback before persistence. Cleanup is therefore
+        // post-commit hygiene, not part of the transaction. Returning an error after
+        // the authority changed would make callers roll component directories back
+        // under a catalog that already describes the new versions.
         atomic_write_json(&root.join("components-catalog.json"), catalog)?;
-        clear_catalog_overlays(root)
+        let _ = clear_catalog_overlays(root);
+        Ok(())
     }
 }
 
@@ -1338,7 +1380,61 @@ fn validate_all_manifest_files(
             return Err(format!("Хеш файла компонента не совпадает: {relative}"));
         }
     }
-    Ok(())
+
+    // The signed manifest is also an allow-list. Reject injected DLLs, executables
+    // or any other unexpected filesystem object instead of merely checking that
+    // the expected files still exist. The two control JSON files are separately
+    // bound to the signed descriptor/receipt and are intentionally outside the
+    // payload file map.
+    fn walk(root: &Path, current: &Path, allowed: &BTreeMap<String, String>) -> Result<(), String> {
+        for entry in std::fs::read_dir(current).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err(
+                    "Символические ссылки внутри установленного компонента запрещены".into(),
+                );
+            }
+            if metadata.file_type().is_dir() {
+                walk(root, &path, allowed)?;
+                continue;
+            }
+            if !metadata.file_type().is_file() {
+                return Err("Компонент содержит неподдерживаемый объект файловой системы".into());
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "Файл компонента вышел за пределы корня".to_string())?;
+            let key = path_key(relative)
+                .ok_or_else(|| "Некорректный путь файла компонента".to_string())?;
+            if matches!(
+                key.as_str(),
+                "component-files.json" | "component-status.json"
+            ) {
+                continue;
+            }
+            if !allowed.contains_key(&key) {
+                return Err(format!("Компонент содержит неподписанный файл: {key}"));
+            }
+        }
+        Ok(())
+    }
+
+    walk(component_dir, component_dir, &manifest.files)
+}
+
+fn read_verified_component_manifest(
+    component_dir: &Path,
+    descriptor: &ComponentDescriptor,
+) -> Result<ComponentFilesManifest, String> {
+    validate_installed_component(component_dir, descriptor)?;
+    let manifest = read_component_files_manifest(component_dir, descriptor)?;
+    // Executables are never trusted in isolation. DLLs, models and every other
+    // manifest-bound companion must still match before any path is returned to a
+    // process launcher, otherwise a valid executable can load a tampered DLL.
+    validate_all_manifest_files(component_dir, &manifest)?;
+    Ok(manifest)
 }
 
 fn statuses_from_descriptors(
@@ -1368,9 +1464,7 @@ fn status_for_descriptor(
     sidecars: &[crate::universal_intake::SidecarToolStatus],
 ) -> ComponentStatus {
     let component_dir = root.join(&descriptor.id);
-    let valid = validate_installed_component(&component_dir, descriptor)
-        .and_then(|_| read_component_files_manifest(&component_dir, descriptor))
-        .and_then(|manifest| validate_all_manifest_files(&component_dir, &manifest));
+    let valid = read_verified_component_manifest(&component_dir, descriptor);
     let downloaded = valid.is_ok();
     let relevant = descriptor
         .unlocks
@@ -1642,6 +1736,56 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex::encode(digest.finalize()))
 }
 
+fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() {
+        let metadata = std::fs::symlink_metadata(destination).map_err(|error| error.to_string())?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err("Целевой JSON имеет небезопасный тип".into());
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let source = temporary
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let moved = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                target.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved == 0 {
+            return Err(format!(
+                "Не удалось атомарно заменить {}: {}",
+                destination.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::fs::rename(temporary, destination).map_err(|error| {
+            format!(
+                "Не удалось атомарно заменить {}: {error}",
+                destination.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let parent = path
         .parent()
@@ -1660,21 +1804,24 @@ fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
         .create_new(true)
         .open(&temporary)
         .map_err(|error| error.to_string())?;
-    output
-        .write_all(&bytes)
-        .map_err(|error| error.to_string())?;
-    output.write_all(b"\n").map_err(|error| error.to_string())?;
-    output.sync_all().map_err(|error| error.to_string())?;
+    let write_result = (|| -> Result<(), String> {
+        output
+            .write_all(&bytes)
+            .map_err(|error| error.to_string())?;
+        output.write_all(b"\n").map_err(|error| error.to_string())?;
+        output.sync_all().map_err(|error| error.to_string())?;
+        Ok(())
+    })();
     drop(output);
-    if path.exists() {
-        let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-            let _ = std::fs::remove_file(&temporary);
-            return Err("Целевой JSON имеет небезопасный тип".into());
-        }
-        std::fs::remove_file(path).map_err(|error| error.to_string())?;
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
     }
-    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+    if let Err(error) = replace_file_atomically(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn emit_progress(
@@ -1795,9 +1942,10 @@ mod tests {
     #[test]
     fn installed_component_manifest_detects_tampering() {
         use super::{
-            read_component_files_manifest, validate_all_manifest_files,
-            validate_installed_component, ComponentDescriptor, ComponentFilesManifest,
-            InstalledComponentReceipt, COMPONENT_FILES_SCHEMA, COMPONENT_STATUS_SCHEMA,
+            read_component_files_manifest, read_verified_component_manifest,
+            validate_all_manifest_files, validate_installed_component, ComponentDescriptor,
+            ComponentFilesManifest, InstalledComponentReceipt, COMPONENT_FILES_SCHEMA,
+            COMPONENT_STATUS_SCHEMA,
         };
         use sha2::{Digest as _, Sha256};
         use std::collections::BTreeMap;
@@ -1807,13 +1955,19 @@ mod tests {
             std::env::temp_dir().join(format!("dokkomplekt-component-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("bin")).unwrap();
         let tool = root.join("bin").join("tool");
+        let companion = root.join("bin").join("helper.dll");
         std::fs::write(&tool, b"trusted").unwrap();
+        std::fs::write(&companion, b"trusted-companion").unwrap();
         let tool_hash = hex::encode(Sha256::digest(b"trusted"));
+        let companion_hash = hex::encode(Sha256::digest(b"trusted-companion"));
         let manifest = ComponentFilesManifest {
             schema: COMPONENT_FILES_SCHEMA,
             component_id: "ocr".into(),
             target: super::crate_platform_for_test(),
-            files: BTreeMap::from([("bin/tool".into(), tool_hash)]),
+            files: BTreeMap::from([
+                ("bin/tool".into(), tool_hash),
+                ("bin/helper.dll".into(), companion_hash),
+            ]),
         };
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         std::fs::write(root.join("component-files.json"), &manifest_bytes).unwrap();
@@ -1846,13 +2000,21 @@ mod tests {
         validate_installed_component(&root, &descriptor).unwrap();
         let parsed = read_component_files_manifest(&root, &descriptor).unwrap();
         validate_all_manifest_files(&root, &parsed).unwrap();
+        read_verified_component_manifest(&root, &descriptor).unwrap();
+        std::fs::write(&companion, b"tampered-companion").unwrap();
+        assert!(read_verified_component_manifest(&root, &descriptor).is_err());
+        std::fs::write(&companion, b"trusted-companion").unwrap();
+        let injected = root.join("bin").join("injected.dll");
+        std::fs::write(&injected, b"not-in-signed-manifest").unwrap();
+        assert!(read_verified_component_manifest(&root, &descriptor).is_err());
+        std::fs::remove_file(injected).unwrap();
         std::fs::write(&tool, b"tampered").unwrap();
         assert!(validate_all_manifest_files(&root, &parsed).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn interrupted_component_upgrade_restores_verified_previous_version() {
+    fn interrupted_component_upgrade_restores_verified_previous_over_uncommitted_final() {
         use super::{
             recover_component_transactions, ComponentDescriptor, ComponentFilesManifest,
             ComponentsCatalogPayload, InstalledComponentReceipt, SignedComponentsCatalog,
@@ -1904,6 +2066,15 @@ mod tests {
             serde_json::to_vec(&receipt).unwrap(),
         )
         .unwrap();
+
+        // Simulate a crash after the new staged directory was renamed into place
+        // but before the new signed catalog became authoritative. The cached
+        // descriptor still describes `previous`, so recovery must not accept the
+        // mere existence of this uncommitted final directory.
+        let uncommitted_final = root.join("ocr");
+        std::fs::create_dir_all(uncommitted_final.join("bin")).unwrap();
+        std::fs::write(uncommitted_final.join("bin/tool"), b"new-uncommitted").unwrap();
+
         let catalog = SignedComponentsCatalog {
             payload: ComponentsCatalogPayload {
                 schema: 1,
@@ -1917,8 +2088,20 @@ mod tests {
             signature: String::new(),
         };
         recover_component_transactions(&root, Some(&catalog.payload.components)).unwrap();
-        assert!(root.join("ocr/bin/tool").is_file());
+        assert_eq!(
+            std::fs::read(root.join("ocr/bin/tool")).unwrap(),
+            b"trusted"
+        );
         assert!(!previous.exists());
+        assert!(!std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.ends_with(".interrupted"))
+            }));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2025,6 +2208,28 @@ mod tests {
         );
         let effective =
             effective_component_descriptors_from_catalogs(&[complete, partial, replacement])
+                .unwrap();
+        let ids = effective
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["office"]);
+
+        // Physical deletion of an old overlay is only cleanup. Even if it is
+        // temporarily locked on Windows and remains on disk, an equal-timestamp
+        // complete catalog is ordered after partial catalogs and is authoritative.
+        let stale_overlay = catalog(
+            "partial",
+            "2026-07-22T00:00:00Z",
+            vec![descriptor("archive")],
+        );
+        let same_time_complete = catalog(
+            "complete",
+            "2026-07-22T00:00:00Z",
+            vec![descriptor("office")],
+        );
+        let effective =
+            effective_component_descriptors_from_catalogs(&[stale_overlay, same_time_complete])
                 .unwrap();
         let ids = effective
             .iter()

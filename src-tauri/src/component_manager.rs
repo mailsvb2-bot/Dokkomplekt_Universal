@@ -131,17 +131,27 @@ fn lock_component_transactions() -> Result<MutexGuard<'static, ()>, String> {
 #[derive(Debug)]
 enum AtomicWriteError {
     BeforeCommit(String),
+    #[cfg(any(unix, test))]
     AfterCommit(String),
 }
 
 impl AtomicWriteError {
     fn authority_committed(&self) -> bool {
-        matches!(self, Self::AfterCommit(_))
+        #[cfg(any(unix, test))]
+        {
+            matches!(self, Self::AfterCommit(_))
+        }
+        #[cfg(not(any(unix, test)))]
+        {
+            false
+        }
     }
 
     fn into_message(self) -> String {
         match self {
-            Self::BeforeCommit(message) | Self::AfterCommit(message) => message,
+            Self::BeforeCommit(message) => message,
+            #[cfg(any(unix, test))]
+            Self::AfterCommit(message) => message,
         }
     }
 }
@@ -1728,6 +1738,7 @@ fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {
     .collect()
 }
 
+#[cfg(any(unix, test))]
 fn sanitized_component_file_mode(unix_mode: Option<u32>) -> u32 {
     // Component archives are signed, but permission metadata still must not be
     // allowed to introduce setuid/setgid/sticky or broader write permissions.

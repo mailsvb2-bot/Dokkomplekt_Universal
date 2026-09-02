@@ -934,7 +934,9 @@ fn process_watcher_source(
     let state = app.state::<AppState>();
     match perform_created_documents_intake(&state, &app, req) {
         Ok(response) => {
-            remove_source_service_notes(&path);
+            // `Ok` also covers attention/setup/ignored outcomes. Service-note cleanup
+            // belongs to the successful source-finalization owner in the intake runtime;
+            // deleting here would erase the fail-closed retry guard for blocked sources.
             let _ = app.emit("document-batch-ready", response.clone());
             let (latest_runtime, control_error) = match control_path.as_deref() {
                 None => (None, Some("Настройки фонового агента не найдены.".to_string())),

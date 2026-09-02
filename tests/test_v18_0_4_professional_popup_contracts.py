@@ -104,13 +104,18 @@ class ProfessionalPopupContracts(unittest.TestCase):
     def test_linked_dates_copy_until_specialist_edits_them(self) -> None:
         profiles = self.read("crates/dokkomplekt-core/src/popup_profiles.rs")
         workspace = self.read("src/components/Workspace.tsx")
+        preflight = self.read("src/components/GenerationPreflightModal.tsx")
+        linked_answers = self.read("src/lib/workflowPromptVisibility.ts")
         editor = self.read("src/components/PopupFieldEditor.tsx")
         self.assertIn("VK_MSE_PROTOCOL_DATE => Some(VK_MSE_COMMISSION_DATE)", profiles)
         self.assertIn(
             "SICK_LEAVE_VK_PROTOCOL_DATE => Some(SICK_LEAVE_VK_COMMISSION_DATE)",
             profiles,
         )
-        self.assertIn("linkedPrompt.linked_to !== prompt.field_id", workspace)
+        self.assertIn("linkedPrompt.linked_to !== prompt.field_id", linked_answers)
+        self.assertIn("linkedCurrent === previousSourceValue", linked_answers)
+        self.assertIn("updateWorkflowAnswers(workflowPrompts", workspace)
+        self.assertIn("updateWorkflowAnswers(props.plan.prompts", preflight)
         self.assertIn("Повторять значение поля", editor)
 
     def test_popup_values_have_final_user_confirmed_priority(self) -> None:

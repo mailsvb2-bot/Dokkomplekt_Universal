@@ -47,6 +47,25 @@ pub enum CreatedDocumentsBatch {
     },
 }
 
+fn source_name_digest(file_name: &std::ffi::OsStr) -> String {
+    let mut hasher = Sha256::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        hasher.update(file_name.as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        for unit in file_name.encode_wide() {
+            hasher.update(unit.to_le_bytes());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    hasher.update(file_name.to_string_lossy().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 pub fn source_service_note_key(source: &Path) -> String {
     const MAX_KEY_CHARS: usize = 120;
     const HASH_CHARS: usize = 12;
@@ -56,11 +75,11 @@ pub fn source_service_note_key(source: &Path) -> String {
     };
     let raw = file_name.to_string_lossy();
     let direct = sanitize_path_component(&raw);
-    if raw.chars().count() <= MAX_KEY_CHARS {
+    if raw.chars().count() <= MAX_KEY_CHARS && direct == raw.as_ref() {
         return direct;
     }
 
-    let digest = hex::encode(Sha256::digest(raw.as_bytes()));
+    let digest = source_name_digest(file_name);
     let hash = &digest[..HASH_CHARS];
     let extension = source
         .extension()
@@ -395,6 +414,19 @@ mod tests {
             attention_file_name(&pdf_key),
             "Иванов.pdf_ТРЕБУЕТ_ВНИМАНИЯ.txt"
         );
+    }
+
+    #[test]
+    fn sanitized_short_service_note_keys_keep_distinct_source_identity() {
+        let canonical = Path::new("C:/watch/A B.docx");
+        let collapsed = Path::new("C:/watch/A  B.docx");
+        let canonical_key = source_service_note_key(canonical);
+        let collapsed_key = source_service_note_key(collapsed);
+        assert_eq!(canonical_key, "A B.docx");
+        assert_ne!(canonical_key, collapsed_key);
+        assert!(collapsed_key.starts_with("A B~"));
+        assert!(collapsed_key.ends_with(".docx"));
+        assert!(collapsed_key.chars().count() <= 120);
     }
 
     #[test]

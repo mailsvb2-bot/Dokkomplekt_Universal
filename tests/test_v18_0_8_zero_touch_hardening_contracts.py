@@ -27,6 +27,7 @@ class V1808ZeroTouchHardeningContracts(unittest.TestCase):
         self.assertIn("&source_note_key,", self.main)
         self.assertIn("legacy_source_service_note_key", self.main)
         self.assertIn("remove_source_service_notes(&source)", self.main)
+        self.assertNotIn("remove_source_service_notes(&path)", self.main)
         self.assertNotIn("attention_file_name(&stem)", self.main)
 
     def test_placeholder_detection_uses_parser_and_supports_escaping(self) -> None:

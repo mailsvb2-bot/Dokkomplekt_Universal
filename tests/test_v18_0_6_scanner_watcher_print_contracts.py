@@ -64,7 +64,9 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
     def test_unreadable_watcher_file_is_visible_and_retry_is_bounded(self) -> None:
         self.assertIn(' — НЕ ПРОЧИТАН.txt', self.main)
         self.assertIn("write_unreadable_source_note", self.main)
-        self.assertIn("unreadable_note_blocks_retry(&unreadable_note, &path, now)", self.main)
+        self.assertIn("unreadable_note_blocks_retry_for_source(&path, now)", self.main)
+        self.assertIn("unreadable_note_path(source)", self.main)
+        self.assertIn("legacy_unreadable_note_path", self.main)
         self.assertIn("retry_after_unix_ms=", self.main)
         self.assertIn('Some("content_change") => true', self.main)
         self.assertIn('Some("timed") =>', self.main)

@@ -331,11 +331,7 @@ fn perform_created_documents_intake(
             &serde_json::to_value(&segmentation).map_err(|error| error.to_string())?,
         )?;
         if !segmentation.zero_touch_allowed {
-            let stem = source
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or("source");
-            let report_path = source.with_file_name(attention_file_name(stem));
+            let report_path = attention_note_path(&source);
             let mut attention = String::from(
                 "КОМПЛЕКТ НЕ СОЗДАН: источник содержит несколько дел или неоднозначные вложения\n\n",
             );
@@ -595,11 +591,7 @@ fn perform_created_documents_intake(
     )?;
 
     if bundle_decision.review_required {
-        let report_name = attention_file_name(source
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("source"));
-        let report_path = source.with_file_name(&report_name);
+        let report_path = attention_note_path(&source);
         let question = bundle_decision
             .question
             .clone()
@@ -711,6 +703,7 @@ fn perform_created_documents_intake(
         .and_then(|s| s.to_str())
         .unwrap_or("source.docx")
         .to_string();
+    let source_note_key = source_service_note_key(&source);
 
     let configured_template_texts: Vec<String> = configured
         .iter()
@@ -736,8 +729,7 @@ fn perform_created_documents_intake(
             .iter()
             .map(|blocker| blocker.field_id.clone())
             .collect::<Vec<_>>();
-        let report_name = attention_file_name(&stem);
-        let report_path = source.with_file_name(&report_name);
+        let report_path = attention_note_path(&source);
         let mut attention = String::from("КОМПЛЕКТ НЕ СОЗДАН: значения требуют подтверждения\n\n");
         for blocker in &quality.blockers {
             attention.push_str(&format!(
@@ -790,7 +782,7 @@ fn perform_created_documents_intake(
         &configured,
         &flags,
         &req.folder_parts,
-        &stem,
+        &source_note_key,
         &file_name,
     );
 
@@ -1483,19 +1475,11 @@ fn perform_created_documents_intake(
                 &source_sha256,
                 &source_finalize,
             );
-            // Remove the canonical note and the legacy 18.0.7 name that included
-            // the source extension (`Иванов.docx_ТРЕБУЕТ_ВНИМАНИЯ.txt`).  This
-            // migration prevents stale “КОМПЛЕКТ НЕ СОЗДАН” files from surviving
-            // after a later successful retry.
-            let _ = std::fs::remove_file(source.with_file_name(attention_file_name(&stem)));
-            let legacy_attention_stem = source
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(&stem);
-            let _ = std::fs::remove_file(
-                source.with_file_name(attention_file_name(legacy_attention_stem)),
-            );
-            let _ = std::fs::remove_file(source.with_file_name(unreadable_note_file_name(&stem)));
+            // Service notes are keyed by the complete source filename so files with
+            // the same stem but different formats cannot overwrite or clear each
+            // other's failures. Remove both the canonical names and pre-18.4.4
+            // stem-only names after this exact source succeeds.
+            remove_source_service_notes(&source);
             let triage_document_ids = outputs
                 .iter()
                 .map(|output| output.document_id.clone())

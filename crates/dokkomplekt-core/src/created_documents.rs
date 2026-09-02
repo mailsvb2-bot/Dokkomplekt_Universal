@@ -5,6 +5,8 @@
 //! rendered set or one attention result; callers perform filesystem side effects.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use std::path::Path;
 
 use crate::{
     build_output_folder_name, missing_output_folder_fields, plan_workflow, render_text_template,
@@ -45,8 +47,56 @@ pub enum CreatedDocumentsBatch {
     },
 }
 
-pub fn attention_file_name(source_stem: &str) -> String {
-    format!("{source_stem}{ATTENTION_SUFFIX}")
+pub fn source_service_note_key(source: &Path) -> String {
+    const MAX_KEY_CHARS: usize = 120;
+    const HASH_CHARS: usize = 12;
+
+    let Some(file_name) = source.file_name() else {
+        return "Документ".into();
+    };
+    let raw = file_name.to_string_lossy();
+    let direct = sanitize_path_component(&raw);
+    if raw.chars().count() <= MAX_KEY_CHARS {
+        return direct;
+    }
+
+    let digest = hex::encode(Sha256::digest(raw.as_bytes()));
+    let hash = &digest[..HASH_CHARS];
+    let extension = source
+        .extension()
+        .map(|value| sanitize_path_component(&value.to_string_lossy()))
+        .unwrap_or_default()
+        .chars()
+        .take(16)
+        .collect::<String>();
+    let suffix = if extension.is_empty() {
+        format!("~{hash}")
+    } else {
+        format!("~{hash}.{extension}")
+    };
+    let prefix_budget = MAX_KEY_CHARS.saturating_sub(suffix.chars().count());
+    let stem = source
+        .file_stem()
+        .map(|value| sanitize_path_component(&value.to_string_lossy()))
+        .unwrap_or_else(|| "Документ".into());
+    let prefix = stem
+        .chars()
+        .take(prefix_budget)
+        .collect::<String>()
+        .trim_end_matches([' ', '.'])
+        .to_string();
+    format!(
+        "{}{suffix}",
+        if prefix.is_empty() {
+            "Документ"
+        } else {
+            &prefix
+        }
+    )
+}
+
+pub fn attention_file_name(source_note_key: &str) -> String {
+    format!("{source_note_key}{ATTENTION_SUFFIX}")
 }
 
 fn dedup_preserve(items: Vec<String>) -> Vec<String> {
@@ -90,7 +140,7 @@ pub fn plan_created_documents_batch(
     documents: &[ConfiguredDocument],
     flags: &WorkflowFlags,
     folder_parts: &[FolderNamePart],
-    source_stem: &str,
+    source_note_key: &str,
     source_file_name: &str,
 ) -> CreatedDocumentsBatch {
     let mut missing = Vec::new();
@@ -173,7 +223,7 @@ pub fn plan_created_documents_batch(
         return CreatedDocumentsBatch::Attention {
             title: ATTENTION_TITLE.to_string(),
             missing,
-            attention_file_name: attention_file_name(source_stem),
+            attention_file_name: attention_file_name(source_note_key),
             attention_text,
         };
     }
@@ -193,6 +243,7 @@ mod tests {
     use crate::domains::medical_semantics::*;
     use crate::{SemanticValue, ValueSource};
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     fn value(v: &str) -> SemanticValue {
         SemanticValue {
@@ -325,6 +376,43 @@ mod tests {
             }
             other => panic!("expected attention, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn service_note_key_keeps_extension_to_separate_same_stem_sources() {
+        let docx = Path::new("C:/watch/Иванов.docx");
+        let pdf = Path::new("C:/watch/Иванов.pdf");
+        let docx_key = source_service_note_key(docx);
+        let pdf_key = source_service_note_key(pdf);
+        assert_eq!(docx_key, "Иванов.docx");
+        assert_eq!(pdf_key, "Иванов.pdf");
+        assert_ne!(docx_key, pdf_key);
+        assert_eq!(
+            attention_file_name(&docx_key),
+            "Иванов.docx_ТРЕБУЕТ_ВНИМАНИЯ.txt"
+        );
+        assert_eq!(
+            attention_file_name(&pdf_key),
+            "Иванов.pdf_ТРЕБУЕТ_ВНИМАНИЯ.txt"
+        );
+    }
+
+    #[test]
+    fn long_service_note_keys_are_bounded_and_collision_resistant() {
+        let common = "а".repeat(150);
+        let first = PathBuf::from(format!("{common}1.docx"));
+        let second = PathBuf::from(format!("{common}2.docx"));
+        let pdf = PathBuf::from(format!("{common}1.pdf"));
+        let first_key = source_service_note_key(&first);
+        let second_key = source_service_note_key(&second);
+        let pdf_key = source_service_note_key(&pdf);
+        assert!(first_key.chars().count() <= 120);
+        assert!(second_key.chars().count() <= 120);
+        assert!(pdf_key.chars().count() <= 120);
+        assert_ne!(first_key, second_key);
+        assert_ne!(first_key, pdf_key);
+        assert!(first_key.ends_with(".docx"));
+        assert!(pdf_key.ends_with(".pdf"));
     }
 
     #[test]

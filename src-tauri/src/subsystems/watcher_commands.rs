@@ -404,8 +404,64 @@ fn remove_autostart_entries() -> (Vec<PathBuf>, Vec<String>) {
     (removed, warnings)
 }
 
-fn unreadable_note_file_name(source_stem: &str) -> String {
-    format!("{source_stem} — НЕ ПРОЧИТАН.txt")
+fn unreadable_note_file_name(source_note_key: &str) -> String {
+    format!("{source_note_key} — НЕ ПРОЧИТАН.txt")
+}
+
+fn legacy_source_service_note_key(source: &Path) -> String {
+    source
+        .file_stem()
+        .map(|value| sanitize_path_component(&value.to_string_lossy()))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Документ".into())
+}
+
+fn attention_note_path(source: &Path) -> PathBuf {
+    source.with_file_name(attention_file_name(&source_service_note_key(source)))
+}
+
+fn unreadable_note_path(source: &Path) -> PathBuf {
+    source.with_file_name(unreadable_note_file_name(&source_service_note_key(source)))
+}
+
+fn legacy_attention_note_path(source: &Path) -> PathBuf {
+    source.with_file_name(attention_file_name(&legacy_source_service_note_key(source)))
+}
+
+fn legacy_unreadable_note_path(source: &Path) -> PathBuf {
+    source.with_file_name(unreadable_note_file_name(&legacy_source_service_note_key(source)))
+}
+
+fn has_supported_same_stem_sibling(source: &Path) -> bool {
+    let Some(parent) = source.parent() else {
+        return false;
+    };
+    let source_stem = source.file_stem();
+    std::fs::read_dir(parent)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .any(|candidate| {
+            candidate != source
+                && candidate.file_stem() == source_stem
+                && universal_intake::is_supported_path(&candidate)
+        })
+}
+
+fn remove_source_service_notes(source: &Path) {
+    for note in [attention_note_path(source), unreadable_note_path(source)] {
+        let _ = std::fs::remove_file(note);
+    }
+    if has_supported_same_stem_sibling(source) {
+        return;
+    }
+    for note in [legacy_attention_note_path(source), legacy_unreadable_note_path(source)] {
+        if note_matches_source_content(&note, source) {
+            let _ = std::fs::remove_file(note);
+        }
+    }
 }
 
 const NOTE_SOURCE_SHA256_PREFIX: &str = "source_sha256=";
@@ -600,6 +656,50 @@ fn unreadable_note_blocks_retry(
     }
 }
 
+
+fn migrate_matching_legacy_note(
+    source: &Path,
+    exact: &Path,
+    legacy: &Path,
+) -> Option<PathBuf> {
+    if exact.exists() {
+        return Some(exact.to_path_buf());
+    }
+    // A stem-only note from an older release is ambiguous when two supported
+    // sources share that stem. Do not let it control either exact source. Each
+    // file will be retried once and receive its own filename-scoped note.
+    if has_supported_same_stem_sibling(source) {
+        return None;
+    }
+    if legacy == exact || !note_matches_source_content(legacy, source) {
+        return None;
+    }
+    if std::fs::rename(legacy, exact).is_ok() {
+        Some(exact.to_path_buf())
+    } else {
+        // A migration failure must not turn a known source error into an
+        // unbounded retry loop. The legacy note remains a conservative guard.
+        Some(legacy.to_path_buf())
+    }
+}
+
+fn attention_note_blocks_retry_for_source(source: &Path) -> bool {
+    let exact = attention_note_path(source);
+    let legacy = legacy_attention_note_path(source);
+    migrate_matching_legacy_note(source, &exact, &legacy)
+        .is_some_and(|path| note_matches_source_content(&path, source))
+}
+
+fn unreadable_note_blocks_retry_for_source(
+    source: &Path,
+    now: std::time::SystemTime,
+) -> bool {
+    let exact = unreadable_note_path(source);
+    let legacy = legacy_unreadable_note_path(source);
+    migrate_matching_legacy_note(source, &exact, &legacy)
+        .is_some_and(|path| unreadable_note_blocks_retry(&path, source, now))
+}
+
 #[derive(Debug, Clone)]
 struct FileStabilityObservation {
     size_bytes: u64,
@@ -665,11 +765,7 @@ fn write_unreadable_source_note_with_classifier(
     now: std::time::SystemTime,
     classifier: fn(&str) -> (&'static str, UnreadableRetryPolicy),
 ) -> Result<PathBuf, String> {
-    let stem = source
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Документ");
-    let note_path = source.with_file_name(unreadable_note_file_name(stem));
+    let note_path = unreadable_note_path(source);
     let safe_error = error
         .replace(['\r', '\n', '\t'], " ")
         .split_whitespace()
@@ -838,9 +934,7 @@ fn process_watcher_source(
     let state = app.state::<AppState>();
     match perform_created_documents_intake(&state, &app, req) {
         Ok(response) => {
-            let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or_default();
-            let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
-            let _ = std::fs::remove_file(&unreadable_note);
+            remove_source_service_notes(&path);
             let _ = app.emit("document-batch-ready", response.clone());
             let (latest_runtime, control_error) = match control_path.as_deref() {
                 None => (None, Some("Настройки фонового агента не найдены.".to_string())),
@@ -1171,11 +1265,8 @@ fn start_watcher_thread(
                 {
                     continue;
                 }
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-                let attention_note = path.with_file_name(attention_file_name(stem));
-                let unreadable_note = path.with_file_name(unreadable_note_file_name(stem));
-                if note_matches_source_content(&attention_note, &path)
-                    || unreadable_note_blocks_retry(&unreadable_note, &path, now)
+                if attention_note_blocks_retry_for_source(&path)
+                    || unreadable_note_blocks_retry_for_source(&path, now)
                 {
                     pending_paths.remove(&path);
                     stability_observations.remove(&path);
@@ -1622,6 +1713,45 @@ mod watcher_handoff_tests {
         };
         assert_ne!(runtime.watch_folder, runtime.output_root);
         assert_eq!(runtime.output_root, "D:/Ready");
+    }
+
+    #[test]
+    fn watcher_service_note_names_separate_same_stem_source_formats() {
+        let docx = Path::new("C:/watch/Иванов.docx");
+        let pdf = Path::new("C:/watch/Иванов.pdf");
+        assert_ne!(attention_note_path(docx), attention_note_path(pdf));
+        assert_ne!(unreadable_note_path(docx), unreadable_note_path(pdf));
+        assert!(attention_note_path(docx)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.starts_with("Иванов.docx")));
+        assert!(unreadable_note_path(pdf)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.starts_with("Иванов.pdf")));
+    }
+
+    #[test]
+    fn ambiguous_legacy_stem_note_is_not_claimed_when_two_sources_share_a_stem() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-note-collision-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create collision root");
+        let docx = root.join("Иванов.docx");
+        let pdf = root.join("Иванов.pdf");
+        std::fs::write(&docx, b"docx").expect("write docx source");
+        std::fs::write(&pdf, b"pdf").expect("write pdf source");
+        assert!(has_supported_same_stem_sibling(&docx));
+        assert!(has_supported_same_stem_sibling(&pdf));
+        let legacy = legacy_attention_note_path(&docx);
+        let exact = attention_note_path(&docx);
+        std::fs::write(&legacy, b"legacy ambiguous note").expect("write legacy note");
+        assert!(migrate_matching_legacy_note(&docx, &exact, &legacy).is_none());
+        assert!(legacy.exists());
+        assert!(!exact.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -21,11 +21,13 @@ class V1808ZeroTouchHardeningContracts(unittest.TestCase):
         cls.morph = source("crates/dokkomplekt-morph/src/lib.rs")
         cls.intake = source("src-tauri/src/universal_intake.rs")
 
-    def test_attention_report_uses_canonical_source_stem(self) -> None:
-        self.assertIn("let report_name = attention_file_name(&stem);", self.main)
-        self.assertNotIn("let report_name = attention_file_name(&file_name);", self.main)
-        self.assertIn("legacy_attention_stem", self.main)
-        self.assertIn("attention_file_name(legacy_attention_stem)", self.main)
+    def test_attention_report_uses_collision_safe_source_filename_namespace(self) -> None:
+        self.assertIn("source_service_note_key", self.created_documents)
+        self.assertIn("attention_note_path(&source)", self.main)
+        self.assertIn("&source_note_key,", self.main)
+        self.assertIn("legacy_source_service_note_key", self.main)
+        self.assertIn("remove_source_service_notes(&source)", self.main)
+        self.assertNotIn("attention_file_name(&stem)", self.main)
 
     def test_placeholder_detection_uses_parser_and_supports_escaping(self) -> None:
         self.assertNotIn("fn has_unfilled_placeholder", self.created_documents)

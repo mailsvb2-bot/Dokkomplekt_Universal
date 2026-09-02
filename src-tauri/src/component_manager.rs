@@ -1096,23 +1096,47 @@ fn catalog_published_at(catalog: &SignedComponentsCatalog) -> Result<OffsetDateT
     .map_err(|_| "Некорректный published_at components catalog".to_string())
 }
 
-fn guard_catalog_not_older(root: &Path, incoming: &SignedComponentsCatalog) -> Result<(), String> {
+fn guard_catalog_sequence(
+    current: &[SignedComponentsCatalog],
+    incoming: &SignedComponentsCatalog,
+) -> Result<(), String> {
     let incoming_at = catalog_published_at(incoming)?;
-    if !catalog_cache_exists(root)? {
-        return Ok(());
-    }
-    let current = read_cached_catalogs(root)?;
     let current_at = current
         .iter()
         .map(catalog_published_at)
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .max()
-        .ok_or_else(|| "Кэш подписанных каталогов пуст".to_string())?;
+        .max();
+    let Some(current_at) = current_at else {
+        return Ok(());
+    };
     if incoming_at < current_at {
         return Err("Подписанный каталог старее уже принятого; rollback отклонён".into());
     }
+    if incoming_at == current_at {
+        let is_idempotent_replay = current.iter().any(|catalog| {
+            catalog_published_at(catalog).ok() == Some(incoming_at)
+                && catalog
+                    .signature_alg
+                    .eq_ignore_ascii_case(&incoming.signature_alg)
+                && catalog.signature == incoming.signature
+        });
+        if !is_idempotent_replay {
+            return Err(
+                "Другой подписанный каталог уже принят с тем же published_at; неоднозначная authority-версия отклонена"
+                    .into(),
+            );
+        }
+    }
     Ok(())
+}
+
+fn guard_catalog_not_older(root: &Path, incoming: &SignedComponentsCatalog) -> Result<(), String> {
+    if !catalog_cache_exists(root)? {
+        return Ok(());
+    }
+    let current = read_cached_catalogs(root)?;
+    guard_catalog_sequence(&current, incoming)
 }
 
 fn guard_target_matches_platform(descriptor: &ComponentDescriptor) -> Result<(), String> {
@@ -2602,6 +2626,45 @@ mod tests {
             stale,
             false,
         ));
+    }
+
+    #[test]
+    fn catalog_sequence_rejects_distinct_equal_timestamp_but_allows_idempotent_replay() {
+        use super::{guard_catalog_sequence, ComponentsCatalogPayload, SignedComponentsCatalog};
+
+        fn catalog(scope: &str, published_at: &str, signature: &str) -> SignedComponentsCatalog {
+            SignedComponentsCatalog {
+                payload: ComponentsCatalogPayload {
+                    schema: 1,
+                    app_min_version: env!("CARGO_PKG_VERSION").into(),
+                    published_at: published_at.into(),
+                    catalog_scope: Some(scope.into()),
+                    allowed_hosts: vec![],
+                    components: vec![],
+                },
+                signature_alg: "Ed25519".into(),
+                signature: signature.into(),
+            }
+        }
+
+        let current = catalog("complete", "2026-09-02T12:00:00Z", "signature-a");
+        assert!(guard_catalog_sequence(std::slice::from_ref(&current), &current).is_ok());
+
+        let conflicting_partial = catalog("partial", "2026-09-02T12:00:00Z", "signature-b");
+        let error = guard_catalog_sequence(std::slice::from_ref(&current), &conflicting_partial)
+            .unwrap_err();
+        assert!(error.contains("тем же published_at"));
+
+        let conflicting_complete = catalog("complete", "2026-09-02T12:00:00Z", "signature-c");
+        assert!(
+            guard_catalog_sequence(std::slice::from_ref(&current), &conflicting_complete,).is_err()
+        );
+
+        let newer_partial = catalog("partial", "2026-09-02T12:00:01Z", "signature-d");
+        assert!(guard_catalog_sequence(std::slice::from_ref(&current), &newer_partial).is_ok());
+
+        let older = catalog("complete", "2026-09-02T11:59:59Z", "signature-e");
+        assert!(guard_catalog_sequence(std::slice::from_ref(&current), &older).is_err());
     }
 
     #[test]

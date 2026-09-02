@@ -257,6 +257,39 @@ function Invoke-UiElementPhysically {
   throw 'UI element did not become physically actionable within 5 seconds.'
 }
 
+function Invoke-UiActionFromProbe {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$ActionProbe,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    try {
+      $action = & $ActionProbe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $action = $null
+    }
+    if ($null -eq $action) {
+      Start-Sleep -Milliseconds 100
+      continue
+    }
+    try {
+      # Never keep polling a stale WebView2 AutomationElement. If React remounts
+      # the button between discovery and invocation, resolve a fresh live element
+      # from the action probe and retry within the same bounded action deadline.
+      Invoke-UiElement -Element $action
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) {
+        throw "UI smoke timeout invoking live action: $Description. Last error: $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "UI smoke timeout invoking live action: $Description"
+}
+
 function Invoke-UiActionWithObservedTransition {
   param(
     [Parameter(Mandatory = $true)][scriptblock]$ActionProbe,
@@ -265,8 +298,7 @@ function Invoke-UiActionWithObservedTransition {
     [Parameter(Mandatory = $true)][string]$TransitionDescription,
     [int]$TransitionSeconds = 5
   )
-  $action = Wait-UiElement -Description $Description -TimeoutSeconds 30 -Probe $ActionProbe
-  Invoke-UiElement -Element $action
+  Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description
 
   $deadline = [DateTime]::UtcNow.AddSeconds($TransitionSeconds)
   do {
@@ -836,23 +868,38 @@ if ($adversarial) {
 # End-to-end installed generation proof: select the real created button, open the
 # real preflight, fill deterministic folder fields when the backend asks for them,
 # click Create, then require a physical readable DOCX in the Desktop output subfolder.
-$selectAllButton = Wait-UiElement -Description 'Выбрать всё button' -TimeoutSeconds 30 -Probe {
-  Find-ReadyButtonByNames -Root $appWindow -Names @('Выбрать всё')
-}
-Invoke-UiElement -Element $selectAllButton
+$generationAction = Invoke-UiActionWithObservedTransition `
+  -Description 'Выбрать всё button' `
+  -TransitionDescription 'generation action for one selected document' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать всё')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  }
+if ($null -eq $generationAction) { throw 'Selecting all documents did not expose the one-document generation action.' }
 
-$preflightButton = Wait-UiElement -Description 'generation action for one selected document' -TimeoutSeconds 40 -Probe {
-  Find-ReadyButtonByNames -Root $appWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
-}
-Invoke-UiElement -Element $preflightButton
-
-$preflightTitle = Wait-UiElement -Description 'Проверка перед созданием dialog' -TimeoutSeconds 30 -Probe {
-  $condition = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    'Проверка перед созданием'
-  )
-  $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-}
+$preflightTitle = Invoke-UiActionWithObservedTransition `
+  -Description 'generation action for one selected document' `
+  -TransitionDescription 'Проверка перед созданием dialog' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Проверка перед созданием'
+    )
+    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
 if ($null -eq $preflightTitle) { throw 'Generation action did not open the real preflight.' }
 
 $smokeNumber = "WIN-SMOKE-$PID"

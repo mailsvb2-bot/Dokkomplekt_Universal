@@ -27,6 +27,12 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
     assert "Invoke-UiActionWithObservedTransition" in source
+    assert "function Invoke-UiActionFromProbe" in source
+    assert "Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description" in source
+    assert "-Description 'Выбрать всё button'" in source
+    assert "-TransitionDescription 'generation action for one selected document'" in source
+    assert "Selecting all documents did not expose the one-document generation action." in source
+    assert "$selectAllButton = Wait-UiElement" not in source
     assert "$actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)" in source
     assert "remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click" in source
     assert "remains actionable; retrying once with physical input" in source

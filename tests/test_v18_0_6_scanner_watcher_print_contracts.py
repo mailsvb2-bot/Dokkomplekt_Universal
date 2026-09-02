@@ -21,6 +21,7 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         cls.workspace = (ROOT / "src/components/Workspace.tsx").read_text(encoding="utf-8")
         cls.guided_modal = (ROOT / "src/components/GuidedScannerModal.tsx").read_text(encoding="utf-8")
         cls.runtime_validation = (ROOT / "src/lib/runtimeValidation.ts").read_text(encoding="utf-8")
+        cls.created_documents = (ROOT / "crates/dokkomplekt-core/src/created_documents.rs").read_text(encoding="utf-8")
 
     def test_short_scanner_keywords_use_token_boundaries(self) -> None:
         self.assertIn("containsTokenSequence", self.suggestions)
@@ -62,9 +63,13 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn('let _ = &capture;', self.main)
 
     def test_unreadable_watcher_file_is_visible_and_retry_is_bounded(self) -> None:
-        self.assertIn(' — НЕ ПРОЧИТАН.txt', self.main)
+        self.assertIn('pub const UNREADABLE_SUFFIX: &str = " — НЕ ПРОЧИТАН.txt"', self.created_documents)
+        self.assertIn("unreadable_note_file_name", self.main)
+        self.assertIn("service_note_key_budget_units", self.created_documents)
         self.assertIn("write_unreadable_source_note", self.main)
-        self.assertIn("unreadable_note_blocks_retry(&unreadable_note, &path, now)", self.main)
+        self.assertIn("unreadable_note_blocks_retry_for_source(&path, now)", self.main)
+        self.assertIn("unreadable_note_path(source)", self.main)
+        self.assertIn("legacy_unreadable_note_path", self.main)
         self.assertIn("retry_after_unix_ms=", self.main)
         self.assertIn('Some("content_change") => true', self.main)
         self.assertIn('Some("timed") =>', self.main)

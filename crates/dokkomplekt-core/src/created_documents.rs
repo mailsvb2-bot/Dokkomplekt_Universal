@@ -5,6 +5,8 @@
 //! rendered set or one attention result; callers perform filesystem side effects.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use std::path::Path;
 
 use crate::{
     build_output_folder_name, missing_output_folder_fields, plan_workflow, render_text_template,
@@ -13,7 +15,9 @@ use crate::{
 };
 
 pub const ATTENTION_SUFFIX: &str = "_ТРЕБУЕТ_ВНИМАНИЯ.txt";
+pub const UNREADABLE_SUFFIX: &str = " — НЕ ПРОЧИТАН.txt";
 pub const ATTENTION_TITLE: &str = "НЕ ХВАТАЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ";
+const MAX_SERVICE_NOTE_COMPONENT_UNITS: usize = 240;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlannedOutput {
@@ -45,8 +49,115 @@ pub enum CreatedDocumentsBatch {
     },
 }
 
-pub fn attention_file_name(source_stem: &str) -> String {
-    format!("{source_stem}{ATTENTION_SUFFIX}")
+fn source_name_digest(file_name: &std::ffi::OsStr) -> String {
+    let mut hasher = Sha256::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        hasher.update(file_name.as_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        for unit in file_name.encode_wide() {
+            hasher.update(unit.to_le_bytes());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    hasher.update(file_name.to_string_lossy().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn service_char_units(ch: char) -> usize {
+    #[cfg(unix)]
+    {
+        ch.len_utf8()
+    }
+    #[cfg(windows)]
+    {
+        ch.len_utf16()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        1
+    }
+}
+
+fn service_component_units(value: &str) -> usize {
+    value.chars().map(service_char_units).sum()
+}
+
+fn truncate_to_service_units(value: &str, max_units: usize) -> String {
+    let mut used = 0usize;
+    value
+        .chars()
+        .take_while(|ch| {
+            let next = used.saturating_add(service_char_units(*ch));
+            if next > max_units {
+                false
+            } else {
+                used = next;
+                true
+            }
+        })
+        .collect()
+}
+
+fn service_note_key_budget_units() -> usize {
+    let suffix_units =
+        service_component_units(ATTENTION_SUFFIX).max(service_component_units(UNREADABLE_SUFFIX));
+    MAX_SERVICE_NOTE_COMPONENT_UNITS.saturating_sub(suffix_units)
+}
+
+pub fn source_service_note_key(source: &Path) -> String {
+    const HASH_CHARS: usize = 12;
+
+    let Some(file_name) = source.file_name() else {
+        return "Документ".into();
+    };
+    let raw = file_name.to_string_lossy();
+    let direct = sanitize_path_component(&raw);
+    let key_budget = service_note_key_budget_units();
+    if direct == raw.as_ref() && service_component_units(&direct) <= key_budget {
+        return direct;
+    }
+
+    let digest = source_name_digest(file_name);
+    let hash = &digest[..HASH_CHARS];
+    let extension = source
+        .extension()
+        .map(|value| sanitize_path_component(&value.to_string_lossy()))
+        .unwrap_or_default();
+    let extension = truncate_to_service_units(&extension, 24);
+    let suffix = if extension.is_empty() {
+        format!("~{hash}")
+    } else {
+        format!("~{hash}.{extension}")
+    };
+    let prefix_budget = key_budget.saturating_sub(service_component_units(&suffix));
+    let stem = source
+        .file_stem()
+        .map(|value| sanitize_path_component(&value.to_string_lossy()))
+        .unwrap_or_else(|| "Документ".into());
+    let prefix = truncate_to_service_units(&stem, prefix_budget)
+        .trim_end_matches([' ', '.'])
+        .to_string();
+    format!(
+        "{}{suffix}",
+        if prefix.is_empty() {
+            "Документ"
+        } else {
+            &prefix
+        }
+    )
+}
+
+pub fn attention_file_name(source_note_key: &str) -> String {
+    format!("{source_note_key}{ATTENTION_SUFFIX}")
+}
+
+pub fn unreadable_note_file_name(source_note_key: &str) -> String {
+    format!("{source_note_key}{UNREADABLE_SUFFIX}")
 }
 
 fn dedup_preserve(items: Vec<String>) -> Vec<String> {
@@ -90,7 +201,7 @@ pub fn plan_created_documents_batch(
     documents: &[ConfiguredDocument],
     flags: &WorkflowFlags,
     folder_parts: &[FolderNamePart],
-    source_stem: &str,
+    source_note_key: &str,
     source_file_name: &str,
 ) -> CreatedDocumentsBatch {
     let mut missing = Vec::new();
@@ -173,7 +284,7 @@ pub fn plan_created_documents_batch(
         return CreatedDocumentsBatch::Attention {
             title: ATTENTION_TITLE.to_string(),
             missing,
-            attention_file_name: attention_file_name(source_stem),
+            attention_file_name: attention_file_name(source_note_key),
             attention_text,
         };
     }
@@ -193,6 +304,7 @@ mod tests {
     use crate::domains::medical_semantics::*;
     use crate::{SemanticValue, ValueSource};
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     fn value(v: &str) -> SemanticValue {
         SemanticValue {
@@ -325,6 +437,81 @@ mod tests {
             }
             other => panic!("expected attention, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn service_note_key_keeps_extension_to_separate_same_stem_sources() {
+        let docx = Path::new("C:/watch/Иванов.docx");
+        let pdf = Path::new("C:/watch/Иванов.pdf");
+        let docx_key = source_service_note_key(docx);
+        let pdf_key = source_service_note_key(pdf);
+        assert_eq!(docx_key, "Иванов.docx");
+        assert_eq!(pdf_key, "Иванов.pdf");
+        assert_ne!(docx_key, pdf_key);
+        assert_eq!(
+            attention_file_name(&docx_key),
+            "Иванов.docx_ТРЕБУЕТ_ВНИМАНИЯ.txt"
+        );
+        assert_eq!(
+            attention_file_name(&pdf_key),
+            "Иванов.pdf_ТРЕБУЕТ_ВНИМАНИЯ.txt"
+        );
+    }
+
+    #[test]
+    fn sanitized_short_service_note_keys_keep_distinct_source_identity() {
+        let canonical = Path::new("C:/watch/A B.docx");
+        let collapsed = Path::new("C:/watch/A  B.docx");
+        let canonical_key = source_service_note_key(canonical);
+        let collapsed_key = source_service_note_key(collapsed);
+        assert_eq!(canonical_key, "A B.docx");
+        assert_ne!(canonical_key, collapsed_key);
+        assert!(collapsed_key.starts_with("A B~"));
+        assert!(collapsed_key.ends_with(".docx"));
+        assert!(collapsed_key.chars().count() <= 120);
+    }
+
+    #[test]
+    fn multibyte_service_note_names_fit_the_final_component_budget() {
+        let source = PathBuf::from(format!("{}.docx", "я".repeat(111)));
+        let key = source_service_note_key(&source);
+        let attention = attention_file_name(&key);
+        let unreadable = unreadable_note_file_name(&key);
+        assert!(
+            service_component_units(&attention) <= MAX_SERVICE_NOTE_COMPONENT_UNITS,
+            "attention units={} key={key:?} name={attention:?}",
+            service_component_units(&attention)
+        );
+        assert!(
+            service_component_units(&unreadable) <= MAX_SERVICE_NOTE_COMPONENT_UNITS,
+            "unreadable units={} key={key:?} name={unreadable:?}",
+            service_component_units(&unreadable)
+        );
+    }
+
+    #[test]
+    fn long_service_note_keys_are_bounded_and_collision_resistant() {
+        let common = "а".repeat(150);
+        let first = PathBuf::from(format!("{common}1.docx"));
+        let second = PathBuf::from(format!("{common}2.docx"));
+        let pdf = PathBuf::from(format!("{common}1.pdf"));
+        let first_key = source_service_note_key(&first);
+        let second_key = source_service_note_key(&second);
+        let pdf_key = source_service_note_key(&pdf);
+        for key in [&first_key, &second_key, &pdf_key] {
+            assert!(
+                service_component_units(&attention_file_name(key))
+                    <= MAX_SERVICE_NOTE_COMPONENT_UNITS
+            );
+            assert!(
+                service_component_units(&unreadable_note_file_name(key))
+                    <= MAX_SERVICE_NOTE_COMPONENT_UNITS
+            );
+        }
+        assert_ne!(first_key, second_key);
+        assert_ne!(first_key, pdf_key);
+        assert!(first_key.ends_with(".docx"));
+        assert!(pdf_key.ends_with(".pdf"));
     }
 
     #[test]

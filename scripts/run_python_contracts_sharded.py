@@ -109,7 +109,12 @@ def run_module(path: Path, timeout_seconds: int) -> ModuleResult:
     skipped_matches = SKIPPED_RE.findall(output)
     passed = sum(int(value) for value in passed_matches)
     skipped = sum(int(value) for value in skipped_matches)
-    result = "passed" if process.returncode == 0 and passed > 0 else "failed"
+    # Pytest return code is authoritative. A shard may legitimately contain only
+    # platform-gated tests (for example Windows reboot evidence on Linux), in which
+    # case pytest returns 0 with skipped > 0 and passed == 0. Treating that as a
+    # failure makes the cross-platform contour lie. Empty collection still returns
+    # pytest code 5, and real assertion/collection failures remain non-zero.
+    result = "passed" if process.returncode == 0 else "failed"
     return ModuleResult(
         module=path.relative_to(ROOT).as_posix(),
         result=result,

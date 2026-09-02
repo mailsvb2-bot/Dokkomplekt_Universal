@@ -9,6 +9,7 @@ import type {
   SemanticExtractResult,
   WorkflowPlan,
 } from '../lib/types';
+import { activeWorkflowPrompts, updateWorkflowAnswers } from '../lib/workflowPromptVisibility';
 import { AdditionalMaterialsPanel } from './AdditionalMaterialsPanel';
 
 interface ParsedSourceSummary {
@@ -128,7 +129,8 @@ export function Workspace(props: WorkspaceProps) {
     : null;
   const reviewEvidence = reviewField?.evidence?.[0];
   const sourceReady = Boolean(props.sourceFileName || props.parsed);
-  const prompts = props.plan?.prompts ?? [];
+  const workflowPrompts = props.plan?.prompts ?? [];
+  const prompts = activeWorkflowPrompts(workflowPrompts, props.answers);
   const planReady = !props.planLoading && props.plan !== null;
   const reviewCount = props.semantic?.fields.filter(field => field.confidence < .95).length ?? 0;
 
@@ -339,16 +341,7 @@ export function Workspace(props: WorkspaceProps) {
                   skipped={Boolean(props.skippedAnswers[prompt.field_id])}
                   onChange={(value) => {
                     props.setSkippedAnswers((previous) => ({ ...previous, [prompt.field_id]: false }));
-                    props.setAnswers((previous) => {
-                      const previousSourceValue = previous[prompt.field_id] ?? prompt.current_value ?? '';
-                      const next = { ...previous, [prompt.field_id]: value };
-                      for (const linkedPrompt of prompts) {
-                        if (linkedPrompt.linked_to !== prompt.field_id) continue;
-                        const linkedCurrent = previous[linkedPrompt.field_id] ?? linkedPrompt.current_value ?? '';
-                        if (!linkedCurrent || linkedCurrent === previousSourceValue) next[linkedPrompt.field_id] = value;
-                      }
-                      return next;
-                    });
+                    props.setAnswers((previous) => updateWorkflowAnswers(workflowPrompts, previous, prompt, value));
                   }}
                   onSkipChange={(skipped) => props.setSkippedAnswers((previous) => ({
                     ...previous,

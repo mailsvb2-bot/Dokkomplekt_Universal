@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useEffect } from 'react';
 import type { DocumentTemplateSpec, PromptSpec, WorkflowPlan } from '../lib/types';
-import { activeWorkflowPrompts } from '../lib/workflowPromptVisibility';
+import { activeWorkflowPrompts, updateWorkflowAnswers } from '../lib/workflowPromptVisibility';
 import { WorkflowPromptField } from './Workspace';
 
 const INTERNAL_DIARY_RUNTIME_FIELDS = new Set([
@@ -53,19 +53,7 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
 
   function changePrompt(prompt: PromptSpec, value: string) {
     props.setSkippedAnswers((previous) => ({ ...previous, [prompt.field_id]: false }));
-    props.setAnswers((previous) => {
-      const previousSourceValue = previous[prompt.field_id] ?? prompt.current_value ?? '';
-      const next = { ...previous, [prompt.field_id]: value };
-      for (const linkedPrompt of prompts) {
-        if (linkedPrompt.linked_to !== prompt.field_id) continue;
-        // A linked field whose source is Yes/No is a generic visibility dependency. It must not
-        // receive the literal source value ("Да"/"Нет"). Date-to-date links keep copy behavior.
-        if (prompt.input_kind === 'yes_no') continue;
-        const linkedCurrent = previous[linkedPrompt.field_id] ?? linkedPrompt.current_value ?? '';
-        if (!linkedCurrent || linkedCurrent === previousSourceValue) next[linkedPrompt.field_id] = value;
-      }
-      return next;
-    });
+    props.setAnswers((previous) => updateWorkflowAnswers(props.plan.prompts, previous, prompt, value));
   }
 
   return (

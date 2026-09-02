@@ -97,6 +97,7 @@ def test_dynamic_sick_leave_epicrisis_is_donor_owned_and_not_a_frontend_second_b
     epicrisis = read("crates/dokkomplekt-core/src/diary_epicrisis.rs")
     records = read("crates/dokkomplekt-core/src/diary_professional_records.rs")
     preflight = read("src/components/GenerationPreflightModal.tsx")
+    linked_answers = read("src/lib/workflowPromptVisibility.ts")
 
     assert "base.checked_add_signed(Duration::days(10))" in epicrisis
     assert "donor_non_working_day" in epicrisis
@@ -106,6 +107,8 @@ def test_dynamic_sick_leave_epicrisis_is_donor_owned_and_not_a_frontend_second_b
     assert "Лечащий врач ____________________" in epicrisis
     assert "merge_dynamic_epicrises" in records
     assert 'SemanticAtom::Text("dynamic_epicrisis".into())' in records
-    assert "linked field whose source is Yes/No is a generic visibility dependency" in preflight
-    assert "medical.diary_sick_leave_epicrisis" not in preflight
-    assert "medical.diary_treatment_correction" not in preflight
+    assert "source?.input_kind !== 'yes_no'" in linked_answers
+    assert "if (prompt.input_kind === 'yes_no') continue" in linked_answers
+    for frontend_owner in (preflight, linked_answers):
+        assert "medical.diary_sick_leave_epicrisis" not in frontend_owner
+        assert "medical.diary_treatment_correction" not in frontend_owner

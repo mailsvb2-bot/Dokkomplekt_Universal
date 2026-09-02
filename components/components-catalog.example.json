@@ -3,6 +3,7 @@
     "schema": 1,
     "app_min_version": "18.3.0",
     "published_at": "2026-07-20T00:00:00Z",
+    "catalog_scope": "partial",
     "allowed_hosts": ["REPLACE_WITH_PUBLIC_DOWNLOAD_HOST"],
     "components": [
       {

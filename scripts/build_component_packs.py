@@ -222,6 +222,8 @@ def main() -> int:
     selected = [item.strip() for item in args.components.split(",") if item.strip()]
     if not selected or any(not SAFE_COMPONENT.fullmatch(item) or item not in COMPONENTS for item in selected):
         raise ValueError("--components contains an unknown component")
+    if len(selected) != len(set(selected)):
+        raise ValueError("--components contains duplicate component ids")
     base_url = args.base_url.strip().rstrip("/")
     parsed = None
     if base_url:
@@ -254,6 +256,7 @@ def main() -> int:
         "schema": 1,
         "app_min_version": args.app_min_version,
         "published_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "catalog_scope": "complete" if set(selected) == set(COMPONENTS) else "partial",
         "allowed_hosts": [parsed.hostname.lower()] if parsed and parsed.hostname else [],
         "components": sorted(descriptors, key=lambda item: (item["target"], item["id"])),
     }

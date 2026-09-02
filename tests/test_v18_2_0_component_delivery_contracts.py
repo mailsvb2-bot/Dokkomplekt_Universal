@@ -150,6 +150,7 @@ class ComponentDeliveryContracts(unittest.TestCase):
                 self.assertEqual(manifest["target"], target)
             catalog = json.loads(catalog_path.read_text("utf-8"))
             self.assertRegex(catalog["payload"]["published_at"], r"^\d{4}-\d{2}-\d{2}T")
+            self.assertEqual(catalog["payload"]["catalog_scope"], "partial")
             descriptor = catalog["payload"]["components"][0]
             self.assertEqual(descriptor["archive_name"], pack.name)
             self.assertEqual(descriptor["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
@@ -182,6 +183,11 @@ class ComponentDeliveryContracts(unittest.TestCase):
             "component_archive_name",
             "stage_verified_component_archive",
             "commit_staged_offline_components",
+            "catalog_scope",
+            "COMPONENT_CATALOG_OVERLAYS_DIR",
+            "read_effective_component_descriptors",
+            "persist_verified_catalog",
+            "resolve_component_tool_candidate",
             "SHA-256 локального компонента",
             "Содержимое офлайн-комплекта не совпадает",
         ]:
@@ -230,6 +236,7 @@ class ComponentDeliveryContracts(unittest.TestCase):
             subprocess.run(command, cwd=ROOT, env=env, check=True, capture_output=True, text=True)
             catalog = json.loads((output_dir / "components-catalog.json").read_text("utf-8"))
             self.assertEqual(catalog["payload"]["allowed_hosts"], [])
+            self.assertEqual(catalog["payload"]["catalog_scope"], "partial")
             descriptor = catalog["payload"]["components"][0]
             self.assertEqual(descriptor["url"], "")
             self.assertEqual(descriptor["archive_name"], f"archive-{target}.zip")

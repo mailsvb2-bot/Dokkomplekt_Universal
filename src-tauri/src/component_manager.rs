@@ -24,6 +24,8 @@ const COMPONENT_CATALOG_SCHEMA: u32 = 1;
 const COMPONENT_STATUS_SCHEMA: u32 = 1;
 const COMPONENT_FILES_SCHEMA: u32 = 1;
 const MAX_COMPONENT_CATALOG_BYTES: u64 = 256 * 1024;
+const MAX_COMPONENT_CATALOG_OVERLAYS: usize = 64;
+const COMPONENT_CATALOG_OVERLAYS_DIR: &str = "catalog-overlays";
 const MAX_COMPONENT_ARCHIVE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_COMPONENT_ENTRIES: usize = 50_000;
 const MAX_COMPONENT_UNPACKED_BYTES: u64 = 12 * 1024 * 1024 * 1024;
@@ -57,6 +59,11 @@ pub(crate) struct ComponentsCatalogPayload {
     pub schema: u32,
     pub app_min_version: String,
     pub published_at: String,
+    /// `complete` is authoritative for the whole component set; `partial` only
+    /// overlays descriptors it contains. `None` preserves signature compatibility
+    /// with legacy schema-1 catalogs and is interpreted as `complete`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_scope: Option<String>,
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
     pub components: Vec<ComponentDescriptor>,
@@ -156,11 +163,9 @@ pub(crate) fn resolve_trusted_component_tool(
     executable_name: &str,
 ) -> Option<PathBuf> {
     let root = user_components_dir()?;
-    let catalog = read_cached_catalog(&root).ok()?;
+    let descriptors = read_effective_component_descriptors(&root).ok()?;
     let target = crate::current_update_platform();
-    for descriptor in catalog
-        .payload
-        .components
+    for descriptor in descriptors
         .iter()
         .filter(|component| component.target == target)
         .filter(|component| component.unlocks.iter().any(|item| item == program))
@@ -169,20 +174,16 @@ pub(crate) fn resolve_trusted_component_tool(
         if validate_installed_component(&component_dir, descriptor).is_err() {
             continue;
         }
-        let manifest = read_component_files_manifest(&component_dir, descriptor).ok()?;
+        let manifest = match read_component_files_manifest(&component_dir, descriptor) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
         let mut candidates = Vec::new();
         append_component_tool_candidates(&mut candidates, &component_dir, program, executable_name);
-        for candidate in candidates {
-            let relative = candidate.strip_prefix(&component_dir).ok()?;
-            let relative_key = path_key(relative)?;
-            let expected = manifest.files.get(&relative_key)?;
-            if candidate.is_file()
-                && sha256_file(&candidate)
-                    .ok()
-                    .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
-            {
-                return Some(candidate);
-            }
+        if let Some(candidate) =
+            resolve_component_tool_candidate(&component_dir, &manifest, candidates)
+        {
+            return Some(candidate);
         }
     }
     None
@@ -193,14 +194,14 @@ pub(crate) fn component_statuses() -> Vec<ComponentStatus> {
         Some(value) => value,
         None => return fallback_statuses("Пользовательская папка компонентов недоступна."),
     };
-    let catalog = match read_cached_catalog(&root) {
+    let descriptors = match read_effective_component_descriptors(&root) {
         Ok(value) => value,
         Err(error) => {
             return fallback_statuses(&format!("Подписанный каталог ещё не загружен: {error}"))
         }
     };
-    let _ = recover_component_transactions(&root, Some(&catalog));
-    statuses_from_catalog(&root, &catalog)
+    let _ = recover_component_transactions(&root, Some(&descriptors));
+    statuses_from_descriptors(&root, &descriptors)
 }
 
 pub(crate) fn refresh_component_catalog(
@@ -210,11 +211,11 @@ pub(crate) fn refresh_component_catalog(
     let root =
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    recover_component_transactions(&root, Some(&catalog))?;
     guard_catalog_not_older(&root, &catalog)?;
-    atomic_write_json(&root.join("components-catalog.json"), &catalog)?;
-    recover_component_transactions(&root, Some(&catalog))?;
-    Ok(statuses_from_catalog(&root, &catalog))
+    persist_verified_catalog(&root, &catalog)?;
+    let descriptors = read_effective_component_descriptors(&root)?;
+    recover_component_transactions(&root, Some(&descriptors))?;
+    Ok(statuses_from_descriptors(&root, &descriptors))
 }
 
 pub(crate) async fn install_component(
@@ -441,12 +442,12 @@ pub(crate) fn import_offline_component_bundle(
             "Компонент установлен из подписанного офлайн-комплекта",
         );
     }
-    Ok(catalog
-        .payload
-        .components
-        .iter()
-        .map(|descriptor| status_for_descriptor(&root, descriptor, true, &sidecars))
-        .collect())
+    let descriptors = read_effective_component_descriptors(&root)?;
+    Ok(statuses_from_descriptors_with_sidecars(
+        &root,
+        &descriptors,
+        &sidecars,
+    ))
 }
 
 fn component_archive_name(descriptor: &ComponentDescriptor) -> Result<String, String> {
@@ -561,7 +562,7 @@ fn commit_staged_offline_components(
         }
         committed.push((final_dir, previous));
     }
-    if let Err(error) = atomic_write_json(&root.join("components-catalog.json"), catalog) {
+    if let Err(error) = persist_verified_catalog(root, catalog) {
         rollback_offline_component_commits(&committed);
         return Err(error);
     }
@@ -577,10 +578,8 @@ pub(crate) fn remove_component(id: &str) -> Result<ComponentStatus, String> {
     let id = validate_component_id(id)?;
     let root =
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
-    let catalog = read_cached_catalog(&root)?;
-    let descriptor = catalog
-        .payload
-        .components
+    let descriptors = read_effective_component_descriptors(&root)?;
+    let descriptor = descriptors
         .iter()
         .find(|component| component.id == id)
         .ok_or_else(|| "Неизвестный компонент".to_string())?;
@@ -616,7 +615,7 @@ fn install_component_blocking(app: &tauri::AppHandle, id: &str) -> Result<Compon
         user_components_dir().ok_or_else(|| "Нет пользовательского каталога данных".to_string())?;
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     guard_catalog_not_older(&root, &catalog)?;
-    atomic_write_json(&root.join("components-catalog.json"), &catalog)?;
+    persist_verified_catalog(&root, &catalog)?;
 
     if descriptor.url.trim().is_empty() {
         return Err("Компонент доступен только в подписанном офлайн-комплекте; выберите «Импортировать офлайн-комплект»".into());
@@ -763,7 +762,7 @@ fn install_component_blocking(app: &tauri::AppHandle, id: &str) -> Result<Compon
 
 fn recover_component_transactions(
     root: &Path,
-    catalog: Option<&SignedComponentsCatalog>,
+    descriptors: Option<&[ComponentDescriptor]>,
 ) -> Result<(), String> {
     if !root.exists() {
         return Ok(());
@@ -773,8 +772,8 @@ fn recover_component_transactions(
         return Err("Пользовательский каталог компонентов имеет небезопасный тип".into());
     }
 
-    if let Some(catalog) = catalog {
-        for descriptor in &catalog.payload.components {
+    if let Some(descriptors) = descriptors {
+        for descriptor in descriptors {
             if descriptor.target != crate::current_update_platform() {
                 continue;
             }
@@ -885,6 +884,10 @@ fn verify_catalog(catalog: &SignedComponentsCatalog) -> Result<(), String> {
         &catalog.signature,
         "components catalog",
     )?;
+    match catalog.payload.catalog_scope.as_deref() {
+        None | Some("complete") | Some("partial") => {}
+        Some(_) => return Err("Некорректный catalog_scope components catalog".into()),
+    }
     catalog_published_at(catalog)?;
     let current = crate::parse_semver(env!("CARGO_PKG_VERSION"))?;
     let minimum = crate::parse_semver(&catalog.payload.app_min_version)?;
@@ -927,11 +930,19 @@ fn catalog_published_at(catalog: &SignedComponentsCatalog) -> Result<OffsetDateT
 
 fn guard_catalog_not_older(root: &Path, incoming: &SignedComponentsCatalog) -> Result<(), String> {
     let incoming_at = catalog_published_at(incoming)?;
-    if let Ok(current) = read_cached_catalog(root) {
-        let current_at = catalog_published_at(&current)?;
-        if incoming_at < current_at {
-            return Err("Подписанный каталог старее уже принятого; rollback отклонён".into());
-        }
+    if !catalog_cache_exists(root)? {
+        return Ok(());
+    }
+    let current = read_cached_catalogs(root)?;
+    let current_at = current
+        .iter()
+        .map(catalog_published_at)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .ok_or_else(|| "Кэш подписанных каталогов пуст".to_string())?;
+    if incoming_at < current_at {
+        return Err("Подписанный каталог старее уже принятого; rollback отклонён".into());
     }
     Ok(())
 }
@@ -1052,20 +1063,196 @@ fn guard_descriptor(
     Ok(())
 }
 
-fn read_cached_catalog(root: &Path) -> Result<SignedComponentsCatalog, String> {
-    let path = root.join("components-catalog.json");
-    let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err("Кэш каталога компонентов имеет небезопасный тип".into());
+fn catalog_is_partial(catalog: &SignedComponentsCatalog) -> bool {
+    catalog.payload.catalog_scope.as_deref() == Some("partial")
+}
+
+fn catalog_cache_exists(root: &Path) -> Result<bool, String> {
+    if root.join("components-catalog.json").exists() {
+        return Ok(true);
     }
-    if metadata.len() > MAX_COMPONENT_CATALOG_BYTES {
-        return Err("Кэш каталога компонентов превышает лимит".into());
+    let overlays = root.join(COMPONENT_CATALOG_OVERLAYS_DIR);
+    if !overlays.exists() {
+        return Ok(false);
+    }
+    let metadata = std::fs::symlink_metadata(&overlays).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err("Каталог partial components catalog имеет небезопасный тип".into());
+    }
+    for entry in std::fs::read_dir(overlays).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| !name.starts_with('.'))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn read_catalog_file(path: &Path, label: &str) -> Result<SignedComponentsCatalog, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(format!("{label} имеет небезопасный тип"));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_COMPONENT_CATALOG_BYTES {
+        return Err(format!("{label} превышает лимит или пуст"));
     }
     let catalog: SignedComponentsCatalog =
-        serde_json::from_slice(&std::fs::read(&path).map_err(|error| error.to_string())?)
-            .map_err(|error| format!("Некорректный кэш components catalog: {error}"))?;
+        serde_json::from_slice(&std::fs::read(path).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("Некорректный {label}: {error}"))?;
     verify_catalog(&catalog)?;
     Ok(catalog)
+}
+
+fn read_cached_catalogs(root: &Path) -> Result<Vec<SignedComponentsCatalog>, String> {
+    let mut catalogs = Vec::new();
+    let primary = root.join("components-catalog.json");
+    if primary.exists() {
+        catalogs.push(read_catalog_file(&primary, "кэш components catalog")?);
+    }
+
+    let overlays = root.join(COMPONENT_CATALOG_OVERLAYS_DIR);
+    if overlays.exists() {
+        let metadata = std::fs::symlink_metadata(&overlays).map_err(|error| error.to_string())?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err("Каталог partial components catalog имеет небезопасный тип".into());
+        }
+        let mut paths = std::fs::read_dir(&overlays)
+            .map_err(|error| error.to_string())?
+            .map(|entry| {
+                entry
+                    .map(|value| value.path())
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.retain(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| !name.starts_with('.'))
+        });
+        paths.sort();
+        if paths.len() > MAX_COMPONENT_CATALOG_OVERLAYS {
+            return Err("Слишком много partial components catalog; состояние отклонено".into());
+        }
+        for path in paths {
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                return Err("В каталоге partial components catalog найден посторонний файл".into());
+            }
+            let catalog = read_catalog_file(&path, "partial components catalog")?;
+            if !catalog_is_partial(&catalog) {
+                return Err(
+                    "Overlay-каталог обязан иметь подписанный catalog_scope=partial".into(),
+                );
+            }
+            catalogs.push(catalog);
+        }
+    }
+    if catalogs.is_empty() {
+        return Err("Кэш подписанного каталога компонентов отсутствует".into());
+    }
+    Ok(catalogs)
+}
+
+fn effective_component_descriptors_from_catalogs(
+    catalogs: &[SignedComponentsCatalog],
+) -> Result<Vec<ComponentDescriptor>, String> {
+    let mut ordered = catalogs
+        .iter()
+        .map(|catalog| {
+            Ok((
+                catalog_published_at(catalog)?,
+                if catalog_is_partial(catalog) {
+                    0u8
+                } else {
+                    1u8
+                },
+                catalog.signature.as_str(),
+                catalog,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    ordered.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(right.2))
+    });
+
+    let mut effective = BTreeMap::<String, ComponentDescriptor>::new();
+    for (_, _, _, catalog) in ordered {
+        if !catalog_is_partial(catalog) {
+            effective.clear();
+        }
+        for descriptor in &catalog.payload.components {
+            effective.insert(
+                format!("{}:{}", descriptor.target, descriptor.id),
+                descriptor.clone(),
+            );
+        }
+    }
+    Ok(effective.into_values().collect())
+}
+
+fn read_effective_component_descriptors(root: &Path) -> Result<Vec<ComponentDescriptor>, String> {
+    let catalogs = read_cached_catalogs(root)?;
+    effective_component_descriptors_from_catalogs(&catalogs)
+}
+
+fn ensure_catalog_overlays_dir(root: &Path) -> Result<PathBuf, String> {
+    let overlays = root.join(COMPONENT_CATALOG_OVERLAYS_DIR);
+    if overlays.exists() {
+        let metadata = std::fs::symlink_metadata(&overlays).map_err(|error| error.to_string())?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err("Каталог partial components catalog имеет небезопасный тип".into());
+        }
+    } else {
+        std::fs::create_dir(&overlays).map_err(|error| error.to_string())?;
+    }
+    Ok(overlays)
+}
+
+fn clear_catalog_overlays(root: &Path) -> Result<(), String> {
+    let overlays = root.join(COMPONENT_CATALOG_OVERLAYS_DIR);
+    if !overlays.exists() {
+        return Ok(());
+    }
+    let metadata = std::fs::symlink_metadata(&overlays).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err("Каталог partial components catalog имеет небезопасный тип".into());
+    }
+    std::fs::remove_dir_all(overlays).map_err(|error| error.to_string())
+}
+
+fn persist_verified_catalog(root: &Path, catalog: &SignedComponentsCatalog) -> Result<(), String> {
+    verify_catalog(catalog)?;
+    if catalog_is_partial(catalog) {
+        let overlays = ensure_catalog_overlays_dir(root)?;
+        let fingerprint = sha256_bytes(catalog.signature.as_bytes());
+        let path = overlays.join(format!("{fingerprint}.json"));
+        if !path.exists() {
+            let mut count = 0usize;
+            for entry in std::fs::read_dir(&overlays).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| !name.starts_with('.'))
+                {
+                    count += 1;
+                }
+            }
+            if count >= MAX_COMPONENT_CATALOG_OVERLAYS {
+                return Err("Достигнут лимит partial components catalog".into());
+            }
+        }
+        atomic_write_json(&path, catalog)
+    } else {
+        atomic_write_json(&root.join("components-catalog.json"), catalog)?;
+        clear_catalog_overlays(root)
+    }
 }
 
 fn validate_installed_component(
@@ -1154,14 +1341,23 @@ fn validate_all_manifest_files(
     Ok(())
 }
 
-fn statuses_from_catalog(root: &Path, catalog: &SignedComponentsCatalog) -> Vec<ComponentStatus> {
+fn statuses_from_descriptors(
+    root: &Path,
+    descriptors: &[ComponentDescriptor],
+) -> Vec<ComponentStatus> {
     let sidecars = crate::universal_intake::sidecar_tool_statuses();
-    catalog
-        .payload
-        .components
+    statuses_from_descriptors_with_sidecars(root, descriptors, &sidecars)
+}
+
+fn statuses_from_descriptors_with_sidecars(
+    root: &Path,
+    descriptors: &[ComponentDescriptor],
+    sidecars: &[crate::universal_intake::SidecarToolStatus],
+) -> Vec<ComponentStatus> {
+    descriptors
         .iter()
         .filter(|component| component.target == crate::current_update_platform())
-        .map(|component| status_for_descriptor(root, component, true, &sidecars))
+        .map(|component| status_for_descriptor(root, component, true, sidecars))
         .collect()
 }
 
@@ -1310,6 +1506,32 @@ fn safe_extract_zip(archive_path: &Path, stage_dir: &Path) -> Result<(), String>
         output.sync_all().map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn resolve_component_tool_candidate(
+    component_dir: &Path,
+    manifest: &ComponentFilesManifest,
+    candidates: Vec<PathBuf>,
+) -> Option<PathBuf> {
+    for candidate in candidates {
+        let Ok(relative) = candidate.strip_prefix(component_dir) else {
+            continue;
+        };
+        let Some(relative_key) = path_key(relative) else {
+            continue;
+        };
+        let Some(expected) = manifest.files.get(&relative_key) else {
+            continue;
+        };
+        if candidate.is_file()
+            && sha256_file(&candidate)
+                .ok()
+                .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn append_component_tool_candidates(
@@ -1542,6 +1764,7 @@ mod tests {
             schema: 1,
             app_min_version: env!("CARGO_PKG_VERSION").into(),
             published_at: "2026-07-20T00:00:00Z".into(),
+            catalog_scope: None,
             allowed_hosts: vec!["downloads.dokkomplekt.ru".into()],
             components: vec![descriptor.clone()],
         };
@@ -1686,15 +1909,127 @@ mod tests {
                 schema: 1,
                 app_min_version: env!("CARGO_PKG_VERSION").into(),
                 published_at: "2026-07-20T00:00:00Z".into(),
+                catalog_scope: None,
                 allowed_hosts: vec!["example.com".into()],
                 components: vec![descriptor],
             },
             signature_alg: "Ed25519".into(),
             signature: String::new(),
         };
-        recover_component_transactions(&root, Some(&catalog)).unwrap();
+        recover_component_transactions(&root, Some(&catalog.payload.components)).unwrap();
         assert!(root.join("ocr/bin/tool").is_file());
         assert!(!previous.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolver_skips_missing_candidates_before_packaged_7zip_path() {
+        use super::{
+            resolve_component_tool_candidate, ComponentFilesManifest, COMPONENT_FILES_SCHEMA,
+        };
+        use sha2::{Digest as _, Sha256};
+        use std::collections::BTreeMap;
+        use uuid::Uuid;
+
+        let root =
+            std::env::temp_dir().join(format!("dokkomplekt-7zip-resolver-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("7zip")).unwrap();
+        let tool = root
+            .join("7zip")
+            .join(if cfg!(windows) { "7z.exe" } else { "7z" });
+        std::fs::write(&tool, b"trusted-7zip").unwrap();
+        let hash = hex::encode(Sha256::digest(b"trusted-7zip"));
+        let key = format!("7zip/{}", tool.file_name().unwrap().to_string_lossy());
+        let manifest = ComponentFilesManifest {
+            schema: COMPONENT_FILES_SCHEMA,
+            component_id: "archive".into(),
+            target: super::crate_platform_for_test(),
+            files: BTreeMap::from([(key, hash)]),
+        };
+        let candidates = vec![
+            root.join(tool.file_name().unwrap()),
+            root.join("7z").join(tool.file_name().unwrap()),
+            root.join("bin").join(tool.file_name().unwrap()),
+            tool.clone(),
+        ];
+        assert_eq!(
+            resolve_component_tool_candidate(&root, &manifest, candidates),
+            Some(tool)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_catalog_overlays_preserve_omitted_components_until_next_complete_catalog() {
+        use super::{
+            effective_component_descriptors_from_catalogs, ComponentDescriptor,
+            ComponentsCatalogPayload, SignedComponentsCatalog,
+        };
+
+        fn descriptor(id: &str) -> ComponentDescriptor {
+            ComponentDescriptor {
+                id: id.into(),
+                label: id.into(),
+                description: String::new(),
+                unlocks: vec![id.into()],
+                target: super::crate_platform_for_test(),
+                size_bytes: 1,
+                sha256: "a".repeat(64),
+                files_manifest_sha256: "b".repeat(64),
+                archive_name: format!("{id}.zip"),
+                url: String::new(),
+            }
+        }
+        fn catalog(
+            scope: &str,
+            published_at: &str,
+            components: Vec<ComponentDescriptor>,
+        ) -> SignedComponentsCatalog {
+            SignedComponentsCatalog {
+                payload: ComponentsCatalogPayload {
+                    schema: 1,
+                    app_min_version: env!("CARGO_PKG_VERSION").into(),
+                    published_at: published_at.into(),
+                    catalog_scope: Some(scope.into()),
+                    allowed_hosts: vec![],
+                    components,
+                },
+                signature_alg: "Ed25519".into(),
+                signature: format!("{scope}-{published_at}"),
+            }
+        }
+
+        let complete = catalog(
+            "complete",
+            "2026-07-20T00:00:00Z",
+            vec![descriptor("ocr"), descriptor("office")],
+        );
+        let partial = catalog(
+            "partial",
+            "2026-07-21T00:00:00Z",
+            vec![descriptor("archive")],
+        );
+        let effective =
+            effective_component_descriptors_from_catalogs(&[complete.clone(), partial.clone()])
+                .unwrap();
+        let ids = effective
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["archive", "ocr", "office"]);
+
+        let replacement = catalog(
+            "complete",
+            "2026-07-22T00:00:00Z",
+            vec![descriptor("office")],
+        );
+        let effective =
+            effective_component_descriptors_from_catalogs(&[complete, partial, replacement])
+                .unwrap();
+        let ids = effective
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["office"]);
     }
 }

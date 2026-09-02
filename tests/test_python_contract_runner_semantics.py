@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNNER = ROOT / "scripts" / "run_python_contracts_sharded.py"
+SCRIPTS = ROOT / "scripts"
+RUNNER = SCRIPTS / "run_python_contracts_sharded.py"
 
 
 def load_runner():
     spec = importlib.util.spec_from_file_location("dokkomplekt_contract_runner", RUNNER)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPTS))
     return module
 
 

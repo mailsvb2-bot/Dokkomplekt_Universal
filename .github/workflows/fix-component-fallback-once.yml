@@ -58,6 +58,11 @@ jobs:
               + '    let external_state = external_component_state(&descriptor.unlocks, sidecars);\n'
               + text[external_end:]
           )
+          old_available = '    let available = downloaded || externally_available;\n'
+          new_available = '    let available = downloaded || external_state.is_some();\n'
+          if text.count(old_available) != 1:
+              raise SystemExit('status_for_descriptor available assignment drifted')
+          text = text.replace(old_available, new_available, 1)
 
           status_fn = text.index('fn status_for_descriptor(')
           helper = '''fn external_component_state(

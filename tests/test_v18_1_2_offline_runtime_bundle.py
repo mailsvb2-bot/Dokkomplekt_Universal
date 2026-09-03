@@ -34,6 +34,7 @@ class OfflineRuntimeBundleTests(unittest.TestCase):
                 ("poppler", "poppler/bin/pdftoppm.exe"),
                 ("libreoffice", "libreoffice/program/soffice.exe"),
                 ("sumatrapdf", "sumatrapdf/SumatraPDF.exe"),
+                ("7zip", "7zip/7z.exe"),
                 ("llama_cpp", "llama_cpp/llama-server.exe"),
                 ("semantic_model", "semantic_model/model.gguf"),
             ]
@@ -68,7 +69,7 @@ class OfflineRuntimeBundleTests(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 sbom = json.loads(archive.read("runtime-sbom.json"))
                 self.assertTrue(sbom["semantic_model_required"])
-                self.assertEqual(len(sbom["files"]), 9)
+                self.assertEqual(len(sbom["files"]), 10)
                 self.assertIn(
                     "runtime/windows-x86_64/semantic_model/model.gguf",
                     archive.namelist(),

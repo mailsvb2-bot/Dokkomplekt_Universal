@@ -4,7 +4,6 @@ import importlib.util
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +87,19 @@ def test_libreoffice_probe_exercises_real_headless_docx_to_pdf(monkeypatch, tmp_
     soffice = tmp_path / "libreoffice" / "program" / "soffice.exe"
     soffice.parent.mkdir(parents=True)
     soffice.write_bytes(b"fixture")
+    probe_root = tmp_path / "probe-work"
+    probe_root.mkdir()
     captured: dict[str, object] = {}
+
+    class FixedTemporaryDirectory:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return str(probe_root)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
 
     def fake_run(command, **kwargs):
         captured["command"] = list(command)
@@ -100,12 +111,11 @@ def test_libreoffice_probe_exercises_real_headless_docx_to_pdf(monkeypatch, tmp_
         assert input_path.read_bytes()[:2] == b"PK"
         output_dir = Path(command[command.index("--outdir") + 1])
         output_dir.joinpath("fixture.pdf").write_bytes(b"%PDF-1.7\n" + b"x" * 1200)
-        profile_arg = next(part for part in command if part.startswith("-env:UserInstallation="))
-        profile_url = profile_arg.split("=", 1)[1]
-        profile_path = Path(unquote(urlparse(profile_url).path))
-        profile_path.joinpath("registrymodifications.xcu").write_text("fixture", encoding="utf-8")
+        profile_dir = probe_root / "profile"
+        profile_dir.joinpath("registrymodifications.xcu").write_text("fixture", encoding="utf-8")
         return SimpleNamespace(returncode=0, stdout="converted")
 
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", FixedTemporaryDirectory)
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     module.run_probe("LibreOffice", [str(soffice)], {0})
 
@@ -113,6 +123,7 @@ def test_libreoffice_probe_exercises_real_headless_docx_to_pdf(monkeypatch, tmp_
     kwargs = captured["kwargs"]
     assert "--headless" in command
     assert "--nofirststartwizard" in command
+    assert any(part.startswith("-env:UserInstallation=file:") for part in command)
     assert kwargs["timeout"] == module.LIBREOFFICE_TIMEOUT_SECONDS == 120
     assert kwargs["cwd"] == soffice.parent.parent.resolve()
     assert kwargs["env"]["SAL_USE_VCLPLUGIN"] == "svp"

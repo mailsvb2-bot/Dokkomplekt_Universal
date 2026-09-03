@@ -125,7 +125,7 @@ jobs:
             [IO.File]::WriteAllBytes($approvalKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64))
             $bundle = (Resolve-Path release-runtime/Dokkomplekt-offline-runtime-windows-x86_64.zip).Path
             $payload = "$bundle.signing.json"
-            python scripts/stage_signed_runtime_bundle.py $bundle --payload $payload --signature "$payload.sig" --trusted-runtime-public-key $runtimeKey --approval-signature "$payload.approval.sig" --trusted-approval-public-key $approvalKey --clean --json-report verification/release/HOSTED_RUNTIME_STAGE.json
+            python scripts/stage_signed_runtime_bundle.py $bundle --payload $payload --signature "$payload.sig" --trusted-runtime-public-key $runtimeKey --approval-signature "$payload.approval.sig" --trusted-approval-public-key $approvalKey --profile core --clean --json-report verification/release/HOSTED_RUNTIME_STAGE.json
             if ($LASTEXITCODE -ne 0) { throw 'hosted runtime staging failed' }
           } finally {
             Remove-Item -LiteralPath $runtimeKey -Force -ErrorAction SilentlyContinue
@@ -134,10 +134,10 @@ jobs:
       - name: Verify production runtime staged from immutable approved bundle
         shell: pwsh
         run: |
-          python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --require-semantic-model --require-supply-chain --production
-          python scripts/verify_windows_runtime_app_parity.py --target windows-x86_64
+          python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --profile core --require-supply-chain --production
+          python scripts/verify_windows_runtime_app_parity.py --target windows-x86_64 --profile core
           tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
-          python scripts/probe_offline_runtime.py --target windows-x86_64
+          python scripts/probe_offline_runtime.py --target windows-x86_64 --profile core
           python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
       - name: Install current CVSS-4-compatible cargo-audit on packaging runner
         run: cargo install cargo-audit --locked --version 0.22.2
@@ -151,13 +151,16 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
-      - name: Build deterministic signed optional component packs
+      - name: Build deterministic signed core component overlay
         shell: pwsh
         env:
           DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64)) { throw 'Update signing key is required for components catalog.' }
-          python scripts/build_component_packs.py --target windows-x86_64 --components ocr,office,semantic,archive --app-min-version 18.3.0 --base-url $env:DOKKOMPLEKT_COMPONENTS_BASE_URL --out release-components --require-trusted-public-key
+          python scripts/build_component_packs.py --target windows-x86_64 --components ocr,office,archive --app-min-version 18.3.0 --base-url $env:DOKKOMPLEKT_COMPONENTS_BASE_URL --out release-components --require-trusted-public-key
+          $catalog = Get-Content release-components/components-catalog.json -Raw | ConvertFrom-Json
+          if ($catalog.payload.catalog_scope -ne 'partial') { throw 'Core component catalog must be a partial overlay so omitted semantic availability is not revoked.' }
+          if ($catalog.payload.components.id -contains 'semantic') { throw 'Core installer workflow must not rebuild or embed the semantic component.' }
       - name: Require clean production release artifact boundary
         shell: pwsh
         run: |

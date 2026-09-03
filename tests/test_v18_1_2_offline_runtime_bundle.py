@@ -76,6 +76,43 @@ class OfflineRuntimeBundleTests(unittest.TestCase):
                 )
 
 
+    def test_core_bundle_preflight_verifies_full_source_stage_before_filtering(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target, target_dir, status = self.stage(root / "tools")
+            status["runtime_profile"] = "full"
+            status["semantic_model_required"] = True
+            (target_dir / "sidecar-status.json").write_text(json.dumps(status), "utf-8")
+            module.TOOLS_ROOT = root / "tools"
+            with mock.patch.object(module.subprocess, "run") as verifier:
+                loaded_dir, loaded = module.load_verified_status(target, "core", False)
+            self.assertEqual(loaded_dir, target_dir.resolve())
+            self.assertEqual(loaded["runtime_profile"], "full")
+            command = verifier.call_args.args[0]
+            self.assertEqual(command[command.index("--profile") + 1], "full")
+            self.assertIn("--require-semantic-model", command)
+
+    def test_bundle_preflight_rejects_status_change_during_verification(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target, target_dir, status = self.stage(root / "tools")
+            status["runtime_profile"] = "full"
+            status["semantic_model_required"] = True
+            status_path = target_dir / "sidecar-status.json"
+            status_path.write_text(json.dumps(status), "utf-8")
+            module.TOOLS_ROOT = root / "tools"
+
+            def mutate_status(*args, **kwargs):
+                changed = dict(status)
+                changed["network_used"] = True
+                status_path.write_text(json.dumps(changed), "utf-8")
+
+            with mock.patch.object(module.subprocess, "run", side_effect=mutate_status):
+                with self.assertRaisesRegex(ValueError, "changed during bundle preflight"):
+                    module.load_verified_status(target, "core", False)
+
     def test_core_bundle_excludes_semantic_payload_but_keeps_complete_document_runtime(self) -> None:
         module = load_module()
         with tempfile.TemporaryDirectory() as temporary:

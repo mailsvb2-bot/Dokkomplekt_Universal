@@ -73,25 +73,54 @@ def validate_target(target: str) -> str:
     return target
 
 
+def staged_profile(status: dict[str, Any], requested_profile: str) -> str:
+    """Resolve the profile that must be verified before deriving a bundle.
+
+    A bounded ``core`` bundle may be derived from a verified ``full`` stage, but
+    the source stage must first pass its own stronger full-profile contract.
+    Legacy full stages predate ``runtime_profile`` and are recognized only when
+    their semantic requirement or complete semantic tool pair proves that shape.
+    """
+    declared = status.get("runtime_profile")
+    if declared is not None:
+        return normalize_profile(
+            declared, semantic_model_required=status.get("semantic_model_required")
+        )
+    if status.get("semantic_model_required") is True:
+        return FULL_PROFILE
+    tools = {str(item.get("tool", "")).strip().lower() for item in status.get("files", [])}
+    if {"llama_cpp", "semantic_model"}.issubset(tools):
+        return FULL_PROFILE
+    return normalize_profile(
+        requested_profile, semantic_model_required=(requested_profile == FULL_PROFILE)
+    )
+
+
 def load_verified_status(target: str, profile: str, require_supply_chain: bool) -> tuple[Path, dict[str, Any]]:
-    require_model = profile_requires_semantic(profile)
+    target_dir = (TOOLS_ROOT / target).resolve()
+    target_dir.relative_to(TOOLS_ROOT.resolve())
+    status_path = target_dir / "sidecar-status.json"
+    before = status_path.read_bytes()
+    status = json.loads(before.decode("utf-8"))
+    source_profile = staged_profile(status, profile)
+    require_model = profile_requires_semantic(source_profile)
     command = [
         sys.executable,
         str(ROOT / "scripts" / "assert_offline_runtime_ready.py"),
         "--target",
         target,
         "--profile",
-        profile,
+        source_profile,
     ]
     if require_model:
         command.append("--require-semantic-model")
     if require_supply_chain:
         command.append("--require-supply-chain")
     subprocess.run(command, cwd=ROOT, check=True)
-    target_dir = (TOOLS_ROOT / target).resolve()
-    target_dir.relative_to(TOOLS_ROOT.resolve())
-    status = json.loads((target_dir / "sidecar-status.json").read_text("utf-8"))
-    return target_dir, status
+    after = status_path.read_bytes()
+    if after != before:
+        raise ValueError("staged runtime status changed during bundle preflight verification")
+    return target_dir, json.loads(after.decode("utf-8"))
 
 
 def zip_info(name: str, executable: bool = False) -> zipfile.ZipInfo:

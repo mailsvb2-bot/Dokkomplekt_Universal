@@ -8,7 +8,12 @@ on:
       - '.github/core-runtime-patch.part00'
       - '.github/core-runtime-patch.part01'
       - '.github/core-runtime-patch.part02'
-      - '.github/core-runtime-patch.part03'
+      - '.github/core-runtime-patch.part03a'
+      - '.github/core-runtime-patch.part03b'
+      - '.github/core-runtime-patch.part03c'
+      - '.github/core-runtime-patch.part03d'
+      - '.github/core-runtime-patch.part03e'
+      - '.github/core-runtime-patch.part03f'
       - '.github/core-runtime-patch.part04'
       - '.github/workflows/apply-core-runtime-patch.yml'
 
@@ -45,8 +50,19 @@ jobs:
           from pathlib import Path, PurePosixPath
 
           expected_sha = '7b497f141bfe5c331997c132c1fdcd2ac4ea5f43690a01616707ce316c82ec37'
-          parts = [Path(f'.github/core-runtime-patch.part{i:02d}') for i in range(5)]
-          encoded = ''.join(path.read_text(encoding='utf-8') for path in parts)
+          part_names = [
+              '.github/core-runtime-patch.part00',
+              '.github/core-runtime-patch.part01',
+              '.github/core-runtime-patch.part02',
+              '.github/core-runtime-patch.part03a',
+              '.github/core-runtime-patch.part03b',
+              '.github/core-runtime-patch.part03c',
+              '.github/core-runtime-patch.part03d',
+              '.github/core-runtime-patch.part03e',
+              '.github/core-runtime-patch.part03f',
+              '.github/core-runtime-patch.part04',
+          ]
+          encoded = ''.join(Path(name).read_text(encoding='utf-8') for name in part_names)
           payload = base64.b64decode(encoded, validate=True)
           actual_sha = hashlib.sha256(payload).hexdigest()
           if actual_sha != expected_sha:
@@ -88,7 +104,12 @@ jobs:
           rm -f .github/core-runtime-patch.part00 \
                 .github/core-runtime-patch.part01 \
                 .github/core-runtime-patch.part02 \
-                .github/core-runtime-patch.part03 \
+                .github/core-runtime-patch.part03a \
+                .github/core-runtime-patch.part03b \
+                .github/core-runtime-patch.part03c \
+                .github/core-runtime-patch.part03d \
+                .github/core-runtime-patch.part03e \
+                .github/core-runtime-patch.part03f \
                 .github/core-runtime-patch.part04 \
                 .github/workflows/apply-core-runtime-patch.yml
 

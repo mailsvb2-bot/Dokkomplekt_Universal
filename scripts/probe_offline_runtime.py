@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -71,7 +72,7 @@ def runtime_probes(
     return probes
 
 
-def run_probe(title: str, command: list[str], accepted_codes: set[int] | None = None) -> None:
+def _execute_probe(title: str, command: list[str], accepted_codes: set[int]) -> None:
     completed = subprocess.run(
         command,
         stdin=subprocess.DEVNULL,
@@ -84,14 +85,33 @@ def run_probe(title: str, command: list[str], accepted_codes: set[int] | None = 
         check=False,
         env={**os.environ, "DOKKOMPLEKT_RUNTIME_PROBE": "1"},
     )
-    accepted = accepted_codes or {0}
-    if completed.returncode not in accepted:
+    if completed.returncode not in accepted_codes:
         tail = completed.stdout[-1200:].strip()
         raise RuntimeError(
             f"{title} failed to start (exit {completed.returncode}). "
             f"The portable runtime may miss DLLs or use the wrong architecture. Output: {tail}"
         )
     print(f"RUNTIME PROBE OK: {title}")
+
+
+def run_probe(title: str, command: list[str], accepted_codes: set[int] | None = None) -> None:
+    accepted = accepted_codes or {0}
+    if title == "LibreOffice":
+        # LibreOffice owns a per-user profile and can wait on a stale lock or a
+        # first-start profile transition even when the staged binary itself is
+        # healthy. Release probing must be deterministic and must not read or
+        # mutate the runner/user's real LibreOffice profile. Keep the isolated
+        # profile alive until the child exits; Path.as_uri() also handles spaces
+        # and non-ASCII Windows profile roots correctly.
+        with tempfile.TemporaryDirectory(prefix="dokkomplekt-lo-probe-") as profile_dir:
+            isolated_command = [
+                command[0],
+                f"-env:UserInstallation={Path(profile_dir).resolve().as_uri()}",
+                *command[1:],
+            ]
+            _execute_probe(title, isolated_command, accepted)
+        return
+    _execute_probe(title, command, accepted)
 
 
 def main() -> int:

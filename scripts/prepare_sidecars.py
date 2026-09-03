@@ -20,8 +20,10 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import FULL_PROFILE, normalize_profile, validate_profile_file_set
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import FULL_PROFILE, normalize_profile, validate_profile_file_set
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST_ROOT = ROOT / "src-tauri" / "resources" / "tools"
@@ -199,12 +201,25 @@ def main() -> int:
             })
         staged.append(staged_entry)
 
+    runtime_profile = data.get("runtime_profile")
+    semantic_model_required = data.get("semantic_model_required")
+    if runtime_profile is None:
+        # Legacy locks represented the old full runtime and always carried both semantic tools.
+        runtime_profile = FULL_PROFILE
+        semantic_model_required = True
+    runtime_profile = normalize_profile(
+        runtime_profile, semantic_model_required=semantic_model_required
+    )
+    validate_profile_file_set(runtime_profile, staged)
+
     distribution_review = stage_distribution_review(data, manifest_path, destination)
     status = {
         "schema": 1,
         "target": target,
         "generated_by": "scripts/prepare_sidecars.py",
         "network_used": False,
+        "runtime_profile": runtime_profile,
+        "semantic_model_required": runtime_profile == FULL_PROFILE,
         "supply_chain_locked": data.get("supply_chain_locked") is True,
         "files": staged,
     }

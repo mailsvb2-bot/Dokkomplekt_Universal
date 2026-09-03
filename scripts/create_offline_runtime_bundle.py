@@ -80,6 +80,8 @@ def load_verified_status(target: str, profile: str, require_supply_chain: bool) 
         str(ROOT / "scripts" / "assert_offline_runtime_ready.py"),
         "--target",
         target,
+        "--profile",
+        profile,
     ]
     if require_model:
         command.append("--require-semantic-model")
@@ -101,7 +103,19 @@ def zip_info(name: str, executable: bool = False) -> zipfile.ZipInfo:
     return info
 
 
-def bundled_distribution_review(target_dir: Path, status: dict[str, Any]) -> tuple[dict[str, Any] | None, Path | None]:
+def bundled_distribution_review(
+    target_dir: Path,
+    status: dict[str, Any],
+    entries: list[dict[str, Any]],
+    profile: str,
+) -> tuple[dict[str, Any] | None, bytes | None]:
+    """Bind the review to the exact profile-specific bundle inventory.
+
+    The reviewed staged inventory is first revalidated against the complete
+    staged status. A core bundle then derives a deterministic subset containing
+    only the reviewed core files; it never reuses a full inventory while
+    stripping semantic payloads.
+    """
     raw = status.get("distribution_review")
     if raw is None:
         return None, None
@@ -113,16 +127,51 @@ def bundled_distribution_review(target_dir: Path, status: dict[str, Any]) -> tup
         if not value:
             raise ValueError(f"distribution_review is missing {key}")
         review[key] = value
+
     relative = Path(validate_relative_runtime_path(review["inventory_path"], "distribution inventory path"))
     source = target_dir / relative
     if not source.is_file():
         raise FileNotFoundError(f"staged distribution inventory is missing: {source}")
-    actual = sha256_file(source)
+    source_bytes = source.read_bytes()
+    actual = hashlib.sha256(source_bytes).hexdigest()
     if actual != review["inventory_sha256"].lower():
         raise ValueError("staged distribution inventory SHA-256 mismatch")
-    review["inventory_path"] = relative.as_posix()
-    review["inventory_sha256"] = actual
-    return review, source
+    source_inventory = json.loads(source_bytes.decode("utf-8"))
+    if source_inventory.get("schema") != 1 or not isinstance(source_inventory.get("tools"), dict):
+        raise ValueError("staged distribution inventory has an incompatible schema")
+
+    staged_tools: dict[str, list[str]] = {}
+    for item in status.get("files", []):
+        tool = str(item.get("tool", "")).strip().lower()
+        path = validate_relative_runtime_path(item.get("path"), "staged runtime path")
+        staged_tools.setdefault(tool, []).append(path)
+    staged_tools = {tool: sorted(paths) for tool, paths in sorted(staged_tools.items())}
+    declared_tools = {
+        str(tool).strip().lower(): sorted(
+            validate_relative_runtime_path(path, f"distribution inventory {tool}")
+            for path in paths
+        )
+        for tool, paths in source_inventory["tools"].items()
+        if isinstance(paths, list)
+    }
+    if declared_tools != staged_tools:
+        raise ValueError("staged runtime does not match the reviewed source inventory before profile filtering")
+
+    profile_tools_map: dict[str, list[str]] = {}
+    for item in entries:
+        tool = str(item["tool"]).strip().lower()
+        profile_tools_map.setdefault(tool, []).append(str(item["path"]))
+    profile_inventory = {
+        "schema": 1,
+        "target": status.get("target"),
+        "generated_by": "scripts/create_offline_runtime_bundle.py",
+        "runtime_profile": profile,
+        "tools": {tool: sorted(paths) for tool, paths in sorted(profile_tools_map.items())},
+    }
+    inventory_bytes = canonical_json(profile_inventory)
+    review["inventory_path"] = f"_evidence/runtime-inventory-{profile}.json"
+    review["inventory_sha256"] = hashlib.sha256(inventory_bytes).hexdigest()
+    return review, inventory_bytes
 
 
 def create_bundle(
@@ -191,7 +240,9 @@ def create_bundle(
             "size_bytes": source.stat().st_size,
         })
     license_entries.sort(key=lambda item: item["path"])
-    distribution_review, inventory_source = bundled_distribution_review(target_dir, status)
+    distribution_review, inventory_bytes = bundled_distribution_review(
+        target_dir, status, entries, selected_profile
+    )
     sbom = {
         "schema": "dokkomplekt.offline-runtime.sbom.v1",
         "target": target,
@@ -221,10 +272,10 @@ def create_bundle(
                 zip_info(f"runtime/{target}/{item['path']}", False),
                 source.read_bytes(),
             )
-        if distribution_review is not None and inventory_source is not None:
+        if distribution_review is not None and inventory_bytes is not None:
             archive.writestr(
                 zip_info(f"runtime/{target}/{distribution_review['inventory_path']}", False),
-                inventory_source.read_bytes(),
+                inventory_bytes,
             )
     temporary.replace(output)
     payload = {

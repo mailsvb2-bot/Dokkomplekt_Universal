@@ -1,9 +1,8 @@
 """Canonical Windows offline-runtime profile policy.
 
-The stock NSIS installer is intentionally bounded to the document-processing
-runtime.  The semantic model is a separately verified optional component: the
-currently approved candidate is larger than the stock NSIS data limit and must
-never make the core application un-installable.
+The stock NSIS installer is bounded to the document-processing runtime. The
+semantic runtime/model remains a separately verified optional component so a
+large GGUF never makes normal document installation depend on semantic payloads.
 """
 from __future__ import annotations
 
@@ -19,27 +18,27 @@ CORE_TOOLS = frozenset({
     "libreoffice",
     "sumatrapdf",
     "7zip",
-    "msgconvert",
 })
 SEMANTIC_TOOLS = frozenset({"llama_cpp", "semantic_model"})
+RUNTIME_TOOLS = CORE_TOOLS | SEMANTIC_TOOLS
 
 
 def normalize_profile(value: object, *, semantic_model_required: object | None = None) -> str:
-    """Return a validated profile, preserving old full payload compatibility.
+    """Return a validated profile while preserving legacy full payloads.
 
-    Legacy signed production payloads had no ``runtime_profile`` field but were
-    required to set ``semantic_model_required=true``.  Those payloads therefore
-    map only to ``full``.  A core payload must opt in explicitly.
+    Legacy signed runtime payloads did not carry ``runtime_profile`` but did
+    require ``semantic_model_required=true``. They therefore map only to
+    ``full``. A non-semantic/core signed payload must opt in explicitly.
     """
     if isinstance(value, str) and value.strip():
         profile = value.strip().lower()
         if profile not in PROFILES:
             raise ValueError(f"unsupported runtime profile: {profile!r}")
+    elif semantic_model_required is True:
+        profile = FULL_PROFILE
     else:
-        if semantic_model_required is True:
-            profile = FULL_PROFILE
-        else:
-            raise ValueError("runtime_profile is required for a non-semantic runtime payload")
+        raise ValueError("runtime_profile is required for a non-semantic runtime payload")
+
     expected_semantic = profile == FULL_PROFILE
     if semantic_model_required is not None and semantic_model_required is not expected_semantic:
         raise ValueError(
@@ -49,32 +48,39 @@ def normalize_profile(value: object, *, semantic_model_required: object | None =
 
 
 def profile_requires_semantic(profile: str) -> bool:
-    normalized = normalize_profile(profile, semantic_model_required=(profile == FULL_PROFILE))
-    return normalized == FULL_PROFILE
+    return normalize_profile(
+        profile, semantic_model_required=(profile == FULL_PROFILE)
+    ) == FULL_PROFILE
+
+
+def profile_tools(profile: str) -> frozenset[str]:
+    normalized = normalize_profile(
+        profile, semantic_model_required=(profile == FULL_PROFILE)
+    )
+    return RUNTIME_TOOLS if normalized == FULL_PROFILE else CORE_TOOLS
 
 
 def include_tool(profile: str, tool: object) -> bool:
-    normalized = normalize_profile(profile, semantic_model_required=(profile == FULL_PROFILE))
     name = str(tool).strip().lower()
     if not name:
         raise ValueError("runtime file is missing its tool identifier")
-    if normalized == FULL_PROFILE:
-        return True
-    return name not in SEMANTIC_TOOLS
+    if name not in RUNTIME_TOOLS:
+        raise ValueError(f"unsupported external Windows runtime component: {name}")
+    return name in profile_tools(profile)
 
 
 def validate_profile_file_set(profile: str, files: list[dict[str, Any]]) -> None:
-    normalized = normalize_profile(profile, semantic_model_required=(profile == FULL_PROFILE))
+    normalized = normalize_profile(
+        profile, semantic_model_required=(profile == FULL_PROFILE)
+    )
     tools = {str(item.get("tool", "")).strip().lower() for item in files}
-    required = {"tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip"}
-    missing = sorted(required - tools)
-    if missing:
-        raise ValueError(f"runtime profile {normalized!r} is missing core tools: {missing}")
-    if normalized == CORE_PROFILE:
-        forbidden = sorted(tools & SEMANTIC_TOOLS)
-        if forbidden:
-            raise ValueError(f"core runtime must not embed semantic tools: {forbidden}")
-    else:
-        missing_semantic = sorted(SEMANTIC_TOOLS - tools)
-        if missing_semantic:
-            raise ValueError(f"full runtime is missing semantic tools: {missing_semantic}")
+    if "" in tools:
+        raise ValueError("runtime file is missing its tool identifier")
+    expected = set(profile_tools(normalized))
+    missing = sorted(expected - tools)
+    extra = sorted(tools - expected)
+    if missing or extra:
+        raise ValueError(
+            f"runtime profile {normalized!r} component set mismatch: "
+            f"missing={missing}; extra={extra}"
+        )

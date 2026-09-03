@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Execute staged Windows sidecars before an installer may be released.
 
-Hash checks prove identity, not launchability. This probe catches incomplete
-portable distributions (missing DLLs/data files, wrong architecture, broken
-executables) by starting every production entry point with a bounded, read-only
-version/help command. It never sends documents to a network service.
+``core`` probes only the document-processing executables embedded by the stock
+installer. ``full`` additionally probes llama.cpp. The GGUF itself is data and
+is verified by the offline-runtime integrity gate.
 """
 from __future__ import annotations
 
@@ -18,8 +17,10 @@ from typing import Iterable
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import CORE_PROFILE, FULL_PROFILE, PROFILES, normalize_profile
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import CORE_PROFILE, FULL_PROFILE, PROFILES, normalize_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
@@ -53,23 +54,21 @@ def tool_path(target_dir: Path, status: dict, tool: str, names: Iterable[str]) -
     raise FileNotFoundError(f"runtime entry point is missing for {tool}: {sorted(expected)}")
 
 
-def runtime_probes(target_dir: Path, status: dict) -> list[tuple[str, list[str], set[int]]]:
-    """Return the executable probes for the canonical external Windows runtime.
-
-    Outlook MSG is intentionally absent: `.msg` parsing is built into the Rust
-    core and is covered by native intake regressions, not by an external sidecar.
-    The semantic GGUF model is data rather than an executable; its presence and
-    integrity are verified by the offline-runtime verifier.
-    """
-    return [
+def runtime_probes(
+    target_dir: Path, status: dict, profile: str = FULL_PROFILE
+) -> list[tuple[str, list[str], set[int]]]:
+    normalize_profile(profile, semantic_model_required=(profile == FULL_PROFILE))
+    probes = [
         ("Tesseract", [str(tool_path(target_dir, status, "tesseract", ["tesseract.exe"])), "--version"], {0}),
         ("Poppler pdftotext", [str(tool_path(target_dir, status, "poppler", ["pdftotext.exe"])), "-v"], {0, 1, 99}),
         ("Poppler pdftoppm", [str(tool_path(target_dir, status, "poppler", ["pdftoppm.exe"])), "-v"], {0, 1, 99}),
         ("LibreOffice", [str(tool_path(target_dir, status, "libreoffice", ["soffice.exe"])), "--headless", "--version"], {0}),
         ("SumatraPDF", [str(tool_path(target_dir, status, "sumatrapdf", ["sumatrapdf.exe"])), "-help"], {0}),
         ("7-Zip", [str(tool_path(target_dir, status, "7zip", ["7z.exe", "7zz.exe"])), "i"], {0}),
-        ("llama.cpp", [str(tool_path(target_dir, status, "llama_cpp", ["llama-server.exe", "server.exe"])), "--version"], {0}),
     ]
+    if profile == FULL_PROFILE:
+        probes.append(("llama.cpp", [str(tool_path(target_dir, status, "llama_cpp", ["llama-server.exe", "server.exe"])), "--version"], {0}))
+    return probes
 
 
 def run_probe(title: str, command: list[str], accepted_codes: set[int] | None = None) -> None:
@@ -98,15 +97,25 @@ def run_probe(title: str, command: list[str], accepted_codes: set[int] | None = 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="windows-x86_64")
+    parser.add_argument("--profile", choices=PROFILES)
     args = parser.parse_args()
     if os.name != "nt":
         raise RuntimeError("executable runtime probing must run on the target Windows machine")
 
     target_dir, status = load_status(args.target)
-    probes = runtime_probes(target_dir, status)
+    if args.profile:
+        profile = args.profile
+    elif status.get("runtime_profile"):
+        profile = normalize_profile(
+            status.get("runtime_profile"),
+            semantic_model_required=status.get("semantic_model_required"),
+        )
+    else:
+        profile = FULL_PROFILE
+    probes = runtime_probes(target_dir, status, profile)
     for title, command, accepted in probes:
         run_probe(title, command, accepted)
-    print(f"OFFLINE RUNTIME EXECUTION PROBE PASSED: target={args.target}; probes={len(probes)}")
+    print(f"OFFLINE RUNTIME EXECUTION PROBE PASSED: target={args.target}; profile={profile}; probes={len(probes)}")
     return 0
 
 

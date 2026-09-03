@@ -64,7 +64,6 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-
 def stage_distribution_review(
     data: dict[str, Any], manifest_path: Path, destination: Path
 ) -> dict[str, Any] | None:
@@ -203,14 +202,18 @@ def main() -> int:
 
     runtime_profile = data.get("runtime_profile")
     semantic_model_required = data.get("semantic_model_required")
-    if runtime_profile is None:
-        # Legacy locks represented the old full runtime and always carried both semantic tools.
-        runtime_profile = FULL_PROFILE
-        semantic_model_required = True
-    runtime_profile = normalize_profile(
-        runtime_profile, semantic_model_required=semantic_model_required
-    )
-    validate_profile_file_set(runtime_profile, staged)
+    profile_declared = runtime_profile is not None or semantic_model_required is not None
+    if profile_declared:
+        runtime_profile = normalize_profile(
+            runtime_profile, semantic_model_required=semantic_model_required
+        )
+        validate_profile_file_set(runtime_profile, staged)
+    else:
+        # Schema-v1 development manifests predate runtime profiles and may stage
+        # a deliberately partial local sidecar set. Keep that compatibility only
+        # when no profile claim is made; production core/full manifests remain
+        # exact-set validated above.
+        runtime_profile = None
 
     distribution_review = stage_distribution_review(data, manifest_path, destination)
     status = {

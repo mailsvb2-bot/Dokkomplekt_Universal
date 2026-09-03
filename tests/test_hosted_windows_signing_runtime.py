@@ -131,9 +131,35 @@ def build_runtime_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path,
     approval_public.write_bytes(pem_public(approval_key))
     approval_private.write_bytes(pem_private(approval_key))
 
-    runtime_file = b"MZ" + b"x" * 128
     license_data = b"license"
-    inventory = json.dumps({"schema": 1, "tools": {"tesseract": ["tesseract/tesseract.exe"]}}, sort_keys=True).encode()
+    components = [
+        ("tesseract", "tesseract/tesseract.exe", b"MZ" + b"t" * 128, True),
+        ("poppler", "poppler/bin/pdftoppm.exe", b"MZ" + b"p" * 128, True),
+        ("libreoffice", "libreoffice/program/soffice.exe", b"MZ" + b"l" * 128, True),
+        ("sumatrapdf", "sumatrapdf/SumatraPDF.exe", b"MZ" + b"s" * 128, True),
+        ("7zip", "7zip/7z.exe", b"MZ" + b"7" * 128, True),
+        ("llama_cpp", "llama_cpp/llama-server.exe", b"MZ" + b"a" * 128, True),
+        ("semantic_model", "semantic_model/model.gguf", b"GGUF" + b"m" * 128, False),
+    ]
+    files = []
+    inventory_tools: dict[str, list[str]] = {}
+    for tool, path, data, executable in components:
+        inventory_tools.setdefault(tool, []).append(path)
+        files.append(
+            {
+                "tool": tool,
+                "path": path,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size_bytes": len(data),
+                "executable": executable,
+                "version": "fixture",
+                "source_url": f"https://downloads.dokkomplekt.ru/runtime/{tool}",
+                "license": "fixture-license",
+                "license_path": "_licenses/license.txt",
+                "license_sha256": hashlib.sha256(license_data).hexdigest(),
+            }
+        )
+    inventory = json.dumps({"schema": 1, "tools": inventory_tools}, sort_keys=True).encode()
     inventory_path = "_evidence/runtime-inventory.json"
     sbom = {
         "schema": "dokkomplekt.offline-runtime.sbom.v1",
@@ -141,20 +167,7 @@ def build_runtime_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path,
         "network_used": False,
         "semantic_model_required": True,
         "supply_chain_locked": True,
-        "files": [
-            {
-                "tool": "tesseract",
-                "path": "tesseract/tesseract.exe",
-                "sha256": hashlib.sha256(runtime_file).hexdigest(),
-                "size_bytes": len(runtime_file),
-                "executable": True,
-                "version": "fixture",
-                "source_url": "https://downloads.dokkomplekt.ru/runtime/tesseract",
-                "license": "fixture-license",
-                "license_path": "_licenses/license.txt",
-                "license_sha256": hashlib.sha256(license_data).hexdigest(),
-            }
-        ],
+        "files": files,
         "license_notices": [
             {
                 "path": "_licenses/license.txt",
@@ -175,7 +188,8 @@ def build_runtime_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path,
     bundle = tmp_path / "Dokkomplekt-offline-runtime-windows-x86_64.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
         archive.writestr("runtime-sbom.json", sbom_bytes)
-        archive.writestr("runtime/windows-x86_64/tesseract/tesseract.exe", runtime_file)
+        for _tool, path, data, _executable in components:
+            archive.writestr(f"runtime/windows-x86_64/{path}", data)
         archive.writestr("runtime/windows-x86_64/_licenses/license.txt", license_data)
         archive.writestr(f"runtime/windows-x86_64/{inventory_path}", inventory)
     payload_data = {

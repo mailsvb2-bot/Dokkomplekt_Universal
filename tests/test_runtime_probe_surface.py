@@ -57,6 +57,9 @@ def test_external_runtime_probe_surface_is_exactly_seven_and_has_no_msgconvert()
     libreoffice = next(command for title, command, _ in probes if title == "LibreOffice")
     assert len(libreoffice) == 1
     assert libreoffice[0].lower().endswith("soffice.exe")
+    sumatrapdf = next(command for title, command, _ in probes if title == "SumatraPDF")
+    assert len(sumatrapdf) == 1
+    assert sumatrapdf[0].lower().endswith("sumatrapdf.exe")
 
 
 def test_core_runtime_probe_surface_omits_semantic_server() -> None:
@@ -128,3 +131,91 @@ def test_libreoffice_probe_exercises_real_headless_docx_to_pdf(monkeypatch, tmp_
     assert kwargs["cwd"] == soffice.parent.parent.resolve()
     assert kwargs["env"]["SAL_USE_VCLPLUGIN"] == "svp"
     assert kwargs["env"]["DOKKOMPLEKT_RUNTIME_PROBE"] == "1"
+
+
+
+def test_sumatrapdf_probe_exercises_real_one_page_benchmark_render(monkeypatch, tmp_path: Path) -> None:
+    module = load_module()
+    executable = tmp_path / "sumatrapdf" / "SumatraPDF.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    probe_root = tmp_path / "sumatra-probe-work"
+    probe_root.mkdir()
+    captured: dict[str, object] = {}
+
+    class FixedTemporaryDirectory:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return str(probe_root)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_run(command, **kwargs):
+        captured["command"] = list(command)
+        captured["kwargs"] = kwargs
+        assert command[1:3] == ["-log", "-bench"]
+        assert command[-1] == "1"
+        sample_pdf = Path(command[-2])
+        payload = sample_pdf.read_bytes()
+        assert payload.startswith(b"%PDF-1.4")
+        assert payload.rstrip().endswith(b"%%EOF")
+        output = "\n".join(
+            [
+                str(sample_pdf),
+                "page count: 1",
+                "pageload 1: 1.23 ms",
+                "pagerender 1: 2.34 ms",
+                f"Finished (in 3.45 ms): {sample_pdf}",
+            ]
+        )
+        # SumatraPDF 3.6.1 is known to return rc=1 after a successful benchmark.
+        return SimpleNamespace(returncode=1, stdout=output)
+
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", FixedTemporaryDirectory)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module.run_probe("SumatraPDF", [str(executable)], {0, 1})
+
+    command = captured["command"]
+    kwargs = captured["kwargs"]
+    assert command[1:3] == ["-log", "-bench"]
+    assert kwargs["timeout"] == module.SUMATRAPDF_TIMEOUT_SECONDS == 30
+    assert kwargs["creationflags"] == int(getattr(module.subprocess, "CREATE_NO_WINDOW", 0))
+    assert kwargs["env"]["DOKKOMPLEKT_RUNTIME_PROBE"] == "1"
+
+
+def test_sumatrapdf_probe_rejects_false_success_without_render_evidence(monkeypatch, tmp_path: Path) -> None:
+    module = load_module()
+    executable = tmp_path / "SumatraPDF.exe"
+    executable.write_bytes(b"fixture")
+    probe_root = tmp_path / "sumatra-negative-work"
+    probe_root.mkdir()
+
+    class FixedTemporaryDirectory:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return str(probe_root)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_run(command, **kwargs):
+        sample_pdf = Path(command[-2])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"{sample_pdf}\npage count: 1\nError: failed to render page 1\n",
+        )
+
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", FixedTemporaryDirectory)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    try:
+        module.run_probe("SumatraPDF", [str(executable)], {0, 1})
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "render evidence" in message or "render failures" in message
+    else:
+        raise AssertionError("SumatraPDF probe accepted output without proven page rendering")

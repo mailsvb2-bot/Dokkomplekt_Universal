@@ -40,30 +40,20 @@ jobs:
           path = Path('src-tauri/src/component_manager.rs')
           text = path.read_text(encoding='utf-8')
 
-          old_external = '''    let relevant = descriptor
-              .unlocks
-              .iter()
-              .filter_map(|tool| sidecars.iter().find(|status| status.tool == *tool))
-              .collect::<Vec<_>>();
-          let externally_available = relevant.len() == descriptor.unlocks.len()
-              && relevant.iter().all(|status| status.available);
-          let external_state =
-              if externally_available && relevant.iter().all(|status| status.state == "bundled") {
-                  Some("bundled")
-              } else if externally_available {
-                  Some("system")
-              } else {
-                  None
-              };
-          '''
-          new_external = '''    let external_state = external_component_state(&descriptor.unlocks, sidecars);
-          '''
-          if text.count(old_external) != 1:
-              raise SystemExit('status_for_descriptor external availability block drifted')
-          text = text.replace(old_external, new_external, 1)
+          status_fn = text.index('fn status_for_descriptor(')
+          external_start = text.index('    let relevant = descriptor', status_fn)
+          external_end = text.index('    let state = if downloaded {', external_start)
+          external_block = text[external_start:external_end]
+          for required in ('externally_available', 'status.state == "bundled"', 'Some("system")'):
+              if required not in external_block:
+                  raise SystemExit(f'status_for_descriptor availability block drifted: {required}')
+          text = (
+              text[:external_start]
+              + '    let external_state = external_component_state(&descriptor.unlocks, sidecars);\n'
+              + text[external_end:]
+          )
 
-          marker = '''fn status_for_descriptor(
-          '''
+          status_fn = text.index('fn status_for_descriptor(')
           helper = '''fn external_component_state(
               unlocks: &[String],
               sidecars: &[crate::universal_intake::SidecarToolStatus],
@@ -83,17 +73,14 @@ jobs:
               }
           }
 
-          fn status_for_descriptor(
           '''
-          if text.count(marker) != 1:
-              raise SystemExit('status_for_descriptor marker drifted')
-          text = text.replace(marker, helper, 1)
+          text = text[:status_fn] + helper + text[status_fn:]
 
           start = text.index('fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {')
           end = text.index('\n#[cfg(any(unix, test))]\nfn sanitized_component_file_mode', start)
           old_fallback = text[start:end]
           if 'available: false' not in old_fallback or 'state: "missing".into()' not in old_fallback:
-              raise SystemExit('fallback implementation drifted from expected fail-closed legacy form')
+              raise SystemExit('fallback implementation drifted from expected legacy form')
           new_fallback = '''fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {
               let sidecars = crate::universal_intake::sidecar_tool_statuses();
               fallback_statuses_with_sidecars(message, &sidecars)
@@ -153,13 +140,13 @@ jobs:
           '''
           text = text[:start] + new_fallback + text[end:]
 
-          test_marker = '''    #[test]
-              fn component_paths_reject_traversal_and_absolute_paths() {
-          '''
+          marker = '    #[test]\n    fn component_paths_reject_traversal_and_absolute_paths() {'
+          if text.count(marker) != 1:
+              raise SystemExit('component test insertion marker drifted')
           regression = '''    #[test]
               fn fallback_component_statuses_honor_bundled_runtime_without_catalog() {
-                  use crate::universal_intake::SidecarToolStatus;
                   use super::fallback_statuses_with_sidecars;
+                  use crate::universal_intake::SidecarToolStatus;
 
                   let bundled = |tool: &str| SidecarToolStatus {
                       tool: tool.into(),
@@ -185,12 +172,8 @@ jobs:
                   assert_eq!(ocr.message, "catalog unavailable");
               }
 
-              #[test]
-              fn component_paths_reject_traversal_and_absolute_paths() {
-          '''
-          if text.count(test_marker) != 1:
-              raise SystemExit('component test insertion marker drifted')
-          text = text.replace(test_marker, regression, 1)
+          ''' + marker
+          text = text.replace(marker, regression, 1)
           path.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all

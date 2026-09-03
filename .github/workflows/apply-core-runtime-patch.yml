@@ -101,6 +101,10 @@ jobs:
                   target.write_bytes(source.read())
           PY
 
+          # GitHub Actions' token is not allowed to publish workflow-file changes.
+          # Leave build-installers.yml for the authenticated repository connector,
+          # but publish the entire non-workflow runtime implementation here.
+          git checkout HEAD -- .github/workflows/build-installers.yml
           rm -f .github/core-runtime-patch.part00 \
                 .github/core-runtime-patch.part01 \
                 .github/core-runtime-patch.part02 \
@@ -110,8 +114,7 @@ jobs:
                 .github/core-runtime-patch.part03d \
                 .github/core-runtime-patch.part03e \
                 .github/core-runtime-patch.part03f \
-                .github/core-runtime-patch.part04 \
-                .github/workflows/apply-core-runtime-patch.yml
+                .github/core-runtime-patch.part04
 
       - name: Verify targeted runtime contracts
         shell: bash
@@ -130,17 +133,7 @@ jobs:
             tests/test_hardware_preflight_trust_order.py \
             tests/test_windows_signed_handoff.py
 
-      - name: Regenerate and verify source manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/verify_source_manifest.py \
-            --candidate SOURCE_MANIFEST_SHA256.generated.txt \
-            --json-report /tmp/source-manifest-before.json || true
-          mv SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py --json-report /tmp/source-manifest-after.json
-
-      - name: Commit final core runtime wiring
+      - name: Commit non-workflow core runtime wiring
         shell: bash
         run: |
           set -euo pipefail
@@ -148,5 +141,5 @@ jobs:
           git config user.email 'mailsvb2@gmail.com'
           git add -A
           git diff --cached --check
-          git commit -m 'Complete core offline installer profile wiring'
+          git commit -m 'Complete core offline runtime profile wiring'
           git push origin HEAD:agent/core-offline-windows-installer

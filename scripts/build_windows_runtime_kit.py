@@ -147,6 +147,16 @@ def build_catalog(
     selected_profile = normalize_profile(
         selected_profile, semantic_model_required=(selected_profile == FULL_PROFILE)
     )
+    declared_profile = data.get("runtime_profile")
+    if declared_profile is not None:
+        declared = normalize_profile(
+            declared_profile, semantic_model_required=data.get("semantic_model_required")
+        )
+        if profile is not None and declared != selected_profile:
+            raise ValueError(
+                f"runtime-kit spec profile mismatch: requested {selected_profile!r}, "
+                f"declared {declared!r}"
+            )
     expected_tools = set(profile_tools(selected_profile))
     review = parse_review(data)
     components = data.get("components")
@@ -297,7 +307,7 @@ def main() -> int:
     )
     parser.add_argument("spec", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--profile", choices=PROFILES, default=FULL_PROFILE)
+    parser.add_argument("--profile", choices=PROFILES)
     args = parser.parse_args()
 
     spec_path = args.spec.resolve()

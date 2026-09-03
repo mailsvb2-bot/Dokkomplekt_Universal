@@ -73,7 +73,9 @@ def component_tree(root: Path, tool: str) -> Path:
     return tree
 
 
-def make_spec(root: Path, *, omit: str | None = None) -> Path:
+def make_spec(
+    root: Path, *, omit: str | None = None, runtime_profile: str | None = None
+) -> Path:
     license_file = write(root / "licenses" / "RUNTIME-LICENSE.txt", b"fixture license\n")
     tools = [
         "tesseract",
@@ -110,6 +112,8 @@ def make_spec(root: Path, *, omit: str | None = None) -> Path:
         },
         "components": components,
     }
+    if runtime_profile is not None:
+        spec["runtime_profile"] = runtime_profile
     path = root / "runtime-kit.json"
     path.write_text(json.dumps(spec), encoding="utf-8")
     return path
@@ -253,6 +257,39 @@ def test_core_profile_filters_semantic_trees_and_stages_exact_document_runtime()
             tools = verifier.verify_entries(target_dir, loaded)
             verifier.verify_required_runtime(tools, False)
             assert set(tools) == {"tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip"}
+
+def test_builder_rejects_profile_override_that_conflicts_with_spec() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_profile_mismatch")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root, runtime_profile="core")
+        with pytest.raises(ValueError, match="spec profile mismatch"):
+            builder.build_catalog(spec, root / "output", "full")
+
+
+def test_cli_honors_profile_declared_by_spec_without_override() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_cli_profile")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root, runtime_profile="core")
+        output = root / "output"
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["build_windows_runtime_kit.py", str(spec), "--output-dir", str(output)],
+        ):
+            assert builder.main() == 0
+
+        catalog = json.loads((output / "runtime-catalog.json").read_text("utf-8"))
+        lock = json.loads((output / "windows-x86_64-manifest.json").read_text("utf-8"))
+        report = json.loads((output / "RUNTIME_KIT_REPORT.json").read_text("utf-8"))
+        assert catalog["runtime_profile"] == "core"
+        assert lock["runtime_profile"] == "core"
+        assert report["runtime_profile"] == "core"
+        assert {item["tool"] for item in lock["files"]} == {
+            "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip"
+        }
+
 
 def test_one_command_wrapper_is_fail_closed_and_network_free() -> None:
     text = WRAPPER.read_text(encoding="utf-8")

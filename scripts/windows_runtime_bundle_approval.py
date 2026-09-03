@@ -2,8 +2,8 @@
 """Offline Ed25519 approval for an exact signed Windows runtime bundle payload.
 
 The production runtime signing key may live in a protected GitHub environment,
-but runtime composition still requires an independent offline approval.  The
-offline approval private key never needs to exist in GitHub Actions.  A reviewer
+but runtime composition still requires an independent offline approval. The
+offline approval private key never needs to exist in GitHub Actions. A reviewer
 signs the exact ``*.signing.json`` payload emitted by
 ``create_offline_runtime_bundle.py``; hosted signing jobs receive only the raw
 approval signature and the pinned approval public key.
@@ -22,6 +22,11 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+try:
+    from scripts._runtime_profile import normalize_profile
+except ModuleNotFoundError:
+    from _runtime_profile import normalize_profile
 
 SCHEMA = "dokkomplekt.windows-runtime-bundle-approval.v1"
 PAYLOAD_SCHEMA = "dokkomplekt.offline-runtime.signature.v1"
@@ -57,8 +62,11 @@ def load_payload(path: Path) -> tuple[dict[str, Any], bytes]:
         raise ValueError(f"runtime signing payload target must be {TARGET}")
     if data.get("supply_chain_locked") is not True:
         raise ValueError("runtime signing payload must assert supply_chain_locked=true")
-    if data.get("semantic_model_required") is not True:
-        raise ValueError("runtime signing payload must require the semantic model")
+    profile = normalize_profile(
+        data.get("runtime_profile"),
+        semantic_model_required=data.get("semantic_model_required"),
+    )
+    data["runtime_profile"] = profile
     digest = str(data.get("bundle_sha256", "")).strip().lower()
     if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
         raise ValueError("runtime signing payload bundle_sha256 is invalid")
@@ -118,6 +126,7 @@ def sign_payload(
         "schema": SCHEMA,
         "algorithm": "Ed25519",
         "target": data["target"],
+        "runtime_profile": data["runtime_profile"],
         "payload": payload_path.name,
         "payload_sha256": sha256_bytes(payload),
         "bundle_sha256": data["bundle_sha256"],
@@ -147,6 +156,7 @@ def verify_payload(payload_path: Path, signature_path: Path, public_key_path: Pa
         "ok": True,
         "algorithm": "Ed25519",
         "target": data["target"],
+        "runtime_profile": data["runtime_profile"],
         "payload": str(payload_path.resolve()),
         "payload_sha256": sha256_bytes(payload),
         "bundle_sha256": data["bundle_sha256"],
@@ -154,7 +164,7 @@ def verify_payload(payload_path: Path, signature_path: Path, public_key_path: Pa
         "signature_sha256": sha256_bytes(signature),
         "approval_key_id": public_key_id(public_key),
         "supply_chain_locked": True,
-        "semantic_model_required": True,
+        "semantic_model_required": data.get("semantic_model_required") is True,
     }
 
 

@@ -1639,6 +1639,25 @@ fn statuses_from_descriptors_with_sidecars(
         .collect()
 }
 
+fn external_component_state(
+    unlocks: &[String],
+    sidecars: &[crate::universal_intake::SidecarToolStatus],
+) -> Option<&'static str> {
+    let relevant = unlocks
+        .iter()
+        .filter_map(|tool| sidecars.iter().find(|status| status.tool == *tool))
+        .collect::<Vec<_>>();
+    let available =
+        relevant.len() == unlocks.len() && relevant.iter().all(|status| status.available);
+    if !available {
+        None
+    } else if relevant.iter().all(|status| status.state == "bundled") {
+        Some("bundled")
+    } else {
+        Some("system")
+    }
+}
+
 fn status_for_descriptor(
     root: &Path,
     descriptor: &ComponentDescriptor,
@@ -1648,27 +1667,13 @@ fn status_for_descriptor(
     let component_dir = root.join(&descriptor.id);
     let valid = read_verified_component_manifest(&component_dir, descriptor);
     let downloaded = valid.is_ok();
-    let relevant = descriptor
-        .unlocks
-        .iter()
-        .filter_map(|tool| sidecars.iter().find(|status| status.tool == *tool))
-        .collect::<Vec<_>>();
-    let externally_available = relevant.len() == descriptor.unlocks.len()
-        && relevant.iter().all(|status| status.available);
-    let external_state =
-        if externally_available && relevant.iter().all(|status| status.state == "bundled") {
-            Some("bundled")
-        } else if externally_available {
-            Some("system")
-        } else {
-            None
-        };
+    let external_state = external_component_state(&descriptor.unlocks, sidecars);
     let state = if downloaded {
         "downloaded"
     } else {
         external_state.unwrap_or("missing")
     };
-    let available = downloaded || externally_available;
+    let available = downloaded || external_state.is_some();
     ComponentStatus {
         id: descriptor.id.clone(),
         label: descriptor.label.clone(),
@@ -1702,6 +1707,14 @@ fn status_for_descriptor(
 }
 
 fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {
+    let sidecars = crate::universal_intake::sidecar_tool_statuses();
+    fallback_statuses_with_sidecars(message, &sidecars)
+}
+
+fn fallback_statuses_with_sidecars(
+    message: &str,
+    sidecars: &[crate::universal_intake::SidecarToolStatus],
+) -> Vec<ComponentStatus> {
     [
         (
             "ocr",
@@ -1721,19 +1734,32 @@ fn fallback_statuses(message: &str) -> Vec<ComponentStatus> {
         ("archive", "Распаковка входящих архивов", vec!["7z"]),
     ]
     .into_iter()
-    .map(|(id, label, unlocks)| ComponentStatus {
-        id: id.into(),
-        label: label.into(),
-        description: String::new(),
-        target: crate::current_update_platform().into(),
-        size_bytes: 0,
-        size_label: "размер появится после проверки каталога".into(),
-        unlocks: unlocks.into_iter().map(str::to_string).collect(),
-        state: "missing".into(),
-        installed: false,
-        available: false,
-        catalog_available: false,
-        message: message.into(),
+    .map(|(id, label, unlocks)| {
+        let unlocks = unlocks.into_iter().map(str::to_string).collect::<Vec<_>>();
+        let external_state = external_component_state(&unlocks, sidecars);
+        let available = external_state.is_some();
+        let state = external_state.unwrap_or("missing");
+        ComponentStatus {
+            id: id.into(),
+            label: label.into(),
+            description: String::new(),
+            target: crate::current_update_platform().into(),
+            size_bytes: 0,
+            size_label: "размер появится после проверки каталога".into(),
+            unlocks,
+            state: state.into(),
+            installed: false,
+            available,
+            catalog_available: false,
+            message: if state == "bundled" {
+                "Все инструменты компонента уже встроены в установщик и доступны.".into()
+            } else if state == "system" {
+                "Все инструменты компонента найдены в системе; отдельная загрузка не требуется."
+                    .into()
+            } else {
+                message.into()
+            },
+        }
     })
     .collect()
 }
@@ -2154,6 +2180,38 @@ fn crate_platform_for_test() -> String {
 #[cfg(test)]
 mod tests {
     use super::{safe_relative_path, validate_component_id};
+
+    #[test]
+    fn fallback_component_statuses_honor_bundled_runtime_without_catalog() {
+        use super::fallback_statuses_with_sidecars;
+        use crate::universal_intake::SidecarToolStatus;
+
+        let bundled = |tool: &str| SidecarToolStatus {
+            tool: tool.into(),
+            available: true,
+            bundled: true,
+            state: "bundled".into(),
+            component_id: None,
+            resolved_path: format!("C:/Dokkomplekt/{tool}.exe"),
+            purpose: "test".into(),
+        };
+        let sidecars = vec![bundled("soffice"), bundled("sumatrapdf")];
+        let statuses = fallback_statuses_with_sidecars("catalog unavailable", &sidecars);
+        let office = statuses
+            .iter()
+            .find(|status| status.id == "office")
+            .unwrap();
+        assert!(office.available);
+        assert!(!office.installed);
+        assert!(!office.catalog_available);
+        assert_eq!(office.state, "bundled");
+        assert!(office.message.contains("встроены в установщик"));
+
+        let ocr = statuses.iter().find(|status| status.id == "ocr").unwrap();
+        assert!(!ocr.available);
+        assert_eq!(ocr.state, "missing");
+        assert_eq!(ocr.message, "catalog unavailable");
+    }
 
     #[test]
     fn component_paths_reject_traversal_and_absolute_paths() {

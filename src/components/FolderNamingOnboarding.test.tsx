@@ -14,10 +14,19 @@ describe('FolderNamingOnboarding', () => {
     const save = screen.getByRole('button', { name: 'Сохранить папку и правило' }) as HTMLButtonElement;
     expect(document.activeElement).toBe(save);
     expect(save.getAttribute('aria-keyshortcuts')).toBe('Enter');
+    expect(save.type).toBe('submit');
     fireEvent.click(screen.getByRole('button', { name: /Человек \+ месяц/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить папку и правило' }));
     expect(onConfirm).toHaveBeenCalledWith(['ShortInitials', 'PeriodStartMonthName']);
   });
+  it('submits the ready default rule through Enter-compatible form semantics', () => {
+    const onConfirm = vi.fn();
+    render(<FolderNamingOnboarding currentRoot="D:/Ready" currentParts={['DocumentNumber', 'DocumentDate']} onPickRoot={vi.fn()} onConfirm={onConfirm} />);
+    const save = screen.getByRole('button', { name: 'Сохранить папку и правило' }) as HTMLButtonElement;
+    fireEvent.submit(save.form!);
+    expect(onConfirm).toHaveBeenCalledWith(['DocumentNumber', 'DocumentDate']);
+  });
+
   it('blocks an empty folder naming rule so unrelated kits cannot collide', () => {
     const onConfirm = vi.fn();
     render(<FolderNamingOnboarding currentRoot="D:/Ready" currentParts={[]} onPickRoot={vi.fn()} onConfirm={onConfirm} />);

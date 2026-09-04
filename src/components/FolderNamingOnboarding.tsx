@@ -43,7 +43,7 @@ export function FolderNamingOnboarding(props: {
 
   return (
     <div className="backdrop folderNamingBackdrop" role="presentation">
-      <section className="modal folderNamingOnboarding" role="dialog" aria-modal="true" aria-labelledby="folder-naming-title">
+      <form className="modal folderNamingOnboarding" role="dialog" aria-modal="true" aria-labelledby="folder-naming-title" onSubmit={(event) => { event.preventDefault(); if (root && selected.length) props.onConfirm(selected); }}>
         <span className="workflowEyebrow">Первичная настройка результата</span>
         <h2 id="folder-naming-title">Как называть папку комплекта?</h2>
         <p className="hint">Сначала выберите реальную папку на компьютере, куда программа будет складывать готовые документы. Затем задайте правило имени подпапки. Оба значения сохраняются.</p>
@@ -91,9 +91,9 @@ export function FolderNamingOnboarding(props: {
         <div className="modalActions">
           <small>{!root ? 'Сначала выберите папку на компьютере.' : !selected.length ? 'Выберите хотя бы один компонент имени подпапки.' : 'Папка и правило будут сохранены.'}</small>
           <span className="spacer" />
-          <button type="button" className="primaryBtn" autoFocus aria-keyshortcuts="Enter" disabled={!root || !selected.length} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
+          <button type="submit" className="primaryBtn" autoFocus aria-keyshortcuts="Enter" disabled={!root || !selected.length}>Сохранить папку и правило</button>
         </div>
-      </section>
+      </form>
     </div>
   );
 }

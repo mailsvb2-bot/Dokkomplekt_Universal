@@ -13,23 +13,22 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
 
     assert 'aria-label="Выбрать исходный файл"' in workspace
     assert 'autoFocus aria-keyshortcuts="Enter"' in onboarding
-    assert "Сохранить папку и правило" in source
+    assert "Сохранить папку и правило" in onboarding
     assert "function Activate-LiveAppWindow" in source
     assert "SetForegroundWindow" in source
     assert "ShowWindow($hwnd, 9)" in source
     assert "Activate-LiveAppWindow -Window $appWindow" in source
-    assert "function Get-FocusedElementForProcess" in source
-    assert "function Find-FocusedReadyButtonByNames" in source
-    assert "$saveFolderRule = Wait-UiElement" in source
-    assert "Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id)" in source
-    assert "Invoke-UiElementPhysically -Element $saveFolderRule" in source
-    assert "saved output-folder onboarding focus dismissal" in source
-    assert "$focusedInApp = Get-FocusedElementForProcess -ProcessId ([int]$process.Id)" in source
-    assert "if ($null -eq $focusedInApp)" in source
-    transition = source.split("saved output-folder onboarding focus dismissal", 1)[1].split("Write-Host 'Default output folder", 1)[0]
-    assert "$currentAppWindow.SetFocus()" not in transition
-    assert "manufacture the very focus transition" in transition
-    assert "FindFirst(Descendants)" in source
+    assert '<form className="modal folderNamingOnboarding"' in onboarding
+    assert 'type="submit" className="primaryBtn" autoFocus aria-keyshortcuts="Enter"' in onboarding
+    assert "function Get-AppStateCipherFingerprint" in source
+    assert "function Wait-AppStateCipherFingerprint" in source
+    assert "$outputPreferenceStateKey = 'output_preferences_v2'" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')" in source
+    assert "-DifferentFrom $beforeFolderRuleSave" in source
+    assert "durable native state mutation" in source
+    assert "Find-FocusedReadyButtonByNames" not in source
+    assert "Get-FocusedElementForProcess" not in source
+    assert "[System.Windows.Automation.TreeScope]::Descendants" in source
     assert "$saveFolderRule = Find-ButtonByNames" not in source
     assert "$createPreparedButton = Wait-UiElement" not in source
     assert "$generateButton = Wait-UiElement" not in source

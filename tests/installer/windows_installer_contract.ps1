@@ -548,35 +548,56 @@ function Find-ReadyButtonByNames {
   }
 }
 
-function Get-FocusedElementForProcess {
-  param([Parameter(Mandatory = $true)][int]$ProcessId)
-  try {
-    $element = [System.Windows.Automation.AutomationElement]::FocusedElement
-    if ($null -eq $element) { return $null }
-    if ([int]$element.Current.ProcessId -ne $ProcessId) { return $null }
-    return $element
-  } catch {
-    if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
-    throw
-  }
+function Get-AppStateCipherFingerprint {
+  param(
+    [Parameter(Mandatory = $true)][string]$DatabasePath,
+    [Parameter(Mandatory = $true)][string]$StateKey
+  )
+  if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { return $null }
+  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+  if ($null -eq $pythonCommand) { throw 'Python is required by the installed-app CI contract to inspect SQLite state metadata.' }
+  $script = @'
+import hashlib, sqlite3, sys
+path, key = sys.argv[1], sys.argv[2]
+try:
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
+    try:
+        row = con.execute("SELECT json FROM app_state WHERE state_key=?", (key,)).fetchone()
+    finally:
+        con.close()
+except (OSError, sqlite3.Error):
+    raise SystemExit(3)
+if row is None:
+    raise SystemExit(4)
+payload = str(row[0]).encode("utf-8")
+print(hashlib.sha256(payload).hexdigest())
+'@
+  $result = & $pythonCommand.Source -c $script $DatabasePath $StateKey 2>$null
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $fingerprint = ([string]$result).Trim().ToLowerInvariant()
+  if ($fingerprint -notmatch '^[0-9a-f]{64}$') { return $null }
+  return $fingerprint
 }
 
-function Find-FocusedReadyButtonByNames {
+function Wait-AppStateCipherFingerprint {
   param(
-    [Parameter(Mandatory = $true)][int]$ProcessId,
-    [Parameter(Mandatory = $true)][string[]]$Names
+    [Parameter(Mandatory = $true)][string]$DatabasePath,
+    [Parameter(Mandatory = $true)][string]$StateKey,
+    [string]$DifferentFrom = '',
+    [int]$TimeoutSeconds = 15
   )
-  $button = Get-FocusedElementForProcess -ProcessId $ProcessId
-  if ($null -eq $button) { return $null }
-  try {
-    if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { return $null }
-    if ($Names -notcontains [string]$button.Current.Name) { return $null }
-    if (-not $button.Current.IsEnabled) { return $null }
-    return $button
-  } catch {
-    if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
-    throw
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $fingerprint = Get-AppStateCipherFingerprint -DatabasePath $DatabasePath -StateKey $StateKey
+    if ($null -ne $fingerprint -and ([string]::IsNullOrWhiteSpace($DifferentFrom) -or $fingerprint -ne $DifferentFrom)) {
+      return $fingerprint
+    }
+    Start-Sleep -Milliseconds 150
+  } while ([DateTime]::UtcNow -lt $deadline)
+  if ([string]::IsNullOrWhiteSpace($DifferentFrom)) {
+    throw "Native app_state row '$StateKey' did not become readable within $TimeoutSeconds seconds."
   }
+  throw "Native app_state row '$StateKey' did not change after the real installed UI action within $TimeoutSeconds seconds."
 }
 
 function Set-UiValue {
@@ -714,60 +735,31 @@ if ($adversarial) {
 }
 
 # Confirm the first-run output naming rule before exercising generation. The
-# default rule is deterministic: document number + document date. The onboarding
-# save button owns initial keyboard focus by product contract, so do not traverse
-# the full WebView2 accessibility subtree here: Chromium's UIA provider can block
-# inside FindFirst(Descendants) for minutes and an outer PowerShell deadline cannot
-# interrupt that COM call. Resolve the global focused element, prove it is the
-# enabled save button owned by this installed process, activate it physically, and
-# require focus to leave that button long enough to prove the modal was dismissed.
+# default rule is deterministic: document number + document date. WebView2 does
+# not reliably expose DOM descendant focus through UIAutomation.FocusedElement on
+# hosted Windows, so focus itself is not authoritative. The product uses native
+# HTML form semantics with an autofocus submit button: activate the real installed
+# window, send a real Enter key, and require the encrypted native SQLite state row
+# to change. This proves both the installed UI action and its durable Rust save,
+# without a deep WebView2 UIA traversal that can block inside COM for minutes.
+$stateDatabase = Join-Path $appDataRoot 'dokkomplekt-user-state.sqlite'
+$outputPreferenceStateKey = 'output_preferences_v2'
+$beforeFolderRuleSave = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 15
 Activate-LiveAppWindow -Window $appWindow
 Start-Sleep -Milliseconds 250
-$saveFolderRule = Wait-UiElement -Description 'focused Сохранить папку и правило button' -TimeoutSeconds 10 -Probe {
-  Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id) -Names @('Сохранить папку и правило')
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+$afterFolderRuleSave = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -DifferentFrom $beforeFolderRuleSave `
+  -TimeoutSeconds 20
+if ($afterFolderRuleSave -eq $beforeFolderRuleSave) {
+  throw 'First-run output rule Enter action did not mutate durable native state.'
 }
-Invoke-UiElementPhysically -Element $saveFolderRule -Description 'Сохранить папку и правило focused button'
-$folderRuleFocusLeft = [pscustomobject]@{ Since = $null }
-$null = Wait-UiElement -Description 'saved output-folder onboarding focus dismissal' -TimeoutSeconds 15 -Probe {
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) {
-    $folderRuleFocusLeft.Since = $null
-    return $null
-  }
-  # Observe the focus left by the real physical click. Do not call SetFocus here:
-  # doing so would manufacture the very focus transition this assertion is meant
-  # to prove and could let an undismissed modal pass.
-  $focusedInApp = Get-FocusedElementForProcess -ProcessId ([int]$process.Id)
-  if ($null -eq $focusedInApp) {
-    $folderRuleFocusLeft.Since = $null
-    return $null
-  }
-  try {
-    $stillSave = (
-      $focusedInApp.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
-      [string]$focusedInApp.Current.Name -eq 'Сохранить папку и правило'
-    )
-  } catch {
-    if (Test-UiaTransientTimeout -ErrorRecord $_) {
-      $folderRuleFocusLeft.Since = $null
-      return $null
-    }
-    throw
-  }
-  if ($stillSave) {
-    $folderRuleFocusLeft.Since = $null
-    return $null
-  }
-  if ($null -eq $folderRuleFocusLeft.Since) {
-    $folderRuleFocusLeft.Since = [DateTime]::UtcNow
-    return $null
-  }
-  if (([DateTime]::UtcNow - $folderRuleFocusLeft.Since).TotalSeconds -ge 1) {
-    return $currentAppWindow
-  }
-  return $null
-}
-Write-Host 'Default output folder and subfolder naming rule confirmed through focused physical UI action.'
+Write-Host 'Default output folder and subfolder naming rule confirmed through foreground Enter and durable native state mutation.'
 
 $templateDialog = Invoke-UiActionWithObservedTransition `
   -Description 'Создать свои кнопки button' `

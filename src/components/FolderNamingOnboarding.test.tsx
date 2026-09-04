@@ -11,6 +11,9 @@ describe('FolderNamingOnboarding', () => {
     expect(screen.queryByText(/папк.*пациент/i)).toBeNull();
     expect(screen.getByText('D:/Работа/Готовые документы')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Выбрать папку на компьютере' })).toBeTruthy();
+    const save = screen.getByRole('button', { name: 'Сохранить папку и правило' }) as HTMLButtonElement;
+    expect(document.activeElement).toBe(save);
+    expect(save.getAttribute('aria-keyshortcuts')).toBe('Enter');
     fireEvent.click(screen.getByRole('button', { name: /Человек \+ месяц/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить папку и правило' }));
     expect(onConfirm).toHaveBeenCalledWith(['ShortInitials', 'PeriodStartMonthName']);

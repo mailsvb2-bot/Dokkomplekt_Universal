@@ -91,7 +91,7 @@ export function FolderNamingOnboarding(props: {
         <div className="modalActions">
           <small>{!root ? 'Сначала выберите папку на компьютере.' : !selected.length ? 'Выберите хотя бы один компонент имени подпапки.' : 'Папка и правило будут сохранены.'}</small>
           <span className="spacer" />
-          <button type="button" className="primaryBtn" disabled={!root || !selected.length} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
+          <button type="button" className="primaryBtn" autoFocus aria-keyshortcuts="Enter" disabled={!root || !selected.length} onClick={() => props.onConfirm(selected)}>Сохранить папку и правило</button>
         </div>
       </section>
     </div>

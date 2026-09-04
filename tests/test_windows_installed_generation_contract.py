@@ -3,16 +3,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
 WORKSPACE = ROOT / "src" / "components" / "Workspace.tsx"
+FOLDER_ONBOARDING = ROOT / "src" / "components" / "FolderNamingOnboarding.tsx"
 
 
 def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> None:
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
     workspace = WORKSPACE.read_text(encoding="utf-8")
+    onboarding = FOLDER_ONBOARDING.read_text(encoding="utf-8")
 
     assert 'aria-label="Выбрать исходный файл"' in workspace
+    assert 'autoFocus aria-keyshortcuts="Enter"' in onboarding
     assert "Сохранить папку и правило" in source
-    assert "-Description 'Сохранить папку и правило button'" in source
-    assert "-TransitionDescription 'saved output-folder onboarding dismissal'" in source
+    assert "function Find-FocusedReadyButtonByNames" in source
+    assert "$saveFolderRule = Wait-UiElement" in source
+    assert "Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id)" in source
+    assert "Invoke-UiElementPhysically -Element $saveFolderRule" in source
+    assert "saved output-folder onboarding focus dismissal" in source
+    assert "FindFirst(Descendants)" in source
     assert "$saveFolderRule = Find-ButtonByNames" not in source
     assert "$createPreparedButton = Wait-UiElement" not in source
     assert "$generateButton = Wait-UiElement" not in source

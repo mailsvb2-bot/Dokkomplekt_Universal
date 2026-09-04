@@ -542,6 +542,25 @@ function Find-ReadyButtonByNames {
   }
 }
 
+function Find-FocusedReadyButtonByNames {
+  param(
+    [Parameter(Mandatory = $true)][int]$ProcessId,
+    [Parameter(Mandatory = $true)][string[]]$Names
+  )
+  try {
+    $button = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -eq $button) { return $null }
+    if ([int]$button.Current.ProcessId -ne $ProcessId) { return $null }
+    if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { return $null }
+    if ($Names -notcontains [string]$button.Current.Name) { return $null }
+    if (-not $button.Current.IsEnabled) { return $null }
+    return $button
+  } catch {
+    if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
+    return $null
+  }
+}
+
 function Set-UiValue {
   param(
     [Parameter(Mandatory = $true)]$Element,
@@ -667,42 +686,42 @@ if ($adversarial) {
 }
 
 # Confirm the first-run output naming rule before exercising generation. The
-# default rule is deterministic: document number + document date.
-# Output preferences are hydrated asynchronously from the durable native store.
-# Never capture the onboarding button from the first React frame: that frame can
-# legitimately expose a disabled placeholder before the canonical Desktop root is
-# loaded. Resolve a live enabled button, invoke it, and require the onboarding to
-# remain absent long enough to prove that the durable save completed.
-$folderRuleAbsence = [pscustomobject]@{ Since = $null }
-$null = Invoke-UiActionWithObservedTransition `
-  -Description 'Сохранить папку и правило button' `
-  -TransitionDescription 'saved output-folder onboarding dismissal' `
-  -ActionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Сохранить папку и правило')
-  } `
-  -TransitionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) {
-      $folderRuleAbsence.Since = $null
-      return $null
-    }
-    $stillOpen = Find-ButtonByNames -Root $currentAppWindow -Names @('Сохранить папку и правило')
-    if ($null -ne $stillOpen) {
-      $folderRuleAbsence.Since = $null
-      return $null
-    }
-    if ($null -eq $folderRuleAbsence.Since) {
-      $folderRuleAbsence.Since = [DateTime]::UtcNow
-      return $null
-    }
-    if (([DateTime]::UtcNow - $folderRuleAbsence.Since).TotalSeconds -ge 1) {
-      return $currentAppWindow
-    }
+# default rule is deterministic: document number + document date. The onboarding
+# save button owns initial keyboard focus by product contract, so do not traverse
+# the full WebView2 accessibility subtree here: Chromium's UIA provider can block
+# inside FindFirst(Descendants) for minutes and an outer PowerShell deadline cannot
+# interrupt that COM call. Resolve the global focused element, prove it is the
+# enabled save button owned by this installed process, activate it physically, and
+# require focus to leave that button long enough to prove the modal was dismissed.
+$appWindow.SetFocus()
+Start-Sleep -Milliseconds 250
+$saveFolderRule = Wait-UiElement -Description 'focused Сохранить папку и правило button' -TimeoutSeconds 10 -Probe {
+  Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id) -Names @('Сохранить папку и правило')
+}
+Invoke-UiElementPhysically -Element $saveFolderRule -Description 'Сохранить папку и правило focused button'
+$folderRuleFocusLeft = [pscustomobject]@{ Since = $null }
+$null = Wait-UiElement -Description 'saved output-folder onboarding focus dismissal' -TimeoutSeconds 15 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) {
+    $folderRuleFocusLeft.Since = $null
     return $null
   }
-Write-Host 'Default output folder and subfolder naming rule confirmed.'
+  try { $currentAppWindow.SetFocus() } catch { }
+  $stillFocused = Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id) -Names @('Сохранить папку и правило')
+  if ($null -ne $stillFocused) {
+    $folderRuleFocusLeft.Since = $null
+    return $null
+  }
+  if ($null -eq $folderRuleFocusLeft.Since) {
+    $folderRuleFocusLeft.Since = [DateTime]::UtcNow
+    return $null
+  }
+  if (([DateTime]::UtcNow - $folderRuleFocusLeft.Since).TotalSeconds -ge 1) {
+    return $currentAppWindow
+  }
+  return $null
+}
+Write-Host 'Default output folder and subfolder naming rule confirmed through focused physical UI action.'
 
 $templateDialog = Invoke-UiActionWithObservedTransition `
   -Description 'Создать свои кнопки button' `

@@ -151,6 +151,12 @@ public static class DokkomplektNativeMouse {
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
   public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 "@
 
@@ -673,6 +679,16 @@ function Find-LiveAppWindow {
   )
   return $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
+
+function Activate-LiveAppWindow {
+  param([Parameter(Mandatory = $true)]$Window)
+  $hwnd = [IntPtr]$Window.Current.NativeWindowHandle
+  if ($hwnd -eq [IntPtr]::Zero) { throw 'Installed application window does not expose a native HWND.' }
+  $null = [DokkomplektNativeMouse]::ShowWindow($hwnd, 9) # SW_RESTORE
+  if (-not [DokkomplektNativeMouse]::SetForegroundWindow($hwnd)) {
+    throw 'Could not activate installed application window through its native HWND.'
+  }
+}
 $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
@@ -705,7 +721,7 @@ if ($adversarial) {
 # interrupt that COM call. Resolve the global focused element, prove it is the
 # enabled save button owned by this installed process, activate it physically, and
 # require focus to leave that button long enough to prove the modal was dismissed.
-$appWindow.SetFocus()
+Activate-LiveAppWindow -Window $appWindow
 Start-Sleep -Milliseconds 250
 $saveFolderRule = Wait-UiElement -Description 'focused Сохранить папку и правило button' -TimeoutSeconds 10 -Probe {
   Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id) -Names @('Сохранить папку и правило')
@@ -718,8 +734,9 @@ $null = Wait-UiElement -Description 'saved output-folder onboarding focus dismis
     $folderRuleFocusLeft.Since = $null
     return $null
   }
-  $currentAppWindow.SetFocus()
-  Start-Sleep -Milliseconds 50
+  # Observe the focus left by the real physical click. Do not call SetFocus here:
+  # doing so would manufacture the very focus transition this assertion is meant
+  # to prove and could let an undismissed modal pass.
   $focusedInApp = Get-FocusedElementForProcess -ProcessId ([int]$process.Id)
   if ($null -eq $focusedInApp) {
     $folderRuleFocusLeft.Since = $null

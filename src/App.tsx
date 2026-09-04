@@ -103,7 +103,7 @@ function AppContent() {
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
   const {
-    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, outputRootRecoveryRequired, watcherRefreshRevision,
+    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, outputPreferencesLoading, outputRootRecoveryRequired, watcherRefreshRevision,
     setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
     chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
   } = useOutputDestination(run, setStatus);
@@ -1260,7 +1260,7 @@ function AppContent() {
   }
 
 
-  const interactionBusy = busy || workspaceStateLoading || !workspaceStateReady;
+  const interactionBusy = busy || workspaceStateLoading || !workspaceStateReady || outputPreferencesLoading;
 
   return (
     <div className="appRoot">
@@ -1441,7 +1441,7 @@ function AppContent() {
         </footer>
       </div>
 
-      {(!folderNamingConfirmed || !outputRoot.trim()) && (
+      {!outputPreferencesLoading && (!folderNamingConfirmed || !outputRoot.trim()) && (
         <FolderNamingOnboarding
           currentRoot={outputRoot}
           currentParts={folderParts}

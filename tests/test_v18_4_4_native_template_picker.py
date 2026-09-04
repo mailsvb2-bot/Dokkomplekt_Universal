@@ -49,5 +49,5 @@ def test_windows_installer_smoke_clicks_real_button_and_requires_native_dialog()
     assert "remains actionable; retrying once with physical input" in smoke
     assert "-Description 'Создать свои кнопки button'" in smoke
     assert "-TransitionDescription 'native Word template picker'" in smoke
-    assert 'Invoke-UiElementPhysically -Element $retryAction' in smoke
+    assert 'Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe' in smoke
     assert "if ($null -eq $retryAction)" in smoke

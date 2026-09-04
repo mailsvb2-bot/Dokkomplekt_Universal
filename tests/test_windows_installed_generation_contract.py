@@ -11,6 +11,12 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
 
     assert 'aria-label="Выбрать исходный файл"' in workspace
     assert "Сохранить папку и правило" in source
+    assert "-Description 'Сохранить папку и правило button'" in source
+    assert "-TransitionDescription 'saved output-folder onboarding dismissal'" in source
+    assert "$saveFolderRule = Find-ButtonByNames" not in source
+    assert "$createPreparedButton = Wait-UiElement" not in source
+    assert "$generateButton = Wait-UiElement" not in source
+    assert "UI element did not become enabled and actionable within 5 seconds." not in source
     assert "Выбрать исходный файл" in source
     assert "native source file picker" in source
     assert "Real source DOCX accepted by installed application" in source
@@ -27,6 +33,8 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
     assert "Invoke-UiActionWithObservedTransition" in source
+    assert "function Invoke-UiActionPhysicallyFromProbe" in source
+    assert "Never poll the same WebView2 AutomationElement" in source
     assert "function Invoke-UiActionFromProbe" in source
     assert "Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description" in source
     assert "-Description 'Выбрать всё button'" in source
@@ -41,7 +49,7 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "-Description 'existing-kit Другие варианты'" in source
     assert "-TransitionDescription 'Создать новую версию'" in source
     assert "-Description 'Создать новую версию'" in source
-    assert 'Invoke-UiElementPhysically -Element $retryAction' in source
+    assert 'Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe' in source
     assert "$generationTransitionDeadlineSeconds = 5" in source
     assert "UIA action produced no observable generation transition; retrying once with physical input." in source
     assert "--- installed UI snapshot after generation timeout ---" in source

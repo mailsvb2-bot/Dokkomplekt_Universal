@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory = $true)] [string] $SpecPath,
     [string] $OutputDir = 'C:\DokkomplektRuntime\locked',
+    [ValidateSet('core', 'full')] [string] $Profile = 'full',
     [string] $Python = 'python'
 )
 
@@ -47,7 +48,9 @@ Invoke-Checked -Executable $pythonExe -Arguments @(
     'scripts/build_windows_runtime_kit.py',
     $resolvedSpec,
     '--output-dir',
-    $resolvedOutput
+    $resolvedOutput,
+    '--profile',
+    $Profile
 ) -Label 'Production runtime lock build'
 
 $manifest = Resolve-DirectFile -Path (Join-Path $resolvedOutput 'windows-x86_64-manifest.json') -Label 'Generated runtime manifest'
@@ -58,19 +61,24 @@ Invoke-Checked -Executable $pythonExe -Arguments @(
     '--clean'
 ) -Label 'Verified sidecar staging'
 
-Invoke-Checked -Executable $pythonExe -Arguments @(
+$runtimeArgs = @(
     'scripts/assert_offline_runtime_ready.py',
     '--target',
     'windows-x86_64',
-    '--require-semantic-model',
+    '--profile',
+    $Profile,
     '--require-supply-chain',
     '--production'
-) -Label 'Production offline runtime verification'
+)
+if ($Profile -eq 'full') { $runtimeArgs += '--require-semantic-model' }
+Invoke-Checked -Executable $pythonExe -Arguments $runtimeArgs -Label 'Production offline runtime verification'
 
 Invoke-Checked -Executable $pythonExe -Arguments @(
     'scripts/verify_windows_runtime_app_parity.py',
     '--target',
-    'windows-x86_64'
+    'windows-x86_64',
+    '--profile',
+    $Profile
 ) -Label 'Production runtime application parity verification'
 
 $manifestHash = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -87,6 +95,7 @@ if (Test-Path -LiteralPath $signature -PathType Leaf) {
 }
 
 Write-Host 'DOKKOMPLEKT WINDOWS PRODUCTION RUNTIME KIT VERIFIED'
+Write-Host "Profile: $Profile"
 Write-Host "Manifest: $manifest"
 Write-Host "Manifest SHA-256: $manifestHash"
 Write-Host "Report: $report"

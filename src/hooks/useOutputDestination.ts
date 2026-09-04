@@ -39,6 +39,7 @@ export function useOutputDestination(
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(cachedParts);
   const [folderNamingConfirmed, setFolderNamingConfirmed] = useState(cachedConfirmed && Boolean(cachedRoot));
   const [outputPreferencesReady, setOutputPreferencesReady] = useState(false);
+  const [outputPreferencesLoading, setOutputPreferencesLoading] = useState(true);
   const [outputRootRecoveryRequired, setOutputRootRecoveryRequired] = useState(false);
   const [watcherRefreshRevision, setWatcherRefreshRevision] = useState(0);
 
@@ -96,6 +97,8 @@ export function useOutputDestination(
           setFolderNamingConfirmed(false);
           setStatus(`Не удалось восстановить проверенную папку результата: ${error instanceof Error ? error.message : String(error)}. Подтвердите папку заново.`);
         }
+      } finally {
+        if (alive) setOutputPreferencesLoading(false);
       }
 
       try {
@@ -293,6 +296,7 @@ export function useOutputDestination(
     folderParts,
     folderNamingConfirmed,
     outputPreferencesReady,
+    outputPreferencesLoading,
     outputRootRecoveryRequired,
     watcherRefreshRevision,
     setOutputRootDraft,

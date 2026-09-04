@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$BundleDir = "target\release\bundle",
   [string]$TauriConfig = "src-tauri\tauri.conf.json",
   [ValidateSet("", "downloadBootstrapper", "offlineInstaller")]
@@ -151,6 +151,12 @@ public static class DokkomplektNativeMouse {
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
   public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 "@
 
@@ -181,80 +187,78 @@ function Wait-UiElement {
 }
 
 function Invoke-UiElement {
-  param([Parameter(Mandatory = $true)]$Element)
-  $deadline = [DateTime]::UtcNow.AddSeconds(5)
-  do {
-    try {
-      if (-not $Element.Current.IsEnabled) {
-        Start-Sleep -Milliseconds 150
-        continue
-      }
-      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-        $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-        $scroll.ScrollIntoView()
-        Start-Sleep -Milliseconds 150
-      }
-      if ($Element.Current.IsInvokePatternAvailable) {
-        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $pattern.Invoke()
-        return
-      }
-      if ($Element.Current.IsLegacyIAccessiblePatternAvailable) {
-        $legacy = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-        $legacy.DoDefaultAction()
-        return
-      }
-      try {
-        $point = $Element.GetClickablePoint()
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
-        [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-        [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-        return
-      } catch {
-        # WebView2 can temporarily omit a clickable point for a keyboard-actionable
-        # button. Focus + Enter still exercises the real installed UI action.
-        $Element.SetFocus()
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-        return
-      }
-    } catch {
-      if ([DateTime]::UtcNow -ge $deadline) { throw }
+  param(
+    [Parameter(Mandatory = $true)]$Element,
+    [string]$Description = 'UI element'
+  )
+  # Never poll the same WebView2 AutomationElement. React can remount a button
+  # while UIA keeps the old provider object alive; querying that stale object can
+  # block for minutes inside the provider and defeats an outer stopwatch. Callers
+  # that target WebView controls must re-resolve a fresh live element via an
+  # ActionProbe on every retry.
+  try {
+    if (-not $Element.Current.IsEnabled) {
+      throw "$Description is currently disabled."
+    }
+    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+      $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+      $scroll.ScrollIntoView()
       Start-Sleep -Milliseconds 150
     }
-  } while ([DateTime]::UtcNow -lt $deadline)
-  throw 'UI element did not become enabled and actionable within 5 seconds.'
+    if ($Element.Current.IsInvokePatternAvailable) {
+      $pattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+      $pattern.Invoke()
+      return
+    }
+    if ($Element.Current.IsLegacyIAccessiblePatternAvailable) {
+      $legacy = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+      $legacy.DoDefaultAction()
+      return
+    }
+    try {
+      $point = $Element.GetClickablePoint()
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+      [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+      return
+    } catch {
+      # WebView2 can temporarily omit a clickable point for a keyboard-actionable
+      # button. Focus + Enter still exercises the real installed UI action.
+      $Element.SetFocus()
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      return
+    }
+  } catch {
+    throw "Live UI action failed for '$Description': $($_.Exception.Message)"
+  }
 }
 
 function Invoke-UiElementPhysically {
-  param([Parameter(Mandatory = $true)]$Element)
-  $deadline = [DateTime]::UtcNow.AddSeconds(5)
-  do {
-    try {
-      if (-not $Element.Current.IsEnabled) {
-        Start-Sleep -Milliseconds 100
-        continue
-      }
-      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-        $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-        $scroll.ScrollIntoView()
-        Start-Sleep -Milliseconds 100
-      }
-      try {
-        $point = $Element.GetClickablePoint()
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
-        [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-        [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-      } catch {
-        $Element.SetFocus()
-        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-      }
-      return
-    } catch {
-      if ([DateTime]::UtcNow -ge $deadline) { throw }
+  param(
+    [Parameter(Mandatory = $true)]$Element,
+    [string]$Description = 'UI element'
+  )
+  try {
+    if (-not $Element.Current.IsEnabled) {
+      throw "$Description is currently disabled."
+    }
+    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+      $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+      $scroll.ScrollIntoView()
       Start-Sleep -Milliseconds 100
     }
-  } while ([DateTime]::UtcNow -lt $deadline)
-  throw 'UI element did not become physically actionable within 5 seconds.'
+    try {
+      $point = $Element.GetClickablePoint()
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+      [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    } catch {
+      $Element.SetFocus()
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    }
+  } catch {
+    throw "Live physical UI action failed for '$Description': $($_.Exception.Message)"
+  }
 }
 
 function Invoke-UiActionFromProbe {
@@ -278,7 +282,7 @@ function Invoke-UiActionFromProbe {
       # Never keep polling a stale WebView2 AutomationElement. If React remounts
       # the button between discovery and invocation, resolve a fresh live element
       # from the action probe and retry within the same bounded action deadline.
-      Invoke-UiElement -Element $action
+      Invoke-UiElement -Element $action -Description $Description
       return
     } catch {
       if ([DateTime]::UtcNow -ge $deadline) {
@@ -288,6 +292,36 @@ function Invoke-UiActionFromProbe {
     }
   } while ([DateTime]::UtcNow -lt $deadline)
   throw "UI smoke timeout invoking live action: $Description"
+}
+
+function Invoke-UiActionPhysicallyFromProbe {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$ActionProbe,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    try {
+      $action = & $ActionProbe
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $action = $null
+    }
+    if ($null -eq $action) {
+      Start-Sleep -Milliseconds 100
+      continue
+    }
+    try {
+      Invoke-UiElementPhysically -Element $action -Description $Description
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) {
+        throw "UI smoke timeout invoking fresh physical action: $Description. Last error: $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "UI smoke timeout invoking fresh physical action: $Description"
 }
 
 function Invoke-UiActionWithObservedTransition {
@@ -341,7 +375,7 @@ function Invoke-UiActionWithObservedTransition {
   # fresh live element, retry once with physical input, and still require the exact
   # product transition. A broken product therefore remains red.
   Write-Host "UIA action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
-  Invoke-UiElementPhysically -Element $retryAction
+  Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe -Description "$Description physical retry"
   return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
 }
 
@@ -514,6 +548,58 @@ function Find-ReadyButtonByNames {
   }
 }
 
+function Get-AppStateCipherFingerprint {
+  param(
+    [Parameter(Mandatory = $true)][string]$DatabasePath,
+    [Parameter(Mandatory = $true)][string]$StateKey
+  )
+  if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { return $null }
+  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+  if ($null -eq $pythonCommand) { throw 'Python is required by the installed-app CI contract to inspect SQLite state metadata.' }
+  $script = @'
+import hashlib, sqlite3, sys
+path, key = sys.argv[1], sys.argv[2]
+try:
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.2)
+    try:
+        row = con.execute("SELECT json FROM app_state WHERE state_key=?", (key,)).fetchone()
+    finally:
+        con.close()
+except (OSError, sqlite3.Error):
+    raise SystemExit(3)
+if row is None:
+    raise SystemExit(4)
+payload = str(row[0]).encode("utf-8")
+print(hashlib.sha256(payload).hexdigest())
+'@
+  $result = & $pythonCommand.Source -c $script $DatabasePath $StateKey 2>$null
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $fingerprint = ([string]$result).Trim().ToLowerInvariant()
+  if ($fingerprint -notmatch '^[0-9a-f]{64}$') { return $null }
+  return $fingerprint
+}
+
+function Wait-AppStateCipherFingerprint {
+  param(
+    [Parameter(Mandatory = $true)][string]$DatabasePath,
+    [Parameter(Mandatory = $true)][string]$StateKey,
+    [string]$DifferentFrom = '',
+    [int]$TimeoutSeconds = 15
+  )
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $fingerprint = Get-AppStateCipherFingerprint -DatabasePath $DatabasePath -StateKey $StateKey
+    if ($null -ne $fingerprint -and ([string]::IsNullOrWhiteSpace($DifferentFrom) -or $fingerprint -ne $DifferentFrom)) {
+      return $fingerprint
+    }
+    Start-Sleep -Milliseconds 150
+  } while ([DateTime]::UtcNow -lt $deadline)
+  if ([string]::IsNullOrWhiteSpace($DifferentFrom)) {
+    throw "Native app_state row '$StateKey' did not become readable within $TimeoutSeconds seconds."
+  }
+  throw "Native app_state row '$StateKey' did not change after the real installed UI action within $TimeoutSeconds seconds."
+}
+
 function Set-UiValue {
   param(
     [Parameter(Mandatory = $true)]$Element,
@@ -614,6 +700,16 @@ function Find-LiveAppWindow {
   )
   return $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 }
+
+function Activate-LiveAppWindow {
+  param([Parameter(Mandatory = $true)]$Window)
+  $hwnd = [IntPtr]$Window.Current.NativeWindowHandle
+  if ($hwnd -eq [IntPtr]::Zero) { throw 'Installed application window does not expose a native HWND.' }
+  $null = [DokkomplektNativeMouse]::ShowWindow($hwnd, 9) # SW_RESTORE
+  if (-not [DokkomplektNativeMouse]::SetForegroundWindow($hwnd)) {
+    throw 'Could not activate installed application window through its native HWND.'
+  }
+}
 $appWindow = Wait-UiElement -Description 'installed Dokkomplekt window' -Probe {
   $condition = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
@@ -639,12 +735,31 @@ if ($adversarial) {
 }
 
 # Confirm the first-run output naming rule before exercising generation. The
-# default rule is deterministic: document number + document date.
-$saveFolderRule = Find-ButtonByNames -Root $appWindow -Names @('Сохранить папку и правило')
-if ($null -ne $saveFolderRule) {
-  Invoke-UiElement -Element $saveFolderRule
-  Write-Host 'Default output folder and subfolder naming rule confirmed.'
+# default rule is deterministic: document number + document date. WebView2 does
+# not reliably expose DOM descendant focus through UIAutomation.FocusedElement on
+# hosted Windows, so focus itself is not authoritative. The product uses native
+# HTML form semantics with an autofocus submit button: activate the real installed
+# window, send a real Enter key, and require the encrypted native SQLite state row
+# to change. This proves both the installed UI action and its durable Rust save,
+# without a deep WebView2 UIA traversal that can block inside COM for minutes.
+$stateDatabase = Join-Path $appDataRoot 'dokkomplekt-user-state.sqlite'
+$outputPreferenceStateKey = 'output_preferences_v2'
+$beforeFolderRuleSave = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 15
+Activate-LiveAppWindow -Window $appWindow
+Start-Sleep -Milliseconds 250
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+$afterFolderRuleSave = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -DifferentFrom $beforeFolderRuleSave `
+  -TimeoutSeconds 20
+if ($afterFolderRuleSave -eq $beforeFolderRuleSave) {
+  throw 'First-run output rule Enter action did not mutate durable native state.'
 }
+Write-Host 'Default output folder and subfolder naming rule confirmed through foreground Enter and durable native state mutation.'
 
 $templateDialog = Invoke-UiActionWithObservedTransition `
   -Description 'Создать свои кнопки button' `
@@ -690,10 +805,11 @@ Set-UiValue -Element $fileNameEdit -Value $plainTemplate
 Submit-OpenFileDialog -Dialog $templateDialog
 Write-Host 'Native first-run template picker OK: real DOCX selected.'
 
-$createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) button' -TimeoutSeconds 40 -Probe {
-  Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+Invoke-UiActionFromProbe -Description 'Создать кнопки (1) button' -ActionProbe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
 }
-Invoke-UiElement -Element $createPreparedButton
 
 $expectedTemplateButtonName = if ($adversarial) { 'исходник проверка' } else { 'button-smoke' }
 # WebView2 can acknowledge UIA InvokePattern without dispatching the underlying DOM
@@ -713,10 +829,11 @@ do {
 
 if (-not $templateSetupStarted) {
   Write-Host 'UIA action produced no observable template-registration transition; retrying once with physical input.'
-  $createPreparedButton = Wait-UiElement -Description 'Создать кнопки (1) physical retry' -TimeoutSeconds 10 -Probe {
-    Find-ReadyButtonByNames -Root $appWindow -Names @('Создать кнопки (1)')
+  Invoke-UiActionPhysicallyFromProbe -Description 'Создать кнопки (1) physical retry' -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
   }
-  Invoke-UiElementPhysically -Element $createPreparedButton
 }
 
 # Registration still has a bounded completion deadline and must expose the real
@@ -917,10 +1034,11 @@ if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNum
 if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
 $expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
-$generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
-  Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
+Invoke-UiActionFromProbe -Description 'Создать документы button' -ActionProbe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
 }
-Invoke-UiElement -Element $generateButton
 
 # WebView2 can report a successful UIA InvokePattern call without dispatching a DOM click
 # on a saturated hosted runner. Never trust the automation method itself: require an
@@ -955,10 +1073,11 @@ do {
 
 if (-not $generationActionStarted) {
   Write-Host 'UIA action produced no observable generation transition; retrying once with physical input.'
-  $generateButton = Wait-UiElement -Description 'Создать документы physical retry' -TimeoutSeconds 10 -Probe {
-    Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
+  Invoke-UiActionPhysicallyFromProbe -Description 'Создать документы physical retry' -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
   }
-  Invoke-UiElementPhysically -Element $generateButton
 }
 
 $createdDeadline = [DateTime]::UtcNow.AddSeconds(60)

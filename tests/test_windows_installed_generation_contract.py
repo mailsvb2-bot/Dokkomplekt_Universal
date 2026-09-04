@@ -3,14 +3,36 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
 WORKSPACE = ROOT / "src" / "components" / "Workspace.tsx"
+FOLDER_ONBOARDING = ROOT / "src" / "components" / "FolderNamingOnboarding.tsx"
 
 
 def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> None:
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
     workspace = WORKSPACE.read_text(encoding="utf-8")
+    onboarding = FOLDER_ONBOARDING.read_text(encoding="utf-8")
 
     assert 'aria-label="Выбрать исходный файл"' in workspace
-    assert "Сохранить папку и правило" in source
+    assert 'autoFocus aria-keyshortcuts="Enter"' in onboarding
+    assert "Сохранить папку и правило" in onboarding
+    assert "function Activate-LiveAppWindow" in source
+    assert "SetForegroundWindow" in source
+    assert "ShowWindow($hwnd, 9)" in source
+    assert "Activate-LiveAppWindow -Window $appWindow" in source
+    assert '<form className="modal folderNamingOnboarding"' in onboarding
+    assert 'type="submit" className="primaryBtn" autoFocus aria-keyshortcuts="Enter"' in onboarding
+    assert "function Get-AppStateCipherFingerprint" in source
+    assert "function Wait-AppStateCipherFingerprint" in source
+    assert "$outputPreferenceStateKey = 'output_preferences_v2'" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')" in source
+    assert "-DifferentFrom $beforeFolderRuleSave" in source
+    assert "durable native state mutation" in source
+    assert "Find-FocusedReadyButtonByNames" not in source
+    assert "Get-FocusedElementForProcess" not in source
+    assert "[System.Windows.Automation.TreeScope]::Descendants" in source
+    assert "$saveFolderRule = Find-ButtonByNames" not in source
+    assert "$createPreparedButton = Wait-UiElement" not in source
+    assert "$generateButton = Wait-UiElement" not in source
+    assert "UI element did not become enabled and actionable within 5 seconds." not in source
     assert "Выбрать исходный файл" in source
     assert "native source file picker" in source
     assert "Real source DOCX accepted by installed application" in source
@@ -27,6 +49,8 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
     assert "Invoke-UiActionWithObservedTransition" in source
+    assert "function Invoke-UiActionPhysicallyFromProbe" in source
+    assert "Never poll the same WebView2 AutomationElement" in source
     assert "function Invoke-UiActionFromProbe" in source
     assert "Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description" in source
     assert "-Description 'Выбрать всё button'" in source
@@ -41,7 +65,7 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "-Description 'existing-kit Другие варианты'" in source
     assert "-TransitionDescription 'Создать новую версию'" in source
     assert "-Description 'Создать новую версию'" in source
-    assert 'Invoke-UiElementPhysically -Element $retryAction' in source
+    assert 'Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe' in source
     assert "$generationTransitionDeadlineSeconds = 5" in source
     assert "UIA action produced no observable generation transition; retrying once with physical input." in source
     assert "--- installed UI snapshot after generation timeout ---" in source

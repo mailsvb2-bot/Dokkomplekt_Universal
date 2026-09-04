@@ -2,9 +2,9 @@
 """Create a hash- and provenance-locked offline runtime manifest.
 
 The catalog is reviewed input; this command never downloads software. Every
-runtime artifact and its license notice must already exist locally. The emitted
-JSON remains compatible with prepare_sidecars.py while adding immutable version,
-origin and license evidence used by the production release gate.
+runtime artifact and its license notice must already exist locally. ``full`` is
+the legacy/default profile; ``core`` locks only the document-processing runtime
+used by the stock offline NSIS installer.
 """
 from __future__ import annotations
 
@@ -20,17 +20,19 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path, validate_source_reference
+    from scripts._runtime_profile import (
+        FULL_PROFILE, PROFILES, RUNTIME_TOOLS, normalize_profile,
+        profile_requires_semantic, profile_tools, validate_profile_file_set,
+    )
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path, validate_source_reference
+    from _runtime_profile import (
+        FULL_PROFILE, PROFILES, RUNTIME_TOOLS, normalize_profile,
+        profile_requires_semantic, profile_tools, validate_profile_file_set,
+    )
 
-SUPPORTED_TOOLS = {
-    "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip",
-    "llama_cpp", "semantic_model",
-}
-REQUIRED_TOOLS = {
-    "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip",
-    "llama_cpp", "semantic_model",
-}
+SUPPORTED_TOOLS = set(RUNTIME_TOOLS)
+REQUIRED_TOOLS = set(profile_tools(FULL_PROFILE))
 SAFE_TARGET = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -131,17 +133,33 @@ def build_distribution_review(
     }
 
 
-def build_lock(catalog_path: Path) -> dict[str, Any]:
+def build_lock(catalog_path: Path, profile: str | None = None) -> dict[str, Any]:
     data = json.loads(catalog_path.read_text("utf-8"))
     if data.get("schema") != 1:
         raise ValueError("catalog schema must be 1")
     target = str(data.get("target", "")).strip()
     if not SAFE_TARGET.fullmatch(target):
         raise ValueError("target must be a safe platform-arch identifier")
+
+    selected_profile = profile or data.get("runtime_profile") or FULL_PROFILE
+    selected_profile = normalize_profile(
+        selected_profile, semantic_model_required=(selected_profile == FULL_PROFILE)
+    )
+    declared_profile = data.get("runtime_profile")
+    if declared_profile is not None:
+        declared = normalize_profile(
+            declared_profile, semantic_model_required=data.get("semantic_model_required")
+        )
+        if declared != selected_profile:
+            raise ValueError(
+                f"catalog runtime_profile mismatch: requested {selected_profile!r}, declared {declared!r}"
+            )
+
     artifacts = data.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise ValueError("catalog must contain artifacts")
 
+    expected_tools = set(profile_tools(selected_profile))
     output: list[dict[str, Any]] = []
     seen_targets: set[str] = set()
     tools: set[str] = set()
@@ -151,6 +169,10 @@ def build_lock(catalog_path: Path) -> dict[str, Any]:
         tool = str(raw.get("tool", "")).strip().lower()
         if tool not in SUPPORTED_TOOLS:
             raise ValueError(f"artifacts[{index}].tool is unsupported: {tool!r}")
+        if tool not in expected_tools:
+            raise ValueError(
+                f"runtime profile {selected_profile!r} must not contain tool {tool!r}"
+            )
         source = resolve(catalog_path.parent, raw.get("source"), f"artifacts[{index}].source")
         license_file = resolve(
             catalog_path.parent, raw.get("license_file"), f"artifacts[{index}].license_file"
@@ -172,14 +194,19 @@ def build_lock(catalog_path: Path) -> dict[str, Any]:
             "license_file": str(license_file),
             "license_sha256": sha256_file(license_file),
         })
-    missing = sorted(REQUIRED_TOOLS - tools)
-    if missing:
-        raise ValueError(f"runtime catalog is incomplete; missing tools: {missing}")
-    if not any(item["tool"] == "semantic_model" and item["target"].lower().endswith(".gguf") for item in output):
-        raise ValueError("semantic_model must include a GGUF file")
+
+    validate_profile_file_set(selected_profile, output)
+    if profile_requires_semantic(selected_profile) and not any(
+        item["tool"] == "semantic_model" and item["target"].lower().endswith(".gguf")
+        for item in output
+    ):
+        raise ValueError("full runtime semantic_model must include a GGUF file")
+
     lock = {
         "schema": 1,
         "target": target,
+        "runtime_profile": selected_profile,
+        "semantic_model_required": profile_requires_semantic(selected_profile),
         "supply_chain_locked": True,
         "generated_by": "scripts/create_runtime_lock.py",
         "files": output,
@@ -194,12 +221,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("catalog", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--profile", choices=PROFILES)
     args = parser.parse_args()
-    lock = build_lock(args.catalog.resolve())
+    lock = build_lock(args.catalog.resolve(), args.profile)
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n", "utf-8")
-    print(f"RUNTIME LOCK CREATED: {output}; files={len(lock['files'])}")
+    print(
+        f"RUNTIME LOCK CREATED: {output}; profile={lock['runtime_profile']}; "
+        f"files={len(lock['files'])}"
+    )
     return 0
 
 

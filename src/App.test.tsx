@@ -86,6 +86,40 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: 'Создать свои кнопки' })).toBeTruthy();
   });
 
+  it('does not show a false disabled output-folder onboarding before durable preferences hydrate', async () => {
+    let resolvePreferences!: (value: unknown) => void;
+    const pendingPreferences = new Promise((resolve) => { resolvePreferences = resolve; });
+    __setInvokeForTests(async (name: string) => {
+      if (name === 'first_run_state') {
+        return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
+      }
+      if (name === 'get_output_preferences') return await pendingPreferences as never;
+      if (name === 'ensure_output_root') return 'C:/Users/Test/Desktop/Выписанные пациенты' as never;
+      if (name === 'get_background_watcher_state') return { platform: 'windows', installed: false, migration_required: false } as never;
+      if (name === 'get_intake_capabilities') return [] as never;
+      if (name === 'get_sidecar_status') return [] as never;
+      return {} as never;
+    });
+
+    render(<App />);
+    const createButtons = await screen.findByRole('button', { name: 'Создать свои кнопки' }) as HTMLButtonElement;
+    expect(createButtons.disabled).toBe(true);
+    expect(screen.queryByRole('heading', { name: 'Как называть папку комплекта?' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Сохранить папку и правило' })).toBeNull();
+
+    resolvePreferences({
+      output_root: 'C:/Users/Test/Desktop/Выписанные пациенты',
+      folder_parts: ['DocumentNumber', 'DocumentDate'],
+      naming_confirmed: false,
+    });
+
+    const onboarding = await screen.findByRole('heading', { name: 'Как называть папку комплекта?' });
+    expect(onboarding).toBeTruthy();
+    const saveRule = screen.getByRole('button', { name: 'Сохранить папку и правило' }) as HTMLButtonElement;
+    await waitFor(() => expect(saveRule.disabled).toBe(false));
+    await waitFor(() => expect(createButtons.disabled).toBe(false));
+  });
+
   it('starts without built-in examples and shows one clear create-buttons action', async () => {
     installTemplateMock(false);
     render(<App />);

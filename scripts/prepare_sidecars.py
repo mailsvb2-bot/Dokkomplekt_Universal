@@ -20,8 +20,10 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import FULL_PROFILE, normalize_profile, validate_profile_file_set
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import FULL_PROFILE, normalize_profile, validate_profile_file_set
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST_ROOT = ROOT / "src-tauri" / "resources" / "tools"
@@ -60,7 +62,6 @@ def load_manifest(path: Path) -> dict[str, Any]:
     if not isinstance(entries, list) or not entries:
         raise ValueError("manifest must contain a non-empty files array")
     return data
-
 
 
 def stage_distribution_review(
@@ -199,12 +200,29 @@ def main() -> int:
             })
         staged.append(staged_entry)
 
+    runtime_profile = data.get("runtime_profile")
+    semantic_model_required = data.get("semantic_model_required")
+    profile_declared = runtime_profile is not None or semantic_model_required is not None
+    if profile_declared:
+        runtime_profile = normalize_profile(
+            runtime_profile, semantic_model_required=semantic_model_required
+        )
+        validate_profile_file_set(runtime_profile, staged)
+    else:
+        # Schema-v1 development manifests predate runtime profiles and may stage
+        # a deliberately partial local sidecar set. Keep that compatibility only
+        # when no profile claim is made; production core/full manifests remain
+        # exact-set validated above.
+        runtime_profile = None
+
     distribution_review = stage_distribution_review(data, manifest_path, destination)
     status = {
         "schema": 1,
         "target": target,
         "generated_by": "scripts/prepare_sidecars.py",
         "network_used": False,
+        "runtime_profile": runtime_profile,
+        "semantic_model_required": runtime_profile == FULL_PROFILE,
         "supply_chain_locked": data.get("supply_chain_locked") is True,
         "files": staged,
     }

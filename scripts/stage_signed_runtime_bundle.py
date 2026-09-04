@@ -24,9 +24,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import PROFILES, normalize_profile, validate_profile_file_set
     from scripts.windows_runtime_bundle_approval import verify_payload as verify_offline_approval
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import PROFILES, normalize_profile, validate_profile_file_set
     from windows_runtime_bundle_approval import verify_payload as verify_offline_approval
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +110,7 @@ def main() -> int:
     parser.add_argument("--approval-signature", type=Path, required=True)
     parser.add_argument("--trusted-approval-public-key", type=Path, required=True)
     parser.add_argument("--target", default=TARGET)
+    parser.add_argument("--profile", choices=PROFILES)
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--json-report", type=Path)
     args = parser.parse_args()
@@ -122,8 +125,16 @@ def main() -> int:
     payload = json.loads(payload_bytes.decode("utf-8"))
     if payload.get("schema") != PAYLOAD_SCHEMA or payload.get("target") != TARGET:
         raise ValueError("runtime signing payload schema/target mismatch")
-    if payload.get("supply_chain_locked") is not True or payload.get("semantic_model_required") is not True:
-        raise ValueError("hosted production runtime must be supply-chain locked and include semantic model")
+    if payload.get("supply_chain_locked") is not True:
+        raise ValueError("hosted production runtime must be supply-chain locked")
+    runtime_profile = normalize_profile(
+        payload.get("runtime_profile"),
+        semantic_model_required=payload.get("semantic_model_required"),
+    )
+    if args.profile and args.profile != runtime_profile:
+        raise ValueError(
+            f"runtime payload profile mismatch: expected {args.profile!r}, got {runtime_profile!r}"
+        )
     if payload.get("distribution_review_bound") is not True:
         raise ValueError("hosted production runtime must bind the reviewed distribution inventory")
     if payload.get("bundle") != bundle.name:
@@ -147,6 +158,8 @@ def main() -> int:
         direct_file(args.approval_signature, "runtime offline approval signature"),
         direct_file(args.trusted_approval_public_key, "trusted offline approval public key"),
     )
+    if approval.get("runtime_profile") != runtime_profile:
+        raise ValueError("offline approval runtime profile mismatch")
 
     destination = (TOOLS_ROOT / TARGET).resolve()
     destination.relative_to(TOOLS_ROOT.resolve())
@@ -177,8 +190,12 @@ def main() -> int:
             raise ValueError("runtime SBOM schema/target mismatch")
         if sbom.get("network_used") is not False or sbom.get("supply_chain_locked") is not True:
             raise ValueError("runtime SBOM does not prove offline locked provenance")
-        if sbom.get("semantic_model_required") is not True:
-            raise ValueError("runtime SBOM does not require semantic model")
+        sbom_profile = normalize_profile(
+            sbom.get("runtime_profile"),
+            semantic_model_required=sbom.get("semantic_model_required"),
+        )
+        if sbom_profile != runtime_profile:
+            raise ValueError("runtime SBOM profile does not match signed payload")
         files = sbom.get("files")
         licenses = sbom.get("license_notices")
         review = sbom.get("distribution_review")
@@ -214,6 +231,8 @@ def main() -> int:
                 if key in item:
                     entry[key] = item[key]
             staged.append(entry)
+
+        validate_profile_file_set(runtime_profile, staged)
 
         for index, item in enumerate(licenses):
             if not isinstance(item, dict):
@@ -252,6 +271,7 @@ def main() -> int:
     status = {
         "schema": 1,
         "target": TARGET,
+        "runtime_profile": runtime_profile,
         "generated_by": "scripts/stage_signed_runtime_bundle.py",
         "network_used": False,
         "supply_chain_locked": True,
@@ -265,6 +285,7 @@ def main() -> int:
         "schema": "dokkomplekt.hosted-runtime-stage.v1",
         "ok": True,
         "target": TARGET,
+        "runtime_profile": runtime_profile,
         "bundle": str(bundle),
         "bundle_sha256": payload["bundle_sha256"],
         "runtime_signature_verified": True,
@@ -278,9 +299,6 @@ def main() -> int:
     if args.json_report:
         report_path = args.json_report.resolve()
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        # These public evidence files are copied from the exact objects used by
-        # this successful staging decision, so downstream hardware evidence can
-        # bind to the real trust root/status without artifact-provided TOFU.
         atomic_write(report_path.parent / "sidecar-status.json", status_path.read_bytes())
         atomic_write(report_path.parent / "runtime-trusted-public.pem", trusted_key_bytes)
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

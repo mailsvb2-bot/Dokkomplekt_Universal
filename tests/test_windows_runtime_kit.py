@@ -73,7 +73,9 @@ def component_tree(root: Path, tool: str) -> Path:
     return tree
 
 
-def make_spec(root: Path, *, omit: str | None = None) -> Path:
+def make_spec(
+    root: Path, *, omit: str | None = None, runtime_profile: str | None = None
+) -> Path:
     license_file = write(root / "licenses" / "RUNTIME-LICENSE.txt", b"fixture license\n")
     tools = [
         "tesseract",
@@ -110,6 +112,8 @@ def make_spec(root: Path, *, omit: str | None = None) -> Path:
         },
         "components": components,
     }
+    if runtime_profile is not None:
+        spec["runtime_profile"] = runtime_profile
     path = root / "runtime-kit.json"
     path.write_text(json.dumps(spec), encoding="utf-8")
     return path
@@ -209,6 +213,82 @@ def test_production_runtime_surface_is_exactly_seven_components_without_msgconve
     assert locker.REQUIRED_TOOLS == EXPECTED_PRODUCTION_COMPONENTS
     assert locker.SUPPORTED_TOOLS == EXPECTED_PRODUCTION_COMPONENTS
     assert "msgconvert" not in locker.SUPPORTED_TOOLS
+
+
+
+def test_core_profile_filters_semantic_trees_and_stages_exact_document_runtime() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_core")
+    stager = load_module(STAGER, "prepare_sidecars_runtime_kit_core")
+    verifier = load_module(VERIFIER, "assert_offline_runtime_ready_runtime_kit_core")
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root)
+        output = root / "output"
+        output.mkdir()
+        catalog, report = builder.build_catalog(spec, output, "core")
+        catalog_path = output / "runtime-catalog.json"
+        builder.atomic_json(catalog_path, catalog)
+        lock = builder.build_lock(catalog_path, "core")
+        lock_path = output / "windows-x86_64-manifest.json"
+        builder.atomic_json(lock_path, lock)
+
+        assert catalog["runtime_profile"] == "core"
+        assert lock["runtime_profile"] == "core"
+        assert lock["semantic_model_required"] is False
+        assert report["runtime_profile"] == "core"
+        assert report["component_count"] == 5
+        assert {entry["tool"] for entry in lock["files"]} == {
+            "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip"
+        }
+
+        staged_root = root / "staged"
+        with mock.patch.object(stager, "DEST_ROOT", staged_root), mock.patch.object(
+            sys, "argv", ["prepare_sidecars.py", str(lock_path), "--clean"]
+        ):
+            assert stager.main() == 0
+        status = json.loads(
+            (staged_root / "windows-x86_64" / "sidecar-status.json").read_text(encoding="utf-8")
+        )
+        assert status["runtime_profile"] == "core"
+        assert status["semantic_model_required"] is False
+        with mock.patch.object(verifier, "TOOLS_ROOT", staged_root):
+            target_dir, loaded = verifier.load_status("windows-x86_64")
+            tools = verifier.verify_entries(target_dir, loaded)
+            verifier.verify_required_runtime(tools, False)
+            assert set(tools) == {"tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip"}
+
+def test_builder_rejects_profile_override_that_conflicts_with_spec() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_profile_mismatch")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root, runtime_profile="core")
+        with pytest.raises(ValueError, match="spec profile mismatch"):
+            builder.build_catalog(spec, root / "output", "full")
+
+
+def test_cli_honors_profile_declared_by_spec_without_override() -> None:
+    builder = load_module(BUILDER, "build_windows_runtime_kit_cli_profile")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        spec = make_spec(root, runtime_profile="core")
+        output = root / "output"
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["build_windows_runtime_kit.py", str(spec), "--output-dir", str(output)],
+        ):
+            assert builder.main() == 0
+
+        catalog = json.loads((output / "runtime-catalog.json").read_text("utf-8"))
+        lock = json.loads((output / "windows-x86_64-manifest.json").read_text("utf-8"))
+        report = json.loads((output / "RUNTIME_KIT_REPORT.json").read_text("utf-8"))
+        assert catalog["runtime_profile"] == "core"
+        assert lock["runtime_profile"] == "core"
+        assert report["runtime_profile"] == "core"
+        assert {item["tool"] for item in lock["files"]} == {
+            "tesseract", "poppler", "libreoffice", "sumatrapdf", "7zip"
+        }
 
 
 def test_one_command_wrapper_is_fail_closed_and_network_free() -> None:

@@ -14,11 +14,14 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert 'aria-label="Выбрать исходный файл"' in workspace
     assert 'autoFocus aria-keyshortcuts="Enter"' in onboarding
     assert "Сохранить папку и правило" in source
+    assert "function Get-FocusedElementForProcess" in source
     assert "function Find-FocusedReadyButtonByNames" in source
     assert "$saveFolderRule = Wait-UiElement" in source
     assert "Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id)" in source
     assert "Invoke-UiElementPhysically -Element $saveFolderRule" in source
     assert "saved output-folder onboarding focus dismissal" in source
+    assert "$focusedInApp = Get-FocusedElementForProcess -ProcessId ([int]$process.Id)" in source
+    assert "if ($null -eq $focusedInApp)" in source
     assert "FindFirst(Descendants)" in source
     assert "$saveFolderRule = Find-ButtonByNames" not in source
     assert "$createPreparedButton = Wait-UiElement" not in source

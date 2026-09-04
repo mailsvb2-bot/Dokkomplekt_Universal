@@ -542,22 +542,34 @@ function Find-ReadyButtonByNames {
   }
 }
 
+function Get-FocusedElementForProcess {
+  param([Parameter(Mandatory = $true)][int]$ProcessId)
+  try {
+    $element = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -eq $element) { return $null }
+    if ([int]$element.Current.ProcessId -ne $ProcessId) { return $null }
+    return $element
+  } catch {
+    if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
+    throw
+  }
+}
+
 function Find-FocusedReadyButtonByNames {
   param(
     [Parameter(Mandatory = $true)][int]$ProcessId,
     [Parameter(Mandatory = $true)][string[]]$Names
   )
+  $button = Get-FocusedElementForProcess -ProcessId $ProcessId
+  if ($null -eq $button) { return $null }
   try {
-    $button = [System.Windows.Automation.AutomationElement]::FocusedElement
-    if ($null -eq $button) { return $null }
-    if ([int]$button.Current.ProcessId -ne $ProcessId) { return $null }
     if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { return $null }
     if ($Names -notcontains [string]$button.Current.Name) { return $null }
     if (-not $button.Current.IsEnabled) { return $null }
     return $button
   } catch {
     if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
-    return $null
+    throw
   }
 }
 
@@ -706,9 +718,26 @@ $null = Wait-UiElement -Description 'saved output-folder onboarding focus dismis
     $folderRuleFocusLeft.Since = $null
     return $null
   }
-  try { $currentAppWindow.SetFocus() } catch { }
-  $stillFocused = Find-FocusedReadyButtonByNames -ProcessId ([int]$process.Id) -Names @('Сохранить папку и правило')
-  if ($null -ne $stillFocused) {
+  $currentAppWindow.SetFocus()
+  Start-Sleep -Milliseconds 50
+  $focusedInApp = Get-FocusedElementForProcess -ProcessId ([int]$process.Id)
+  if ($null -eq $focusedInApp) {
+    $folderRuleFocusLeft.Since = $null
+    return $null
+  }
+  try {
+    $stillSave = (
+      $focusedInApp.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
+      [string]$focusedInApp.Current.Name -eq 'Сохранить папку и правило'
+    )
+  } catch {
+    if (Test-UiaTransientTimeout -ErrorRecord $_) {
+      $folderRuleFocusLeft.Since = $null
+      return $null
+    }
+    throw
+  }
+  if ($stillSave) {
     $folderRuleFocusLeft.Since = $null
     return $null
   }

@@ -300,6 +300,7 @@ function AppContent() {
     setSourceFileName(null);
     setSourceFilePath(null);
     setWebSourceUrl('');
+    setIntakeSource('');
     setParsed(null);
     clearSourceScopedUiState();
     manualSelectionTouched.current = false;

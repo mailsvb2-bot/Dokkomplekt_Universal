@@ -648,6 +648,8 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
       string(command, root.plan, 'plan');
       number(command, root.document_limit_month, 'document_limit_month');
       number(command, root.max_documents_per_run, 'max_documents_per_run');
+      if (root.documents_used_month !== undefined) number(command, root.documents_used_month, 'documents_used_month');
+      if (root.documents_left_month !== undefined) number(command, root.documents_left_month, 'documents_left_month');
       break;
     }
     default:

@@ -9,61 +9,20 @@
 /// Return the canonical storage id for aliases that are semantically identical.
 /// Role-dependent fields are intentionally never collapsed here.
 pub fn canonical_storage_field_id(raw: &str) -> String {
+    use std::collections::BTreeMap;
+    use std::sync::OnceLock;
+
+    static ALIASES: OnceLock<Option<BTreeMap<String, String>>> = OnceLock::new();
+    let aliases = ALIASES.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../shared/field_aliases.json")).ok()
+    });
     let field = raw.trim();
-    match field {
-        "diagnosis.main" => "medical.diagnosis".into(),
-        "diagnosis.icd10" | "icd10" | "medical.diagnosis_code" => "medical.icd10".into(),
-        "organization.name" => "org.name".into(),
-        "organization.inn" | "accounting.inn" | "company.inn" => "org.inn".into(),
-        "organization.kpp" | "accounting.kpp" | "company.kpp" => "org.kpp".into(),
-        "subject.full_name" | "person.full_name" | "patient.fio" | "patient.full_name" => {
-            "subject.name".into()
-        }
-        "person.birth_date" | "patient.birth_date" => "subject.birth_date".into(),
-        "person.address" | "patient.address" => "subject.address".into(),
-        "person.age" | "patient.age" => "subject.age".into(),
-        "complaints" | "medical.complaints_text" => "medical.complaints".into(),
-        "anamnesis.disease" | "disease_anamnesis" => "medical.anamnesis_disease".into(),
-        "anamnesis.life" | "life_anamnesis" => "medical.anamnesis_life".into(),
-        "profile_observation" | "psych_account" | "medical.psych_account" => {
-            "medical.profile_observation".into()
-        }
-        "rvk_referral" => "medical.rvk_referral".into(),
-        "epidemiology" => "medical.epidemiology".into(),
-        "expert_work_org" | "expert.work_org" => "medical.workplace".into(),
-        "expert_position" | "expert.position" => "medical.position".into(),
-        "expert_sick_leave_number" | "expert.sick_leave_number" => {
-            "medical.sick_leave_number".into()
-        }
-        "expert_sick_leave_from" | "expert.sick_leave_from" => "medical.sick_leave_from".into(),
-        "expert_sick_leave_needed" | "expert.sick_leave_needed" => {
-            "medical.sick_leave_needed".into()
-        }
-        "expert_anamnesis" | "expert.anamnesis" => "medical.expert_anamnesis".into(),
-        "status.objective" | "status.somatic" | "somatic_status" => "medical.somatic_status".into(),
-        "status.profile" | "status.mental" | "mental_status" => "medical.profile_status".into(),
-        "examination.plan" | "examination_plan" => "medical.examination_plan".into(),
-        "treatment.result" => "medical.treatment_result".into(),
-        "condition.discharge" => "medical.discharge_condition".into(),
-        "labs.results" | "labs.block" | "labs_block" | "LAB_BLOCK" | "laboratory.results"
-        | "analysis.results" | "analyses.results" => "medical.labs".into(),
-        "labs.date" => "medical.labs_date".into(),
-        "labs.source" => "medical.labs_source".into(),
-        "labs.date_policy" => "medical.labs_date_policy".into(),
-        "hr.employee_name" => "employee.name".into(),
-        "hr.position" => "employee.position".into(),
-        "hr.department" => "employee.department".into(),
-        "hr.salary" => "employee.salary".into(),
-        "legal.contract_number" => "contract.number".into(),
-        "legal.contract_date" => "contract.date".into(),
-        "legal.subject" => "contract.subject".into(),
-        "legal.amount" => "contract.amount".into(),
-        "legal.party_a" => "contract.party_a".into(),
-        "legal.party_b" => "contract.party_b".into(),
-        "accounting.client" => "counterparty.name".into(),
-        "accounting.amount_total" => "amount.total".into(),
-        "accounting.currency" => "amount.currency".into(),
-        _ => field.to_string(),
+    // The shared resource is compile-time bundled and independently verified by
+    // source/contract tests. If a corrupted development tree bypasses those
+    // gates, fail closed to the caller-supplied id instead of panicking.
+    match aliases.as_ref().and_then(|values| values.get(field)) {
+        Some(canonical) => canonical.clone(),
+        None => field.to_string(),
     }
 }
 
@@ -246,6 +205,20 @@ mod tests {
             storage_equivalent_field_ids("counterparty.name"),
             &["counterparty.name", "accounting.client"]
         );
+    }
+
+    #[test]
+    fn shared_alias_owner_matches_storage_equivalence_reads() {
+        let aliases: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(include_str!("../../../shared/field_aliases.json"))
+                .expect("shared field alias map must be valid JSON");
+        for (alias, canonical) in aliases {
+            assert_eq!(canonical_storage_field_id(&alias), canonical);
+            assert!(
+                storage_equivalent_field_ids(&canonical).contains(&alias.as_str()),
+                "alias {alias} -> {canonical} is missing from storage equivalence reads"
+            );
+        }
     }
 
     #[test]

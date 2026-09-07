@@ -1,6 +1,6 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { FolderNamePartDto, PopupAnswerDto, PopupApplyResult, WorkflowPlan } from '../lib/types';
-import { activeWorkflowPrompts } from '../lib/workflowPromptVisibility';
+import { activeWorkflowPrompts, isInternalWorkflowPrompt } from '../lib/workflowPromptVisibility';
 
 export interface GenerationSnapshot {
   documentIds: string[];
@@ -8,6 +8,8 @@ export interface GenerationSnapshot {
   folderParts: FolderNamePartDto[];
   outputRoot: string;
   documentRevisionTokens: Record<string, string>;
+  autoPrint: boolean;
+  printCopies: Record<string, number>;
 }
 
 interface UseGenerationPreflightOptions {
@@ -16,6 +18,8 @@ interface UseGenerationPreflightOptions {
   folderParts: FolderNamePartDto[];
   outputRoot: string;
   documentRevisionTokens: Record<string, string>;
+  autoPrint: boolean;
+  printCopies: Record<string, number>;
   preflightPlan: WorkflowPlan | null;
   preflightLoading: boolean;
   answers: Record<string, string>;
@@ -60,6 +64,8 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
       folderParts: [...options.folderParts],
       outputRoot: options.outputRoot.trim(),
       documentRevisionTokens: { ...options.documentRevisionTokens },
+      autoPrint: options.autoPrint,
+      printCopies: { ...options.printCopies },
     };
     const workflow = await options.requestWorkflowPlan(snapshot);
     if (!workflow) {
@@ -105,10 +111,19 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
         const missing = activePrompts.filter((prompt) => prompt.required
           && !options.skippedAnswers[prompt.field_id]
           && !(options.answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
-        if (missing.length) {
-          const message = `Не заполнено обязательное поле: ${missing[0].title}.`;
+        const missingInternal = missing.find((prompt) => isInternalWorkflowPrompt(prompt.field_id));
+        if (missingInternal) {
+          const message = 'Внутренние параметры серии дневников не рассчитаны. Закройте проверку, перепроверьте даты поступления/выписки и откройте создание заново.';
           setGenerationError(message);
-          setGenerationValidationFieldId(missing[0].field_id);
+          setGenerationValidationFieldId(null);
+          options.setStatus(message);
+          return;
+        }
+        const missingVisible = missing.filter((prompt) => !isInternalWorkflowPrompt(prompt.field_id));
+        if (missingVisible.length) {
+          const message = `Не заполнено обязательное поле: ${missingVisible[0].title}.`;
+          setGenerationError(message);
+          setGenerationValidationFieldId(missingVisible[0].field_id);
           options.setStatus(message);
           return;
         }

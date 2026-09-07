@@ -100,6 +100,7 @@ async function renderUtility(onCheckUpdates = vi.fn()) {
   });
   render(
     <UtilityPanel
+      busy={false}
       documents={[]}
       selectedDocumentIds={[]}
       onStatus={vi.fn()}

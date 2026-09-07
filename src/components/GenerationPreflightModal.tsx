@@ -1,13 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useEffect } from 'react';
 import type { DocumentTemplateSpec, PromptSpec, WorkflowPlan } from '../lib/types';
-import { activeWorkflowPrompts, updateWorkflowAnswers } from '../lib/workflowPromptVisibility';
+import { activeWorkflowPrompts, isInternalWorkflowPrompt, updateWorkflowAnswers } from '../lib/workflowPromptVisibility';
 import { WorkflowPromptField } from './Workspace';
-
-const INTERNAL_DIARY_RUNTIME_FIELDS = new Set([
-  'medical.diary_day_start_time',
-  'medical.diary_day_end_time',
-]);
 
 interface GenerationPreflightModalProps {
   plan: WorkflowPlan;
@@ -38,11 +33,12 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
   }, [props.invalidFieldId]);
   const selected = props.documents.filter((document) => props.selectedDocumentIds.includes(document.id));
   const prompts = activeWorkflowPrompts(props.plan.prompts, props.answers);
+  // Shared internal bounds kept out of doctor-facing UI: medical.diary_day_start_time, medical.diary_day_end_time.
   // These values are backend-owned bounds for the generic repeated-record engine.
   // They remain in the WorkflowPlan and are submitted by useGenerationPreflight,
   // but are not extra user questions. Donor-facing choices stay in the WorkflowPlan; only these
   // technical bounds are hidden from the specialist.
-  const visiblePrompts = prompts.filter((prompt) => !INTERNAL_DIARY_RUNTIME_FIELDS.has(prompt.field_id));
+  const visiblePrompts = prompts.filter((prompt) => !isInternalWorkflowPrompt(prompt.field_id));
   const sections = visiblePrompts.reduce<Array<{ title: string; prompts: PromptSpec[] }>>((groups, prompt) => {
     const title = prompt.section?.trim() || 'Данные документа';
     const existing = groups.find((group) => group.title === title);

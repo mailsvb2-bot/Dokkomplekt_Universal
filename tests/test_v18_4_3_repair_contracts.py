@@ -85,11 +85,13 @@ def test_trivial_repeated_digit_inn_is_rejected() -> None:
 
 def test_accounting_popup_ids_and_input_kinds_are_canonicalized_before_merge() -> None:
     aliases = text("crates/dokkomplekt-core/src/field_aliases.rs")
+    shared_aliases = json.loads(text("shared/field_aliases.json"))
     profiles = text("crates/dokkomplekt-core/src/popup_profiles.rs")
     domain_profiles = text("crates/dokkomplekt-core/src/domain_profiles.rs")
 
-    assert '"accounting.client" => "counterparty.name".into()' in aliases
-    assert '"accounting.currency" => "amount.currency".into()' in aliases
+    assert shared_aliases["accounting.client"] == "counterparty.name"
+    assert shared_aliases["accounting.currency"] == "amount.currency"
+    assert 'include_str!("../../../shared/field_aliases.json")' in aliases
     assert '.map(|field| canonical_storage_field_id(field))' in profiles
     assert 'id.contains("count")' not in profiles
     assert 'let leaf = id.rsplit' in profiles

@@ -12,6 +12,11 @@ const PARTS: Array<{ value: FolderNamePartDto; label: string; example: string }>
   { value: 'ShortPeriodRange', label: 'Период коротко', example: '01.06.26-30.06.26' },
   { value: 'PeriodStartMonthName', label: 'Месяц начала словом', example: 'июнь 2026' },
   { value: 'PeriodEndMonthName', label: 'Месяц окончания словом', example: 'июнь 2026' },
+  { value: 'AdmissionDate', label: 'Дата поступления', example: '01.06.2026' },
+  { value: 'DischargeDate', label: 'Дата выписки', example: '30.06.2026' },
+  { value: 'AdmissionAndDischargeDates', label: 'Обе даты лечения', example: '01.06.2026 - 30.06.2026' },
+  { value: 'AdmissionMonth', label: 'Месяц поступления', example: '06.2026' },
+  { value: 'DischargeMonth', label: 'Месяц выписки', example: '06.2026' },
 ];
 
 const PRESETS: Array<{ id: string; title: string; hint: string; parts: FolderNamePartDto[] }> = [

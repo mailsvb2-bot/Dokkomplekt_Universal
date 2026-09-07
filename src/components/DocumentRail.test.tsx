@@ -100,4 +100,14 @@ it('keeps the native picker primary and exposes an explicit text fallback', () =
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Выписной эпикриз в комплект' }));
     expect(onToggleSelected).toHaveBeenCalledWith(document.id);
   });
+
+  it('locks selection, template management and copy count while an operation is in flight', () => {
+    renderRail({ busy: true });
+    expect((screen.getByRole('checkbox', { name: 'Добавить Выписной эпикриз в комплект' }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Выписной эпикриз' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Выбрать всё' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText('Управление кнопками'));
+    expect((screen.getByRole('button', { name: 'Переименовать' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
 });

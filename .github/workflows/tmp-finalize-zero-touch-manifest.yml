@@ -1,0 +1,73 @@
+name: TEMP Finalize zero-touch manifest
+
+on:
+  push:
+    branches:
+      - ops/finalize-zero-touch-manifest-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: fix/user-scenario-integrity-20260907
+      TARGET_CODE_SHA: 2fa0e495fff7aecf771133c250be7f25e83e6dbe
+      EXPECTED_MANIFEST_BLOB: c7a2f770557523afadff7a841df6f08836b1fbac
+      EXPECTED_FINAL_TREE: e8ba6092449dc210c9fb0573313f25401b781e1c
+      FINALIZER_BRANCH: ops/finalize-zero-touch-manifest-20260907
+    steps:
+      - name: Finalize exact target tree
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          current=""
+          for _ in $(seq 1 120); do
+            current="$(git ls-remote "$repo_url" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+            if [[ "$current" == "$TARGET_CODE_SHA" ]]; then
+              break
+            fi
+            sleep 5
+          done
+          test "$current" = "$TARGET_CODE_SHA"
+
+          git clone --branch "$TARGET_BRANCH" --single-branch "$repo_url" target
+          cd target
+          test "$(git rev-parse HEAD)" = "$TARGET_CODE_SHA"
+
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST.generated.txt \
+            --json-report /tmp/source-manifest-before.json || true
+          test -s /tmp/SOURCE_MANIFEST.generated.txt
+          cp /tmp/SOURCE_MANIFEST.generated.txt SOURCE_MANIFEST_SHA256.txt
+
+          actual_manifest_blob="$(git hash-object SOURCE_MANIFEST_SHA256.txt)"
+          test "$actual_manifest_blob" = "$EXPECTED_MANIFEST_BLOB"
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST.verify.txt \
+            --json-report /tmp/source-manifest-after.json
+
+          git config user.name "Dokkomplekt CI Finalizer"
+          git config user.email "actions@users.noreply.github.com"
+          git add SOURCE_MANIFEST_SHA256.txt
+          actual_tree="$(git write-tree)"
+          test "$actual_tree" = "$EXPECTED_FINAL_TREE"
+
+          git commit -m "Refresh source manifest for zero-touch ownership fix"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_FINAL_TREE"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+      - name: Remove temporary finalizer branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push "$repo_url" ":refs/heads/${FINALIZER_BRANCH}"

@@ -13,6 +13,8 @@ describe('medical diary source key contract', () => {
     expect(medicalDiagnosisKey('Диагноз F20 . 0, ремиссия')).toBe('f200');
     expect(medicalDiaryFileKey('Дневники F20 . 0 — вариант.docx')).toBe('f200');
     expect(medicalDiagnosisKey('F20 Шизофрения')).toBe('f20');
+    expect(medicalDiaryFileKey('Шизофрения.docx')).toBe(medicalDiaryFileKey('Шизофрения финал.docx'));
+    expect(medicalDiaryFileKey('Депрессия.txt')).toBe(medicalDiaryFileKey('Итоговый Депрессия.txt'));
   });
 
   it('keeps non-ICD diagnosis keys bounded by the storage contract', () => {

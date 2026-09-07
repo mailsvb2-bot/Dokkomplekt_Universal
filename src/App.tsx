@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
@@ -25,8 +24,8 @@ import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGene
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
+import { useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
-import { normalizeCreatedDocumentsIntakeResult } from './lib/runtimeValidation';
 import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templateButtonLabelFromFileName, uniqueTemplateButtonLabel, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
 import { chooseExistingOutputPolicyFlow, openCreatedOutputFolderSilently } from './lib/outputFlow';
@@ -49,6 +48,7 @@ function AppContent() {
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const manualSelectionTouched = useRef(false);
+  const documentLoadRevision = useRef(0);
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
@@ -140,34 +140,7 @@ function AppContent() {
     setAutoPrint, setPrintCopies, setStatus,
   });
 
-  useEffect(() => {
-    let disposed = false;
-    let stopListening: (() => void) | undefined;
-    listen<unknown>('document-batch-ready', (event) => {
-      try {
-        const result = normalizeCreatedDocumentsIntakeResult(event.payload);
-        setLastOutput(null);
-        setIntakeResult(result);
-        setStatus(result.message);
-        if (result.status === 'processed' && result.created_files.length) {
-          setLastOutput({
-            folder: result.patient_folder,
-            files: result.created_files,
-            source: 'watcher',
-            print_items: createdPrintItems(result.created_documents, result.created_files, documents),
-          });
-        }
-      } catch (error) {
-        setStatus(`Фоновая обработка вернула некорректный результат: ${errorMessage(error)}`);
-      }
-    }).then((unlisten) => {
-      if (disposed) unlisten(); else stopListening = unlisten;
-    }).catch(() => { /* browser/tests: Tauri event bridge is unavailable */ });
-    return () => {
-      disposed = true;
-      stopListening?.();
-    };
-  }, [documents]);
+  const { backgroundNotice, dismissBackgroundNotice } = useWatcherResultIsolation({ documents, foregroundCaseActive: Boolean(sourceFileName || parsed || sourceText.trim()), setLastOutput, setIntakeResult, setStatus });
 
   useEffect(() => {
     if (!setupOpen) return;
@@ -320,6 +293,7 @@ function AppContent() {
   }
 
   async function resetCurrentCase() {
+    documentLoadRevision.current += 1;
     const cleared = await run('reset_case', () => resetCase());
     if (!cleared) return;
     setSourceText('');
@@ -341,6 +315,21 @@ function AppContent() {
       return selection.summary;
     }
     return `${selection.summary} Ручной выбор документов сохранён и не был заменён автоматически.`;
+  }
+
+  function changeSourceText(value: string) {
+    setSourceText(value);
+    if (parsed || sourceFileName || sourceFilePath || semantic || preflightPlan || lastOutput) {
+      setSourceFileName(null);
+      setSourceFilePath(null);
+      setParsed(null);
+      setSemantic(null);
+      setPlan(null);
+      setPreflightPlan(null);
+      setPreview(null);
+      setLastOutput(null);
+      setStatus('Текст источника изменён. Нажмите «Использовать текст», чтобы заново распознать данные перед созданием документов.');
+    }
   }
 
   async function parseSourceNow() {
@@ -433,6 +422,7 @@ function AppContent() {
   }
 
   async function selectDocument(doc: DocumentTemplateSpec) {
+    const requestRevision = ++documentLoadRevision.current;
     manualSelectionTouched.current = true;
     setSelectedDocIds((previous) => previous.includes(doc.id) ? previous : [...previous, doc.id]);
     setActiveDoc(doc.id);
@@ -441,6 +431,7 @@ function AppContent() {
       run('get_workflow_plan', () => getWorkflowPlan(doc.id, sickLeave)),
       run('get_document_template_text', () => getDocumentTemplateText(doc.id)),
     ]);
+    if (requestRevision !== documentLoadRevision.current) return;
     if (template) setActiveTemplateText(template.template_text);
     if (!workflow) return;
     setPlan(workflow);
@@ -599,7 +590,7 @@ function AppContent() {
     setStatus(opened.opened
       ? creationStatus
       : `${creationStatus} Папка не открылась автоматически: ${opened.error}. Используйте кнопку «Открыть папку с документами».`);
-    if (autoPrint) await queuePrint(jobsForItems(printItems, printCopies), true, snapshot.documentIds, null, res.output_folder);
+    if (snapshot.autoPrint) await queuePrint(jobsForItems(printItems, snapshot.printCopies), true, snapshot.documentIds, null, res.output_folder);
     return null;
   }
 
@@ -609,7 +600,7 @@ function AppContent() {
   }
   const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
-    selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds),
+    selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds), autoPrint, printCopies,
     preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
@@ -692,6 +683,7 @@ function AppContent() {
 
   async function removeActiveDocument() {
     if (!activeDoc) return;
+    documentLoadRevision.current += 1;
     const current = documents.find((document) => document.id === activeDoc);
     const confirmed = await dialogs.confirm({
       title: 'Убрать документ из набора?',
@@ -726,7 +718,15 @@ function AppContent() {
     const value = answers[fieldId] ?? '';
     const saved = await run('set_field', () => setField(fieldId, value));
     if (!saved) return;
-    await refreshPreflightPlan();
+    let refreshError: string | null = null;
+    const refreshed = await run('get_workflow_plan_batch', async () => {
+      await refreshPreflightPlan();
+      return true;
+    }, (detail) => { refreshError = detail; });
+    if (!refreshed) {
+      setStatus(`Значение сохранено, но план комплекта не удалось обновить: ${refreshError ?? 'неизвестная ошибка'}. Перед созданием программа проверит план заново.`);
+      return;
+    }
     setStatus('Значение сохранено и будет использовано в других документах комплекта.');
   }
 
@@ -884,6 +884,10 @@ function AppContent() {
   async function reportSemanticFieldError(fieldId: string, value: string) {
     setScannerField(fieldId);
     setScannerText(value);
+    if (!sourceFilePath) {
+      setStatus('Выделите правильное значение в тексте источника и нажмите «Назначить выделение полю». Для веб-источника и вставленного текста Word не требуется.');
+      return;
+    }
     setStatus('Покажите правильное значение один раз — программа исправит текущий комплект и запомнит расположение.');
     await startGuidedSourceScanner(fieldId);
   }
@@ -1327,7 +1331,7 @@ function AppContent() {
             onUninstallWatcher={() => void uninstallWatcher()}
             setIntakeSource={setIntakeSource}
             setAutoPrint={updateAutoPrint}
-            setSourceText={setSourceText}
+            setSourceText={changeSourceText}
             setSourceFileName={(value) => { setSourceFileName(value); if (value === null) setSourceFilePath(null); }}
             setWebSourceUrl={setWebSourceUrl}
             setScannerField={setScannerField}
@@ -1382,6 +1386,7 @@ function AppContent() {
 
         {utilityOpen && (
           <UtilityPanel
+            busy={interactionBusy}
             documents={documents}
             selectedDocumentIds={selectedDocIds}
             onStatus={setStatus}
@@ -1435,6 +1440,7 @@ function AppContent() {
           <div role="alert">Не удалось подготовить папку готовых документов</div>
         )}
 
+        {backgroundNotice && <div className="backgroundNotice" role="status"><span>{backgroundNotice}</span><button type="button" className="textBtn" onClick={dismissBackgroundNotice}>Скрыть</button></div>}
         <footer className="statusBar">
           <span className={busy ? 'dot busy' : 'dot'} aria-hidden="true" />
           {status}
@@ -1452,6 +1458,7 @@ function AppContent() {
 
       {setupOpen && (
         <TemplateSetupModal
+          busy={busy}
           templateText={templateText}
           buttonLabel={buttonLabel}
           previewTitle={previewTitle}
@@ -1495,7 +1502,7 @@ function AppContent() {
           sickLeaveEnabled={sickLeave}
           setAnswers={setAnswers}
           setSkippedAnswers={setSkippedAnswers}
-          onSickLeaveChange={setSickLeave}
+          onSickLeaveChange={changeGenerationSickLeave}
           onCancel={closeGenerationPreflight}
           onConfirm={() => void confirmGenerationPreflight()}
         />
@@ -1503,6 +1510,7 @@ function AppContent() {
 
       {popupDesignerDocument && (
         <PopupDesignerModal
+          busy={busy}
           document={popupDesignerDocument}
           fields={popupDesignerFields}
           onChange={setPopupDesignerFields}

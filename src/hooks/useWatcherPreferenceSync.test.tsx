@@ -140,4 +140,39 @@ describe('useWatcherPreferenceSync', () => {
     await waitFor(() => expect(calls.filter((call) => call === 'get_background_watcher_state')).toHaveLength(2));
     await waitFor(() => expect(calls).toContain('update_background_watcher_preferences'));
   });
+
+  it('serializes watcher preference writes so an older request cannot overwrite a newer choice', async () => {
+    const updates: Array<{ copies: Record<string, number>; release?: () => void }> = [];
+    let releaseFirst!: () => void;
+    __setInvokeForTests(async (command, payload) => {
+      if (command === 'get_background_watcher_state') {
+        return { platform: 'windows', installed: true, watch_folder: 'C:/Inbox', output_root: 'D:/Ready', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false } as never;
+      }
+      if (command === 'update_background_watcher_preferences') {
+        const copies = ((payload as { req?: { print_copies_by_document?: Record<string, number> } })?.req?.print_copies_by_document ?? {});
+        updates.push({ copies });
+        if (updates.length === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
+        return true as never;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    const common = {
+      outputPreferencesReady: true, watcherRefreshRevision: 0, folderNamingConfirmed: true,
+      outputRoot: 'D:/Ready', folderParts: ['DocumentNumber'] as const, autoPrint: false,
+      setAutoPrint: vi.fn(), setPrintCopies: vi.fn(), setStatus: vi.fn(),
+    };
+    const { rerender } = renderHook(
+      ({ copies }) => useWatcherPreferenceSync({ ...common, folderParts: [...common.folderParts], printCopies: copies }),
+      { initialProps: { copies: { doc: 1 } } },
+    );
+    await waitFor(() => expect(updates).toHaveLength(1));
+    rerender({ copies: { doc: 2 } });
+    rerender({ copies: { doc: 3 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(updates).toHaveLength(1);
+    releaseFirst();
+    await waitFor(() => expect(updates.length).toBeGreaterThanOrEqual(3));
+    expect(updates.map(item => item.copies.doc)).toEqual([1, 2, 3]);
+  });
+
 });

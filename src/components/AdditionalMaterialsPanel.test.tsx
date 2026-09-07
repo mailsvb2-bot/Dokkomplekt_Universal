@@ -37,16 +37,18 @@ describe('AdditionalMaterialsPanel', () => {
     expect(screen.queryByText('Медицинские дневники')).toBeNull();
   });
 
-  it('keeps Cyrillic generic material keys compatible with the universal backend contract', async () => {
+  it('keeps Cyrillic generic material keys compatible with the universal backend contract and publishes content plus index atomically', async () => {
     const savedBlocks: string[] = [];
+    let replaceCalls = 0;
     __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
       if (command === 'import_learning_example_file') return {
         source_path: '/app-data/договор.pdf', source_kind: 'pdf', extracted_text: 'Условия договора и реквизиты сторон.', warnings: [],
       } as T;
       if (command === 'list_clause_blocks') return [] as T;
-      if (command === 'save_clause_block') {
-        savedBlocks.push((payload as { req?: { block_id?: string } })?.req?.block_id ?? '');
-        return [] as T;
+      if (command === 'replace_clause_blocks') {
+        replaceCalls += 1;
+        savedBlocks.push(...replacementBlocks(payload).map(block => block.block_id ?? ''));
+        return true as T;
       }
       throw new Error(`Unexpected command: ${command}`);
     });
@@ -55,6 +57,7 @@ describe('AdditionalMaterialsPanel', () => {
     fireEvent.change(input, { target: { files: [new File(['pdf'], 'договор.pdf', { type: 'application/pdf' })] } });
 
     await waitFor(() => {
+      expect(replaceCalls).toBe(1);
       expect(savedBlocks).toContain('professional.material.legal.договор');
       expect(savedBlocks).toContain('professional.materials.index');
     });

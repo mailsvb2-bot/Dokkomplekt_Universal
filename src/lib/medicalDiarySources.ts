@@ -31,7 +31,15 @@ export function medicalDiagnosisKey(value: string): string {
 
 export function medicalDiaryFileKey(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '');
-  return medicalIcdCodeKey(stem) || safeSourceKey(fileName);
+  const codeKey = medicalIcdCodeKey(stem);
+  if (codeKey) return codeKey;
+  const roleNeutralStem = stem
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/(?:^|[\s._—–:;,-]+)(?:финал(?:ьн(?:ый|ая|ое|ые))?|итог(?:овый|овая|овое|овые)?|выписк(?:а|и|ой|у)?|заключительн(?:ый|ая|ое|ые)?)(?=$|[\s._—–:;,-]+)/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return safeSourceKey(roleNeutralStem || stem);
 }
 
 export function isFinalMedicalDiaryText(fileName: string): boolean {

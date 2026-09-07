@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import type { DocumentTemplateSpec, DomainKind } from '../lib/types';
 import {
   deleteClauseBlock,
@@ -35,6 +35,9 @@ interface DiaryFileSelection {
   status: string;
 }
 
+const MAX_DROPPED_FILES = 250;
+const MAX_DROP_DEPTH = 12;
+
 interface DroppedFileEntry {
   isFile: boolean;
   isDirectory: boolean;
@@ -42,19 +45,22 @@ interface DroppedFileEntry {
   createReader(): { readEntries(callback: (entries: DroppedFileEntry[]) => void, error?: (error: unknown) => void): void };
 }
 
-async function filesFromDroppedEntry(entry: DroppedFileEntry): Promise<File[]> {
+async function filesFromDroppedEntry(entry: DroppedFileEntry, depth: number, budget: { remaining: number }): Promise<File[]> {
+  if (depth > MAX_DROP_DEPTH) throw new Error(`Папка вложена слишком глубоко. Максимальная глубина: ${MAX_DROP_DEPTH}.`);
   if (entry.isFile) {
+    if (budget.remaining <= 0) throw new Error(`Слишком много файлов. За один импорт можно добавить не больше ${MAX_DROPPED_FILES}.`);
+    budget.remaining -= 1;
     return new Promise((resolve, reject) => entry.file(file => resolve([file]), reject));
   }
   if (!entry.isDirectory) return [];
   const reader = entry.createReader();
-  const children: DroppedFileEntry[] = [];
+  const files: File[] = [];
   for (;;) {
     const batch = await new Promise<DroppedFileEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
     if (!batch.length) break;
-    children.push(...batch);
+    for (const child of batch) files.push(...await filesFromDroppedEntry(child, depth + 1, budget));
   }
-  return (await Promise.all(children.map(filesFromDroppedEntry))).flat();
+  return files;
 }
 
 async function filesFromDrop(event: DragEvent<HTMLDivElement>): Promise<File[]> {
@@ -62,8 +68,15 @@ async function filesFromDrop(event: DragEvent<HTMLDivElement>): Promise<File[]> 
   const entries = items
     .map(item => (item as unknown as { webkitGetAsEntry?: () => DroppedFileEntry | null }).webkitGetAsEntry?.())
     .filter((entry): entry is DroppedFileEntry => Boolean(entry));
-  if (entries.length) return (await Promise.all(entries.map(filesFromDroppedEntry))).flat();
-  return Array.from(event.dataTransfer.files ?? []);
+  if (entries.length) {
+    const budget = { remaining: MAX_DROPPED_FILES };
+    const files: File[] = [];
+    for (const entry of entries) files.push(...await filesFromDroppedEntry(entry, 0, budget));
+    return files;
+  }
+  const files = Array.from(event.dataTransfer.files ?? []);
+  if (files.length > MAX_DROPPED_FILES) throw new Error(`Слишком много файлов. За один импорт можно добавить не больше ${MAX_DROPPED_FILES}.`);
+  return files;
 }
 
 function domainKey(domain: DomainKind): string {
@@ -122,6 +135,7 @@ export function AdditionalMaterialsPanel(props: {
 }) {
   const [status, setStatus] = useState('');
   const [working, setWorking] = useState(false);
+  const workingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [customRvk, setCustomRvk] = useState('');
   const [diaryFiles, setDiaryFiles] = useState<DiaryFileSelection[]>([]);
@@ -150,6 +164,11 @@ export function AdditionalMaterialsPanel(props: {
   if (!selected.length) return null;
 
   async function withWork<T>(label: string, action: () => Promise<T>): Promise<T | null> {
+    if (workingRef.current || props.busy) {
+      setStatus('Дождитесь завершения текущей операции с дополнительными материалами.');
+      return null;
+    }
+    workingRef.current = true;
     setWorking(true);
     setStatus(label);
     try {
@@ -158,6 +177,7 @@ export function AdditionalMaterialsPanel(props: {
       setStatus(error instanceof Error ? error.message : String(error));
       return null;
     } finally {
+      workingRef.current = false;
       setWorking(false);
     }
   }
@@ -167,32 +187,31 @@ export function AdditionalMaterialsPanel(props: {
     return importLearningExampleFile(file.name, arrayBufferToBase64(bytes));
   }
 
-  async function saveMaterialIndex(newEntries: MaterialIndexEntry[]) {
-    const blocks = await listClauseBlocks();
-    const existing = blocks.find(block => block.block_id === MATERIAL_INDEX_BLOCK)?.content;
-    let current: MaterialIndexEntry[] = [];
-    if (existing) {
-      try {
-        const parsed = JSON.parse(existing);
-        if (Array.isArray(parsed)) current = parsed as MaterialIndexEntry[];
-      } catch { /* replace invalid old index with a valid one */ }
-    }
-    const byId = new Map(current.map(entry => [entry.block_id, entry]));
-    for (const entry of newEntries) byId.set(entry.block_id, entry);
-    await saveClauseBlock(MATERIAL_INDEX_BLOCK, 'Дополнительные материалы · индекс', JSON.stringify([...byId.values()], null, 2));
-  }
-
   async function importGenericFiles(files: File[]) {
     if (!files.length) return;
+    if (files.length > MAX_DROPPED_FILES) {
+      setStatus(`Слишком много файлов. За один импорт можно добавить не больше ${MAX_DROPPED_FILES}.`);
+      return;
+    }
     await withWork('Импортируем дополнительные материалы…', async () => {
+      const existingBlocks = await listClauseBlocks();
+      const existingIndex = existingBlocks.find(block => block.block_id === MATERIAL_INDEX_BLOCK)?.content;
+      let current: MaterialIndexEntry[] = [];
+      if (existingIndex) {
+        try {
+          const parsed = JSON.parse(existingIndex);
+          if (Array.isArray(parsed)) current = parsed as MaterialIndexEntry[];
+        } catch { /* an invalid legacy index is replaced atomically */ }
+      }
       const indexEntries: MaterialIndexEntry[] = [];
+      const replacements: Array<{ blockId: string; title: string; content: string }> = [];
       for (const file of files) {
         const imported = await extractMaterial(file);
         const content = imported.extracted_text.trim();
         if (!content) continue;
         for (const domain of domains.length ? domains : ['Generic' as DomainKind]) {
           const blockId = `professional.material.${domainKey(domain)}.${safeKey(file.name) || 'source'}`;
-          await saveClauseBlock(blockId, `Дополнительный материал: ${file.name}`, content);
+          replacements.push({ blockId, title: `Дополнительный материал: ${file.name}`, content });
           indexEntries.push({
             block_id: blockId,
             file_name: file.name,
@@ -201,13 +220,25 @@ export function AdditionalMaterialsPanel(props: {
           });
         }
       }
-      await saveMaterialIndex(indexEntries);
-      setStatus(`Дополнительные материалы сохранены: ${indexEntries.length}.`);
+      const byId = new Map(current.map(entry => [entry.block_id, entry]));
+      for (const entry of indexEntries) byId.set(entry.block_id, entry);
+      replacements.push({
+        blockId: MATERIAL_INDEX_BLOCK,
+        title: 'Дополнительные материалы · индекс',
+        content: JSON.stringify([...byId.values()], null, 2),
+      });
+      const deleteIds = [...new Set(replacements.map(block => block.blockId))];
+      await replaceClauseBlocks(deleteIds, replacements);
+      setStatus(`Дополнительные материалы сохранены атомарно: ${indexEntries.length}.`);
     });
   }
 
   async function importDiaryTexts(files: File[], bindToCurrentDiagnosis = false) {
     if (!files.length) return;
+    if (workingRef.current || props.busy) {
+      setStatus('Дождитесь завершения текущей операции с дополнительными материалами.');
+      return;
+    }
     const currentDiagnosisKey = bindToCurrentDiagnosis ? medicalDiagnosisKey(props.medicalDiagnosis ?? '') : '';
     if (bindToCurrentDiagnosis && !currentDiagnosisKey) {
       setStatus('Сначала укажите или подтвердите диагноз текущего пациента, затем снова выберите «Тексты». Файл не сохранён, чтобы не привязать медицинский текст к неверному диагнозу.');
@@ -219,6 +250,7 @@ export function AdditionalMaterialsPanel(props: {
       status: 'Импортируется',
     }));
     setDiaryFiles(selections);
+    workingRef.current = true;
     setWorking(true);
     setStatus('Импортируем медицинскую библиотеку текстов…');
     try {
@@ -334,6 +366,7 @@ export function AdditionalMaterialsPanel(props: {
       setDiaryFiles(selections.map(item => item.status === 'Импортируется' ? { ...item, status: `Ошибка импорта: ${detail}` } : item));
       setStatus(`Не удалось открыть библиотеку дневников: ${detail}`);
     } finally {
+      workingRef.current = false;
       setWorking(false);
     }
   }
@@ -387,7 +420,10 @@ export function AdditionalMaterialsPanel(props: {
         onDrop={(event: DragEvent<HTMLDivElement>) => {
           event.preventDefault();
           setDragging(false);
-          void filesFromDrop(event).then(files => { if (files.length) return importGenericFiles(files); });
+          if (working || props.busy) return;
+          void filesFromDrop(event)
+            .then(files => { if (files.length) return importGenericFiles(files); })
+            .catch(error => setStatus(shortImportError(error)));
         }}
       >
         Перетащите сюда дополнительные файлы или содержимое папки

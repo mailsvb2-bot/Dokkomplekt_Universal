@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TemplateSetupModal } from './TemplateSetupModal';
 
 const base = {
+  busy: false,
   templateText: '',
   buttonLabel: '',
   previewTitle: 'Документ',
@@ -172,6 +173,27 @@ describe('TemplateSetupModal', () => {
     });
 
     expect(onPendingTemplateDomainChange).toHaveBeenCalledWith('d1', 'Legal');
+  });
+
+
+  it('blocks duplicate button labels before publishing the template pack', () => {
+    render(<TemplateSetupModal {...base} pendingTemplates={[
+      { document_id: 'd1', file_name: 'Акт 1.docx', button_label: 'Акт', extracted_text: 'Акт', popup_fields: [] },
+      { document_id: 'd2', file_name: 'Акт 2.docx', button_label: '  Акт  ', extracted_text: 'Другой акт', popup_fields: [] },
+    ]} />);
+    expect(screen.getByText('Названия кнопок должны отличаться')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Создать кнопки (2)' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('blocks empty, duplicate and dangling popup field identifiers before button creation', () => {
+    render(<TemplateSetupModal {...base} pendingTemplates={[{
+      document_id: 'd1', file_name: 'Акт.docx', button_label: 'Акт', extracted_text: 'Акт',
+      popup_fields: [
+        { field_id: 'document.number', title: 'Номер', required: true, input_kind: 'text', ask_mode: 'always', options: [], allow_custom_option: false, help_text: null, section: null, default_value: null, linked_to: 'missing.field', order: 1 },
+      ],
+    }]} />);
+    expect(screen.getByText('Исправьте уточняющие вопросы')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
 });

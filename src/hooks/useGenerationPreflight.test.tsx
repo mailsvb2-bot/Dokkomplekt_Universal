@@ -15,6 +15,8 @@ function context(documentId: string) {
     folderParts: ['DocumentNumber'] as FolderNamePartDto[],
     outputRoot: 'C:/Desktop/Выписанные пациенты',
     documentRevisionTokens: { [documentId]: 'revision-1' },
+    autoPrint: false,
+    printCopies: {},
   };
 }
 
@@ -122,7 +124,7 @@ describe('useGenerationPreflight', () => {
     const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
     const { result, rerender } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['contract'], sickLeaveEnabled, folderParts: ['DocumentNumber'], outputRoot,
-      documentRevisionTokens: { contract: 'revision-1' }, preflightPlan: readyPlan, preflightLoading: false,
+      documentRevisionTokens: { contract: 'revision-1' }, autoPrint: true, printCopies: { contract: 3 }, preflightPlan: readyPlan, preflightLoading: false,
       answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
       setStatus: vi.fn(), requestWorkflowPlan: vi.fn(async () => readyPlan), applyAnswers: vi.fn(async () => null), onConfirmed,
     }));
@@ -132,6 +134,7 @@ describe('useGenerationPreflight', () => {
     expect(onConfirmed).toHaveBeenCalledWith(expect.objectContaining({
       documentIds: ['contract'], outputRoot: 'C:/Desktop/Выписанные пациенты', sickLeaveEnabled: false,
       folderParts: ['DocumentNumber'], documentRevisionTokens: { contract: 'revision-1' },
+      autoPrint: true, printCopies: { contract: 3 },
     }));
   });
 
@@ -204,4 +207,26 @@ describe('useGenerationPreflight', () => {
     release();
     await act(async () => { await first; });
   });
+
+  it('fails clearly instead of focusing an invisible required diary runtime field', async () => {
+    const runtimePlan: WorkflowPlan = {
+      document_id: 'diaries', prompts: [{ field_id: 'medical.diary_day_start_time', title: 'Время начала дня', required: true, input_kind: 'text', ask_mode: 'always' }],
+      blocked: false, block_reasons: [],
+    };
+    const setStatus = vi.fn();
+    const applyAnswers = vi.fn(async () => null);
+    const onConfirmed = vi.fn(async () => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['diaries'], ...context('diaries'), preflightPlan: runtimePlan, preflightLoading: false,
+      answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
+      setStatus, requestWorkflowPlan: vi.fn(async () => runtimePlan), applyAnswers, onConfirmed,
+    }));
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+    expect(result.current.generationValidationFieldId).toBeNull();
+    expect(result.current.generationError).toMatch(/Внутренние параметры серии дневников/);
+    expect(applyAnswers).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
 });

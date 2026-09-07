@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentTemplateSpec } from '../lib/types';
 
 let listener: ((event: { payload: unknown }) => void) | null = null;
+let listenCalls = 0;
+let unlistenCalls = 0;
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async (_name: string, callback: (event: { payload: unknown }) => void) => {
+    listenCalls += 1;
     listener = callback;
-    return () => { listener = null; };
+    return () => { unlistenCalls += 1; listener = null; };
   }),
 }));
 
@@ -23,7 +26,7 @@ const processed = {
 };
 
 describe('useWatcherResultIsolation', () => {
-  beforeEach(() => { listener = null; });
+  beforeEach(() => { listener = null; listenCalls = 0; unlistenCalls = 0; });
 
   it('never replaces the open foreground case with an unrelated watcher result', async () => {
     const setLastOutput = vi.fn();
@@ -38,6 +41,31 @@ describe('useWatcherResultIsolation', () => {
     expect(setIntakeResult).not.toHaveBeenCalled();
     expect(setStatus).not.toHaveBeenCalled();
     expect(result.current.backgroundNotice).toContain('Текущий открытый комплект не изменён');
+  });
+
+  it('keeps one listener across rerenders and reads the current foreground state', async () => {
+    const setLastOutput = vi.fn();
+    const setIntakeResult = vi.fn();
+    const setStatus = vi.fn();
+    const { result, rerender, unmount } = renderHook(({ active }) => useWatcherResultIsolation({
+      documents: [document], foregroundCaseActive: active, setLastOutput, setIntakeResult, setStatus,
+    }), { initialProps: { active: false } });
+    await waitFor(() => expect(listener).not.toBeNull());
+    expect(listenCalls).toBe(1);
+
+    rerender({ active: true });
+    expect(listenCalls).toBe(1);
+    act(() => listener?.({ payload: processed }));
+    expect(setIntakeResult).not.toHaveBeenCalled();
+    expect(result.current.backgroundNotice).toContain('Текущий открытый комплект не изменён');
+
+    rerender({ active: false });
+    expect(listenCalls).toBe(1);
+    act(() => listener?.({ payload: processed }));
+    expect(setIntakeResult).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith('Комплект Б готов.');
+    unmount();
+    expect(unlistenCalls).toBe(1);
   });
 
   it('publishes watcher output normally when no foreground case is open', async () => {

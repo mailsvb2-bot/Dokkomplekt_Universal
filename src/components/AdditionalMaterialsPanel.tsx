@@ -36,6 +36,7 @@ interface DiaryFileSelection {
 }
 
 const MAX_DROPPED_FILES = 250;
+const MAX_ATOMIC_CLAUSE_BLOCKS = 512;
 const MAX_DROP_DEPTH = 12;
 
 interface DroppedFileEntry {
@@ -193,6 +194,18 @@ export function AdditionalMaterialsPanel(props: {
       setStatus(`Слишком много файлов. За один импорт можно добавить не больше ${MAX_DROPPED_FILES}.`);
       return;
     }
+    const targetDomains = domains.length ? domains : ['Generic' as DomainKind];
+    const plannedBlockIds = new Set<string>();
+    for (const file of files) {
+      for (const domain of targetDomains) {
+        plannedBlockIds.add(`professional.material.${domainKey(domain)}.${safeKey(file.name) || 'source'}`);
+      }
+    }
+    const plannedAtomicBlocks = plannedBlockIds.size + 1; // material blocks + canonical index
+    if (plannedAtomicBlocks > MAX_ATOMIC_CLAUSE_BLOCKS) {
+      setStatus(`Слишком большой импорт для одной атомарной операции: ${plannedAtomicBlocks} профильных блоков при лимите ${MAX_ATOMIC_CLAUSE_BLOCKS}. Уменьшите число файлов или выбранных профессиональных профилей.`);
+      return;
+    }
     await withWork('Импортируем дополнительные материалы…', async () => {
       const existingBlocks = await listClauseBlocks();
       const existingIndex = existingBlocks.find(block => block.block_id === MATERIAL_INDEX_BLOCK)?.content;
@@ -203,16 +216,19 @@ export function AdditionalMaterialsPanel(props: {
           if (Array.isArray(parsed)) current = parsed as MaterialIndexEntry[];
         } catch { /* an invalid legacy index is replaced atomically */ }
       }
-      const indexEntries: MaterialIndexEntry[] = [];
-      const replacements: Array<{ blockId: string; title: string; content: string }> = [];
+      const indexEntriesById = new Map<string, MaterialIndexEntry>();
+      const replacementsById = new Map<string, { blockId: string; title: string; content: string }>();
       for (const file of files) {
         const imported = await extractMaterial(file);
         const content = imported.extracted_text.trim();
         if (!content) continue;
-        for (const domain of domains.length ? domains : ['Generic' as DomainKind]) {
+        for (const domain of targetDomains) {
           const blockId = `professional.material.${domainKey(domain)}.${safeKey(file.name) || 'source'}`;
-          replacements.push({ blockId, title: `Дополнительный материал: ${file.name}`, content });
-          indexEntries.push({
+          // Multiple source files may normalize to one canonical block ID. The
+          // later file wins deterministically, while the atomic backend request
+          // still contains each replacement identifier exactly once.
+          replacementsById.set(blockId, { blockId, title: `Дополнительный материал: ${file.name}`, content });
+          indexEntriesById.set(blockId, {
             block_id: blockId,
             file_name: file.name,
             domain: domainKey(domain),
@@ -220,14 +236,15 @@ export function AdditionalMaterialsPanel(props: {
           });
         }
       }
+      const indexEntries = [...indexEntriesById.values()];
       const byId = new Map(current.map(entry => [entry.block_id, entry]));
       for (const entry of indexEntries) byId.set(entry.block_id, entry);
-      replacements.push({
+      const replacements = [...replacementsById.values(), {
         blockId: MATERIAL_INDEX_BLOCK,
         title: 'Дополнительные материалы · индекс',
         content: JSON.stringify([...byId.values()], null, 2),
-      });
-      const deleteIds = [...new Set(replacements.map(block => block.blockId))];
+      }];
+      const deleteIds = replacements.map(block => block.blockId);
       await replaceClauseBlocks(deleteIds, replacements);
       setStatus(`Дополнительные материалы сохранены атомарно: ${indexEntries.length}.`);
     });

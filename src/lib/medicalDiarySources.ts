@@ -1,6 +1,9 @@
 export const MEDICAL_DIARY_REGULAR_PREFIX = 'professional.medical.diary.regular.';
 export const MEDICAL_DIARY_FINAL_PREFIX = 'professional.medical.diary.final.';
 
+const FINAL_DIARY_MARKER_RE = /(?:финал|итог|выписк|выписн|заключитель)/u;
+const FINAL_DIARY_ROLE_TOKEN_RE = /(?:^|[\s._—–:;,-]+)(?:финал\p{L}*|итог\p{L}*|выписк\p{L}*|выписн\p{L}*|заключитель\p{L}*)(?:[\s._—–:;,-]+эпикриз\p{L}*)?(?=$|[\s._—–:;,-]+)/gu;
+
 export function safeSourceKey(value: string): string {
   return value
     .replace(/\.[^.]+$/, '')
@@ -36,7 +39,7 @@ export function medicalDiaryFileKey(fileName: string): string {
   const roleNeutralStem = stem
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е')
-    .replace(/(?:^|[\s._—–:;,-]+)(?:финал(?:ьн(?:ый|ая|ое|ые))?|итог(?:овый|овая|овое|овые)?|выписк(?:а|и|ой|у)?|заключительн(?:ый|ая|ое|ые)?)(?=$|[\s._—–:;,-]+)/gu, ' ')
+    .replace(FINAL_DIARY_ROLE_TOKEN_RE, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   return safeSourceKey(roleNeutralStem || stem);
@@ -44,7 +47,7 @@ export function medicalDiaryFileKey(fileName: string): string {
 
 export function isFinalMedicalDiaryText(fileName: string): boolean {
   const name = fileName.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
-  return /(?:финал|итог|выписк|заключитель)/u.test(name);
+  return FINAL_DIARY_MARKER_RE.test(name);
 }
 
 export function uniqueMedicalDiaryTexts(values: string[]): string[] {

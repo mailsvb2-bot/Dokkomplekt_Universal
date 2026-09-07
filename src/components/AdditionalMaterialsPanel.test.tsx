@@ -12,6 +12,14 @@ const legal: DocumentTemplateSpec = {
   id: 'contract', button_label: 'Договор', template_path: 'contract.docx', category: 'Legal', role_id: 'contract',
   required_fields: [], placeholders: [], is_static_copy: false,
 };
+const hr: DocumentTemplateSpec = {
+  id: 'hr-order', button_label: 'Приказ', template_path: 'order.docx', category: 'Hr', role_id: 'order',
+  required_fields: [], placeholders: [], is_static_copy: false,
+};
+const generic: DocumentTemplateSpec = {
+  id: 'generic-note', button_label: 'Заметка', template_path: 'note.docx', category: 'Generic', role_id: 'note',
+  required_fields: [], placeholders: [], is_static_copy: false,
+};
 
 type ReplaceClauseBlocksPayload = {
   req?: {
@@ -61,6 +69,63 @@ describe('AdditionalMaterialsPanel', () => {
       expect(savedBlocks).toContain('professional.material.legal.договор');
       expect(savedBlocks).toContain('professional.materials.index');
     });
+  });
+
+  it('deduplicates generic replacements when different source names normalize to one canonical block ID', async () => {
+    let savedPayload: ReplaceClauseBlocksPayload | null = null;
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'import_learning_example_file') {
+        const name = (payload as { req?: { file_name?: string } })?.req?.file_name ?? '';
+        return { source_path: `/app-data/${name}`, source_kind: 'txt', extracted_text: `Текст из ${name}`, warnings: [] } as T;
+      }
+      if (command === 'replace_clause_blocks') {
+        savedPayload = payload as ReplaceClauseBlocksPayload;
+        return true as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(<AdditionalMaterialsPanel documents={[legal]} selectedDocumentIds={['contract']} busy={false} />);
+    const input = screen.getByText('Добавить файлы').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [
+      new File(['pdf'], 'policy.pdf', { type: 'application/pdf' }),
+      new File(['docx'], 'policy.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    ] } });
+
+    await waitFor(() => expect(savedPayload).not.toBeNull());
+    const blocks = replacementBlocks(savedPayload as unknown as Record<string, unknown>);
+    const ids = blocks.map(block => block.block_id ?? '');
+    expect(ids).toEqual(['professional.material.legal.policy', 'professional.materials.index']);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(blocks[0]?.content).toBe('Текст из policy.docx');
+    const index = JSON.parse(blocks[1]?.content ?? '[]') as Array<{ block_id: string; file_name: string }>;
+    expect(index).toEqual([{
+      block_id: 'professional.material.legal.policy',
+      file_name: 'policy.docx',
+      domain: 'legal',
+      imported_at: expect.any(String),
+    }]);
+    expect(replacementDeleteIds(savedPayload as unknown as Record<string, unknown>)).toEqual(ids);
+  });
+
+  it('rejects a multi-domain import before extraction when expanded atomic blocks exceed the backend limit', async () => {
+    const commands: string[] = [];
+    __setInvokeForTests(async <T,>(command: string) => {
+      commands.push(command);
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(<AdditionalMaterialsPanel
+      documents={[legal, hr, generic]}
+      selectedDocumentIds={['contract', 'hr-order', 'generic-note']}
+      busy={false}
+    />);
+    const input = screen.getByText('Добавить файлы').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const files = Array.from({ length: 171 }, (_, index) => new File([String(index)], `source-${index}.txt`, { type: 'text/plain' }));
+    fireEvent.change(input, { target: { files } });
+
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('514 профильных блоков'));
+    expect(screen.getByRole('status').textContent).toContain('лимите 512');
+    expect(commands).toEqual([]);
   });
 
   it('uses the donor program calendar and asks only for Texts in the normal diary flow', () => {

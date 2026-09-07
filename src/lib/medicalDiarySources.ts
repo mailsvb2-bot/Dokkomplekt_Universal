@@ -2,7 +2,7 @@ export const MEDICAL_DIARY_REGULAR_PREFIX = 'professional.medical.diary.regular.
 export const MEDICAL_DIARY_FINAL_PREFIX = 'professional.medical.diary.final.';
 
 const FINAL_DIARY_MARKER_RE = /(?:финал|итог|выписк|выписн|заключитель)/u;
-const FINAL_DIARY_ROLE_TOKEN_RE = /(?:^|[\s._—–:;,-]+)(?:финал\p{L}*|итог\p{L}*|выписк\p{L}*|выписн\p{L}*|заключитель\p{L}*)(?:[\s._—–:;,-]+эпикриз\p{L}*)?(?=$|[\s._—–:;,-]+)/gu;
+const FINAL_DIARY_ROLE_TOKEN_RE = /(?:^|[^\p{L}\p{N}]+)(?:финал\p{L}*|итог\p{L}*|выписк\p{L}*|выписн\p{L}*|заключитель\p{L}*)(?:[^\p{L}\p{N}]+эпикриз\p{L}*)?(?=$|[^\p{L}\p{N}]+)/gu;
 
 export function safeSourceKey(value: string): string {
   return value

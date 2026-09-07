@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
+import { canonicalStorageFieldId } from '../lib/fieldAliases';
 import { PopupFieldEditor, ensurePopupField } from './PopupFieldEditor';
 
 interface PendingTemplateView {
@@ -377,11 +378,15 @@ function domainLabel(domain: DomainKind | null): string {
 }
 
 function popupFieldsAreValid(fields: PopupFieldConfig[]): boolean {
-  const ids = fields.map(field => field.field_id.trim());
-  if (ids.some(id => !id)) return false;
+  const rawIds = fields.map(field => field.field_id.trim());
+  if (rawIds.some(id => !id)) return false;
+  const ids = rawIds.map(canonicalStorageFieldId);
   if (new Set(ids).size !== ids.length) return false;
   const known = new Set(ids);
-  return fields.every(field => !field.linked_to?.trim() || known.has(field.linked_to.trim()));
+  return fields.every(field => {
+    const linked = field.linked_to?.trim();
+    return !linked || known.has(canonicalStorageFieldId(linked));
+  });
 }
 
 function hasInvalidCustomDomain(value: DomainKind | null | undefined): boolean {

@@ -185,6 +185,30 @@ describe('TemplateSetupModal', () => {
     expect((screen.getByRole('button', { name: 'Создать кнопки (2)' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('accepts linked popup targets through the same canonical aliases as the Rust owner', () => {
+    render(<TemplateSetupModal {...base} pendingTemplates={[{
+      document_id: 'd1', file_name: 'Карта.docx', button_label: 'Карта', extracted_text: 'Карта',
+      popup_fields: [
+        { field_id: 'patient.full_name', title: 'ФИО', required: true, input_kind: 'text', ask_mode: 'always', options: [], allow_custom_option: false, help_text: null, section: null, default_value: null, linked_to: null, order: 1 },
+        { field_id: 'custom.confirm_name', title: 'Подтвердить ФИО', required: false, input_kind: 'text', ask_mode: 'always', options: [], allow_custom_option: false, help_text: null, section: null, default_value: null, linked_to: 'subject.name', order: 2 },
+      ],
+    }]} />);
+    expect(screen.queryByText('Исправьте уточняющие вопросы')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('blocks alias-equivalent duplicate popup ids just like the Rust owner', () => {
+    render(<TemplateSetupModal {...base} pendingTemplates={[{
+      document_id: 'd1', file_name: 'Карта.docx', button_label: 'Карта', extracted_text: 'Карта',
+      popup_fields: [
+        { field_id: 'patient.full_name', title: 'ФИО', required: true, input_kind: 'text', ask_mode: 'always', options: [], allow_custom_option: false, help_text: null, section: null, default_value: null, linked_to: null, order: 1 },
+        { field_id: 'subject.name', title: 'ФИО ещё раз', required: true, input_kind: 'text', ask_mode: 'always', options: [], allow_custom_option: false, help_text: null, section: null, default_value: null, linked_to: null, order: 2 },
+      ],
+    }]} />);
+    expect(screen.getByText('Исправьте уточняющие вопросы')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('blocks empty, duplicate and dangling popup field identifiers before button creation', () => {
     render(<TemplateSetupModal {...base} pendingTemplates={[{
       document_id: 'd1', file_name: 'Акт.docx', button_label: 'Акт', extracted_text: 'Акт',

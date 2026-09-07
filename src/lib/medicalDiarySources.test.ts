@@ -16,6 +16,8 @@ describe('medical diary source key contract', () => {
     expect(medicalDiaryFileKey('Шизофрения.docx')).toBe(medicalDiaryFileKey('Шизофрения финал.docx'));
     expect(medicalDiaryFileKey('Шизофрения.docx')).toBe(medicalDiaryFileKey('Шизофрения выписной эпикриз.docx'));
     expect(medicalDiaryFileKey('Шизофрения.docx')).toBe(medicalDiaryFileKey('Шизофрения выписного эпикриза.docx'));
+    expect(medicalDiaryFileKey('Шизофрения.docx')).toBe(medicalDiaryFileKey('Шизофрения (выписной эпикриз).docx'));
+    expect(medicalDiaryFileKey('Шизофрения.docx')).toBe(medicalDiaryFileKey('Шизофрения [выписного эпикриза].docx'));
     expect(isFinalMedicalDiaryText('Шизофрения выписной эпикриз.docx')).toBe(true);
     expect(isFinalMedicalDiaryText('Шизофрения выписного эпикриза.docx')).toBe(true);
     expect(medicalDiaryFileKey('Депрессия.txt')).toBe(medicalDiaryFileKey('Итоговый Депрессия.txt'));

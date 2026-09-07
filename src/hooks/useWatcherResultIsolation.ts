@@ -4,6 +4,18 @@ import type { CreatedDocumentsIntakeResult, DocumentTemplateSpec, GeneratedOutpu
 import { createdPrintItems, errorMessage } from '../lib/appSupport';
 import { normalizeCreatedDocumentsIntakeResult } from '../lib/runtimeValidation';
 
+
+export function watcherForegroundCaseActive(options: {
+  sourceFileName: string | null;
+  hasParsedSource: boolean;
+  sourceText: string;
+  intakeSource: string;
+  intakeResult: CreatedDocumentsIntakeResult | null;
+  lastOutput: GeneratedOutput | null;
+}): boolean {
+  return Boolean(options.sourceFileName || options.hasParsedSource || options.sourceText.trim() || options.intakeSource.trim() || options.intakeResult || options.lastOutput?.source === 'zero_touch');
+}
+
 type Options = {
   documents: DocumentTemplateSpec[];
   foregroundCaseActive: boolean;

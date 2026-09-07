@@ -24,7 +24,7 @@ import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGene
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
-import { useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
+import { watcherForegroundCaseActive, useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
 import { buildTemplateConfirmationRows, importBrowserTemplateFiles, partitionPickedTemplates, templateButtonLabelFromFileName, uniqueTemplateButtonLabel, templatePickerCompletionMessage, templateSetupCompletionMessage } from './lib/templateSetupSupport';
 import { createPendingTemplateIntelligenceHandlers } from './lib/pendingTemplateIntelligence';
@@ -140,7 +140,7 @@ function AppContent() {
     setAutoPrint, setPrintCopies, setStatus,
   });
 
-  const { backgroundNotice, dismissBackgroundNotice } = useWatcherResultIsolation({ documents, foregroundCaseActive: Boolean(sourceFileName || parsed || sourceText.trim()), setLastOutput, setIntakeResult, setStatus });
+  const { backgroundNotice, dismissBackgroundNotice } = useWatcherResultIsolation({ documents, foregroundCaseActive: watcherForegroundCaseActive({ sourceFileName, hasParsedSource: Boolean(parsed), sourceText, intakeSource, intakeResult, lastOutput }), setLastOutput, setIntakeResult, setStatus });
 
   useEffect(() => {
     if (!setupOpen) return;

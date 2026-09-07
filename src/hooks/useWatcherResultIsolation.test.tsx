@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   }),
 }));
 
-import { useWatcherResultIsolation } from './useWatcherResultIsolation';
+import { watcherForegroundCaseActive, useWatcherResultIsolation } from './useWatcherResultIsolation';
 
 const document: DocumentTemplateSpec = {
   id: 'doc', button_label: 'Документ', template_path: 'doc.docx', category: 'Generic', role_id: 'generic',
@@ -24,6 +24,17 @@ const processed = {
   created_documents: [{ document_id: 'doc', label: 'Документ', path: 'C:/Ready/Case-B/doc.docx' }],
   missing: [], attention_file: null, message: 'Комплект Б готов.',
 };
+
+describe('watcherForegroundCaseActive', () => {
+  const base = { sourceFileName: null, hasParsedSource: false, sourceText: '', intakeSource: '', intakeResult: null, lastOutput: null };
+
+  it('treats zero-touch activity and results as foreground ownership', () => {
+    expect(watcherForegroundCaseActive({ ...base, intakeSource: 'C:/Input/case.docx' })).toBe(true);
+    expect(watcherForegroundCaseActive({ ...base, intakeResult: processed })).toBe(true);
+    expect(watcherForegroundCaseActive({ ...base, lastOutput: { folder: 'C:/Ready/Case-B', files: ['C:/Ready/Case-B/doc.docx'], source: 'zero_touch', print_items: [] } })).toBe(true);
+    expect(watcherForegroundCaseActive(base)).toBe(false);
+  });
+});
 
 describe('useWatcherResultIsolation', () => {
   beforeEach(() => { listener = null; listenCalls = 0; unlistenCalls = 0; });

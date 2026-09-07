@@ -1,4 +1,4 @@
-name: TEMP Finalize zero-touch manifest
+name: TEMP Finalize typed zero-touch manifest
 
 on:
   push:
@@ -14,10 +14,8 @@ jobs:
     timeout-minutes: 15
     env:
       TARGET_BRANCH: fix/user-scenario-integrity-20260907
-      TARGET_CODE_SHA: 2fa0e495fff7aecf771133c250be7f25e83e6dbe
-      EXPECTED_MANIFEST_BLOB: c7a2f770557523afadff7a841df6f08836b1fbac
-      EXPECTED_FINAL_TREE: e8ba6092449dc210c9fb0573313f25401b781e1c
-      FINALIZER_BRANCH: ops/finalize-zero-touch-manifest-20260907
+      TARGET_CODE_SHA: 4e07aaddb735f38741e7381b540cbd29c91f6d8f
+      EXPECTED_MANIFEST_BLOB: e269c5edb19ae95bec79e1a3762734c7eb119774
     steps:
       - name: Finalize exact target tree
         shell: bash
@@ -52,22 +50,12 @@ jobs:
             --candidate /tmp/SOURCE_MANIFEST.verify.txt \
             --json-report /tmp/source-manifest-after.json
 
+          test "$(git diff --name-only)" = "SOURCE_MANIFEST_SHA256.txt"
           git config user.name "Dokkomplekt CI Finalizer"
           git config user.email "actions@users.noreply.github.com"
           git add SOURCE_MANIFEST_SHA256.txt
-          actual_tree="$(git write-tree)"
-          test "$actual_tree" = "$EXPECTED_FINAL_TREE"
+          git commit -m "Refresh source manifest for typed watcher regression"
 
-          git commit -m "Refresh source manifest for zero-touch ownership fix"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_FINAL_TREE"
+          remote_before="$(git ls-remote "$repo_url" "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          test "$remote_before" = "$TARGET_CODE_SHA"
           git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
-
-      - name: Remove temporary finalizer branch
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push "$repo_url" ":refs/heads/${FINALIZER_BRANCH}"

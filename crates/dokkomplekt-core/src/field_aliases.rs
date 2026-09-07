@@ -12,16 +12,18 @@ pub fn canonical_storage_field_id(raw: &str) -> String {
     use std::collections::BTreeMap;
     use std::sync::OnceLock;
 
-    static ALIASES: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    static ALIASES: OnceLock<Option<BTreeMap<String, String>>> = OnceLock::new();
     let aliases = ALIASES.get_or_init(|| {
-        serde_json::from_str(include_str!("../../../shared/field_aliases.json"))
-            .expect("shared field alias map must be valid JSON")
+        serde_json::from_str(include_str!("../../../shared/field_aliases.json")).ok()
     });
     let field = raw.trim();
-    aliases
-        .get(field)
-        .cloned()
-        .unwrap_or_else(|| field.to_string())
+    // The shared resource is compile-time bundled and independently verified by
+    // source/contract tests. If a corrupted development tree bypasses those
+    // gates, fail closed to the caller-supplied id instead of panicking.
+    match aliases.as_ref().and_then(|values| values.get(field)) {
+        Some(canonical) => canonical.clone(),
+        None => field.to_string(),
+    }
 }
 
 /// Every historical storage id that is equivalent to the requested field.

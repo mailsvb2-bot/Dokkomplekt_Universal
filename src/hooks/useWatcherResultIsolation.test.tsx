@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DocumentTemplateSpec } from '../lib/types';
+import type { CreatedDocumentsIntakeResult, DocumentTemplateSpec } from '../lib/types';
 
 let listener: ((event: { payload: unknown }) => void) | null = null;
 let listenCalls = 0;
@@ -19,7 +19,7 @@ const document: DocumentTemplateSpec = {
   id: 'doc', button_label: 'Документ', template_path: 'doc.docx', category: 'Generic', role_id: 'generic',
   required_fields: [], placeholders: [], is_static_copy: false,
 };
-const processed = {
+const processed: CreatedDocumentsIntakeResult = {
   status: 'processed', patient_folder: 'C:/Ready/Case-B', created_files: ['C:/Ready/Case-B/doc.docx'],
   created_documents: [{ document_id: 'doc', label: 'Документ', path: 'C:/Ready/Case-B/doc.docx' }],
   missing: [], attention_file: null, message: 'Комплект Б готов.',

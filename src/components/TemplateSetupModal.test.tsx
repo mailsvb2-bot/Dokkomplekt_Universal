@@ -197,6 +197,17 @@ describe('TemplateSetupModal', () => {
     expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('blocks alias-equivalent self-links just like the Rust owner', () => {
+    render(<TemplateSetupModal {...base} pendingTemplates={[{
+      document_id: 'd1', file_name: 'Карта.docx', button_label: 'Карта', extracted_text: 'Карта',
+      popup_fields: [
+        { field_id: 'patient.full_name', title: 'ФИО', required: true, input_kind: 'text', ask_mode: 'always', options: [], allow_custom_option: false, help_text: null, section: null, default_value: null, linked_to: 'subject.name', order: 1 },
+      ],
+    }]} />);
+    expect(screen.getByText('Исправьте уточняющие вопросы')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Создать кнопки (1)' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('blocks alias-equivalent duplicate popup ids just like the Rust owner', () => {
     render(<TemplateSetupModal {...base} pendingTemplates={[{
       document_id: 'd1', file_name: 'Карта.docx', button_label: 'Карта', extracted_text: 'Карта',

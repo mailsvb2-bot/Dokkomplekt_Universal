@@ -384,8 +384,11 @@ function popupFieldsAreValid(fields: PopupFieldConfig[]): boolean {
   if (new Set(ids).size !== ids.length) return false;
   const known = new Set(ids);
   return fields.every(field => {
+    const fieldId = canonicalStorageFieldId(field.field_id.trim());
     const linked = field.linked_to?.trim();
-    return !linked || known.has(canonicalStorageFieldId(linked));
+    if (!linked) return true;
+    const linkedId = canonicalStorageFieldId(linked);
+    return linkedId !== fieldId && known.has(linkedId);
   });
 }
 

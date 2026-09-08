@@ -134,6 +134,43 @@ fn medical_diary_template_is_usable(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+#[cfg(not(windows))]
+fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
+    // POSIX rename replaces an existing destination atomically on the same filesystem.
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
     if medical_diary_template_is_usable(path) {
         return Ok(());
@@ -157,19 +194,11 @@ fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
             return Err("Временный шаблон дневников не содержит обязательную структуру календаря".into());
         }
 
-        if path.exists() && !medical_diary_template_is_usable(path) {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!(
-                        "Не удалось заменить повреждённый локальный шаблон дневников: {error}"
-                    ));
-                }
-            }
-        }
-
-        match std::fs::rename(&temp_path, path) {
+        // Never unlink the shared target before publication. UI and watcher are
+        // different processes, so another process may have repaired the target
+        // after our initial check. Atomic replacement keeps the path continuously
+        // backed by either the previous file or our fully validated temp file.
+        match replace_file_atomically(&temp_path, path) {
             Ok(()) => {}
             Err(_) if medical_diary_template_is_usable(path) => {
                 // Another process published the same complete template first.

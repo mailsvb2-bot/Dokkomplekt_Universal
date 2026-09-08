@@ -37,32 +37,21 @@ fn specialist_kit_rule_key(
     })
 }
 
-fn load_specialist_kit_decision(
-    app: &tauri::AppHandle,
+fn load_specialist_kit_decision_from_repo(
+    repo: &LocalRepository,
     key: &KitRuleKey,
     pack: &DocumentPack,
 ) -> Result<Option<KitLearningDecision>, String> {
-    let state = app.state::<AppState>();
-    let _persistence_guard = state
-        .persistence_gate
-        .lock()
-        .map_err(|_| "persistence gate lock failed")?;
-    let repo = repository_for(&default_state_db_path(app)?)?;
-    let mut rules = repo
+    let rules = repo
         .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
     let known = known_pack_document_ids(pack);
-    let decision = dokkomplekt_core::decision_for_specialist_rule(&rules, key, &known);
-    if decision.is_none() && rules.iter().any(|rule| &rule.key == key) {
-        // The pack changed and at least one remembered document disappeared.
-        // Delete only the stale exact rule and require a fresh confirmation;
-        // never silently shrink a previously approved bundle.
-        rules.retain(|rule| &rule.key != key);
-        repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(decision)
+    // A process-local pack can lag behind the shared SQLite state (the UI and
+    // watcher are separate processes). A rule that cannot be applied to this
+    // snapshot therefore becomes a review-required miss, but is never deleted
+    // here. Only an explicit specialist confirmation may replace that memory.
+    Ok(dokkomplekt_core::decision_for_specialist_rule(&rules, key, &known))
 }
 
 fn updated_specialist_kit_rules(
@@ -84,19 +73,13 @@ fn updated_specialist_kit_rules(
     Ok(rules)
 }
 
-fn persist_specialist_kit_rule(
-    app: &tauri::AppHandle,
+fn persist_specialist_kit_rule_in_repo(
+    repo: &LocalRepository,
     key: &KitRuleKey,
     pack: &DocumentPack,
     confirmed_document_ids: &[String],
 ) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let _persistence_guard = state
-        .persistence_gate
-        .lock()
-        .map_err(|_| "persistence gate lock failed")?;
-    let repo = repository_for(&default_state_db_path(app)?)?;
-    let rules = updated_specialist_kit_rules(&repo, key, pack, confirmed_document_ids)?;
+    let rules = updated_specialist_kit_rules(repo, key, pack, confirmed_document_ids)?;
     repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
         .map_err(|error| error.to_string())
 }
@@ -209,8 +192,8 @@ fn claim_bundle_exception_confirmation(
 // Bundle semantics stay in dokkomplekt-core; this module only resolves the
 // persisted learned decision and owns source/case replacement commands.
 
-fn resolve_document_bundle_for_case(
-    app: &tauri::AppHandle,
+fn resolve_document_bundle_for_case_with_repo(
+    repo: &LocalRepository,
     source_text: &str,
     case: &SemanticCase,
     pack: &DocumentPack,
@@ -225,18 +208,18 @@ fn resolve_document_bundle_for_case(
     let key = specialist_kit_rule_key(domain.clone(), &routing, pack);
     if !specialist_confirmed_ids.is_empty() {
         if let Some(key) = key.as_ref() {
-            persist_specialist_kit_rule(app, key, pack, specialist_confirmed_ids)?;
+            persist_specialist_kit_rule_in_repo(repo, key, pack, specialist_confirmed_ids)?;
         }
     }
 
     let specialist_rule = match key.as_ref() {
-        Some(key) => load_specialist_kit_decision(app, key, pack)?,
+        Some(key) => load_specialist_kit_decision_from_repo(repo, key, pack)?,
         None => None,
     };
     let learned = if specialist_rule.is_some() {
         specialist_rule
     } else if let Some(key) = key.as_ref() {
-        let corpus_entries = repository_for(&default_state_db_path(app)?)?
+        let corpus_entries = repo
             .list_corpus_entries(10_000)
             .map_err(|error| error.to_string())?;
         decision_for_key(&corpus_entries, key, KitPromotionPolicy::default())
@@ -250,6 +233,30 @@ fn resolve_document_bundle_for_case(
         specialist_confirmed_ids,
     );
     Ok((routing, decision, key))
+}
+
+fn resolve_document_bundle_for_case(
+    app: &tauri::AppHandle,
+    source_text: &str,
+    case: &SemanticCase,
+    pack: &DocumentPack,
+    learning_domain: Option<DomainKind>,
+    specialist_confirmed_ids: &[String],
+) -> Result<(DocumentRoutingRecommendation, BundleDecision, Option<KitRuleKey>), String> {
+    let state = app.state::<AppState>();
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    resolve_document_bundle_for_case_with_repo(
+        &repo,
+        source_text,
+        case,
+        pack,
+        learning_domain,
+        specialist_confirmed_ids,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,8 +345,9 @@ fn parse_source(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case(
-            &app,
+        let repo = repository_for(&default_state_db_path(&app)?)?;
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case_with_repo(
+            &repo,
             &req.source_text,
             &semantic_case,
             &snapshot.pack,
@@ -513,8 +521,9 @@ fn parse_source_file_bytes(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case(
-            &app,
+        let repo = repository_for(&default_state_db_path(&app)?)?;
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case_with_repo(
+            &repo,
             &source_text,
             &semantic_case,
             &snapshot.pack,
@@ -681,8 +690,9 @@ fn parse_web_source(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case(
-            &app,
+        let repo = repository_for(&default_state_db_path(&app)?)?;
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case_with_repo(
+            &repo,
             &fetched.source_text,
             &semantic_case,
             &snapshot.pack,
@@ -705,6 +715,78 @@ fn parse_web_source(
     retained.take();
     *source_provenance = Some(provenance);
     Ok(response)
+}
+
+
+#[cfg(test)]
+mod specialist_rule_persistence_tests {
+    use super::{
+        load_specialist_kit_decision_from_repo, updated_specialist_kit_rules,
+        SPECIALIST_KIT_RULES_STATE_KEY,
+    };
+    use dokkomplekt_core::{
+        DocumentPack, DocumentTemplateSpec, DomainKind, KitRuleKey, SpecialistKitRule,
+    };
+    use dokkomplekt_storage::LocalRepository;
+    use uuid::Uuid;
+
+    fn document(id: &str) -> DocumentTemplateSpec {
+        DocumentTemplateSpec {
+            id: id.into(),
+            button_label: id.into(),
+            template_path: format!("{id}.docx"),
+            category: DomainKind::Medical,
+            role_id: "primary".into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        }
+    }
+
+    #[test]
+    fn stale_pack_snapshot_never_deletes_shared_specialist_rule() {
+        let path = std::env::temp_dir().join(format!("dkk-specialist-rule-{}.sqlite3", Uuid::new_v4()));
+        let repo = LocalRepository::open(&path).unwrap();
+        let key = KitRuleKey {
+            domain: DomainKind::Medical,
+            cluster_id: "medical-primary".into(),
+            pack_id: Some("default".into()),
+        };
+        let current_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "default".into(),
+            documents: vec![document("primary")],
+        };
+        let rules = updated_specialist_kit_rules(
+            &repo,
+            &key,
+            &current_pack,
+            &["primary".to_string()],
+        )
+        .unwrap();
+        repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
+            .unwrap();
+
+        let stale_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "stale".into(),
+            documents: Vec::new(),
+        };
+        assert!(load_specialist_kit_decision_from_repo(&repo, &key, &stale_pack)
+            .unwrap()
+            .is_none());
+
+        let persisted = repo
+            .load_state_value::<Vec<SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].key, key);
+        drop(repo);
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[cfg(test)]

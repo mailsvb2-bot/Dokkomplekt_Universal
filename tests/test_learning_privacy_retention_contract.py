@@ -47,13 +47,29 @@ def test_specialist_rule_uses_exact_decision_key_and_one_persistence_gate() -> N
     source = read("src-tauri/src/subsystems/source_intake_commands.rs")
     automation = read("src-tauri/src/subsystems/automation_runtime.rs")
 
-    load_start = source.index("fn load_specialist_kit_decision(")
-    persist_start = source.index("fn persist_specialist_kit_rule(")
+    load_start = source.index("fn load_specialist_kit_decision_from_repo(")
+    persist_start = source.index("fn persist_specialist_kit_rule_in_repo(")
     claim_start = source.index("fn claim_bundle_exception_confirmation(")
+    repo_resolver_start = source.index("fn resolve_document_bundle_for_case_with_repo(")
     resolver_start = source.index("fn resolve_document_bundle_for_case(")
-    assert "persistence_gate" in source[load_start:persist_start]
-    assert "persistence_gate" in source[persist_start:claim_start]
-    assert "persistence_gate" in source[claim_start:resolver_start]
+
+    # Helpers called from an existing state transaction must never recursively
+    # acquire the non-reentrant persistence mutex. The outer command/wrapper owns it.
+    assert "persistence_gate" not in source[load_start:persist_start]
+    assert "persistence_gate" not in source[persist_start:claim_start]
+    assert "persistence_gate" in source[claim_start:repo_resolver_start]
+    assert "persistence_gate" not in source[repo_resolver_start:resolver_start]
+    assert "persistence_gate" in source[resolver_start:]
+    assert "resolve_document_bundle_for_case_with_repo" in source[resolver_start:]
+
+    # A stale process-local pack may fail to apply a remembered rule, but it must
+    # not delete shared memory that another process just made valid.
+    load_body = source[load_start:persist_start]
+    assert "save_state_value" not in load_body
+    assert "never deleted" in load_body
+
+    # All three interactive import routes reuse the already-held transaction gate.
+    assert source.count("resolve_document_bundle_for_case_with_repo(") == 5
     assert "specialist_rule_key_from_exception_details" in source
     assert "Option<KitRuleKey>), String>" in source
     assert '"specialist_rule_key": &specialist_rule_key' in automation

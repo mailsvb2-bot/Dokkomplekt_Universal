@@ -132,3 +132,15 @@ def test_generation_routes_share_diary_template_without_mutating_generic_candida
     assert "TemplateSnapshot::capture_generation(app, document)" in automation
     assert "TemplateSnapshot::capture_generation(app, document)" in mail_merge
 
+
+
+def test_program_calendar_template_repair_never_unlinks_a_concurrent_winner():
+    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    ensure = profile_sources[
+        profile_sources.index("fn ensure_program_calendar_diary_template(") :
+        profile_sources.index("fn program_calendar_diary_template(")
+    ]
+    assert "replace_file_atomically(&temp_path, path)" in ensure
+    assert "std::fs::remove_file(path)" not in ensure
+    assert "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH" in profile_sources
+    assert "std::fs::rename(source, destination)" in profile_sources

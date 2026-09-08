@@ -20,70 +20,112 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Apply review fixes and validate
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Apply fresh Codex review fixes and validate
         shell: bash
         run: |
           set -euo pipefail
-          expected_head='c16d9de0a05f141d0f34102a06366acdd6250da3'
-          test "$(git rev-parse HEAD)" = "$expected_head"
+          test "$(git rev-parse HEAD)" = '8403d023209b5c8e4437c568447a133a9c874b38'
           python - <<'PY'
           from pathlib import Path
-          p = Path('src-tauri/src/subsystems/profile_sources.rs')
-          s = p.read_text(encoding='utf-8')
-          old = '''const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str =
-              dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
-          '''
-          new = '''const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str =
-              dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
-          static MEDICAL_DIARY_TEMPLATE_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-              std::sync::OnceLock::new();
-          '''
-          assert old in s
-          s = s.replace(old, new, 1)
-          old = '''    std::fs::create_dir_all(&root)
-              .map_err(|error| format!("Не удалось подготовить локальный генератор дневников: {error}"))?;
-              let path = root.join(format!(
-          '''
-          new = '''    std::fs::create_dir_all(&root)
-              .map_err(|error| format!("Не удалось подготовить локальный генератор дневников: {error}"))?;
-              let _template_guard = MEDICAL_DIARY_TEMPLATE_LOCK
-                  .get_or_init(|| std::sync::Mutex::new(()))
-                  .lock()
-                  .map_err(|_| "Блокировка локального шаблона дневников повреждена.".to_string())?;
-              let path = root.join(format!(
-          '''
-          assert old in s
-          s = s.replace(old, new, 1)
-          old = '''    Ok(PathBuf::from(&document.template_path))
-          '''
-          new = '''    resolve_user_path(app, &document.template_path)
-          '''
-          assert old in s
-          s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
 
-          t = Path('tests/test_donor_diary_output_parity.py')
-          s = t.read_text(encoding='utf-8')
-          needle = '''    assert "medical_diary_template_override(&app, &base_case, document)?" in manual
-              assert "TemplateSnapshot::capture(" in automation
-          '''
-          repl = '''    assert "medical_diary_template_override(&app, &base_case, document)?" in manual
-              assert "TemplateSnapshot::capture(" in automation
-              assert "MEDICAL_DIARY_TEMPLATE_LOCK" in profile_sources
-              assert ".get_or_init(|| std::sync::Mutex::new(()))" in profile_sources
-              assert "resolve_user_path(app, &document.template_path)" in profile_sources
-              assert "Ok(PathBuf::from(&document.template_path))" not in profile_sources
-          '''
-          assert needle in s
-          t.write_text(s.replace(needle, repl, 1), encoding='utf-8')
+          def read(path): return Path(path).read_text(encoding='utf-8')
+          def write(path, text): Path(path).write_text(text, encoding='utf-8')
+          def replace_once(text, old, new, label):
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, got {text.count(old)}')
+              return text.replace(old, new, 1)
+
+          # 1. Generic snapshots stay neutral; generation supplies an explicit document identity.
+          path = 'src-tauri/src/template_snapshot.rs'
+          s = read(path)
+          s = replace_once(s,
+              '''        let configured_live_path = resolve_user_path(app, configured_path)?;\n        let live_path =\n            Self::effective_registered_generation_path(app, &configured_live_path, label)?;\n''',
+              '''        let live_path = resolve_user_path(app, configured_path)?;\n        Self::capture_resolved(app, &live_path, label)\n    }\n\n    /// Generation is the only surface allowed to substitute a registered\n    /// document's effective template. Requiring the document identity here keeps\n    /// candidate/setup/learning snapshots neutral.\n    pub(crate) fn capture_generation(\n        app: &tauri::AppHandle,\n        document: &dokkomplekt_core::DocumentTemplateSpec,\n    ) -> Result<Self, String> {\n        let live_path = super::effective_generation_template_path(app, document)?;\n        Self::capture_resolved(app, &live_path, &document.button_label)\n    }\n\n    pub(crate) fn capture_resolved(\n        app: &tauri::AppHandle,\n        live_path: &Path,\n        label: &str,\n    ) -> Result<Self, String> {\n''', 'neutral snapshot')
+          start = s.index('    fn effective_registered_generation_path(\n')
+          end = s.index('    fn capture_path(', start)
+          s = s[:start] + s[end:]
+          write(path, s)
+
+          # 2. Every generation route opts into the effective registered template explicitly.
+          path = 'src-tauri/src/subsystems/automation_runtime.rs'
+          s = read(path)
+          s = replace_once(s,
+              '''        .map(|document| {\n            template_snapshot::TemplateSnapshot::capture(\n                app,\n                &document.template_path,\n                &document.button_label,\n            )\n            .map(|snapshot| (document.id.clone(), snapshot))\n        })\n''',
+              '''        .map(|document| {\n            template_snapshot::TemplateSnapshot::capture_generation(app, document)\n                .map(|snapshot| (document.id.clone(), snapshot))\n        })\n''', 'automation generation snapshot')
+          write(path, s)
+
+          path = 'src-tauri/src/subsystems/document_commands.rs'
+          s = read(path)
+          s = replace_once(s,
+              '''    let template_snapshot = template_snapshot::TemplateSnapshot::capture(\n        &app,\n        &doc.template_path,\n        &doc.button_label,\n    )?;\n''',
+              '''    let template_snapshot =\n        template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;\n''', 'single generation snapshot')
+          s = replace_once(s,
+              '''        .map(|document| {\n            let template_path = medical_diary_template_override(&app, &base_case, document)?\n                .unwrap_or_else(|| PathBuf::from(&document.template_path));\n            template_snapshot::TemplateSnapshot::capture(\n                &app,\n                &template_path.display().to_string(),\n                &document.button_label,\n            )\n            .map(|snapshot| (document.id.clone(), snapshot))\n        })\n''',
+              '''        .map(|document| {\n            template_snapshot::TemplateSnapshot::capture_generation(&app, document)\n                .map(|snapshot| (document.id.clone(), snapshot))\n        })\n''', 'batch generation snapshot')
+          write(path, s)
+
+          path = 'src-tauri/src/subsystems/automation_mail_merge.rs'
+          s = read(path)
+          old_start = s.index('fn capture_mail_merge_template_snapshot(\n')
+          old_end = s.index('\nfn ensure_mail_merge_templates_current(', old_start)
+          new = '''fn capture_mail_merge_template_snapshot(\n    app: &tauri::AppHandle,\n    document: &DocumentTemplateSpec,\n) -> Result<MailMergeTemplateSnapshot, String> {\n    let snapshot = template_snapshot::TemplateSnapshot::capture_generation(app, document)?;\n    let text = extract_docx_text(snapshot.path()).map_err(|error| {\n        format!(\n            "Не удалось прочитать стабилизированный шаблон «{}»: {error}",\n            document.button_label\n        )\n    })?;\n    Ok(MailMergeTemplateSnapshot {\n        button_label: document.button_label.clone(),\n        snapshot,\n        text,\n    })\n}\n'''
+          s = s[:old_start] + new + s[old_end:]
+          s = replace_once(s,
+              '''            capture_mail_merge_template_snapshot(\n                &app,\n                &document.button_label,\n                &document.template_path,\n            )\n''',
+              '''            capture_mail_merge_template_snapshot(&app, document)\n''', 'mail merge generation snapshot')
+          write(path, s)
+
+          # Obsolete adapter is removed; effective_generation_template_path remains the single owner.
+          path = 'src-tauri/src/subsystems/profile_sources.rs'
+          s = read(path)
+          start = s.index('// Compatibility adapter for the manual batch path.')
+          end = s.index('\n#[cfg(test)]', start)
+          s = s[:start] + s[end+1:]
+          write(path, s)
+
+          # 3. Storage claims the exception and saves the winning state in one transaction.
+          path = 'crates/dokkomplekt-storage/src/lib.rs'
+          s = read(path)
+          marker = '\n    pub fn append_audit_event('
+          pos = s.index(marker, s.index('    pub fn resolve_exception('))
+          method = '''\n\n    /// Claims an open automation exception and persists state derived from that\n    /// exact winning confirmation in one SQLite transaction. A concurrent loser\n    /// returns false without changing app_state; a failed state write rolls the claim back.\n    pub fn resolve_exception_and_save_state_value<T: serde::Serialize + ?Sized>(\n        &self,\n        exception_id: &str,\n        resolution: &str,\n        state_key: &str,\n        state_value: &T,\n    ) -> StorageResult<bool> {\n        let Some(existing) = self.exception_by_id(exception_id)? else {\n            return Ok(false);\n        };\n        if existing.status != "open" {\n            return Ok(false);\n        }\n        let original_details = serde_json::from_str::<serde_json::Value>(&existing.details_json)\n            .unwrap_or_else(|_| serde_json::json!({ "text": existing.details_json }));\n        let merged = serde_json::json!({\n            "original": original_details,\n            "resolution": {\n                "text": resolution,\n                "resolved_at_unix": unix_timestamp_string(),\n            }\n        });\n        let encoded_details = self.encode_sensitive(&serde_json::to_string(&merged)?)?;\n        let state_json = serde_json::to_string(state_value)?;\n        let encoded_state = self.encode_sensitive(&state_json)?;\n\n        let transaction = self.conn.unchecked_transaction()?;\n        let changed = transaction.execute(\n            "UPDATE automation_exceptions SET status='resolved',details_json=?2,updated_at=CURRENT_TIMESTAMP WHERE exception_id=?1 AND status='open'",\n            params![exception_id, encoded_details],\n        )?;\n        if changed != 1 {\n            transaction.rollback()?;\n            return Ok(false);\n        }\n        transaction.execute(\n            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",\n            params![state_key, encoded_state],\n        )?;\n        transaction.commit()?;\n        Ok(true)\n    }\n'''
+          s = s[:pos] + method + s[pos:]
+          test_marker = '    #[test]\n    fn desktop_snapshot_and_template_versions_publish_as_one_transaction() {'
+          test_pos = s.index(test_marker)
+          test = '''    #[test]\n    fn losing_exception_confirmation_cannot_overwrite_winner_state() {\n        let path = temp_db("exception-state-claim");\n        let repo = LocalRepository::open_with_key(&path, [12u8; 32]).unwrap();\n        let created = repo\n            .create_exception(\n                "bundle_decision",\n                "C:/Inbox/primary.docx",\n                "Подтвердите комплект",\n                r#"{"cluster_id":"medical-primary"}"#,\n            )\n            .unwrap();\n        let first = vec!["primary".to_string(), "diaries".to_string()];\n        let second = vec!["discharge".to_string()];\n        assert!(repo\n            .resolve_exception_and_save_state_value(\n                &created.exception_id, "Первое подтверждение", "specialist_kit_rules.v1", &first,\n            )\n            .unwrap());\n        assert!(!repo\n            .resolve_exception_and_save_state_value(\n                &created.exception_id, "Конкурирующее подтверждение", "specialist_kit_rules.v1", &second,\n            )\n            .unwrap());\n        assert_eq!(\n            repo.load_state_value::<Vec<String>>("specialist_kit_rules.v1").unwrap(),\n            Some(first)\n        );\n        let resolved = repo.list_exceptions(true).unwrap().remove(0);\n        let details: serde_json::Value = serde_json::from_str(&resolved.details_json).unwrap();\n        assert_eq!(details["resolution"]["text"], "Первое подтверждение");\n        let _ = std::fs::remove_file(path);\n    }\n\n'''
+          s = s[:test_pos] + test + s[test_pos:]
+          write(path, s)
+
+          # 4. Bundle-memory owner prepares the next state; automation only orchestrates retry.
+          path = 'src-tauri/src/subsystems/source_intake_commands.rs'
+          s = read(path)
+          start = s.index('fn persist_specialist_kit_rule(\n')
+          end = s.index('\n// Bundle semantics stay in dokkomplekt-core;', start)
+          replacement = '''fn updated_specialist_kit_rules(\n    repo: &LocalRepository,\n    key: &KitRuleKey,\n    pack: &DocumentPack,\n    confirmed_document_ids: &[String],\n) -> Result<Vec<dokkomplekt_core::SpecialistKitRule>, String> {\n    let mut rules = repo\n        .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)\n        .map_err(|error| error.to_string())?\n        .unwrap_or_default();\n    let known = known_pack_document_ids(pack);\n    if !dokkomplekt_core::upsert_specialist_rule(\n        &mut rules, key.clone(), confirmed_document_ids, &known,\n    ) {\n        return Err("Не удалось сохранить подтверждённый комплект: в нём нет существующих документов.".into());\n    }\n    Ok(rules)\n}\n\nfn persist_specialist_kit_rule(\n    app: &tauri::AppHandle,\n    key: &KitRuleKey,\n    pack: &DocumentPack,\n    confirmed_document_ids: &[String],\n) -> Result<(), String> {\n    let repo = repository_for(&default_state_db_path(app)?)?;\n    let rules = updated_specialist_kit_rules(&repo, key, pack, confirmed_document_ids)?;\n    repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)\n        .map_err(|error| error.to_string())\n}\n\nfn claim_bundle_exception_confirmation(\n    app: &tauri::AppHandle,\n    state: &AppState,\n    exception_id: &str,\n    requested_document_ids: &[String],\n) -> Result<(Vec<String>, CaseRunRecord, CreatedDocumentsIntakeRequest), String> {\n    if exception_id.trim().is_empty() {\n        return Err("Не указан идентификатор исключения.".into());\n    }\n    let _confirmation_guard = state\n        .persistence_gate\n        .lock()\n        .map_err(|_| "persistence gate lock failed")?;\n    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();\n    let known_ids = known_pack_document_ids(&pack);\n    let mut seen = BTreeSet::new();\n    let selected = requested_document_ids\n        .iter()\n        .map(|value| value.trim().to_string())\n        .filter(|value| known_ids.contains(value))\n        .filter(|value| seen.insert(value.clone()))\n        .collect::<Vec<_>>();\n    if selected.is_empty() {\n        return Err("Не выбран ни один существующий документ комплекта.".into());\n    }\n    let repo = repository_for(&default_state_db_path(app)?)?;\n    let exception = repo\n        .list_exceptions(false)\n        .map_err(|error| error.to_string())?\n        .into_iter()\n        .find(|item| item.exception_id == exception_id)\n        .ok_or_else(|| "Открытое исключение не найдено.".to_string())?;\n    if exception.category != "bundle_decision" {\n        return Err("Подтверждение состава доступно только для исключения Bundle Decision Engine.".into());\n    }\n    let details: serde_json::Value = serde_json::from_str(&exception.details_json)\n        .map_err(|error| format!("Сохранённые данные подтверждения повреждены: {error}"))?;\n    let cluster_id = details\n        .get("cluster_id")\n        .and_then(serde_json::Value::as_str)\n        .map(str::trim)\n        .filter(|value| !value.is_empty())\n        .ok_or_else(|| "В подтверждении отсутствует структурный тип дела.".to_string())?;\n    let rule_update = if cluster_id != "unclassified" {\n        let domain = details\n            .get("domain")\n            .cloned()\n            .ok_or_else(|| "В подтверждении отсутствует профессиональная область.".to_string())\n            .and_then(|value| serde_json::from_value::<DomainKind>(value)\n                .map_err(|error| format!("Профессиональная область подтверждения повреждена: {error}")))?;\n        let key = KitRuleKey {\n            domain,\n            cluster_id: cluster_id.to_string(),\n            pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),\n        };\n        Some(updated_specialist_kit_rules(&repo, &key, &pack, &selected)?)\n    } else {\n        None\n    };\n    let record = repo\n        .list_case_runs(500)\n        .map_err(|error| error.to_string())?\n        .into_iter()\n        .find(|case| case.source_path == exception.source_path && case.status == "attention")\n        .ok_or_else(|| "Не найдено остановленное дело для этого источника.".to_string())?;\n    if !Path::new(&record.source_path).exists() {\n        return Err("Исходный файл больше не существует в рабочей папке.".into());\n    }\n    let mut intake: CreatedDocumentsIntakeRequest = serde_json::from_str(&record.request_json)\n        .map_err(|error| format!("Сохранённый план дела повреждён: {error}"))?;\n    intake.confirmed_document_ids = selected.clone();\n    let resolution = format!("Специалист подтвердил комплект: {}", selected.join(", "));\n    let resolved = match rule_update.as_ref() {\n        Some(rules) => repo\n            .resolve_exception_and_save_state_value(\n                exception_id, &resolution, SPECIALIST_KIT_RULES_STATE_KEY, rules,\n            )\n            .map_err(|error| error.to_string())?,\n        None => repo.resolve_exception(exception_id, &resolution)\n            .map_err(|error| error.to_string())?,\n    };\n    if !resolved {\n        return Err("Исключение уже закрыто другим процессом.".into());\n    }\n    Ok((selected, record, intake))\n}\n'''
+          s = s[:start] + replacement + s[end:]
+          write(path, s)
+
+          path = 'src-tauri/src/subsystems/automation_runtime.rs'
+          s = read(path)
+          start = s.index('#[tauri::command]\nfn confirm_bundle_exception_and_retry(')
+          end = s.index('\n#[tauri::command]\nfn get_automation_metrics', start)
+          replacement = '''#[tauri::command]\nfn confirm_bundle_exception_and_retry(\n    req: ConfirmBundleExceptionRequest,\n    app: tauri::AppHandle,\n    state: State<'_, AppState>,\n) -> Result<serde_json::Value, String> {\n    let exception_id = req.exception_id.trim();\n    let (selected, record, intake) =\n        claim_bundle_exception_confirmation(&app, &state, exception_id, &req.document_ids)?;\n    increment_metric(&app, "bundle_confirmations", 1);\n    increment_metric(&app, "attention_resolutions", 1);\n    append_audit_event(\n        &app,\n        "document_bundle_confirmed",\n        &record.source_sha256,\n        &serde_json::json!({\n            "exception_id": exception_id,\n            "document_ids": &selected,\n            "case_id": record.case_id,\n        }),\n    )?;\n    perform_created_documents_intake(&state, &app, intake)\n        .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string()))\n}\n'''
+          s = s[:start] + replacement + s[end:]
+          write(path, s)
+
+          # Regression contract: candidate snapshots are neutral, all generation routes are explicit.
+          path = 'tests/test_donor_diary_output_parity.py'
+          s = read(path)
+          start = s.index('def test_manual_and_zero_touch_diary_generation_share_one_effective_program_template()')
+          replacement = '''def test_generation_routes_share_diary_template_without_mutating_generic_candidate_snapshots() -> None:\n    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")\n    snapshots = read("src-tauri/src/template_snapshot.rs")\n    manual = read("src-tauri/src/subsystems/document_commands.rs")\n    automation = read("src-tauri/src/subsystems/automation_runtime.rs")\n    mail_merge = read("src-tauri/src/subsystems/automation_mail_merge.rs")\n    assert "fn effective_generation_template_path" in profile_sources\n    assert "return program_calendar_diary_template(app);" in profile_sources\n    assert "resolve_user_path(app, &document.template_path)" in profile_sources\n    assert "let live_path = resolve_user_path(app, configured_path)?;" in snapshots\n    assert "fn effective_registered_generation_path" not in snapshots\n    assert "app.state::<super::AppState>()" not in snapshots\n    assert "pub(crate) fn capture_generation" in snapshots\n    assert "super::effective_generation_template_path(app, document)?" in snapshots\n    assert manual.count("TemplateSnapshot::capture_generation(") >= 2\n    assert "TemplateSnapshot::capture_generation(app, document)" in automation\n    assert "TemplateSnapshot::capture_generation(app, document)" in mail_merge\n'''
+          s = s[:start] + replacement + '\n'
+          write(path, s)
           PY
           cargo fmt --all
           cargo fmt --all -- --check
           python -m pip install -r requirements-dev.txt
+          cargo test -p dokkomplekt-storage
           cargo test -p dokkomplekt-core
-          python -m pytest -q tests/test_donor_diary_output_parity.py tests/test_donor_patient_folder_watcher_parity.py tests/test_learning_privacy_retention_contract.py
           python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt || true
           cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
           python scripts/verify_source_manifest.py
@@ -93,8 +135,8 @@ jobs:
           test "$(wc -l < src-tauri/src/subsystems/automation_runtime.rs)" -lt 3000
           git config user.name "$(git show -s --format=%an HEAD)"
           git config user.email "$(git show -s --format=%ae HEAD)"
-          git add SOURCE_MANIFEST_SHA256.txt src-tauri/src/subsystems/profile_sources.rs tests/test_donor_diary_output_parity.py
+          git add SOURCE_MANIFEST_SHA256.txt crates/dokkomplekt-storage/src/lib.rs src-tauri/src/subsystems/automation_mail_merge.rs src-tauri/src/subsystems/automation_runtime.rs src-tauri/src/subsystems/document_commands.rs src-tauri/src/subsystems/profile_sources.rs src-tauri/src/subsystems/source_intake_commands.rs src-tauri/src/template_snapshot.rs tests/test_donor_diary_output_parity.py
           git diff --cached --check
-          test "$(git diff --cached --name-only | wc -l)" -eq 3
-          git commit -m 'Fix template path and diary cache races'
+          test "$(git diff --cached --name-only | wc -l)" -eq 9
+          git commit -m 'Make bundle confirmation and template snapshots race-safe'
           git push origin HEAD:fix/real-user-workflow-20260907

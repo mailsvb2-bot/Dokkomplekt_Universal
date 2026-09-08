@@ -1,4 +1,92 @@
 // Real-source intake boundary shared by interactive desktop and automation.
+// User-confirmed bundle memory is a local encrypted preference, not telemetry.
+// It intentionally lives in the existing app_state owner and is keyed by the
+// same structural KitRuleKey used by the routing/learning engine.
+const SPECIALIST_KIT_RULES_STATE_KEY: &str = "specialist_kit_rules.v1";
+
+fn bundle_confirmation_attention_note(
+    routing: &DocumentRoutingRecommendation,
+) -> &'static str {
+    if routing.cluster_id == "unclassified" {
+        "\nОткройте Доккомплект и подтвердите состав одной кнопкой. Тип источника пока не имеет устойчивой структурной сигнатуры, поэтому выбор применится к этому делу и не будет автоматически переноситься на другие источники.\n"
+    } else {
+        "\nОткройте Доккомплект и подтвердите состав одной кнопкой. После подтверждения выбор будет сохранён локально для этого структурного типа дела. Обезличенный обучающий корпус заполняется только если пользователь отдельно включил это в настройках приватности.\n"
+    }
+}
+
+fn known_pack_document_ids(pack: &DocumentPack) -> BTreeSet<String> {
+    pack.documents
+        .iter()
+        .map(|document| document.id.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn specialist_kit_rule_key(
+    domain: DomainKind,
+    routing: &DocumentRoutingRecommendation,
+    pack: &DocumentPack,
+) -> Option<KitRuleKey> {
+    if routing.cluster_id.trim().is_empty() || routing.cluster_id == "unclassified" {
+        return None;
+    }
+    Some(KitRuleKey {
+        domain,
+        cluster_id: routing.cluster_id.clone(),
+        pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
+    })
+}
+
+fn load_specialist_kit_decision(
+    app: &tauri::AppHandle,
+    key: &KitRuleKey,
+    pack: &DocumentPack,
+) -> Result<Option<KitLearningDecision>, String> {
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    let mut rules = repo
+        .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let known = known_pack_document_ids(pack);
+    let decision = dokkomplekt_core::decision_for_specialist_rule(&rules, key, &known);
+    if decision.is_none() && rules.iter().any(|rule| &rule.key == key) {
+        // The pack changed and at least one remembered document disappeared.
+        // Delete only the stale exact rule and require a fresh confirmation;
+        // never silently shrink a previously approved bundle.
+        rules.retain(|rule| &rule.key != key);
+        repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(decision)
+}
+
+fn persist_specialist_kit_rule(
+    app: &tauri::AppHandle,
+    key: &KitRuleKey,
+    pack: &DocumentPack,
+    confirmed_document_ids: &[String],
+) -> Result<(), String> {
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    let mut rules = repo
+        .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let known = known_pack_document_ids(pack);
+    if !dokkomplekt_core::upsert_specialist_rule(
+        &mut rules,
+        key.clone(),
+        confirmed_document_ids,
+        &known,
+    ) {
+        return Err(
+            "Не удалось сохранить подтверждённый комплект: в нём нет существующих документов."
+                .into(),
+        );
+    }
+    repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
+        .map_err(|error| error.to_string())
+}
+
 // Bundle semantics stay in dokkomplekt-core; this module only resolves the
 // persisted learned decision and owns source/case replacement commands.
 
@@ -15,15 +103,27 @@ fn resolve_document_bundle_for_case(
         .or_else(|| case.active_domains.first().cloned())
         .filter(|value| *value != DomainKind::Generic)
         .unwrap_or_else(|| routing.domain.clone());
-    let corpus_entries = repository_for(&default_state_db_path(app)?)?
-        .list_corpus_entries(10_000)
-        .map_err(|error| error.to_string())?;
-    let key = KitRuleKey {
-        domain,
-        cluster_id: routing.cluster_id.clone(),
-        pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
+    let key = specialist_kit_rule_key(domain.clone(), &routing, pack);
+    if !specialist_confirmed_ids.is_empty() {
+        if let Some(key) = key.as_ref() {
+            persist_specialist_kit_rule(app, key, pack, specialist_confirmed_ids)?;
+        }
+    }
+
+    let specialist_rule = match key.as_ref() {
+        Some(key) => load_specialist_kit_decision(app, key, pack)?,
+        None => None,
     };
-    let learned = decision_for_key(&corpus_entries, &key, KitPromotionPolicy::default());
+    let learned = if specialist_rule.is_some() {
+        specialist_rule
+    } else if let Some(key) = key.as_ref() {
+        let corpus_entries = repository_for(&default_state_db_path(app)?)?
+            .list_corpus_entries(10_000)
+            .map_err(|error| error.to_string())?;
+        decision_for_key(&corpus_entries, key, KitPromotionPolicy::default())
+    } else {
+        None
+    };
     let decision = decide_document_bundle(
         pack,
         &routing,

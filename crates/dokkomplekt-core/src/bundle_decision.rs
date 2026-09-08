@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 pub enum BundleDecisionSource {
     SpecialistConfirmation,
     PromotedLearningRule,
+    PersistedSpecialistRule,
     DeterministicRoute,
     ReviewProposal,
     /// Ни один шаблон не взял порог рекомендации, но есть близкие кандидаты.
@@ -93,7 +94,11 @@ pub fn decide_document_bundle(
         if !selected.is_empty() {
             return BundleDecision {
                 document_ids: selected,
-                source: BundleDecisionSource::PromotedLearningRule,
+                source: if rule.source == "specialist_local_rule" {
+                    BundleDecisionSource::PersistedSpecialistRule
+                } else {
+                    BundleDecisionSource::PromotedLearningRule
+                },
                 confidence: rule.confidence.clamp(0.0, 1.0),
                 auto_apply: true,
                 review_required: false,
@@ -174,10 +179,7 @@ pub fn decide_document_bundle(
             confidence: routing.cluster_confidence.clamp(0.0, 1.0),
             auto_apply: false,
             review_required: true,
-            question: Some(format!(
-                "Какой документ создать: {}? Выбор будет запомнен для этого типа дела.",
-                names.join(" или ")
-            )),
+            question: Some(format!("Какой документ создать: {}?", names.join(" или "))),
             reasons,
         };
     }
@@ -189,8 +191,7 @@ pub fn decide_document_bundle(
         auto_apply: false,
         review_required: true,
         question: Some(
-            "Не удалось безопасно определить комплект. Выберите документы один раз для этого типа дела."
-                .into(),
+            "Не удалось безопасно определить комплект. Выберите точный состав документов.".into(),
         ),
         reasons: routing.reasons.clone(),
     }
@@ -388,5 +389,22 @@ mod tests {
     fn unknown_document_ids_are_never_selected() {
         let decision = decide_document_bundle(&pack(), &route(true, &["a", "missing"]), None, &[]);
         assert_eq!(decision.document_ids, vec!["a"]);
+    }
+
+    #[test]
+    fn persisted_specialist_rule_is_distinct_from_corpus_learning() {
+        let rule = KitLearningDecision {
+            document_ids: vec!["a".into(), "b".into()],
+            source: "specialist_local_rule".into(),
+            confidence: 1.0,
+            auto_apply: true,
+            reason: "saved locally".into(),
+        };
+        let decision = decide_document_bundle(&pack(), &route(false, &[]), Some(&rule), &[]);
+        assert_eq!(
+            decision.source,
+            BundleDecisionSource::PersistedSpecialistRule
+        );
+        assert!(decision.is_generation_ready());
     }
 }

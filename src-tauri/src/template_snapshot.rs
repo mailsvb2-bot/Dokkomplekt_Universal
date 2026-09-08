@@ -17,11 +17,8 @@ impl TemplateSnapshot {
         label: &str,
     ) -> Result<Self, String> {
         let configured_live_path = resolve_user_path(app, configured_path)?;
-        let live_path = Self::effective_registered_generation_path(
-            app,
-            &configured_live_path,
-            label,
-        )?;
+        let live_path =
+            Self::effective_registered_generation_path(app, &configured_live_path, label)?;
         let extension = live_path
             .extension()
             .and_then(|value| value.to_str())

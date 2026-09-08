@@ -17,6 +17,12 @@ pub struct KitRuleKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpecialistKitRule {
+    pub key: KitRuleKey,
+    pub document_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LearnedKitRule {
     pub key: KitRuleKey,
     pub document_ids: Vec<String>,
@@ -138,6 +144,45 @@ pub fn learn_kit_rules_from_entries(
     learn_kit_rules(entries, &clusters, policy)
 }
 
+pub fn upsert_specialist_rule(
+    rules: &mut Vec<SpecialistKitRule>,
+    key: KitRuleKey,
+    document_ids: &[String],
+    known_document_ids: &BTreeSet<String>,
+) -> bool {
+    let normalized = normalize_known_kit(document_ids, known_document_ids);
+    if normalized.is_empty() {
+        return false;
+    }
+    rules.retain(|rule| rule.key != key);
+    rules.push(SpecialistKitRule {
+        key,
+        document_ids: normalized,
+    });
+    rules.sort_by(|left, right| left.key.cmp(&right.key));
+    true
+}
+
+pub fn decision_for_specialist_rule(
+    rules: &[SpecialistKitRule],
+    key: &KitRuleKey,
+    known_document_ids: &BTreeSet<String>,
+) -> Option<KitLearningDecision> {
+    let rule = rules.iter().find(|rule| &rule.key == key)?;
+    let normalized = normalize_known_kit(&rule.document_ids, known_document_ids);
+    if normalized.is_empty() || normalized.len() != rule.document_ids.len() {
+        return None;
+    }
+    Some(KitLearningDecision {
+        document_ids: normalized,
+        source: "specialist_local_rule".into(),
+        confidence: 1.0,
+        auto_apply: true,
+        reason: "Специалист ранее подтвердил этот комплект для того же структурного типа дела."
+            .into(),
+    })
+}
+
 pub fn decision_for_key(
     entries: &[CorpusEntry],
     key: &KitRuleKey,
@@ -171,6 +216,16 @@ pub fn decide_learned_kit(rule: &LearnedKitRule) -> KitLearningDecision {
             )
         },
     }
+}
+
+fn normalize_known_kit(values: &[String], known_document_ids: &BTreeSet<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && known_document_ids.contains(value))
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
 }
 
 fn normalize_kit(values: &[String]) -> Vec<String> {
@@ -279,5 +334,43 @@ mod tests {
             item.kit_acceptance_source = CorpusAcceptanceSource::LegacyUnverified;
         }
         assert!(learn_kit_rules_from_entries(&entries, KitPromotionPolicy::default()).is_empty());
+    }
+
+    #[test]
+    fn specialist_rule_is_immediate_and_independent_from_corpus_promotion() {
+        let key = KitRuleKey {
+            domain: DomainKind::Medical,
+            cluster_id: "layout-primary".into(),
+            pack_id: Some("medical".into()),
+        };
+        let known = ["primary".to_string(), "diaries".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut rules = Vec::new();
+        assert!(upsert_specialist_rule(
+            &mut rules,
+            key.clone(),
+            &["primary".into(), "diaries".into()],
+            &known,
+        ));
+        let decision = decision_for_specialist_rule(&rules, &key, &known).unwrap();
+        assert!(decision.auto_apply);
+        assert_eq!(decision.confidence, 1.0);
+        assert_eq!(decision.source, "specialist_local_rule");
+    }
+
+    #[test]
+    fn specialist_rule_fails_closed_when_a_document_was_removed() {
+        let key = KitRuleKey {
+            domain: DomainKind::Medical,
+            cluster_id: "layout-primary".into(),
+            pack_id: Some("medical".into()),
+        };
+        let rules = vec![SpecialistKitRule {
+            key: key.clone(),
+            document_ids: vec!["primary".into(), "diaries".into()],
+        }];
+        let known = ["primary".to_string()].into_iter().collect::<BTreeSet<_>>();
+        assert!(decision_for_specialist_rule(&rules, &key, &known).is_none());
     }
 }

@@ -140,7 +140,6 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hex::encode(hasher.finalize())
 }
 
-
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -589,7 +588,6 @@ fn perform_created_documents_intake(
             "decision": &bundle_decision,
         }),
     )?;
-
     if bundle_decision.review_required {
         let report_path = attention_note_path(&source);
         let question = bundle_decision
@@ -603,7 +601,7 @@ fn perform_created_documents_intake(
                 bundle_decision.document_ids.join(", ")
             ));
         }
-        attention.push_str("\nОткройте Доккомплект, подтвердите состав одной кнопкой. После подтверждения он будет записан в корпус обучения для этого типа дела.\n");
+        attention.push_str(bundle_confirmation_attention_note(&routing_recommendation));
         std::fs::write(
             &report_path,
             note_with_source_fingerprint(
@@ -2056,21 +2054,19 @@ fn confirm_bundle_exception_and_retry(
     if exception_id.is_empty() {
         return Err("Не указан идентификатор исключения.".into());
     }
-    let known_ids = state
+    let pack = state
         .pack
         .lock()
         .map_err(|_| "state lock failed")?
-        .documents
-        .iter()
-        .map(|document| document.id.clone())
-        .collect::<BTreeSet<_>>();
+        .clone();
+    let known_ids = known_pack_document_ids(&pack);
+    let mut seen = BTreeSet::new();
     let selected = req
         .document_ids
         .iter()
         .map(|value| value.trim().to_string())
         .filter(|value| known_ids.contains(value))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+        .filter(|value| seen.insert(value.clone()))
         .collect::<Vec<_>>();
     if selected.is_empty() {
         return Err("Не выбран ни один существующий документ комплекта.".into());
@@ -2085,6 +2081,33 @@ fn confirm_bundle_exception_and_retry(
         .ok_or_else(|| "Открытое исключение не найдено.".to_string())?;
     if exception.category != "bundle_decision" {
         return Err("Подтверждение состава доступно только для исключения Bundle Decision Engine.".into());
+    }
+    let details: serde_json::Value = serde_json::from_str(&exception.details_json)
+        .map_err(|error| format!("Сохранённые данные подтверждения повреждены: {error}"))?;
+    let cluster_id = details
+        .get("cluster_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "В подтверждении отсутствует структурный тип дела.".to_string())?;
+    if cluster_id != "unclassified" {
+        let domain = details
+            .get("domain")
+            .cloned()
+            .ok_or_else(|| "В подтверждении отсутствует профессиональная область.".to_string())
+            .and_then(|value| {
+                serde_json::from_value::<DomainKind>(value)
+                    .map_err(|error| format!("Профессиональная область подтверждения повреждена: {error}"))
+            })?;
+        let key = KitRuleKey {
+            domain,
+            cluster_id: cluster_id.to_string(),
+            pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
+        };
+        // Persist the explicit user choice before closing the exception. If
+        // encrypted local state cannot be written, keep the exception open so
+        // the UI never claims that a choice was remembered when it was not.
+        persist_specialist_kit_rule(&app, &key, &pack, &selected)?;
     }
     let record = repo
         .list_case_runs(500)

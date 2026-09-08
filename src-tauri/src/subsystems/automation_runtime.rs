@@ -160,12 +160,8 @@ fn perform_created_documents_intake(
         .documents
         .iter()
         .map(|document| {
-            template_snapshot::TemplateSnapshot::capture(
-                app,
-                &document.template_path,
-                &document.button_label,
-            )
-            .map(|snapshot| (document.id.clone(), snapshot))
+            template_snapshot::TemplateSnapshot::capture_generation(app, document)
+                .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     let processing_fingerprint =
@@ -2051,85 +2047,8 @@ fn confirm_bundle_exception_and_retry(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let exception_id = req.exception_id.trim();
-    if exception_id.is_empty() {
-        return Err("Не указан идентификатор исключения.".into());
-    }
-    let pack = state
-        .pack
-        .lock()
-        .map_err(|_| "state lock failed")?
-        .clone();
-    let known_ids = known_pack_document_ids(&pack);
-    let mut seen = BTreeSet::new();
-    let selected = req
-        .document_ids
-        .iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| known_ids.contains(value))
-        .filter(|value| seen.insert(value.clone()))
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        return Err("Не выбран ни один существующий документ комплекта.".into());
-    }
-
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    let exception = repo
-        .list_exceptions(false)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|item| item.exception_id == exception_id)
-        .ok_or_else(|| "Открытое исключение не найдено.".to_string())?;
-    if exception.category != "bundle_decision" {
-        return Err("Подтверждение состава доступно только для исключения Bundle Decision Engine.".into());
-    }
-    let details: serde_json::Value = serde_json::from_str(&exception.details_json)
-        .map_err(|error| format!("Сохранённые данные подтверждения повреждены: {error}"))?;
-    let cluster_id = details
-        .get("cluster_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "В подтверждении отсутствует структурный тип дела.".to_string())?;
-    if cluster_id != "unclassified" {
-        let domain = details
-            .get("domain")
-            .cloned()
-            .ok_or_else(|| "В подтверждении отсутствует профессиональная область.".to_string())
-            .and_then(|value| {
-                serde_json::from_value::<DomainKind>(value)
-                    .map_err(|error| format!("Профессиональная область подтверждения повреждена: {error}"))
-            })?;
-        let key = KitRuleKey {
-            domain,
-            cluster_id: cluster_id.to_string(),
-            pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
-        };
-        // Persist the explicit user choice before closing the exception. If
-        // encrypted local state cannot be written, keep the exception open so
-        // the UI never claims that a choice was remembered when it was not.
-        persist_specialist_kit_rule(&app, &key, &pack, &selected)?;
-    }
-    let record = repo
-        .list_case_runs(500)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|case| case.source_path == exception.source_path && case.status == "attention")
-        .ok_or_else(|| "Не найдено остановленное дело для этого источника.".to_string())?;
-    if !Path::new(&record.source_path).exists() {
-        return Err("Исходный файл больше не существует в рабочей папке.".into());
-    }
-    let mut intake: CreatedDocumentsIntakeRequest = serde_json::from_str(&record.request_json)
-        .map_err(|error| format!("Сохранённый план дела повреждён: {error}"))?;
-    intake.confirmed_document_ids = selected.clone();
-    let resolved = repo
-        .resolve_exception(
-            exception_id,
-            &format!("Специалист подтвердил комплект: {}", selected.join(", ")),
-        )
-        .map_err(|error| error.to_string())?;
-    if !resolved {
-        return Err("Исключение уже закрыто другим процессом.".into());
-    }
+    let (selected, record, intake) =
+        claim_bundle_exception_confirmation(&app, &state, exception_id, &req.document_ids)?;
     increment_metric(&app, "bundle_confirmations", 1);
     increment_metric(&app, "attention_resolutions", 1);
     append_audit_event(

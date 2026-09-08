@@ -10,18 +10,17 @@ struct MailMergeTemplateSnapshot {
 
 fn capture_mail_merge_template_snapshot(
     app: &tauri::AppHandle,
-    button_label: &str,
-    configured_path: &str,
+    document: &DocumentTemplateSpec,
 ) -> Result<MailMergeTemplateSnapshot, String> {
-    let snapshot =
-        template_snapshot::TemplateSnapshot::capture(app, configured_path, button_label)?;
+    let snapshot = template_snapshot::TemplateSnapshot::capture_generation(app, document)?;
     let text = extract_docx_text(snapshot.path()).map_err(|error| {
         format!(
-            "Не удалось прочитать стабилизированный шаблон «{button_label}»: {error}"
+            "Не удалось прочитать стабилизированный шаблон «{}»: {error}",
+            document.button_label
         )
     })?;
     Ok(MailMergeTemplateSnapshot {
-        button_label: button_label.to_string(),
+        button_label: document.button_label.clone(),
         snapshot,
         text,
     })
@@ -85,11 +84,7 @@ fn render_mail_merge(
     let template_inputs = documents
         .iter()
         .map(|document| {
-            capture_mail_merge_template_snapshot(
-                &app,
-                &document.button_label,
-                &document.template_path,
-            )
+            capture_mail_merge_template_snapshot(&app, document)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let count = template_inputs

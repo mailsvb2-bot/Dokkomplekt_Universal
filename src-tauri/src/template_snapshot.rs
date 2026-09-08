@@ -16,9 +16,26 @@ impl TemplateSnapshot {
         configured_path: &str,
         label: &str,
     ) -> Result<Self, String> {
-        let configured_live_path = resolve_user_path(app, configured_path)?;
-        let live_path =
-            Self::effective_registered_generation_path(app, &configured_live_path, label)?;
+        let live_path = resolve_user_path(app, configured_path)?;
+        Self::capture_resolved(app, &live_path, label)
+    }
+
+    /// Generation is the only surface allowed to substitute a registered
+    /// document's effective template. Requiring the document identity here keeps
+    /// candidate/setup/learning snapshots neutral.
+    pub(crate) fn capture_generation(
+        app: &tauri::AppHandle,
+        document: &dokkomplekt_core::DocumentTemplateSpec,
+    ) -> Result<Self, String> {
+        let live_path = super::effective_generation_template_path(app, document)?;
+        Self::capture_resolved(app, &live_path, &document.button_label)
+    }
+
+    pub(crate) fn capture_resolved(
+        app: &tauri::AppHandle,
+        live_path: &Path,
+        label: &str,
+    ) -> Result<Self, String> {
         let extension = live_path
             .extension()
             .and_then(|value| value.to_str())
@@ -50,34 +67,6 @@ impl TemplateSnapshot {
             .map_err(|error| error.to_string())?
             .join("template-snapshot-work");
         Self::capture_path(&live_path, &workspace, label)
-    }
-
-    fn effective_registered_generation_path(
-        app: &tauri::AppHandle,
-        configured_live_path: &Path,
-        label: &str,
-    ) -> Result<PathBuf, String> {
-        let registered_document = {
-            let state = app.state::<super::AppState>();
-            let pack = state
-                .pack
-                .lock()
-                .map_err(|_| "state lock failed".to_string())?;
-            pack.documents
-                .iter()
-                .find(|document| {
-                    document.button_label.trim() == label.trim()
-                        && resolve_user_path(app, &document.template_path)
-                            .map(|path| path == configured_live_path)
-                            .unwrap_or(false)
-                })
-                .cloned()
-        };
-
-        match registered_document {
-            Some(document) => super::effective_generation_template_path(app, &document),
-            None => Ok(configured_live_path.to_path_buf()),
-        }
     }
 
     fn capture_path(live_path: &Path, workspace: &Path, label: &str) -> Result<Self, String> {

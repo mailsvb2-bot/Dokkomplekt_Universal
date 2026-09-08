@@ -1110,11 +1110,8 @@ fn render_docx(
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
-    let template_snapshot = template_snapshot::TemplateSnapshot::capture(
-        &app,
-        &doc.template_path,
-        &doc.button_label,
-    )?;
+    let template_snapshot =
+        template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;
     let prepared_template =
         prepare_medical_template_for_render(&app, &doc, template_snapshot.path())?;
     let template_text = prepared_template.template_text.clone();
@@ -1348,14 +1345,8 @@ fn render_docx_batch(
     let template_snapshots = documents
         .iter()
         .map(|document| {
-            let template_path = medical_diary_template_override(&app, &base_case, document)?
-                .unwrap_or_else(|| PathBuf::from(&document.template_path));
-            template_snapshot::TemplateSnapshot::capture(
-                &app,
-                &template_path.display().to_string(),
-                &document.button_label,
-            )
-            .map(|snapshot| (document.id.clone(), snapshot))
+            template_snapshot::TemplateSnapshot::capture_generation(&app, document)
+                .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
     let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;

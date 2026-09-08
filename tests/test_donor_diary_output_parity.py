@@ -114,18 +114,21 @@ def test_dynamic_sick_leave_epicrisis_is_donor_owned_and_not_a_frontend_second_b
         assert "medical.diary_treatment_correction" not in frontend_owner
 
 
-def test_manual_and_zero_touch_diary_generation_share_one_effective_program_template() -> None:
+def test_generation_routes_share_diary_template_without_mutating_generic_candidate_snapshots() -> None:
     profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
     snapshots = read("src-tauri/src/template_snapshot.rs")
     manual = read("src-tauri/src/subsystems/document_commands.rs")
     automation = read("src-tauri/src/subsystems/automation_runtime.rs")
-
+    mail_merge = read("src-tauri/src/subsystems/automation_mail_merge.rs")
     assert "fn effective_generation_template_path" in profile_sources
-    assert "effective_generation_template_path(app, document).map(Some)" in profile_sources
-    assert "fn effective_registered_generation_path" in snapshots
-    assert "document.button_label.trim() == label.trim()" in snapshots
-    assert "path == configured_live_path" in snapshots
-    assert "super::effective_generation_template_path(app, &document)" in snapshots
-    assert "medical_diary_template_override(&app, &base_case, document)?" in manual
-    assert "TemplateSnapshot::capture(" in automation
+    assert "return program_calendar_diary_template(app);" in profile_sources
+    assert "resolve_user_path(app, &document.template_path)" in profile_sources
+    assert "let live_path = resolve_user_path(app, configured_path)?;" in snapshots
+    assert "fn effective_registered_generation_path" not in snapshots
+    assert "app.state::<super::AppState>()" not in snapshots
+    assert "pub(crate) fn capture_generation" in snapshots
+    assert "super::effective_generation_template_path(app, document)?" in snapshots
+    assert manual.count("TemplateSnapshot::capture_generation(") >= 2
+    assert "TemplateSnapshot::capture_generation(app, document)" in automation
+    assert "TemplateSnapshot::capture_generation(app, document)" in mail_merge
 

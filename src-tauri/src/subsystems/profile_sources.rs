@@ -225,20 +225,6 @@ fn effective_generation_template_path(
     resolve_user_path(app, &document.template_path)
 }
 
-// Compatibility adapter for the manual batch path. The effective template
-// decision itself has exactly one owner above; other generation routes resolve
-// the same registered document through TemplateSnapshot.
-fn medical_diary_template_override(
-    app: &tauri::AppHandle,
-    _case: &SemanticCase,
-    document: &DocumentTemplateSpec,
-) -> Result<Option<PathBuf>, String> {
-    if !is_medical_diary_document(document) {
-        return Ok(None);
-    }
-    effective_generation_template_path(app, document).map(Some)
-}
-
 #[cfg(test)]
 mod profile_sources_tests {
     use super::{

@@ -171,7 +171,7 @@ fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
 
         match std::fs::rename(&temp_path, path) {
             Ok(()) => {}
-            Err(error) if medical_diary_template_is_usable(path) => {
+            Err(_) if medical_diary_template_is_usable(path) => {
                 // Another process published the same complete template first.
                 let _ = std::fs::remove_file(&temp_path);
                 return Ok(());

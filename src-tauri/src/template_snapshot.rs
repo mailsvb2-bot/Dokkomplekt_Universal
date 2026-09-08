@@ -47,7 +47,7 @@ impl TemplateSnapshot {
                 live_path.display()
             ));
         }
-        let metadata = std::fs::metadata(&live_path)
+        let metadata = std::fs::metadata(live_path)
             .map_err(|error| format!("Не удалось прочитать шаблон «{label}»: {error}"))?;
         if !metadata.is_file() {
             return Err(format!(
@@ -66,7 +66,7 @@ impl TemplateSnapshot {
             .app_data_dir()
             .map_err(|error| error.to_string())?
             .join("template-snapshot-work");
-        Self::capture_path(&live_path, &workspace, label)
+        Self::capture_path(live_path, &workspace, label)
     }
 
     fn capture_path(live_path: &Path, workspace: &Path, label: &str) -> Result<Self, String> {

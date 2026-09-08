@@ -42,6 +42,11 @@ fn load_specialist_kit_decision(
     key: &KitRuleKey,
     pack: &DocumentPack,
 ) -> Result<Option<KitLearningDecision>, String> {
+    let state = app.state::<AppState>();
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     let repo = repository_for(&default_state_db_path(app)?)?;
     let mut rules = repo
         .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
@@ -85,10 +90,50 @@ fn persist_specialist_kit_rule(
     pack: &DocumentPack,
     confirmed_document_ids: &[String],
 ) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     let repo = repository_for(&default_state_db_path(app)?)?;
     let rules = updated_specialist_kit_rules(&repo, key, pack, confirmed_document_ids)?;
     repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
         .map_err(|error| error.to_string())
+}
+
+fn specialist_rule_key_from_exception_details(
+    details: &serde_json::Value,
+    pack: &DocumentPack,
+) -> Result<Option<KitRuleKey>, String> {
+    if let Some(value) = details.get("specialist_rule_key") {
+        if !value.is_null() {
+            return serde_json::from_value::<KitRuleKey>(value.clone())
+                .map(Some)
+                .map_err(|error| format!("Ключ подтверждённого комплекта повреждён: {error}"));
+        }
+    }
+    let cluster_id = details
+        .get("cluster_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "В подтверждении отсутствует структурный тип дела.".to_string())?;
+    if cluster_id == "unclassified" {
+        return Ok(None);
+    }
+    let domain = details
+        .get("domain")
+        .cloned()
+        .ok_or_else(|| "В подтверждении отсутствует профессиональная область.".to_string())
+        .and_then(|value| {
+            serde_json::from_value::<DomainKind>(value)
+                .map_err(|error| format!("Профессиональная область подтверждения повреждена: {error}"))
+        })?;
+    Ok(Some(KitRuleKey {
+        domain,
+        cluster_id: cluster_id.to_string(),
+        pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
+    }))
 }
 
 fn claim_bundle_exception_confirmation(
@@ -128,27 +173,10 @@ fn claim_bundle_exception_confirmation(
     }
     let details: serde_json::Value = serde_json::from_str(&exception.details_json)
         .map_err(|error| format!("Сохранённые данные подтверждения повреждены: {error}"))?;
-    let cluster_id = details
-        .get("cluster_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "В подтверждении отсутствует структурный тип дела.".to_string())?;
-    let rule_update = if cluster_id != "unclassified" {
-        let domain = details
-            .get("domain")
-            .cloned()
-            .ok_or_else(|| "В подтверждении отсутствует профессиональная область.".to_string())
-            .and_then(|value| serde_json::from_value::<DomainKind>(value)
-                .map_err(|error| format!("Профессиональная область подтверждения повреждена: {error}")))?;
-        let key = KitRuleKey {
-            domain,
-            cluster_id: cluster_id.to_string(),
-            pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
-        };
-        Some(updated_specialist_kit_rules(&repo, &key, &pack, &selected)?)
-    } else {
-        None
+    let specialist_rule_key = specialist_rule_key_from_exception_details(&details, &pack)?;
+    let rule_update = match specialist_rule_key.as_ref() {
+        Some(key) => Some(updated_specialist_kit_rules(&repo, key, &pack, &selected)?),
+        None => None,
     };
     let record = repo
         .list_case_runs(500)
@@ -188,7 +216,7 @@ fn resolve_document_bundle_for_case(
     pack: &DocumentPack,
     learning_domain: Option<DomainKind>,
     specialist_confirmed_ids: &[String],
-) -> Result<(DocumentRoutingRecommendation, BundleDecision), String> {
+) -> Result<(DocumentRoutingRecommendation, BundleDecision, Option<KitRuleKey>), String> {
     let routing = recommend_document_bundle(source_text, case, pack);
     let domain = learning_domain
         .or_else(|| case.active_domains.first().cloned())
@@ -221,7 +249,7 @@ fn resolve_document_bundle_for_case(
         learned.as_ref(),
         specialist_confirmed_ids,
     );
-    Ok((routing, decision))
+    Ok((routing, decision, key))
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,7 +338,7 @@ fn parse_source(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision) = resolve_document_bundle_for_case(
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case(
             &app,
             &req.source_text,
             &semantic_case,
@@ -485,7 +513,7 @@ fn parse_source_file_bytes(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision) = resolve_document_bundle_for_case(
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case(
             &app,
             &source_text,
             &semantic_case,
@@ -653,7 +681,7 @@ fn parse_web_source(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision) = resolve_document_bundle_for_case(
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case(
             &app,
             &fetched.source_text,
             &semantic_case,

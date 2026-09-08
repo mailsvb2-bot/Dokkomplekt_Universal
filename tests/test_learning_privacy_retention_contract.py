@@ -40,3 +40,21 @@ def test_startup_cleanup_failure_is_visible_not_silently_discarded() -> None:
     main = read("src-tauri/src/main.rs")
     assert "if let Err(error) = cleanup_intake_workspace(&handle)" in main
     assert "Очистка временных рабочих данных при запуске пропущена" in main
+
+
+
+def test_specialist_rule_uses_exact_decision_key_and_one_persistence_gate() -> None:
+    source = read("src-tauri/src/subsystems/source_intake_commands.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+
+    load_start = source.index("fn load_specialist_kit_decision(")
+    persist_start = source.index("fn persist_specialist_kit_rule(")
+    claim_start = source.index("fn claim_bundle_exception_confirmation(")
+    resolver_start = source.index("fn resolve_document_bundle_for_case(")
+    assert "persistence_gate" in source[load_start:persist_start]
+    assert "persistence_gate" in source[persist_start:claim_start]
+    assert "persistence_gate" in source[claim_start:resolver_start]
+    assert "specialist_rule_key_from_exception_details" in source
+    assert "Option<KitRuleKey>), String>" in source
+    assert '"specialist_rule_key": &specialist_rule_key' in automation
+    assert "resolve_exception_and_save_state_value" in source

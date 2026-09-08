@@ -567,7 +567,7 @@ fn perform_created_documents_intake(
         });
     }
 
-    let (routing_recommendation, bundle_decision) = resolve_document_bundle_for_case(
+    let (routing_recommendation, bundle_decision, specialist_rule_key) = resolve_document_bundle_for_case(
         app,
         &source_text,
         &case,
@@ -614,6 +614,7 @@ fn perform_created_documents_intake(
             "proposed_document_ids": &bundle_decision.document_ids,
             "cluster_id": &routing_recommendation.cluster_id,
             "domain": &routing_recommendation.domain,
+            "specialist_rule_key": &specialist_rule_key,
             "confidence": bundle_decision.confidence,
             "attention_file": report_path.display().to_string(),
         });

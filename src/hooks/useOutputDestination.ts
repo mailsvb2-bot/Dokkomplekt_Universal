@@ -232,7 +232,7 @@ export function useOutputDestination(
     const selected = await run('pick_folder', () => pickFolder(watchFolder));
     if (!selected) return;
     setWatchFolder(selected);
-    setStatus(`Рабочая папка фонового агента выбрана: ${selected}. Готовые документы будут сохраняться отдельно: ${outputRoot || 'сначала задайте папку результата'}.`);
+    setStatus(`Рабочая папка фонового агента выбрана: ${selected}. Готовые подпапки будут создаваться в: ${outputRoot || 'сначала задайте папку результата'}. Вход и результат могут использовать один корень.`);
   }
 
   async function outputPlan(labels: string[]): Promise<void> {
@@ -256,11 +256,7 @@ export function useOutputDestination(
       return;
     }
     if (!destination || !folderNamingConfirmed) {
-      setStatus('Сначала подтвердите отдельную папку готовых документов и правило имени подпапки. Агент не включён.');
-      return;
-    }
-    if (folder.replace(/[\\/]+$/, '').toLocaleLowerCase() === destination.replace(/[\\/]+$/, '').toLocaleLowerCase()) {
-      setStatus('Рабочая папка и папка готовых документов должны быть разными. Агент не включён.');
+      setStatus('Сначала подтвердите папку готовых документов и правило имени подпапки. Агент не включён.');
       return;
     }
     const res = await run(

@@ -60,7 +60,7 @@ def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
         "medical-diary-program-calendar-{MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION}.docx"
         in profile_sources
     )
-    assert "program_calendar_diary_template(app).map(Some)" in profile_sources
+    assert "return program_calendar_diary_template(app);" in profile_sources
     assert "select_diary_template_for_admission" not in profile_sources
     assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
     assert "{{#each diaries}}" in profile_sources
@@ -112,3 +112,20 @@ def test_dynamic_sick_leave_epicrisis_is_donor_owned_and_not_a_frontend_second_b
     for frontend_owner in (preflight, linked_answers):
         assert "medical.diary_sick_leave_epicrisis" not in frontend_owner
         assert "medical.diary_treatment_correction" not in frontend_owner
+
+
+def test_manual_and_zero_touch_diary_generation_share_one_effective_program_template() -> None:
+    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    snapshots = read("src-tauri/src/template_snapshot.rs")
+    manual = read("src-tauri/src/subsystems/document_commands.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+
+    assert "fn effective_generation_template_path" in profile_sources
+    assert "effective_generation_template_path(app, document).map(Some)" in profile_sources
+    assert "fn effective_registered_generation_path" in snapshots
+    assert "document.button_label.trim() == label.trim()" in snapshots
+    assert "path == configured_live_path" in snapshots
+    assert "super::effective_generation_template_path(app, &document)" in snapshots
+    assert "medical_diary_template_override(&app, &base_case, document)?" in manual
+    assert "TemplateSnapshot::capture(" in automation
+

@@ -157,6 +157,19 @@ fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, St
 /// doctor's selected cadence; diary body text comes from the doctor-owned Texts
 /// library. Numbered 01-31 files are legacy compatibility data and must never
 /// replace the normal diary document during generation.
+fn effective_generation_template_path(
+    app: &tauri::AppHandle,
+    document: &DocumentTemplateSpec,
+) -> Result<PathBuf, String> {
+    if is_medical_diary_document(document) {
+        return program_calendar_diary_template(app);
+    }
+    Ok(PathBuf::from(&document.template_path))
+}
+
+// Compatibility adapter for the manual batch path. The effective template
+// decision itself has exactly one owner above; other generation routes resolve
+// the same registered document through TemplateSnapshot.
 fn medical_diary_template_override(
     app: &tauri::AppHandle,
     _case: &SemanticCase,
@@ -165,7 +178,7 @@ fn medical_diary_template_override(
     if !is_medical_diary_document(document) {
         return Ok(None);
     }
-    program_calendar_diary_template(app).map(Some)
+    effective_generation_template_path(app, document).map(Some)
 }
 
 #[cfg(test)]

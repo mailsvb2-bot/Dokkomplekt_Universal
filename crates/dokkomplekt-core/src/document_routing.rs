@@ -56,9 +56,14 @@ pub fn recommend_document_bundle(
     let domain_prediction = classify_source_domain(source_text, case);
     let source_tokens = routing_tokens(source_text);
     let source_labels = layout_labels(source_text);
-    let cluster_id = stable_cluster_id(&source_labels, &source_tokens);
     let role_scores = score_roles(source_text, case);
     let predicted_role = role_scores.first().map(|item| item.0.clone());
+    // A cluster identifies the structural type of the source, not the current
+    // person's values. Hashing raw source tokens made the same form drift when
+    // names, dates, amounts or diagnoses changed between cases. Use only stable
+    // field labels plus the predicted role; unknown unlabelled layouts remain
+    // explicitly unclassified and therefore cannot grow an unsafe learned rule.
+    let cluster_id = stable_cluster_id(&source_labels, predicted_role.as_deref());
     let role_confidence = role_confidence(&role_scores);
 
     // Домен и его уверенность обязаны выводиться вместе.
@@ -481,12 +486,11 @@ fn layout_labels(text: &str) -> BTreeSet<String> {
             if line.is_empty() || line.chars().count() > 120 {
                 return None;
             }
-            let label = line
-                .split_once(':')
-                .map(|(left, _)| left)
-                .unwrap_or(line)
-                .trim();
-            let normalized = normalize(label);
+            // Only the left side of an explicit field separator is structural.
+            // A free-form line may contain a patient's name, date, amount or
+            // diagnosis and must never enter the persistent cluster identity.
+            let (label, _) = line.split_once(':')?;
+            let normalized = normalize(label.trim());
             if normalized.chars().count() < 3 {
                 None
             } else {
@@ -516,11 +520,18 @@ fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f32 {
     intersection as f32 / union as f32
 }
 
-fn stable_cluster_id(labels: &BTreeSet<String>, tokens: &BTreeSet<String>) -> String {
+fn stable_cluster_id(labels: &BTreeSet<String>, predicted_role: Option<&str>) -> String {
+    let role = predicted_role
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if labels.is_empty() && role.is_none() {
+        return "unclassified".into();
+    }
+
     let mut hash = 0xcbf29ce484222325_u64;
-    for byte in labels
-        .iter()
-        .chain(tokens.iter().take(80))
+    for byte in role
+        .into_iter()
+        .chain(labels.iter().map(String::as_str))
         .flat_map(|value| value.as_bytes().iter().copied().chain([0]))
     {
         hash ^= u64::from(byte);
@@ -673,5 +684,50 @@ mod tests {
             .evidence
             .iter()
             .any(|item| item.contains("обязательных полей")));
+    }
+    #[test]
+    fn cluster_identity_ignores_patient_specific_values() {
+        let pack = DocumentPack {
+            pack_id: "medical".into(),
+            name: "Medical".into(),
+            documents: vec![document(
+                "primary",
+                "Первичный осмотр",
+                "primary",
+                DomainKind::Medical,
+            )],
+        };
+        let first = recommend_document_bundle(
+            "12.01.2026 Первичный осмотр\nФИО: Иванов Иван Иванович\nДата рождения: 01.02.1980\nДиагноз: F20.0",
+            &SemanticCase::default(),
+            &pack,
+        );
+        let second = recommend_document_bundle(
+            "03.09.2026 Первичный осмотр\nФИО: Петров Петр Петрович\nДата рождения: 11.12.1991\nДиагноз: F31.2",
+            &SemanticCase::default(),
+            &pack,
+        );
+        assert_ne!(first.cluster_id, "unclassified");
+        assert_eq!(first.cluster_id, second.cluster_id);
+    }
+
+    #[test]
+    fn unknown_unlabelled_text_is_not_a_learnable_cluster() {
+        let pack = DocumentPack {
+            pack_id: "generic".into(),
+            name: "Generic".into(),
+            documents: vec![document(
+                "custom",
+                "Произвольный документ",
+                "custom",
+                DomainKind::Generic,
+            )],
+        };
+        let result = recommend_document_bundle(
+            "Иванов Иван Петрович 12.01.2026",
+            &SemanticCase::default(),
+            &pack,
+        );
+        assert_eq!(result.cluster_id, "unclassified");
     }
 }

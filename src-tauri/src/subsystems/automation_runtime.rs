@@ -140,7 +140,6 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hex::encode(hasher.finalize())
 }
 
-
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -161,12 +160,8 @@ fn perform_created_documents_intake(
         .documents
         .iter()
         .map(|document| {
-            template_snapshot::TemplateSnapshot::capture(
-                app,
-                &document.template_path,
-                &document.button_label,
-            )
-            .map(|snapshot| (document.id.clone(), snapshot))
+            template_snapshot::TemplateSnapshot::capture_generation(app, document)
+                .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     let processing_fingerprint =
@@ -572,7 +567,7 @@ fn perform_created_documents_intake(
         });
     }
 
-    let (routing_recommendation, bundle_decision) = resolve_document_bundle_for_case(
+    let (routing_recommendation, bundle_decision, specialist_rule_key) = resolve_document_bundle_for_case(
         app,
         &source_text,
         &case,
@@ -589,7 +584,6 @@ fn perform_created_documents_intake(
             "decision": &bundle_decision,
         }),
     )?;
-
     if bundle_decision.review_required {
         let report_path = attention_note_path(&source);
         let question = bundle_decision
@@ -603,7 +597,7 @@ fn perform_created_documents_intake(
                 bundle_decision.document_ids.join(", ")
             ));
         }
-        attention.push_str("\nОткройте Доккомплект, подтвердите состав одной кнопкой. После подтверждения он будет записан в корпус обучения для этого типа дела.\n");
+        attention.push_str(bundle_confirmation_attention_note(&routing_recommendation));
         std::fs::write(
             &report_path,
             note_with_source_fingerprint(
@@ -620,6 +614,7 @@ fn perform_created_documents_intake(
             "proposed_document_ids": &bundle_decision.document_ids,
             "cluster_id": &routing_recommendation.cluster_id,
             "domain": &routing_recommendation.domain,
+            "specialist_rule_key": &specialist_rule_key,
             "confidence": bundle_decision.confidence,
             "attention_file": report_path.display().to_string(),
         });
@@ -2053,60 +2048,8 @@ fn confirm_bundle_exception_and_retry(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let exception_id = req.exception_id.trim();
-    if exception_id.is_empty() {
-        return Err("Не указан идентификатор исключения.".into());
-    }
-    let known_ids = state
-        .pack
-        .lock()
-        .map_err(|_| "state lock failed")?
-        .documents
-        .iter()
-        .map(|document| document.id.clone())
-        .collect::<BTreeSet<_>>();
-    let selected = req
-        .document_ids
-        .iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| known_ids.contains(value))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        return Err("Не выбран ни один существующий документ комплекта.".into());
-    }
-
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    let exception = repo
-        .list_exceptions(false)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|item| item.exception_id == exception_id)
-        .ok_or_else(|| "Открытое исключение не найдено.".to_string())?;
-    if exception.category != "bundle_decision" {
-        return Err("Подтверждение состава доступно только для исключения Bundle Decision Engine.".into());
-    }
-    let record = repo
-        .list_case_runs(500)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|case| case.source_path == exception.source_path && case.status == "attention")
-        .ok_or_else(|| "Не найдено остановленное дело для этого источника.".to_string())?;
-    if !Path::new(&record.source_path).exists() {
-        return Err("Исходный файл больше не существует в рабочей папке.".into());
-    }
-    let mut intake: CreatedDocumentsIntakeRequest = serde_json::from_str(&record.request_json)
-        .map_err(|error| format!("Сохранённый план дела повреждён: {error}"))?;
-    intake.confirmed_document_ids = selected.clone();
-    let resolved = repo
-        .resolve_exception(
-            exception_id,
-            &format!("Специалист подтвердил комплект: {}", selected.join(", ")),
-        )
-        .map_err(|error| error.to_string())?;
-    if !resolved {
-        return Err("Исключение уже закрыто другим процессом.".into());
-    }
+    let (selected, record, intake) =
+        claim_bundle_exception_confirmation(&app, &state, exception_id, &req.document_ids)?;
     increment_metric(&app, "bundle_confirmations", 1);
     increment_metric(&app, "attention_resolutions", 1);
     append_audit_event(

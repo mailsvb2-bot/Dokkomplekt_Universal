@@ -1,6 +1,239 @@
 // Real-source intake boundary shared by interactive desktop and automation.
+// User-confirmed bundle memory is a local encrypted preference, not telemetry.
+// It intentionally lives in the existing app_state owner and is keyed by the
+// same structural KitRuleKey used by the routing/learning engine.
+const SPECIALIST_KIT_RULES_STATE_KEY: &str = "specialist_kit_rules.v1";
+
+fn bundle_confirmation_attention_note(
+    routing: &DocumentRoutingRecommendation,
+) -> &'static str {
+    if routing.cluster_id == "unclassified" {
+        "\nОткройте Доккомплект и подтвердите состав одной кнопкой. Тип источника пока не имеет устойчивой структурной сигнатуры, поэтому выбор применится к этому делу и не будет автоматически переноситься на другие источники.\n"
+    } else {
+        "\nОткройте Доккомплект и подтвердите состав одной кнопкой. После подтверждения выбор будет сохранён локально для этого структурного типа дела. Обезличенный обучающий корпус заполняется только если пользователь отдельно включил это в настройках приватности.\n"
+    }
+}
+
+fn known_pack_document_ids(pack: &DocumentPack) -> BTreeSet<String> {
+    pack.documents
+        .iter()
+        .map(|document| document.id.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn specialist_kit_rule_key(
+    domain: DomainKind,
+    routing: &DocumentRoutingRecommendation,
+    pack: &DocumentPack,
+) -> Option<KitRuleKey> {
+    if routing.cluster_id.trim().is_empty() || routing.cluster_id == "unclassified" {
+        return None;
+    }
+    Some(KitRuleKey {
+        domain,
+        cluster_id: routing.cluster_id.clone(),
+        pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
+    })
+}
+
+fn load_specialist_kit_decision_from_repo(
+    repo: &LocalRepository,
+    key: &KitRuleKey,
+    pack: &DocumentPack,
+) -> Result<Option<KitLearningDecision>, String> {
+    let rules = repo
+        .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let known = known_pack_document_ids(pack);
+    // A process-local pack can lag behind the shared SQLite state (the UI and
+    // watcher are separate processes). A rule that cannot be applied to this
+    // snapshot therefore becomes a review-required miss, but is never deleted
+    // here. Only an explicit specialist confirmation may replace that memory.
+    Ok(dokkomplekt_core::decision_for_specialist_rule(&rules, key, &known))
+}
+
+fn updated_specialist_kit_rules(
+    repo: &LocalRepository,
+    key: &KitRuleKey,
+    pack: &DocumentPack,
+    confirmed_document_ids: &[String],
+) -> Result<Vec<dokkomplekt_core::SpecialistKitRule>, String> {
+    let mut rules = repo
+        .load_state_value::<Vec<dokkomplekt_core::SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let known = known_pack_document_ids(pack);
+    if !dokkomplekt_core::upsert_specialist_rule(
+        &mut rules, key.clone(), confirmed_document_ids, &known,
+    ) {
+        return Err("Не удалось сохранить подтверждённый комплект: в нём нет существующих документов.".into());
+    }
+    Ok(rules)
+}
+
+fn persist_specialist_kit_rule_in_repo(
+    repo: &LocalRepository,
+    key: &KitRuleKey,
+    pack: &DocumentPack,
+    confirmed_document_ids: &[String],
+) -> Result<(), String> {
+    let rules = updated_specialist_kit_rules(repo, key, pack, confirmed_document_ids)?;
+    repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
+        .map_err(|error| error.to_string())
+}
+
+fn specialist_rule_key_from_exception_details(
+    details: &serde_json::Value,
+    pack: &DocumentPack,
+) -> Result<Option<KitRuleKey>, String> {
+    if let Some(value) = details.get("specialist_rule_key") {
+        if !value.is_null() {
+            return serde_json::from_value::<KitRuleKey>(value.clone())
+                .map(Some)
+                .map_err(|error| format!("Ключ подтверждённого комплекта повреждён: {error}"));
+        }
+    }
+    let cluster_id = details
+        .get("cluster_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "В подтверждении отсутствует структурный тип дела.".to_string())?;
+    if cluster_id == "unclassified" {
+        return Ok(None);
+    }
+    let domain = details
+        .get("domain")
+        .cloned()
+        .ok_or_else(|| "В подтверждении отсутствует профессиональная область.".to_string())
+        .and_then(|value| {
+            serde_json::from_value::<DomainKind>(value)
+                .map_err(|error| format!("Профессиональная область подтверждения повреждена: {error}"))
+        })?;
+    Ok(Some(KitRuleKey {
+        domain,
+        cluster_id: cluster_id.to_string(),
+        pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
+    }))
+}
+
+fn claim_bundle_exception_confirmation(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    exception_id: &str,
+    requested_document_ids: &[String],
+) -> Result<(Vec<String>, CaseRunRecord, CreatedDocumentsIntakeRequest), String> {
+    if exception_id.trim().is_empty() {
+        return Err("Не указан идентификатор исключения.".into());
+    }
+    let _confirmation_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    let known_ids = known_pack_document_ids(&pack);
+    let mut seen = BTreeSet::new();
+    let selected = requested_document_ids
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| known_ids.contains(value))
+        .filter(|value| seen.insert(value.clone()))
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Err("Не выбран ни один существующий документ комплекта.".into());
+    }
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    let exception = repo
+        .list_exceptions(false)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|item| item.exception_id == exception_id)
+        .ok_or_else(|| "Открытое исключение не найдено.".to_string())?;
+    if exception.category != "bundle_decision" {
+        return Err("Подтверждение состава доступно только для исключения Bundle Decision Engine.".into());
+    }
+    let details: serde_json::Value = serde_json::from_str(&exception.details_json)
+        .map_err(|error| format!("Сохранённые данные подтверждения повреждены: {error}"))?;
+    let specialist_rule_key = specialist_rule_key_from_exception_details(&details, &pack)?;
+    let rule_update = match specialist_rule_key.as_ref() {
+        Some(key) => Some(updated_specialist_kit_rules(&repo, key, &pack, &selected)?),
+        None => None,
+    };
+    let record = repo
+        .list_case_runs(500)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|case| case.source_path == exception.source_path && case.status == "attention")
+        .ok_or_else(|| "Не найдено остановленное дело для этого источника.".to_string())?;
+    if !Path::new(&record.source_path).exists() {
+        return Err("Исходный файл больше не существует в рабочей папке.".into());
+    }
+    let mut intake: CreatedDocumentsIntakeRequest = serde_json::from_str(&record.request_json)
+        .map_err(|error| format!("Сохранённый план дела повреждён: {error}"))?;
+    intake.confirmed_document_ids = selected.clone();
+    let resolution = format!("Специалист подтвердил комплект: {}", selected.join(", "));
+    let resolved = match rule_update.as_ref() {
+        Some(rules) => repo
+            .resolve_exception_and_save_state_value(
+                exception_id, &resolution, SPECIALIST_KIT_RULES_STATE_KEY, rules,
+            )
+            .map_err(|error| error.to_string())?,
+        None => repo.resolve_exception(exception_id, &resolution)
+            .map_err(|error| error.to_string())?,
+    };
+    if !resolved {
+        return Err("Исключение уже закрыто другим процессом.".into());
+    }
+    Ok((selected, record, intake))
+}
+
 // Bundle semantics stay in dokkomplekt-core; this module only resolves the
 // persisted learned decision and owns source/case replacement commands.
+
+fn resolve_document_bundle_for_case_with_repo(
+    repo: &LocalRepository,
+    source_text: &str,
+    case: &SemanticCase,
+    pack: &DocumentPack,
+    learning_domain: Option<DomainKind>,
+    specialist_confirmed_ids: &[String],
+) -> Result<(DocumentRoutingRecommendation, BundleDecision, Option<KitRuleKey>), String> {
+    let routing = recommend_document_bundle(source_text, case, pack);
+    let domain = learning_domain
+        .or_else(|| case.active_domains.first().cloned())
+        .filter(|value| *value != DomainKind::Generic)
+        .unwrap_or_else(|| routing.domain.clone());
+    let key = specialist_kit_rule_key(domain.clone(), &routing, pack);
+    if !specialist_confirmed_ids.is_empty() {
+        if let Some(key) = key.as_ref() {
+            persist_specialist_kit_rule_in_repo(repo, key, pack, specialist_confirmed_ids)?;
+        }
+    }
+
+    let specialist_rule = match key.as_ref() {
+        Some(key) => load_specialist_kit_decision_from_repo(repo, key, pack)?,
+        None => None,
+    };
+    let learned = if specialist_rule.is_some() {
+        specialist_rule
+    } else if let Some(key) = key.as_ref() {
+        let corpus_entries = repo
+            .list_corpus_entries(10_000)
+            .map_err(|error| error.to_string())?;
+        decision_for_key(&corpus_entries, key, KitPromotionPolicy::default())
+    } else {
+        None
+    };
+    let decision = decide_document_bundle(
+        pack,
+        &routing,
+        learned.as_ref(),
+        specialist_confirmed_ids,
+    );
+    Ok((routing, decision, key))
+}
 
 fn resolve_document_bundle_for_case(
     app: &tauri::AppHandle,
@@ -9,28 +242,21 @@ fn resolve_document_bundle_for_case(
     pack: &DocumentPack,
     learning_domain: Option<DomainKind>,
     specialist_confirmed_ids: &[String],
-) -> Result<(DocumentRoutingRecommendation, BundleDecision), String> {
-    let routing = recommend_document_bundle(source_text, case, pack);
-    let domain = learning_domain
-        .or_else(|| case.active_domains.first().cloned())
-        .filter(|value| *value != DomainKind::Generic)
-        .unwrap_or_else(|| routing.domain.clone());
-    let corpus_entries = repository_for(&default_state_db_path(app)?)?
-        .list_corpus_entries(10_000)
-        .map_err(|error| error.to_string())?;
-    let key = KitRuleKey {
-        domain,
-        cluster_id: routing.cluster_id.clone(),
-        pack_id: (!pack.pack_id.trim().is_empty()).then(|| pack.pack_id.clone()),
-    };
-    let learned = decision_for_key(&corpus_entries, &key, KitPromotionPolicy::default());
-    let decision = decide_document_bundle(
+) -> Result<(DocumentRoutingRecommendation, BundleDecision, Option<KitRuleKey>), String> {
+    let state = app.state::<AppState>();
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    resolve_document_bundle_for_case_with_repo(
+        &repo,
+        source_text,
+        case,
         pack,
-        &routing,
-        learned.as_ref(),
+        learning_domain,
         specialist_confirmed_ids,
-    );
-    Ok((routing, decision))
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,8 +345,9 @@ fn parse_source(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision) = resolve_document_bundle_for_case(
-            &app,
+        let repo = repository_for(&default_state_db_path(&app)?)?;
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case_with_repo(
+            &repo,
             &req.source_text,
             &semantic_case,
             &snapshot.pack,
@@ -294,8 +521,9 @@ fn parse_source_file_bytes(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision) = resolve_document_bundle_for_case(
-            &app,
+        let repo = repository_for(&default_state_db_path(&app)?)?;
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case_with_repo(
+            &repo,
             &source_text,
             &semantic_case,
             &snapshot.pack,
@@ -462,8 +690,9 @@ fn parse_web_source(
     let response = transact_default_state(&app, &state, |snapshot| {
         replace_case_from_new_source(&mut snapshot.semantic_case, parsed);
         let semantic_case = snapshot.semantic_case.clone();
-        let (routing, bundle_decision) = resolve_document_bundle_for_case(
-            &app,
+        let repo = repository_for(&default_state_db_path(&app)?)?;
+        let (routing, bundle_decision, _specialist_rule_key) = resolve_document_bundle_for_case_with_repo(
+            &repo,
             &fetched.source_text,
             &semantic_case,
             &snapshot.pack,
@@ -486,6 +715,78 @@ fn parse_web_source(
     retained.take();
     *source_provenance = Some(provenance);
     Ok(response)
+}
+
+
+#[cfg(test)]
+mod specialist_rule_persistence_tests {
+    use super::{
+        load_specialist_kit_decision_from_repo, updated_specialist_kit_rules,
+        SPECIALIST_KIT_RULES_STATE_KEY,
+    };
+    use dokkomplekt_core::{
+        DocumentPack, DocumentTemplateSpec, DomainKind, KitRuleKey, SpecialistKitRule,
+    };
+    use dokkomplekt_storage::LocalRepository;
+    use uuid::Uuid;
+
+    fn document(id: &str) -> DocumentTemplateSpec {
+        DocumentTemplateSpec {
+            id: id.into(),
+            button_label: id.into(),
+            template_path: format!("{id}.docx"),
+            category: DomainKind::Medical,
+            role_id: "primary".into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        }
+    }
+
+    #[test]
+    fn stale_pack_snapshot_never_deletes_shared_specialist_rule() {
+        let path = std::env::temp_dir().join(format!("dkk-specialist-rule-{}.sqlite3", Uuid::new_v4()));
+        let repo = LocalRepository::open(&path).unwrap();
+        let key = KitRuleKey {
+            domain: DomainKind::Medical,
+            cluster_id: "medical-primary".into(),
+            pack_id: Some("default".into()),
+        };
+        let current_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "default".into(),
+            documents: vec![document("primary")],
+        };
+        let rules = updated_specialist_kit_rules(
+            &repo,
+            &key,
+            &current_pack,
+            &["primary".to_string()],
+        )
+        .unwrap();
+        repo.save_state_value(SPECIALIST_KIT_RULES_STATE_KEY, &rules)
+            .unwrap();
+
+        let stale_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "stale".into(),
+            documents: Vec::new(),
+        };
+        assert!(load_specialist_kit_decision_from_repo(&repo, &key, &stale_pack)
+            .unwrap()
+            .is_none());
+
+        let persisted = repo
+            .load_state_value::<Vec<SpecialistKitRule>>(SPECIALIST_KIT_RULES_STATE_KEY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].key, key);
+        drop(repo);
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[cfg(test)]

@@ -203,4 +203,32 @@ describe('useOutputDestination durable output/watcher contract', () => {
       },
     });
   });
+  it('allows the canonical Выписанные пациенты folder to be both watcher inbox and output root', async () => {
+    const root = 'C:/Users/Doctor/Desktop/Выписанные пациенты';
+    localStorage.setItem(OUTPUT_ROOT_KEY, root);
+    localStorage.setItem(OUTPUT_PREFS_KEY, JSON.stringify(['DocumentNumber', 'DocumentDate']));
+    localStorage.setItem(OUTPUT_NAMING_CONFIRMED_KEY, 'true');
+    const calls: Call[] = [];
+    const status = vi.fn();
+    __setInvokeForTests(async (command, payload) => {
+      calls.push({ command, payload });
+      if (command === 'get_output_preferences') return { output_root: root, folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true } as never;
+      if (command === 'get_background_watcher_state') return { platform: 'windows', installed: false, migration_required: false } as never;
+      if (command === 'ensure_output_root') return root as never;
+      if (command === 'pick_folder') return { selected_path: root } as never;
+      if (command === 'install_background_watcher') return { platform: 'windows', installed: true, watch_folder: root, output_root: root, folder_parts: ['DocumentNumber', 'DocumentDate'], auto_print: false, print_copies_by_document: {}, max_parallel_cases: 2, migration_required: false, warnings: [] } as never;
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const { result } = renderHook(() => useOutputDestination(runAction, status));
+    await waitFor(() => expect(result.current.outputRoot).toBe(root));
+    await act(async () => { await result.current.chooseWatchFolder(); });
+    await act(async () => { await result.current.installWatcher(false, false, {}); });
+
+    expect(calls.find((call) => call.command === 'install_background_watcher')?.payload).toMatchObject({
+      req: { watch_folder: root, output_root: root },
+    });
+    expect(status.mock.calls.at(-1)?.[0]).toContain('Автоматическая обработка включена');
+  });
+
 });

@@ -119,6 +119,111 @@ fn is_medical_diary_document(document: &DocumentTemplateSpec) -> bool {
         || role.ends_with(".diaries")
 }
 
+fn medical_diary_template_is_usable(path: &Path) -> bool {
+    path.is_file()
+        && validate_safe_template_file(path).is_ok()
+        && extract_docx_text(path)
+            .map(|text| {
+                text.contains("{{#each diaries}}")
+                    && text.contains("{{diary.datetime}}")
+                    && text.contains("{{#if diary.is_final}}")
+                    && text.contains("{{else}}{{diary.text}}{{/if}}")
+                    && text.contains("{{diary.treating_physician_signature}}")
+                    && text.contains("{{diary.department_head_signature}}")
+            })
+            .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
+    // POSIX rename replaces an existing destination atomically on the same filesystem.
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
+    if medical_diary_template_is_usable(path) {
+        return Ok(());
+    }
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Не удалось определить каталог локального шаблона дневников".to_string())?;
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("medical-diary-program-calendar");
+    let temp_path = parent.join(format!(".{stem}-{}.tmp.docx", uuid::Uuid::new_v4()));
+
+    let publish = (|| -> Result<(), String> {
+        create_docx_from_text(&temp_path, MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT)
+            .map_err(|error| format!("Не удалось создать временный шаблон текстовых дневников: {error}"))?;
+        validate_safe_template_file(&temp_path)
+            .map_err(|error| format!("Временный шаблон дневников не прошёл проверку: {error}"))?;
+        if !medical_diary_template_is_usable(&temp_path) {
+            return Err("Временный шаблон дневников не содержит обязательную структуру календаря".into());
+        }
+
+        // Never unlink the shared target before publication. UI and watcher are
+        // different processes, so another process may have repaired the target
+        // after our initial check. Atomic replacement keeps the path continuously
+        // backed by either the previous file or our fully validated temp file.
+        match replace_file_atomically(&temp_path, path) {
+            Ok(()) => {}
+            Err(_) if medical_diary_template_is_usable(path) => {
+                // Another process published the same complete template first.
+                let _ = std::fs::remove_file(&temp_path);
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось атомарно опубликовать локальный шаблон дневников: {error}"
+                ));
+            }
+        }
+
+        if !medical_diary_template_is_usable(path) {
+            return Err("Опубликованный шаблон дневников не содержит обязательную структуру календаря".into());
+        }
+        Ok(())
+    })();
+
+    if temp_path.exists() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    publish
+}
+
 fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let root = app
         .path()
@@ -130,25 +235,7 @@ fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, St
     let path = root.join(format!(
         "medical-diary-program-calendar-{MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION}.docx"
     ));
-
-    let usable = path.is_file()
-        && validate_safe_template_file(&path).is_ok()
-        && extract_docx_text(&path)
-            .map(|text| {
-                text.contains("{{#each diaries}}")
-                    && text.contains("{{diary.datetime}}")
-                    && text.contains("{{#if diary.is_final}}")
-                    && text.contains("{{else}}{{diary.text}}{{/if}}")
-                    && text.contains("{{diary.treating_physician_signature}}")
-                    && text.contains("{{diary.department_head_signature}}")
-            })
-            .unwrap_or(false);
-    if !usable {
-        create_docx_from_text(&path, MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT)
-            .map_err(|error| format!("Не удалось создать локальный шаблон текстовых дневников: {error}"))?;
-        validate_safe_template_file(&path)
-            .map_err(|error| format!("Созданный шаблон дневников не прошёл проверку: {error}"))?;
-    }
+    ensure_program_calendar_diary_template(&path)?;
     Ok(path)
 }
 
@@ -157,24 +244,54 @@ fn program_calendar_diary_template(app: &tauri::AppHandle) -> Result<PathBuf, St
 /// doctor's selected cadence; diary body text comes from the doctor-owned Texts
 /// library. Numbered 01-31 files are legacy compatibility data and must never
 /// replace the normal diary document during generation.
-fn medical_diary_template_override(
+fn effective_generation_template_path(
     app: &tauri::AppHandle,
-    _case: &SemanticCase,
     document: &DocumentTemplateSpec,
-) -> Result<Option<PathBuf>, String> {
-    if !is_medical_diary_document(document) {
-        return Ok(None);
+) -> Result<PathBuf, String> {
+    if is_medical_diary_document(document) {
+        return program_calendar_diary_template(app);
     }
-    program_calendar_diary_template(app).map(Some)
+    resolve_user_path(app, &document.template_path)
 }
 
 #[cfg(test)]
 mod profile_sources_tests {
-    use super::parse_profile_quick_options;
+    use super::{
+        ensure_program_calendar_diary_template, medical_diary_template_is_usable,
+        parse_profile_quick_options,
+    };
+    use uuid::Uuid;
 
     #[test]
     fn corrupted_optional_quick_options_do_not_block_the_profile() {
         assert!(parse_profile_quick_options("{broken json").is_empty());
+    }
+
+    #[test]
+    fn concurrent_diary_template_creation_atomically_publishes_complete_docx() {
+        let root = std::env::temp_dir().join(format!("dkk-diary-template-race-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("diaries.docx");
+        std::fs::write(&path, b"broken").unwrap();
+
+        let workers = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || ensure_program_calendar_diary_template(&path))
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+
+        assert!(medical_diary_template_is_usable(&path));
+        let temp_files = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp.docx"))
+            .count();
+        assert_eq!(temp_files, 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -414,13 +414,6 @@ fn validate_medical_template_output_contract(
     ))
 }
 
-fn apply_compiled_contract_to_document(
-    document: &mut DocumentTemplateSpec,
-    compiled_text: &str,
-) -> Result<(), String> {
-    apply_compiled_contract_to_document_with_compiler_fields(document, compiled_text, &[])
-}
-
 fn apply_compiled_contract_to_document_with_compiler_fields(
     document: &mut DocumentTemplateSpec,
     compiled_text: &str,
@@ -1116,7 +1109,7 @@ mod legacy_template_runtime_tests {
         };
         validate_medical_template_output_contract(&document)
             .expect("compiled primary role contract must be complete");
-        apply_compiled_contract_to_document(&mut document, body)
+        apply_compiled_contract_to_document_with_compiler_fields(&mut document, body, &[])
             .expect("compiled primary contract must persist safely");
         assert!(stories["word/header1.xml"].contains("НКЦПЗ"));
         assert!(!stories["word/header1.xml"].contains("Экспертный анамнез"));
@@ -1160,7 +1153,7 @@ mod legacy_template_runtime_tests {
     fn compiled_contract_becomes_the_persisted_document_contract_without_losing_popup_customization() {
         let mut document = medical_document();
         let popup_before = document.popup_fields.clone();
-        apply_compiled_contract_to_document(
+        apply_compiled_contract_to_document_with_compiler_fields(
             &mut document,
             concat!(
                 "Выписной эпикриз\n",
@@ -1173,6 +1166,7 @@ mod legacy_template_runtime_tests {
                 "{{medical.expert_anamnesis}}\n",
                 "{{medical.discharge_condition}}"
             ),
+            &[],
         )
         .expect("compiled contract");
         for field_id in [

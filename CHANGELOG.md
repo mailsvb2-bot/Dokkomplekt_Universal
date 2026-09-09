@@ -1,5 +1,13 @@
 # Changelog
 
+## 18.4.5 — real Word compiler confirmation hotfix
+
+- fixed a real user-path blocker where document creation could stop with `Compiler не подтвердил созданное semantic-поле medical.profile_status`;
+- compiler-owned fields are now verified against the exact placeholder physically written into the final DOCX instead of depending on a second global parse of doctor-owned Word text;
+- preserved fail-closed behavior: a field reported as compiled is still rejected when its exact semantic token is absent from the final document;
+- propagated compiler-owned semantic evidence into the persisted/render contract so unrelated literal braces in user templates cannot hide a valid generated field;
+- added a regression with a real DOCX containing an earlier literal `{{` before `Психический статус`, reproducing the false-negative class.
+
 ## 18.4.4 — donor-compatible structural Word template compiler
 
 - replaced parser-first repair of filled medical DOCX templates with a donor-style structural compiler that binds values to their owning Word labels/sections;

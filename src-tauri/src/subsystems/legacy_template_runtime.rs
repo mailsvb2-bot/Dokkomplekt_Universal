@@ -364,15 +364,18 @@ fn compile_template_contract_copy(
     let derived_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось проверить скомпилированную копию: {error}"))?;
     let derived_analysis = analyze_template_text_with_domain_hint(&derived_text, Some(domain));
-    if derived_analysis.is_static {
+    if derived_analysis.is_static && applied_field_ids.is_empty() {
         return Err("Скомпилированная копия не содержит placeholder-полей.".into());
     }
+    // A compiler-owned field is proven by the exact token that the compiler itself
+    // wrote into the final Word stories. Do not make that proof depend on reparsing
+    // the entire flattened document: a doctor-owned DOCX can contain unrelated
+    // literal/template-like braces which make a global parser stop before a later
+    // valid token. The exact-token check remains fail-closed: a reported field that
+    // is not physically present in the compiled copy is still rejected.
     for field_id in &applied_field_ids {
-        if !derived_analysis
-            .placeholders
-            .iter()
-            .any(|candidate| candidate == field_id)
-        {
+        let token = format!("{{{{{field_id}}}}}");
+        if !derived_text.contains(&token) {
             return Err(format!(
                 "Compiler не подтвердил созданное semantic-поле {field_id}."
             ));
@@ -415,17 +418,32 @@ fn apply_compiled_contract_to_document(
     document: &mut DocumentTemplateSpec,
     compiled_text: &str,
 ) -> Result<(), String> {
+    apply_compiled_contract_to_document_with_compiler_fields(document, compiled_text, &[])
+}
+
+fn apply_compiled_contract_to_document_with_compiler_fields(
+    document: &mut DocumentTemplateSpec,
+    compiled_text: &str,
+    compiler_fields: &[String],
+) -> Result<(), String> {
     let analysis = analyze_template_text_with_domain_hint(compiled_text, Some(&document.category));
-    if analysis.is_static || analysis.placeholders.is_empty() {
+    let mut placeholders = analysis.placeholders.clone();
+    for field_id in compiler_fields {
+        let token = format!("{{{{{field_id}}}}}");
+        if compiled_text.contains(&token) && !placeholders.iter().any(|item| item == field_id) {
+            placeholders.push(field_id.clone());
+        }
+    }
+    placeholders.sort();
+    placeholders.dedup();
+    if placeholders.is_empty() {
         return Err(format!(
             "Скомпилированный шаблон «{}» не содержит semantic-placeholders.",
             document.button_label
         ));
     }
-    document.placeholders = analysis.placeholders.clone();
-    document
-        .required_fields
-        .extend(analysis.placeholders.iter().cloned());
+    document.placeholders = placeholders.clone();
+    document.required_fields.extend(placeholders);
     document.required_fields.sort();
     document.required_fields.dedup();
     document.is_static_copy = false;
@@ -482,8 +500,12 @@ fn migrate_loaded_medical_template_contracts(
             continue;
         }
         let mut candidate_document = document.clone();
-        if apply_compiled_contract_to_document(&mut candidate_document, &compiled.template_text)
-            .is_err()
+        if apply_compiled_contract_to_document_with_compiler_fields(
+            &mut candidate_document,
+            &compiled.template_text,
+            &compiled.applied_field_ids,
+        )
+        .is_err()
         {
             // A deterministic partial repair is still not publishable. Keep the
             // previous version intact and let the runtime safety-net explain the
@@ -565,7 +587,11 @@ fn prepare_medical_template_for_render(
     } else {
         template_text.clone()
     };
-    apply_compiled_contract_to_document(&mut effective_document, &effective_text)?;
+    apply_compiled_contract_to_document_with_compiler_fields(
+        &mut effective_document,
+        &effective_text,
+        &compiled.applied_field_ids,
+    )?;
     if !compiled.changed {
         return Ok(PreparedMedicalRenderTemplate {
             path: template_path.to_path_buf(),
@@ -1165,4 +1191,49 @@ mod legacy_template_runtime_tests {
         assert!(document.popup_configured);
         assert!(!document.is_static_copy);
     }
+    #[test]
+    fn compiler_owned_profile_status_is_not_rejected_by_unrelated_literal_braces() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-profile-status-braces-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("discharge.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: В сознании, ориентирован, контактен.</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "discharge",
+            true,
+        )
+        .expect("compiler-owned exact token must survive unrelated literal braces");
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        let body = extract_docx_text(&compiled.path).expect("compiled text");
+        assert!(body.contains("{{medical.profile_status}}"), "{body}");
+        // The global template parser is intentionally confused by the earlier
+        // doctor-owned literal `{{`; compiler confirmation must not depend on it.
+        let reparsed = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
+        assert!(!reparsed
+            .placeholders
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
 }

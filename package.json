@@ -1,6 +1,6 @@
 {
   "name": "dokkomplekt-universal-tauri",
-  "version": "18.4.4",
+  "version": "18.4.5",
   "private": true,
   "type": "module",
   "scripts": {

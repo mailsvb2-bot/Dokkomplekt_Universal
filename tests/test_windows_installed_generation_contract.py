@@ -53,4 +53,11 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Проверочная кнопка.docx" not in source
     assert "[System.IO.Compression.ZipFile]::OpenRead" in source
     assert "Created DOCX lost the template content" in source
+    assert "Психический статус" in source
+    assert "Шаблонный психический статус старого пациента" in source
+    assert "Контактен, ориентирован, эмоционально напряжён" in source
+    assert "medical.profile_status from the current primary source" in source
+    assert "old template medical.profile_status" in source
+    assert "compiler-owned medical.profile_status placeholder unresolved" in source
+    assert "doctor-owned literal opener used by the profile-status regression" in source
     assert "Installed end-to-end document generation OK" in source

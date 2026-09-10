@@ -66,6 +66,11 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
         "medical.diagnosis",
         "F32.1 Депрессивный эпизод средней степени",
     );
+    set_user_value(
+        &mut source_case,
+        "medical.profile_status",
+        "Контактен, ориентирован, эмоционально напряжён",
+    );
     // A referral may contain narrative text, but it must never become treatment merely
     // because it was present in the source document.
     set_user_value(
@@ -80,6 +85,7 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
         "medical.admission_date",
         "medical.diagnosis",
         "medical.treatment",
+        "medical.profile_status",
     ];
     let primary = medical_document("primary", "Первичный осмотр", "primary", &shared_fields);
     let discharge = medical_document(
@@ -93,6 +99,7 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
             "medical.discharge_date",
             "medical.diagnosis",
             "medical.treatment",
+            "medical.profile_status",
         ],
     );
 
@@ -185,7 +192,7 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
     let primary_output = dir.join("Первичный осмотр.docx");
     create_docx_from_text(
         &primary_template,
-        "ПЕРВИЧНЫЙ ОСМОТР\nИстория болезни № {{medical.case_number}}\nДата поступления: {{medical.admission_date}}\nПациент: {{subject.name}}\nДиагноз: {{medical.diagnosis}}\nЛечение: {{medical.treatment}}\nЛечащий врач __________________ /____________/",
+        "ПЕРВИЧНЫЙ ОСМОТР\nИстория болезни № {{medical.case_number}}\nДата поступления: {{medical.admission_date}}\nПациент: {{subject.name}}\nДиагноз: {{medical.diagnosis}}\nЛечение: {{medical.treatment}}\nПсихический статус: {{medical.profile_status}}\nЛечащий врач __________________ /____________/",
     )
     .expect("create primary template DOCX");
     let primary_render = render_docx_file(
@@ -203,7 +210,7 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
     let discharge_output = dir.join("Выписной эпикриз.docx");
     create_docx_from_text(
         &discharge_template,
-        "ВЫПИСНОЙ ЭПИКРИЗ\nИстория болезни № {{medical.case_number}}\nПоступил: {{medical.admission_date}}\nВыписан: {{medical.discharge_date}}\nПациент: {{subject.name}}\nДиагноз: {{medical.diagnosis}}\nЛечение: {{medical.treatment}}\nЛечащий врач __________________ /____________/",
+        "ВЫПИСНОЙ ЭПИКРИЗ\nИстория болезни № {{medical.case_number}}\nПоступил: {{medical.admission_date}}\nВыписан: {{medical.discharge_date}}\nПациент: {{subject.name}}\nДиагноз: {{medical.diagnosis}}\nЛечение: {{medical.treatment}}\nПсихический статус: {{medical.profile_status}}\nЛечащий врач __________________ /____________/",
     )
     .expect("create discharge template DOCX");
     let discharge_render = render_docx_file(
@@ -228,6 +235,7 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
         assert!(text.contains("Иванов Иван Иванович"));
         assert!(text.contains("F32.1 Депрессивный эпизод средней степени"));
         assert!(text.contains("Сертралин 50 мг утром"));
+        assert!(text.contains("Контактен, ориентирован, эмоционально напряжён"));
         assert!(!text.contains("НАПРАВЛЕНИЕ_НЕ_ИСТОЧНИК_ЛЕЧЕНИЯ"));
         assert!(
             !text.contains("{{"),

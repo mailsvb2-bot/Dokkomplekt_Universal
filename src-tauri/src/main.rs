@@ -2911,16 +2911,20 @@ mod tests {
                 1.0,
             ),
         );
-        let used = ["contract.number".to_string()].into_iter().collect();
+        let used = ["contract.number".to_string()];
         let generated_names = ["contract.docx".into()];
+        let document_evidence = [capture_trust_document_evidence(
+            "contract.docx",
+            &semantic_case,
+            used.into_iter(),
+        )];
         let report = write_trust_report(
             &root,
-            &semantic_case,
             TrustReportContext {
                 source_name: "source.docx",
                 source_sha256: &"a".repeat(64),
                 generated_names: &generated_names,
-                used_field_ids: &used,
+                document_evidence: &document_evidence,
                 include_values: false,
                 source_warnings: &[],
             },

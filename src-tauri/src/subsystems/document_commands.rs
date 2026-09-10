@@ -1326,8 +1326,7 @@ fn render_docx_batch(
     let mut staged_source_copy: Option<PathBuf> = None;
     let rendered = (|| -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
-        let mut report_case = base_case.clone();
-        let mut used_field_ids = BTreeSet::new();
+        let mut trust_document_evidence = Vec::new();
         for document in &documents {
             let template_snapshot = template_snapshots
                 .get(&document.id)
@@ -1336,7 +1335,6 @@ fn render_docx_batch(
                 prepare_medical_template_for_render(&app, document, template_snapshot.path())?;
             let template_text = prepared_template.template_text.clone();
             let effective_document = &prepared_template.effective_document;
-            used_field_ids.extend(effective_document.placeholders.iter().cloned());
             let hydrated = hydrate_case_with_persistent_template_data(
                 &app,
                 &base_case,
@@ -1380,19 +1378,18 @@ fn render_docx_batch(
                 let _ = std::fs::remove_file(&reservation.path);
                 return Err(error);
             }
-            // Trust evidence must come from the exact scoped case that produced
-            // this successfully rendered document. Runtime medical scoping can
-            // deliberately replace or remove persistent values (for example the
-            // derived expert anamnesis), so copying the earlier hydrated case can
-            // otherwise record stale source text that was never rendered.
-            for field_id in &effective_document.placeholders {
-                if let Some(value) = render_case.values.get(field_id) {
-                    report_case.values.insert(field_id.clone(), value.clone());
-                } else {
-                    report_case.values.remove(field_id);
-                }
-            }
-            paths.push(reservation.commit()?);
+            let committed = reservation.commit()?;
+            let document_name = committed
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&document.button_label)
+                .to_string();
+            trust_document_evidence.push(capture_trust_document_evidence(
+                document_name,
+                &render_case,
+                effective_document.placeholders.iter().cloned(),
+            ));
+            paths.push(committed);
         }
         let generated_names = paths
             .iter()
@@ -1419,12 +1416,11 @@ fn render_docx_batch(
                 Some(provenance) => {
                     if let Err(error) = write_trust_report(
                         &stage,
-                        &report_case,
                         TrustReportContext {
                             source_name: &provenance.source_name,
                             source_sha256: &provenance.source_sha256,
                             generated_names: &generated_names,
-                            used_field_ids: &used_field_ids,
+                            document_evidence: &trust_document_evidence,
                             include_values: privacy.include_values_in_trust_report,
                             source_warnings: &[],
                         },

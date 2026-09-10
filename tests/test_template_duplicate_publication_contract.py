@@ -77,20 +77,43 @@ class TemplateDuplicatePublicationContractTests(unittest.TestCase):
         self.assertIn("&effective_document.role_id", single)
         self.assertIn("ensure_rendered_document_complete(", single)
         self.assertIn("effective_document,", single)
-        self.assertIn("used_field_ids.extend(effective_document.placeholders.iter().cloned())", batch)
         self.assertNotIn("for (field_id, value) in &hydrated.case.values", batch)
-        self.assertIn("for field_id in &effective_document.placeholders", batch)
-        self.assertIn("render_case.values.get(field_id)", batch)
-        self.assertIn("report_case.values.remove(field_id)", batch)
+        self.assertNotIn("report_case.values", batch)
+        self.assertIn("let mut trust_document_evidence = Vec::new()", batch)
+        self.assertIn("capture_trust_document_evidence(", batch)
+        self.assertIn("&render_case", batch)
+        self.assertIn("effective_document.placeholders.iter().cloned()", batch)
+        self.assertIn("document_evidence: &trust_document_evidence", batch)
         self.assertLess(
             batch.index("ensure_rendered_document_complete("),
-            batch.index("for field_id in &effective_document.placeholders"),
+            batch.index("capture_trust_document_evidence("),
         )
         self.assertIn("&effective_document.category", batch)
         self.assertIn("&effective_document.role_id", batch)
         self.assertIn("ensure_rendered_document_complete(", batch)
         self.assertIn("effective_document,", batch)
         self.assertNotIn("flat_map(|document| document.placeholders", batch)
+
+    def test_trust_evidence_is_preserved_per_document_in_manual_and_automation_paths(self) -> None:
+        manual = text("src-tauri/src/subsystems/document_commands.rs")
+        automation = text("src-tauri/src/subsystems/automation_runtime.rs")
+        writer = text("src-tauri/src/subsystems/desktop_io.rs")
+
+        manual_batch = command_block(manual, "fn render_docx_batch(", "struct OutputPlanRequest")
+        self.assertIn("capture_trust_document_evidence(", manual_batch)
+        self.assertIn("document_evidence: &trust_document_evidence", manual_batch)
+        self.assertNotIn("report_case.values", manual_batch)
+
+        self.assertIn("let mut trust_document_evidence = Vec::new()", automation)
+        self.assertIn("evidence_case = render_case", automation)
+        self.assertIn("capture_trust_document_evidence(", automation)
+        self.assertIn("document_evidence: &trust_document_evidence", automation)
+        self.assertNotIn("let mut report_case = planning_case.case.clone()", automation)
+
+        self.assertIn("struct TrustDocumentEvidence", writer)
+        self.assertIn("for evidence in document_evidence", writer)
+        self.assertIn("Документ: {safe_document_name}", writer)
+        self.assertIn("trust_report_preserves_conflicting_scoped_values_per_document", writer)
 
     def test_frontend_reports_duplicates_instead_of_claiming_full_success(self) -> None:
         app = text("src/App.tsx")

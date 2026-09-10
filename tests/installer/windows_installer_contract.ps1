@@ -375,7 +375,8 @@ function New-PlainDocxFixture {
 function New-MedicalStoryDocxFixture {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][ValidateSet('template','source')][string]$Variant
+    [Parameter(Mandatory = $true)][ValidateSet('template','source')][string]$Variant,
+    [ValidateSet('primary','sick_leave_vk')][string]$Role = 'primary'
   )
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -429,12 +430,26 @@ function New-MedicalStoryDocxFixture {
           '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>'
       }
+      if ($Variant -eq 'template' -and $Role -eq 'sick_leave_vk') {
+        $roleHeading = 'ВК по больничному'
+        $roleFields =
+          '<w:tbl>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Дата ВК по больничному</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.09.2026</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Номер протокола ВК по больничному</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>234</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Дата протокола ВК по больничному</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.09.2026</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Дата комиссии по больничному листу</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.09.2026</w:t></w:r></w:p></w:tc></w:tr>' +
+          '</w:tbl>'
+      } else {
+        $roleHeading = 'Первичный осмотр'
+        $roleFields = ''
+      }
       $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
-        '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>' + $roleHeading + '</w:t></w:r></w:p>' +
         $patientBlock +
         '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
         $(if ($Variant -eq 'template') { '<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>' } else { '' }) +
         $structuredFields +
+        $roleFields +
         '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>' +
         '<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/></w:sectPr></w:body></w:document>'
@@ -676,7 +691,7 @@ if ($adversarial) {
   $plainTemplate = Join-Path $env:RUNNER_TEMP 'button-smoke.docx'
 }
 if ($adversarial) {
-  New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template'
+  New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template' -Role 'sick_leave_vk'
   $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
   New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source'
   $activeSourcePath = $medicalSource
@@ -921,6 +936,37 @@ $dateInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descend
 if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNumber }
 if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
+if ($adversarial) {
+  # Exact regression for the real 18.4.5 failure. The installed application must
+  # expose and accept the sick-leave VK role-scoped fields before generation.
+  $vkPromptValues = [ordered]@{
+    'medical.sick_leave_vk.commission_date' = '09.09.2026'
+    'medical.sick_leave_vk.protocol_number' = '987'
+    'medical.sick_leave_vk.protocol_date' = '09.09.2026'
+    'medical.sick_leave_commission_date' = '09.09.2026'
+    'medical.sick_leave_vk.workplace' = 'Новый завод'
+    'medical.sick_leave_vk.position' = 'инженер'
+  }
+  $vkPositionSeen = $false
+  foreach ($fieldId in $vkPromptValues.Keys) {
+    $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+    $control = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($fieldId -eq 'medical.sick_leave_vk.position') {
+      $vkPositionSeen = $null -ne $control
+    }
+    if ($null -ne $control) {
+      Set-UiValue -Element $control -Value $vkPromptValues[$fieldId]
+    }
+  }
+  if (-not $vkPositionSeen) {
+    throw 'Installed sick_leave_vk preflight did not expose medical.sick_leave_vk.position; the real 18.4.5 regression is not being exercised.'
+  }
+}
+
 $expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
 $generateButton = Wait-UiElement -Description 'Создать документы button' -TimeoutSeconds 30 -Probe {
   Find-ReadyButtonByNames -Root $appWindow -Names @('Создать документы')
@@ -1029,7 +1075,7 @@ try {
   $reader = [System.IO.StreamReader]::new($documentEntry.Open(), [System.Text.Encoding]::UTF8)
   try { $createdXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
   if ($adversarial) {
-    if ($createdXml -notmatch 'Первичный осмотр') { throw 'Created medical DOCX lost the template heading.' }
+    if ($createdXml -notmatch 'ВК по больничному') { throw 'Created medical DOCX lost the sick_leave_vk template heading.' }
     if ($createdXml -notmatch 'Петров Пётр Петрович') { throw 'Installed medical generation did not render the current patient name.' }
     if ($createdXml -match 'Иванов Иван Иванович') { throw 'Installed medical generation leaked the old template patient name.' }
     if ($createdXml -notmatch '2222') { throw 'Installed medical generation did not render the current case number.' }
@@ -1046,7 +1092,11 @@ try {
     if ($createdXml -match 'Старый завод') { throw 'Installed medical generation leaked old workplace.' }
     if ($createdXml -notmatch '>инженер<') { throw 'Installed medical generation did not render current position.' }
     if ($createdXml -match 'старый инженер') { throw 'Installed medical generation leaked old position.' }
-    if ($createdXml -notmatch 'Экспертный анамнез') { throw 'Primary medical generation did not restore the role-owned expert anamnesis before signatures.' }
+    if ($createdXml -notmatch '>987<') { throw 'Installed sick_leave_vk generation did not render the current protocol number.' }
+    if ($createdXml -match '>234<') { throw 'Installed sick_leave_vk generation leaked the old protocol number.' }
+    if ($createdXml -notmatch '09.09.2026') { throw 'Installed sick_leave_vk generation did not render current commission/protocol dates.' }
+    if ($createdXml -match '10.09.2026') { throw 'Installed sick_leave_vk generation leaked old commission/protocol dates.' }
+    if ($createdXml -match '\{\{medical\.sick_leave_vk\.position\}\}') { throw 'Installed sick_leave_vk generation left medical.sick_leave_vk.position unresolved.' }
     $headerEntry = $createdArchive.GetEntry('word/header1.xml')
     if ($null -eq $headerEntry) { throw 'Created medical DOCX lost its Word header story.' }
     $headerReader = [System.IO.StreamReader]::new($headerEntry.Open(), [System.Text.Encoding]::UTF8)

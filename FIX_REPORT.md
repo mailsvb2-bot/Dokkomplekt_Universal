@@ -1,4 +1,12 @@
-# Dokkomplekt Universal 18.4.5 — corrective repair report
+# Dokkomplekt Universal 18.4.6 — corrective repair report
+
+## 18.4.6 — real sick_leave_vk story-provenance repair
+
+- Устранён подтверждённый пользователем отказ 18.4.5: `Compiler заявил semantic-поле medical.sick_leave_vk.position, но не найдено Word story, где его token был реально добавлен.`
+- Владелец compiler-owned поля больше не восстанавливается по разнице количества `{{token}}` между исходным и итоговым DOCX. Каждый DOCX-compiler возвращает точный provenance `field -> Word story`, а runtime проверяет именно эту story strict-parser'ом.
+- Повторная обработка уже размеченного semantic-token больше не даёт false-negative, при этом body/header/footer остаются независимыми границами и не могут маскировать ошибку друг друга.
+- Windows installed-app smoke переведён на роль `sick_leave_vk` и обязан реально пройти `medical.sick_leave_vk.position`, протокол и даты до физического DOCX.
+
 
 ## 18.4.5 — real generation blocker
 

@@ -985,6 +985,11 @@ pub fn promote_table_row_loops(xml: &str) -> String {
 pub struct StructuralTemplateCompilationReport {
     pub output_path: String,
     pub applied_field_ids: Vec<String>,
+    /// Exact Word stories where the compiler handled each semantic field.
+    /// A field may already be tokenized, so ownership cannot be reconstructed
+    /// reliably from before/after token counts alone.
+    #[serde(default)]
+    pub applied_field_stories: BTreeMap<String, Vec<String>>,
     pub binding_count: usize,
 }
 
@@ -1401,6 +1406,7 @@ pub fn compile_labeled_template_file(
     let output = File::create(&temporary)?;
     let mut writer = ZipWriter::new(output);
     let mut applied_field_ids = Vec::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
     let mut skipped = Vec::new();
     let mut total_uncompressed = 0_u64;
 
@@ -1429,6 +1435,12 @@ pub fn compile_labeled_template_file(
                     continue;
                 };
                 xml = next;
+                for field_id in &applied {
+                    applied_field_stories
+                        .entry(field_id.clone())
+                        .or_default()
+                        .insert(name.clone());
+                }
                 applied_field_ids.extend(applied);
             }
             if let Some(bindings) = bindings_by_story.get(&name) {
@@ -1436,6 +1448,10 @@ pub fn compile_labeled_template_file(
                     if let Some(next) = apply_structural_binding_in_story(&xml, binding) {
                         xml = next;
                         applied_field_ids.push(binding.field_id.clone());
+                        applied_field_stories
+                            .entry(binding.field_id.clone())
+                            .or_default()
+                            .insert(name.clone());
                     } else {
                         skipped.push(format!("{}:{} ({})", name, binding.field_id, binding.label));
                     }
@@ -1464,6 +1480,10 @@ pub fn compile_labeled_template_file(
     Ok(StructuralTemplateCompilationReport {
         output_path: output_path.display().to_string(),
         applied_field_ids,
+        applied_field_stories: applied_field_stories
+            .into_iter()
+            .map(|(field_id, stories)| (field_id, stories.into_iter().collect()))
+            .collect(),
         binding_count,
     })
 }
@@ -1683,6 +1703,8 @@ pub struct TemplateMarkupReport {
 pub struct StoryTemplateMarkupReport {
     pub output_path: String,
     pub applied_field_ids: Vec<String>,
+    #[serde(default)]
+    pub applied_field_stories: BTreeMap<String, Vec<String>>,
     pub applied_binding_count: usize,
     pub replaced_occurrences: usize,
     pub skipped_bindings: Vec<String>,
@@ -1729,6 +1751,7 @@ pub fn apply_story_template_markup_file(
     let output = File::create(&temp)?;
     let mut writer = ZipWriter::new(output);
     let mut applied_fields = BTreeSet::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
     let mut applied_binding_count = 0_usize;
     let mut replaced_occurrences = 0_usize;
     let mut skipped_bindings = Vec::new();
@@ -1774,6 +1797,10 @@ pub fn apply_story_template_markup_file(
                     };
                     xml = next;
                     applied_fields.insert(replacement.field_id.clone());
+                    applied_field_stories
+                        .entry(replacement.field_id.clone())
+                        .or_default()
+                        .insert(name.clone());
                     applied_binding_count += 1;
                     replaced_occurrences += 1;
                 }
@@ -1805,6 +1832,10 @@ pub fn apply_story_template_markup_file(
     Ok(StoryTemplateMarkupReport {
         output_path: output_path.display().to_string(),
         applied_field_ids: applied_fields.into_iter().collect(),
+        applied_field_stories: applied_field_stories
+            .into_iter()
+            .map(|(field_id, stories)| (field_id, stories.into_iter().collect()))
+            .collect(),
         applied_binding_count,
         replaced_occurrences,
         skipped_bindings,
@@ -1926,6 +1957,8 @@ pub struct TemplateLearningMapReport {
 pub struct StoryTemplateLearningMapReport {
     pub output_path: String,
     pub applied_field_ids: Vec<String>,
+    #[serde(default)]
+    pub applied_field_stories: BTreeMap<String, Vec<String>>,
     pub applied_binding_count: usize,
     pub skipped_bindings: Vec<String>,
 }
@@ -1949,6 +1982,7 @@ pub fn apply_story_template_learning_map_file(
     let output = File::create(&temporary)?;
     let mut writer = ZipWriter::new(output);
     let mut applied_fields = BTreeSet::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
     let mut applied_binding_count = 0_usize;
     let mut skipped_bindings = Vec::new();
     let mut seen_stories = BTreeSet::new();
@@ -1996,6 +2030,10 @@ pub fn apply_story_template_learning_map_file(
                     };
                     xml = next;
                     applied_fields.insert(field_id.to_string());
+                    applied_field_stories
+                        .entry(field_id.to_string())
+                        .or_default()
+                        .insert(name.clone());
                     applied_binding_count += 1;
                 }
             }
@@ -2026,6 +2064,10 @@ pub fn apply_story_template_learning_map_file(
     Ok(StoryTemplateLearningMapReport {
         output_path: output_path.display().to_string(),
         applied_field_ids: applied_fields.into_iter().collect(),
+        applied_field_stories: applied_field_stories
+            .into_iter()
+            .map(|(field_id, stories)| (field_id, stories.into_iter().collect()))
+            .collect(),
         applied_binding_count,
         skipped_bindings,
     })
@@ -2914,6 +2956,10 @@ mod tests {
             .expect("story-scoped blank markup");
         assert_eq!(report.applied_binding_count, 1);
         assert!(report.skipped_bindings.is_empty());
+        assert_eq!(
+            report.applied_field_stories.get("medical.complaints"),
+            Some(&vec!["word/document.xml".to_string()])
+        );
         let stories = extract_docx_story_texts(&marked).expect("story texts");
         assert!(stories["word/document.xml"].contains("{{medical.complaints}}"));
         assert_eq!(stories["word/header1.xml"].trim(), "________");
@@ -2947,6 +2993,10 @@ mod tests {
             .expect("story-scoped markup");
         assert_eq!(report.applied_binding_count, 1);
         assert!(report.skipped_bindings.is_empty());
+        assert_eq!(
+            report.applied_field_stories.get("medical.treatment"),
+            Some(&vec!["word/document.xml".to_string()])
+        );
         let stories = extract_docx_story_texts(&marked).expect("story texts");
         assert!(stories["word/document.xml"].contains("{{medical.treatment}}"));
         assert!(stories["word/header1.xml"].contains("старая схема"));
@@ -2989,6 +3039,49 @@ mod tests {
     }
 
     #[test]
+    fn story_report_keeps_owner_when_existing_token_is_reapplied_without_count_growth() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-existing-token-provenance-{}",
+            std::process::id()
+        ));
+        let input = dir.join("existing-token.docx");
+        let marked = dir.join("marked.docx");
+        let token = "{{medical.sick_leave_vk.position}}";
+        write_test_docx(
+            &input,
+            &format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{token}</w:t></w:r></w:p></w:body></w:document>"#
+            ),
+            None,
+        );
+        let replacements = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            vec![TemplateMarkupReplacement {
+                field_id: "medical.sick_leave_vk.position".into(),
+                value: token.into(),
+                action: TemplateMarkupAction::Replace,
+            }],
+        )]);
+        let before = extract_docx_story_texts(&input).expect("before stories");
+        let report = apply_story_template_markup_file(&input, &marked, &replacements)
+            .expect("existing semantic token can be handled idempotently");
+        let after = extract_docx_story_texts(&marked).expect("after stories");
+        assert_eq!(report.applied_binding_count, 1, "{report:?}");
+        assert_eq!(
+            report
+                .applied_field_stories
+                .get("medical.sick_leave_vk.position"),
+            Some(&vec!["word/document.xml".to_string()])
+        );
+        assert_eq!(
+            before["word/document.xml"].matches(token).count(),
+            after["word/document.xml"].matches(token).count(),
+            "this regression must exercise a real compiler application with zero token-count delta"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn blank_medical_table_value_cells_compile_into_semantic_placeholders() {
         let dir = std::env::temp_dir().join(format!(
             "dokkomplekt-blank-medical-table-{}",
@@ -3023,6 +3116,19 @@ mod tests {
             );
         }
         assert_eq!(report.binding_count, 5, "{report:?}");
+        for field_id in [
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert_eq!(
+                report.applied_field_stories.get(field_id),
+                Some(&vec!["word/document.xml".to_string()]),
+                "missing exact story provenance for {field_id}: {report:?}"
+            );
+        }
         let text = extract_docx_text(&compiled).expect("compiled table text");
         for field_id in [
             "medical.case_number",

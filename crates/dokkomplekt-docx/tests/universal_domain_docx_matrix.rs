@@ -40,6 +40,7 @@ fn real_docx_renderer_accepts_fields_from_multiple_domains() {
 
 struct ProfessionScenario {
     profession: &'static str,
+    builtin_profile_id: Option<&'static str>,
     category: DomainKind,
     role_id: &'static str,
     source: &'static str,
@@ -50,6 +51,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
     vec![
         ProfessionScenario {
             profession: "врач",
+            builtin_profile_id: Some("medical"),
             category: DomainKind::Medical,
             role_id: "primary",
             source: "Первичный осмотр\nПациент: Иванов Иван Иванович\nПсихический статус: Контактен, ориентирован, спокоен.",
@@ -60,6 +62,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
         },
         ProfessionScenario {
             profession: "юрист",
+            builtin_profile_id: Some("legal"),
             category: DomainKind::Legal,
             role_id: "contract",
             source: "Договор № Ю-77 от 03.03.2026\nСторона 1: ООО Альфа\nСторона 2: ООО Бета",
@@ -72,6 +75,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
         },
         ProfessionScenario {
             profession: "кадровик",
+            builtin_profile_id: Some("hr"),
             category: DomainKind::Hr,
             role_id: "employment_order",
             source: "Приказ № 44 от 16.02.2026\nСотрудник: Петров Пётр Петрович\nДолжность: инженер\nДата приёма: 17.02.2026",
@@ -85,6 +89,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
         },
         ProfessionScenario {
             profession: "бухгалтер",
+            builtin_profile_id: Some("accounting"),
             category: DomainKind::Accounting,
             role_id: "invoice",
             source: "Счёт № 148 от 01.02.2026\nПокупатель: ООО Василёк\nК оплате: 120000 руб.",
@@ -97,6 +102,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
         },
         ProfessionScenario {
             profession: "педагог",
+            builtin_profile_id: Some("education"),
             category: DomainKind::Education,
             role_id: "grade_report",
             source: "Ведомость успеваемости\nСтудент: Смирнова Анна Сергеевна\nУчебное заведение: Университет № 1\nКурс: Физика\nОценка: отлично",
@@ -109,6 +115,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
         },
         ProfessionScenario {
             profession: "универсальный офисный пользователь",
+            builtin_profile_id: Some("generic"),
             category: DomainKind::Generic,
             role_id: "document",
             source: "Документ № G-12 от 05.04.2026\nФИО: Орлов Олег Олегович\nОрганизация: ООО Универсал",
@@ -121,6 +128,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
         },
         ProfessionScenario {
             profession: "любая пользовательская профессия (ветеринар как пример)",
+            builtin_profile_id: None,
             category: DomainKind::Custom("veterinary".into()),
             role_id: "visit_record",
             source: "Ветеринарный осмотр. Владелец: Сидоров Сергей. Кличка: Барсик.",
@@ -136,19 +144,42 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
 #[test]
 fn profession_release_matrix_tracks_every_builtin_profile_and_custom_fallback() {
     let scenarios = profession_scenarios();
-    for profile in dokkomplekt_core::builtin_profiles() {
-        assert!(
-            scenarios
-                .iter()
-                .any(|scenario| scenario.category == profile.kind),
-            "builtin profile {:?} has no end-to-end release-path scenario",
-            profile.kind
+    let profiles = dokkomplekt_core::builtin_profiles();
+
+    for profile in &profiles {
+        let matching = scenarios
+            .iter()
+            .filter(|scenario| scenario.builtin_profile_id == Some(profile.id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matching.len(),
+            1,
+            "builtin profile {} must have exactly one end-to-end release-path scenario",
+            profile.id
+        );
+        assert_eq!(
+            matching[0].category, profile.kind,
+            "builtin profile {} release scenario uses the wrong domain kind",
+            profile.id
         );
     }
+
+    for scenario in scenarios
+        .iter()
+        .filter(|scenario| scenario.builtin_profile_id.is_some())
+    {
+        let profile_id = scenario.builtin_profile_id.unwrap();
+        assert!(
+            profiles.iter().any(|profile| profile.id == profile_id),
+            "release-path scenario references unknown builtin profile {profile_id}"
+        );
+    }
+
     assert!(
-        scenarios
-            .iter()
-            .any(|scenario| matches!(scenario.category, DomainKind::Custom(_))),
+        scenarios.iter().any(|scenario| {
+            scenario.builtin_profile_id.is_none()
+                && matches!(scenario.category, DomainKind::Custom(_))
+        }),
         "custom professions need an end-to-end release-path scenario"
     );
 }

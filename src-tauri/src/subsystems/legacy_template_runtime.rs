@@ -156,6 +156,7 @@ fn validate_compiler_owned_field_stories(
     applied_field_ids: &[String],
     applied_field_stories: &BTreeMap<String, BTreeSet<String>>,
     domain: &DomainKind,
+    role_id: &str,
 ) -> Result<(), String> {
     for field_id in applied_field_ids {
         let token = format!("{{{{{field_id}}}}}");
@@ -185,7 +186,17 @@ fn validate_compiler_owned_field_stories(
             let parser_confirmed = story_analysis
                 .placeholders
                 .iter()
-                .any(|item| item == field_id);
+                .any(|item| item == field_id)
+                || (domain == &DomainKind::Medical
+                    && dokkomplekt_core::domains::medical_semantics::role_scoped_bindings(role_id)
+                        .iter()
+                        .any(|(scoped_id, shared_id)| {
+                            *shared_id == field_id.as_str()
+                                && story_analysis
+                                    .placeholders
+                                    .iter()
+                                    .any(|item| item == *scoped_id)
+                        }));
             if !parser_confirmed || !story_analysis.template_errors.is_empty() {
                 return Err(format!(
                     "Compiler не подтвердил semantic-поле {field_id} в Word story {story_name} для strict render: {:?}",
@@ -448,6 +459,7 @@ fn compile_template_contract_copy(
         &applied_field_ids,
         &applied_field_stories,
         domain,
+        role_id,
     )?;
     Ok(TemplateContractCompilation {
         changed: true,
@@ -1492,8 +1504,61 @@ mod legacy_template_runtime_tests {
             std::slice::from_ref(&field_id),
             &provenance,
             &DomainKind::Medical,
+            "sick_leave_vk",
         )
         .expect("explicit compiler provenance must validate an existing role-scoped token");
+    }
+
+    #[test]
+    fn shared_vk_position_story_is_confirmed_by_role_scoped_parser_identity() {
+        let field_id = "medical.position".to_string();
+        let story_text = "ВК больничный\nДолжность: {{medical.position}}".to_string();
+        let analysis =
+            analyze_template_text_with_domain_hint(&story_text, Some(&DomainKind::Medical));
+        assert!(analysis
+            .placeholders
+            .iter()
+            .any(|item| item == "medical.sick_leave_vk.position"));
+        assert!(!analysis.placeholders.iter().any(|item| item == &field_id));
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            story_text,
+        )]);
+        let provenance = BTreeMap::from([(
+            field_id.clone(),
+            BTreeSet::from(["word/document.xml".to_string()]),
+        )]);
+        validate_compiler_owned_field_stories(
+            &stories,
+            std::slice::from_ref(&field_id),
+            &provenance,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+        )
+        .expect("shared VK field must validate through its exact role-scoped parser identity");
+    }
+
+    #[test]
+    fn shared_vk_position_story_is_not_accepted_for_a_different_vk_role() {
+        let field_id = "medical.position".to_string();
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            "ВК больничный\nДолжность: {{medical.position}}".to_string(),
+        )]);
+        let provenance = BTreeMap::from([(
+            field_id.clone(),
+            BTreeSet::from(["word/document.xml".to_string()]),
+        )]);
+        let error = validate_compiler_owned_field_stories(
+            &stories,
+            std::slice::from_ref(&field_id),
+            &provenance,
+            &DomainKind::Medical,
+            "vk_mse",
+        )
+        .expect_err("a different VK role must not satisfy story-scoped semantic proof");
+        assert!(error.contains("medical.position"), "{error}");
+        assert!(error.contains("word/document.xml"), "{error}");
     }
 
     #[test]

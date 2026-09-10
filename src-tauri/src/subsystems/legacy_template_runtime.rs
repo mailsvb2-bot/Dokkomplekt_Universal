@@ -160,6 +160,8 @@ fn compile_template_contract_copy(
     infer_blank_zones: bool,
 ) -> Result<TemplateContractCompilation, String> {
     let template_text = extract_docx_text(input_path).map_err(|error| error.to_string())?;
+    let original_stories =
+        extract_docx_story_texts(input_path).map_err(|error| error.to_string())?;
     let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
     let blank_candidates_by_story = if infer_blank_zones {
         blank_template_fields_by_story(input_path, domain, role_id)?
@@ -367,21 +369,40 @@ fn compile_template_contract_copy(
     if derived_analysis.is_static && applied_field_ids.is_empty() {
         return Err("Скомпилированная копия не содержит placeholder-полей.".into());
     }
-    // A compiler-owned field must satisfy both halves of the publication contract:
-    // the exact token is physically present in the compiled Word text *and* the same
-    // strict template parser used by generation recognizes it as a field. This keeps
-    // the old fail-closed guarantee without accepting a token swallowed by unrelated
-    // malformed doctor-owned syntax. The tokenizer itself recovers from stray literal
-    // openers (including an unterminated quote before a later real placeholder).
+    // Word renders body/header/footer as independent template stories. Prove every
+    // compiler-owned field in the exact story where this compilation added it; a
+    // valid duplicate in another story must never mask malformed markup in the owner.
+    let compiled_stories = extract_docx_story_texts(&current_input)
+        .map_err(|error| format!("Не удалось проверить Word stories compiler-копии: {error}"))?;
     for field_id in &applied_field_ids {
         let token = format!("{{{{{field_id}}}}}");
-        let parser_confirmed = derived_analysis
-            .placeholders
-            .iter()
-            .any(|item| item == field_id);
-        if !derived_text.contains(&token) || !parser_confirmed {
+        let mut owner_story_count = 0_usize;
+        for (story_name, story_text) in &compiled_stories {
+            let before_count = original_stories
+                .get(story_name)
+                .map(|text| text.matches(&token).count())
+                .unwrap_or_default();
+            let after_count = story_text.matches(&token).count();
+            if after_count <= before_count {
+                continue;
+            }
+            owner_story_count += 1;
+            let story_analysis =
+                analyze_template_text_with_domain_hint(story_text, Some(domain));
+            let parser_confirmed = story_analysis
+                .placeholders
+                .iter()
+                .any(|item| item == field_id);
+            if !parser_confirmed || !story_analysis.template_errors.is_empty() {
+                return Err(format!(
+                    "Compiler не подтвердил semantic-поле {field_id} в Word story {story_name} для strict render: {:?}",
+                    story_analysis.template_errors
+                ));
+            }
+        }
+        if owner_story_count == 0 {
             return Err(format!(
-                "Compiler не подтвердил созданное semantic-поле {field_id} для strict render."
+                "Compiler заявил semantic-поле {field_id}, но не найдено Word story, где его token был реально добавлен."
             ));
         }
     }
@@ -1365,6 +1386,43 @@ mod legacy_template_runtime_tests {
         assert!(rendered.template_errors.is_empty(), "{:?}", rendered.template_errors);
         assert!(rendered.output_text.contains("Спокоен, ориентирован."));
         assert!(rendered.output_text.contains("Служебная пометка {{ \"черновик без конца"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compiler_field_in_header_cannot_mask_malformed_owner_story() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-proof-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("discharge.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная {{ &quot;черновик</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: В сознании, ориентирован, контактен.</w:t></w:r></w:p>
+<w:p><w:r><w:t>&quot; конец служебной пометки</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            Some(
+                r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>{{medical.profile_status}}</w:t></w:r></w:p></w:hdr>"#,
+            ),
+        );
+
+        let error = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "discharge",
+            true,
+        )
+        .expect_err("valid header duplicate must not mask malformed body owner story");
+        assert!(error.contains("medical.profile_status"), "{error}");
+        assert!(error.contains("word/document.xml"), "{error}");
         let _ = std::fs::remove_dir_all(root);
     }
 

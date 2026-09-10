@@ -1405,7 +1405,7 @@ mod legacy_template_runtime_tests {
 <w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
 <w:p><w:r><w:t>Служебная {{ &quot;черновик</w:t></w:r></w:p>
 <w:p><w:r><w:t>Психический статус: В сознании, ориентирован, контактен.</w:t></w:r></w:p>
-<w:p><w:r><w:t>&quot; конец служебной пометки</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач &quot; Иванов И.И.</w:t></w:r></w:p>
 <w:sectPr/></w:body></w:document>"#,
             Some(
                 r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>{{medical.profile_status}}</w:t></w:r></w:p></w:hdr>"#,

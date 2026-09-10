@@ -1,9 +1,12 @@
 use dokkomplekt_core::{
     apply_popup_answers, build_medical_diary_series, plan_workflow_batch,
     render_diary_text_with_signatures, set_user_value, DocumentTemplateSpec, DomainKind,
-    MedicalDiarySeriesRequest, PopupAnswer, SemanticCase, WorkflowFlags,
+    MedicalDiarySeriesRequest, PopupAnswer, SemanticAtom, SemanticCase, SemanticRecord,
+    WorkflowFlags, MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
 };
-use dokkomplekt_docx::{create_docx_from_text, extract_docx_text, render_docx_file};
+use dokkomplekt_docx::{
+    create_docx_from_text, extract_docx_text, inspect_docx_structure, render_docx_file,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -282,7 +285,70 @@ fn selected_medical_bundle_goes_from_one_popup_to_real_docx_files() {
         assert!(text.starts_with(&entry.date));
         assert!(text.contains("Лечащий врач __________________"));
         assert!(text.contains("Заведующий отделением __________"));
+        assert_eq!(
+            inspect_docx_structure(&path).unwrap().table_count,
+            0,
+            "individual diary output must be paragraph text, never a Word table"
+        );
     }
+
+    // The real Universal diary document is one program-calendar DOCX with repeated
+    // paragraph blocks. Lock the user-visible format: dates + diary text + signatures
+    // are ordinary Word paragraphs and the final DOCX contains no <w:tbl> structure.
+    let diary_template = dir.join("program-calendar-diaries-template.docx");
+    let diary_output = dir.join("Дневники.docx");
+    create_docx_from_text(
+        &diary_template,
+        MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+    )
+    .expect("create program-calendar diary template");
+    let mut diary_case = applied.semantic_case.clone();
+    diary_case.active_domains = vec![DomainKind::Medical];
+    let diary_rows = diary_plan
+        .iter()
+        .map(|entry| {
+            let mut row = SemanticRecord::new();
+            row.insert("datetime".into(), SemanticAtom::Text(entry.date.clone()));
+            row.insert(
+                "text".into(),
+                SemanticAtom::Text("Состояние без отрицательной динамики.".into()),
+            );
+            row.insert(
+                "is_final".into(),
+                SemanticAtom::Boolean(entry.is_final_discharge_entry),
+            );
+            row.insert(
+                "treating_physician_signature".into(),
+                SemanticAtom::Text("Лечащий врач __________________ /____________/".into()),
+            );
+            row.insert(
+                "department_head_signature".into(),
+                SemanticAtom::Text("Заведующий отделением __________ /____________/".into()),
+            );
+            row
+        })
+        .collect::<Vec<_>>();
+    diary_case.set_collection("diaries", diary_rows);
+    let diary_render = render_docx_file(&diary_template, &diary_output, &diary_case, true)
+        .expect("render program-calendar diary DOCX");
+    assert!(diary_render.missing_fields.is_empty());
+    assert!(diary_render.unknown_fields.is_empty());
+    assert!(diary_render.template_errors.is_empty());
+    let diary_text = extract_docx_text(&diary_output).expect("read program-calendar diary DOCX");
+    for entry in &diary_plan {
+        assert!(
+            diary_text.contains(&entry.date),
+            "missing diary date {}",
+            entry.date
+        );
+    }
+    assert!(diary_text.contains("Лечащий врач __________________"));
+    assert!(diary_text.contains("Заведующий отделением __________"));
+    assert_eq!(
+        inspect_docx_structure(&diary_output).unwrap().table_count,
+        0,
+        "program-calendar diary output must be text paragraphs, never a Word table"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

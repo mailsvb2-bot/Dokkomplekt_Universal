@@ -122,6 +122,9 @@ fn is_medical_diary_document(document: &DocumentTemplateSpec) -> bool {
 fn medical_diary_template_is_usable(path: &Path) -> bool {
     path.is_file()
         && validate_safe_template_file(path).is_ok()
+        && inspect_docx_structure(path)
+            .map(|structure| structure.table_count == 0)
+            .unwrap_or(false)
         && extract_docx_text(path)
             .map(|text| {
                 text.contains("{{#each diaries}}")
@@ -260,6 +263,7 @@ mod profile_sources_tests {
         ensure_program_calendar_diary_template, medical_diary_template_is_usable,
         parse_profile_quick_options,
     };
+    use dokkomplekt_docx::inspect_docx_structure;
     use uuid::Uuid;
 
     #[test]
@@ -291,6 +295,25 @@ mod profile_sources_tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp.docx"))
             .count();
         assert_eq!(temp_files, 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn program_calendar_diary_template_is_plain_text_not_a_word_table() {
+        let root = std::env::temp_dir().join(format!(
+            "dkk-diary-plain-text-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("diaries.docx");
+        ensure_program_calendar_diary_template(&path).unwrap();
+
+        let structure = inspect_docx_structure(&path).unwrap();
+        assert_eq!(
+            structure.table_count, 0,
+            "program-generated diary template must be paragraph text, never a Word table"
+        );
+        assert!(medical_diary_template_is_usable(&path));
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -971,7 +971,7 @@ fn perform_created_documents_intake(
                     trust_document_evidence.push(capture_trust_document_evidence(
                         out.file_name.clone(),
                         &evidence_case,
-                        trust_field_ids.into_iter(),
+                        trust_field_ids,
                     ));
                     let checkpoint = resume_engine::persist_checkpoint(
                         &out_path,

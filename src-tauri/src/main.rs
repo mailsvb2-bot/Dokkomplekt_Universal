@@ -2917,7 +2917,7 @@ mod tests {
         let document_evidence = [capture_trust_document_evidence(
             "contract.docx",
             &semantic_case,
-            used.into_iter(),
+            used,
         )];
         let report = write_trust_report(
             &root,

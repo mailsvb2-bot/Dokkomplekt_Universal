@@ -433,7 +433,7 @@ function New-MedicalStoryDocxFixture {
         '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
         $patientBlock +
         '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
-        $(if ($Variant -eq 'template') { '<w:p><w:r><w:t>Служебная пометка {{</w:t></w:r></w:p>' } else { '' }) +
+        $(if ($Variant -eq 'template') { '<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>' } else { '' }) +
         $structuredFields +
         '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>' +

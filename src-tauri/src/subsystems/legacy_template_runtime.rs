@@ -367,17 +367,21 @@ fn compile_template_contract_copy(
     if derived_analysis.is_static && applied_field_ids.is_empty() {
         return Err("Скомпилированная копия не содержит placeholder-полей.".into());
     }
-    // A compiler-owned field is proven by the exact token that the compiler itself
-    // wrote into the final Word stories. Do not make that proof depend on reparsing
-    // the entire flattened document: a doctor-owned DOCX can contain unrelated
-    // literal/template-like braces which make a global parser stop before a later
-    // valid token. The exact-token check remains fail-closed: a reported field that
-    // is not physically present in the compiled copy is still rejected.
+    // A compiler-owned field must satisfy both halves of the publication contract:
+    // the exact token is physically present in the compiled Word text *and* the same
+    // strict template parser used by generation recognizes it as a field. This keeps
+    // the old fail-closed guarantee without accepting a token swallowed by unrelated
+    // malformed doctor-owned syntax. The tokenizer itself recovers from stray literal
+    // openers (including an unterminated quote before a later real placeholder).
     for field_id in &applied_field_ids {
         let token = format!("{{{{{field_id}}}}}");
-        if !derived_text.contains(&token) {
+        let parser_confirmed = derived_analysis
+            .placeholders
+            .iter()
+            .any(|item| item == field_id);
+        if !derived_text.contains(&token) || !parser_confirmed {
             return Err(format!(
-                "Compiler не подтвердил созданное semantic-поле {field_id}."
+                "Compiler не подтвердил созданное semantic-поле {field_id} для strict render."
             ));
         }
     }
@@ -421,13 +425,11 @@ fn merge_compiler_fields_into_analysis(
 ) -> Result<(), String> {
     for field_id in compiler_fields {
         let token = format!("{{{{{field_id}}}}}");
-        if !compiled_text.contains(&token) {
+        let parser_confirmed = analysis.placeholders.iter().any(|item| item == field_id);
+        if !compiled_text.contains(&token) || !parser_confirmed {
             return Err(format!(
-                "Compiler не подтвердил созданное semantic-поле {field_id}."
+                "Compiler не подтвердил созданное semantic-поле {field_id} для strict render."
             ));
-        }
-        if !analysis.placeholders.iter().any(|item| item == field_id) {
-            analysis.placeholders.push(field_id.clone());
         }
     }
     analysis.placeholders.sort();
@@ -1326,7 +1328,7 @@ mod legacy_template_runtime_tests {
             &input,
             r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
 <w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
-<w:p><w:r><w:t>Служебная пометка {{</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>
 <w:p><w:r><w:t>Психический статус: В сознании, ориентирован, контактен.</w:t></w:r></w:p>
 <w:sectPr/></w:body></w:document>"#,
             None,
@@ -1362,21 +1364,18 @@ mod legacy_template_runtime_tests {
         assert!(rendered.unknown_fields.is_empty(), "{:?}", rendered.unknown_fields);
         assert!(rendered.template_errors.is_empty(), "{:?}", rendered.template_errors);
         assert!(rendered.output_text.contains("Спокоен, ориентирован."));
-        assert!(rendered.output_text.contains("Служебная пометка {{"));
+        assert!(rendered.output_text.contains("Служебная пометка {{ \"черновик без конца"));
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn compiler_owned_analysis_evidence_is_merged_only_when_exact_token_exists() {
+        let compiled_text = "Выписной эпикриз\n{{medical.profile_status}}";
         let mut analysis =
-            analyze_template_text_with_domain_hint("Выписной эпикриз", Some(&DomainKind::Medical));
+            analyze_template_text_with_domain_hint(compiled_text, Some(&DomainKind::Medical));
         let fields = vec!["medical.profile_status".to_string()];
-        merge_compiler_fields_into_analysis(
-            &mut analysis,
-            "Выписной эпикриз\n{{medical.profile_status}}",
-            &fields,
-        )
-        .expect("exact compiler token must become analysis evidence");
+        merge_compiler_fields_into_analysis(&mut analysis, compiled_text, &fields)
+            .expect("strict-parser-confirmed compiler token must become analysis evidence");
         assert!(analysis
             .placeholders
             .iter()

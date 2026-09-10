@@ -592,6 +592,7 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
     let mut index = 0usize;
     let mut quote: Option<u8> = None;
     let mut escaped = false;
+    let mut nested_open_inside_unterminated_quote = false;
     while index < bytes.len() {
         let byte = bytes[index];
         if let Some(active_quote) = quote {
@@ -607,6 +608,12 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
             }
             if byte == active_quote {
                 quote = None;
+                nested_open_inside_unterminated_quote = false;
+                index += 1;
+                continue;
+            }
+            if index + 1 < bytes.len() && byte == b'{' && bytes[index + 1] == b'{' {
+                nested_open_inside_unterminated_quote = true;
             }
             index += 1;
             continue;
@@ -626,7 +633,16 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
         }
         index += 1;
     }
-    None
+    // If a doctor-owned stray opener also contains an unterminated quote,
+    // there is no syntactically valid outer tag to preserve. Recover at the
+    // later opener instead of letting that malformed quote swallow a genuine
+    // compiler/user placeholder. A quote that closes normally resets this flag,
+    // so valid conditions such as `{{#if x == "{{"}}}` remain one tag.
+    if quote.is_some() && nested_open_inside_unterminated_quote {
+        Some(TagBoundary::NestedOpen)
+    } else {
+        None
+    }
 }
 
 fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
@@ -1689,6 +1705,26 @@ mod tests {
             true,
         );
         assert_eq!(result.output_text, "совпало Иванов Иван");
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+    }
+
+    #[test]
+    fn unterminated_quote_in_literal_opener_does_not_swallow_later_field() {
+        let result = render_advanced_text_template(
+            r#"Служебная {{ "черновик без конца; организация: {{org.name}}"#,
+            &c(),
+            true,
+        );
+        assert_eq!(
+            result.output_text,
+            r#"Служебная {{ "черновик без конца; организация: Иванов Иван"#
+        );
+        assert!(result.missing_fields.is_empty());
+        assert!(result.unknown_fields.is_empty());
         assert!(
             result.template_errors.is_empty(),
             "{:?}",

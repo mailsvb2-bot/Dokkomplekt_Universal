@@ -947,8 +947,8 @@ if ($adversarial) {
     'medical.sick_leave_vk.protocol_number' = '987'
     'medical.sick_leave_vk.protocol_date' = '09.09.2026'
     'medical.sick_leave_commission_date' = '09.09.2026'
-    'medical.sick_leave_vk.workplace' = 'Новый завод'
-    'medical.sick_leave_vk.position' = 'инженер'
+    'medical.workplace' = 'Новый завод'
+    'medical.position' = 'инженер'
   }
   $vkPositionSeen = $false
   foreach ($fieldId in $vkPromptValues.Keys) {
@@ -958,7 +958,7 @@ if ($adversarial) {
       $automationId
     )
     $control = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-    if ($fieldId -eq 'medical.sick_leave_vk.position') {
+    if ($fieldId -eq 'medical.position') {
       $vkPositionSeen = $null -ne $control
     }
     if ($null -ne $control) {
@@ -966,7 +966,7 @@ if ($adversarial) {
     }
   }
   if (-not $vkPositionSeen) {
-    throw 'Installed sick_leave_vk preflight did not expose medical.sick_leave_vk.position; the real 18.4.5 regression is not being exercised.'
+    throw 'Installed sick_leave_vk preflight did not expose the canonical shared medical.position prompt; the real 18.4.5 regression is not being exercised.'
   }
 }
 

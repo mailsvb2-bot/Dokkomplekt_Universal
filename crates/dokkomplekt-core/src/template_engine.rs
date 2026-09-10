@@ -584,7 +584,7 @@ fn parse(t: &str) -> Parsed {
 }
 enum TagBoundary {
     Close(usize),
-    NestedOpen,
+    NestedOpen(usize),
 }
 
 fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
@@ -592,7 +592,7 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
     let mut index = 0usize;
     let mut quote: Option<u8> = None;
     let mut escaped = false;
-    let mut nested_open_inside_unterminated_quote = false;
+    let mut nested_open_inside_unterminated_quote = None;
     while index < bytes.len() {
         let byte = bytes[index];
         if let Some(active_quote) = quote {
@@ -608,12 +608,12 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
             }
             if byte == active_quote {
                 quote = None;
-                nested_open_inside_unterminated_quote = false;
+                nested_open_inside_unterminated_quote = None;
                 index += 1;
                 continue;
             }
             if index + 1 < bytes.len() && byte == b'{' && bytes[index + 1] == b'{' {
-                nested_open_inside_unterminated_quote = true;
+                nested_open_inside_unterminated_quote.get_or_insert(index);
             }
             index += 1;
             continue;
@@ -628,7 +628,7 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
                 return Some(TagBoundary::Close(index));
             }
             if bytes[index] == b'{' && bytes[index + 1] == b'{' {
-                return Some(TagBoundary::NestedOpen);
+                return Some(TagBoundary::NestedOpen(index));
             }
         }
         index += 1;
@@ -638,11 +638,31 @@ fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
     // later opener instead of letting that malformed quote swallow a genuine
     // compiler/user placeholder. A quote that closes normally resets this flag,
     // so valid conditions such as `{{#if x == "{{"}}}` remain one tag.
-    if quote.is_some() && nested_open_inside_unterminated_quote {
-        Some(TagBoundary::NestedOpen)
+    if quote.is_some() {
+        nested_open_inside_unterminated_quote.map(TagBoundary::NestedOpen)
     } else {
         None
     }
+}
+
+fn abandoned_opener_looks_like_template_construct(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if [
+        "#if", "#unless", "#each", "/if", "/unless", "/each", "else", "=", "sum ", "count ",
+        "block ", "counter ", "image ",
+    ]
+    .iter()
+    .any(|prefix| value == *prefix || value.starts_with(prefix))
+    {
+        return true;
+    }
+    value
+        .split_whitespace()
+        .next()
+        .is_some_and(|candidate| candidate.contains('.') && is_valid_field_id(candidate))
 }
 
 fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
@@ -665,11 +685,19 @@ fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
         }
         if let Some(after) = rest.strip_prefix("{{") {
             match first_unquoted_tag_boundary(after) {
-                Some(TagBoundary::NestedOpen) => {
-                    // A second *unquoted* opener before the first closer cannot be
-                    // valid nested template syntax. Treat only the earlier opener as
-                    // doctor-owned literal text and resume scanning at the later one.
-                    // Braces inside quoted condition operands remain part of the tag.
+                Some(TagBoundary::NestedOpen(nested_at)) => {
+                    // A second opener before a valid close is recoverable only when
+                    // the abandoned opener is ordinary document text. If it already
+                    // looks like template syntax (for example `{{#if ...` or
+                    // `{{org.name ...`), retain a syntax error so strict rendering
+                    // cannot publish a broken template while still recovering at the
+                    // later genuine tag.
+                    let abandoned = after[..nested_at].trim();
+                    if abandoned_opener_looks_like_template_construct(abandoned) {
+                        errors.push(format!(
+                            "Незакрытый тег шаблона «{{{{{abandoned}» перед следующим тегом"
+                        ));
+                    }
                     literal.push_str("{{");
                     cursor += 2;
                     continue;
@@ -1710,6 +1738,28 @@ mod tests {
             "{:?}",
             result.template_errors
         );
+    }
+
+    #[test]
+    fn malformed_value_tag_before_later_field_remains_strict_error() {
+        let result = render_advanced_text_template("{{org.name {{custom.code}}", &c(), true);
+        assert!(!result.template_errors.is_empty());
+        assert!(result
+            .template_errors
+            .iter()
+            .any(|error| error.contains("Незакрытый тег шаблона")));
+    }
+
+    #[test]
+    fn malformed_template_directive_before_later_field_remains_strict_error() {
+        let result = render_advanced_text_template("{{#if custom.flag {{org.name}}", &c(), true);
+        assert!(result.output_text.contains("{{#if custom.flag "));
+        assert!(result.output_text.contains("Иванов Иван"));
+        assert!(!result.template_errors.is_empty());
+        assert!(result
+            .template_errors
+            .iter()
+            .any(|error| error.contains("Незакрытый тег шаблона")));
     }
 
     #[test]

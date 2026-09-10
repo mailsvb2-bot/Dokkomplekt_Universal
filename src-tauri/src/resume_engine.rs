@@ -69,6 +69,7 @@ struct DependencyIds {
 /// unrelated field must not invalidate every already-rendered document in a package. Named blocks
 /// are traversed recursively and collection contents are included only when referenced. Templates
 /// with counters or images are conservatively rendered again because they depend on external state.
+#[cfg(test)]
 pub(crate) fn document_input_fingerprint(
     document_id: &str,
     template_path: &Path,

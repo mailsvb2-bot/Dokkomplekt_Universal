@@ -554,12 +554,12 @@ fn confirm_template_setup(
     }
 
     let requested_rows = req.rows;
-    let (
+    let LegacyTemplateInferenceResult {
         mut rows,
-        _inference_workspace,
-        _inference_summary,
+        workspace: _inference_workspace,
+        summary: _inference_summary,
         compiler_fields_by_document,
-    ) = infer_static_template_rows(&app, &requested_rows, req.auto_infer_static_templates)?;
+    } = infer_static_template_rows(&app, &requested_rows, req.auto_infer_static_templates)?;
     ensure_persistence_available(&state)?;
     let _persistence_guard = state
         .persistence_gate

@@ -634,16 +634,18 @@ fn should_attempt_template_contract_compilation(
     matches!(domain, DomainKind::Medical)
 }
 
+struct LegacyTemplateInferenceResult {
+    rows: Vec<TemplateConfirmationRow>,
+    workspace: Option<LegacyTemplateInferenceWorkspace>,
+    summary: LegacyTemplateInferenceSummary,
+    compiler_fields_by_document: BTreeMap<String, Vec<String>>,
+}
+
 fn infer_static_template_rows(
     app: &tauri::AppHandle,
     rows: &[TemplateConfirmationRow],
     infer_blank_zones: bool,
-) -> Result<(
-    Vec<TemplateConfirmationRow>,
-    Option<LegacyTemplateInferenceWorkspace>,
-    LegacyTemplateInferenceSummary,
-    BTreeMap<String, Vec<String>>,
-), String> {
+) -> Result<LegacyTemplateInferenceResult, String> {
     let mut updated_rows = rows.to_vec();
     let mut workspace: Option<LegacyTemplateInferenceWorkspace> = None;
     let mut summary = LegacyTemplateInferenceSummary::default();
@@ -751,12 +753,12 @@ fn infer_static_template_rows(
         summary.inferred_fields += compiled.applied_field_ids.len();
     }
 
-    Ok((
-        updated_rows,
+    Ok(LegacyTemplateInferenceResult {
+        rows: updated_rows,
         workspace,
         summary,
         compiler_fields_by_document,
-    ))
+    })
 }
 
 fn reanalyze_confirmation_rows_from_snapshots(

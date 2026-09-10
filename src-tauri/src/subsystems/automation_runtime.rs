@@ -904,16 +904,29 @@ fn perform_created_documents_intake(
                         std::slice::from_ref(&template_text),
                         false,
                     )?;
-                    let input_fingerprint = resume_engine::document_input_fingerprint(
-                        &out.document_id,
-                        template_snapshot.path(),
-                        &template_text,
-                        &fingerprint_case.case,
-                        permit.watermark.as_deref(),
-                    )?;
+                    // Fingerprint the same profession-scoped case that would be
+                    // rendered. This makes derived render values (for example an
+                    // expert paragraph assembled from workplace/sick-leave inputs)
+                    // part of checkpoint identity, so changed source inputs can never
+                    // reuse a DOCX whose trust evidence was produced from old values.
+                    let fingerprint_render_case =
+                        dokkomplekt_core::domains::case_for_document_render(
+                            &fingerprint_case.case,
+                            &doc.category,
+                            &doc.role_id,
+                        );
+                    let input_fingerprint =
+                        resume_engine::document_input_fingerprint_with_additional_fields(
+                            &out.document_id,
+                            template_snapshot.path(),
+                            &template_text,
+                            &fingerprint_render_case,
+                            &trust_field_ids,
+                            permit.watermark.as_deref(),
+                        )?;
                     let reusable = resume_engine::template_is_resume_safe(
                         &template_text,
-                        &fingerprint_case.case,
+                        &fingerprint_render_case,
                     )
                     .then(|| {
                         resume_engine::reusable_checkpoint(
@@ -928,11 +941,7 @@ fn perform_created_documents_intake(
                         std::fs::copy(&previous.output_path, &out_path).map_err(|error| {
                             format!("Не удалось восстановить «{}» из checkpoint: {error}", doc.button_label)
                         })?;
-                        evidence_case = dokkomplekt_core::domains::case_for_document_render(
-                            &fingerprint_case.case,
-                            &doc.category,
-                            &doc.role_id,
-                        );
+                        evidence_case = fingerprint_render_case.clone();
                         reused_documents = reused_documents.saturating_add(1);
                         Some(previous.case_id.clone())
                     } else {

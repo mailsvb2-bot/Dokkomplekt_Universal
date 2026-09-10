@@ -582,6 +582,53 @@ fn parse(t: &str) -> Parsed {
         errors,
     }
 }
+enum TagBoundary {
+    Close(usize),
+    NestedOpen,
+}
+
+fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
+    let bytes = value.as_bytes();
+    let mut index = 0usize;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+                index += 1;
+                continue;
+            }
+            if byte == b'\\' {
+                escaped = true;
+                index += 1;
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if index + 1 < bytes.len() {
+            if bytes[index] == b'}' && bytes[index + 1] == b'}' {
+                return Some(TagBoundary::Close(index));
+            }
+            if bytes[index] == b'{' && bytes[index + 1] == b'{' {
+                return Some(TagBoundary::NestedOpen);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
 fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
     let mut out = Vec::new();
     let mut errors = Vec::new();
@@ -601,25 +648,25 @@ fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
             continue;
         }
         if let Some(after) = rest.strip_prefix("{{") {
-            if let Some(end) = after.find("}}") {
-                // A second opener before the first closer cannot be valid nested
-                // template syntax. Treat the earlier opener as doctor-owned literal
-                // text and resume scanning at the later opener. This is essential for
-                // legacy Word documents that legitimately contain a stray `{{` before
-                // a compiler-owned placeholder: the strict renderer must still see
-                // and render the later exact token instead of swallowing both as one
-                // malformed field.
-                if after[..end].contains("{{") {
+            match first_unquoted_tag_boundary(after) {
+                Some(TagBoundary::NestedOpen) => {
+                    // A second *unquoted* opener before the first closer cannot be
+                    // valid nested template syntax. Treat only the earlier opener as
+                    // doctor-owned literal text and resume scanning at the later one.
+                    // Braces inside quoted condition operands remain part of the tag.
                     literal.push_str("{{");
                     cursor += 2;
                     continue;
                 }
-                if !literal.is_empty() {
-                    out.push((false, std::mem::take(&mut literal)));
+                Some(TagBoundary::Close(end)) => {
+                    if !literal.is_empty() {
+                        out.push((false, std::mem::take(&mut literal)));
+                    }
+                    out.push((true, after[..end].trim().to_string()));
+                    cursor += 2 + end + 2;
+                    continue;
                 }
-                out.push((true, after[..end].trim().to_string()));
-                cursor += 2 + end + 2;
-                continue;
+                None => {}
             }
             if !literal.is_empty() {
                 out.push((false, std::mem::take(&mut literal)));
@@ -1597,6 +1644,56 @@ mod tests {
         assert!(result.missing_fields.is_empty());
         assert!(result.unknown_fields.is_empty());
         assert!(result.template_errors.is_empty());
+    }
+
+    #[test]
+    fn quoted_opening_braces_inside_condition_are_not_mistaken_for_nested_tag() {
+        let mut case = c();
+        case.values.insert(
+            "custom.code".into(),
+            SemanticValue::new("custom.code", "{{", ValueSource::UserConfirmed, 1.0),
+        );
+        let result = render_advanced_text_template(
+            r#"{{#if custom.code == "{{"}}совпало{{else}}нет{{/if}} {{org.name}}"#,
+            &case,
+            true,
+        );
+        assert_eq!(result.output_text, "совпало Иванов Иван");
+        assert!(
+            result.missing_fields.is_empty(),
+            "{:?}",
+            result.missing_fields
+        );
+        assert!(
+            result.unknown_fields.is_empty(),
+            "{:?}",
+            result.unknown_fields
+        );
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+    }
+
+    #[test]
+    fn quoted_closing_braces_inside_condition_do_not_end_tag_early() {
+        let mut case = c();
+        case.values.insert(
+            "custom.code".into(),
+            SemanticValue::new("custom.code", "}}", ValueSource::UserConfirmed, 1.0),
+        );
+        let result = render_advanced_text_template(
+            r#"{{#if custom.code == "}}"}}совпало{{else}}нет{{/if}} {{org.name}}"#,
+            &case,
+            true,
+        );
+        assert_eq!(result.output_text, "совпало Иванов Иван");
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
     }
 
     #[test]

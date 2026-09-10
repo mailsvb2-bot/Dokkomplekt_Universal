@@ -52,6 +52,10 @@ class V1821ResumeQueueModularizationContracts(unittest.TestCase):
         self.assertIn("working_days", resume)
         self.assertIn("watermark", resume)
         self.assertIn("unrelated_semantic_value_does_not_invalidate_document", resume)
+        self.assertIn("document_input_fingerprint_with_additional_fields", runtime)
+        self.assertIn("fingerprint_render_case", runtime)
+        self.assertIn("&trust_field_ids", runtime)
+        self.assertIn("trust_evidence_inputs_invalidate_checkpoint_for_derived_render_value", resume)
 
     def test_central_queue_replaces_filesystem_advisory_lock_when_configured(self) -> None:
         queue = text("src-tauri/src/central_queue.rs")

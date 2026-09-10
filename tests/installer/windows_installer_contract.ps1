@@ -426,9 +426,12 @@ function New-MedicalStoryDocxFixture {
           '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Лечение: ' + $treatment + '</w:t></w:r></w:p>' +
-          '<w:p><w:r><w:t>Психический статус: ' + $profileStatus + '</w:t></w:r></w:p>' +
-          '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
-          '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>'
+          '<w:p><w:r><w:t>Психический статус: ' + $profileStatus + '</w:t></w:r></w:p>'
+        if ($Role -ne 'sick_leave_vk') {
+          $structuredFields +=
+            '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
+            '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>'
+        }
       }
       if ($Variant -eq 'template' -and $Role -eq 'sick_leave_vk') {
         $roleHeading = 'ВК по больничному'
@@ -693,7 +696,7 @@ if ($adversarial) {
 if ($adversarial) {
   New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template' -Role 'sick_leave_vk'
   $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
-  New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source'
+  New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'sick_leave_vk'
   $activeSourcePath = $medicalSource
 } else {
   New-PlainDocxFixture -Path $plainTemplate

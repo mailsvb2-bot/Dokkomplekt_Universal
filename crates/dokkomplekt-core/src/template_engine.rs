@@ -601,13 +601,28 @@ fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
             continue;
         }
         if let Some(after) = rest.strip_prefix("{{") {
-            if !literal.is_empty() {
-                out.push((false, std::mem::take(&mut literal)));
-            }
             if let Some(end) = after.find("}}") {
+                // A second opener before the first closer cannot be valid nested
+                // template syntax. Treat the earlier opener as doctor-owned literal
+                // text and resume scanning at the later opener. This is essential for
+                // legacy Word documents that legitimately contain a stray `{{` before
+                // a compiler-owned placeholder: the strict renderer must still see
+                // and render the later exact token instead of swallowing both as one
+                // malformed field.
+                if after[..end].contains("{{") {
+                    literal.push_str("{{");
+                    cursor += 2;
+                    continue;
+                }
+                if !literal.is_empty() {
+                    out.push((false, std::mem::take(&mut literal)));
+                }
                 out.push((true, after[..end].trim().to_string()));
                 cursor += 2 + end + 2;
                 continue;
+            }
+            if !literal.is_empty() {
+                out.push((false, std::mem::take(&mut literal)));
             }
             literal.push_str(rest);
             errors.push("Незакрытый тег шаблона «{{»".into());
@@ -1601,6 +1616,40 @@ mod tests {
         assert!(result.missing_fields.is_empty());
         assert!(result.unknown_fields.is_empty());
         assert!(result.template_errors.is_empty());
+    }
+
+    #[test]
+    fn literal_opening_braces_before_a_later_valid_field_do_not_swallow_the_field() {
+        let result = render_advanced_text_template(
+            "Служебная пометка {{ без шаблонного смысла; организация: {{org.name}}",
+            &c(),
+            true,
+        );
+        assert_eq!(
+            result.output_text,
+            "Служебная пометка {{ без шаблонного смысла; организация: Иванов Иван"
+        );
+        assert!(
+            result.missing_fields.is_empty(),
+            "{:?}",
+            result.missing_fields
+        );
+        assert!(
+            result.unknown_fields.is_empty(),
+            "{:?}",
+            result.unknown_fields
+        );
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+        assert_eq!(
+            template_field_references(
+                "Служебная пометка {{ без шаблонного смысла; организация: {{org.name}}"
+            ),
+            vec!["org.name".to_string()]
+        );
     }
 
     #[test]

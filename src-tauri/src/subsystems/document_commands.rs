@@ -522,69 +522,6 @@ fn register_learned_template(
     Ok(result)
 }
 
-fn reanalyze_confirmation_rows_from_snapshots(
-    rows: &mut [TemplateConfirmationRow],
-    snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
-    existing_pack: &DocumentPack,
-) -> Result<(), String> {
-    let candidates = rows
-        .iter()
-        .map(|row| {
-            if row.domain_override_is_explicit && row.domain_override.is_none() {
-                return Err(format!(
-                    "Для шаблона «{}» отмечен явный профиль, но профиль не указан.",
-                    row.editable_button_label
-                ));
-            }
-            let snapshot = snapshots
-                .get(&row.document_id)
-                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
-            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
-                format!(
-                    "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
-                    row.editable_button_label
-                )
-            })?;
-            Ok(TemplateCandidate {
-                document_id: row.document_id.clone(),
-                template_path: row.template_path.clone(),
-                extracted_text,
-                preferred_button_label: Some(row.editable_button_label.clone()),
-                domain_override: row
-                    .domain_override
-                    .clone()
-                    .filter(|_| row.domain_override_is_explicit),
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let refreshed_by_id = prepare_template_confirmations_with_existing_pack(
-        &candidates,
-        Some(existing_pack),
-    )
-    .into_iter()
-    .map(|row| (row.document_id.clone(), row))
-    .collect::<BTreeMap<_, _>>();
-
-    for row in rows {
-        let refreshed = refreshed_by_id
-            .get(&row.document_id)
-            .ok_or_else(|| format!("Не удалось повторно проанализировать шаблон {}.", row.document_id))?;
-        if !row.popup_fields_edited {
-            row.popup_fields = refreshed.popup_fields.clone();
-        }
-        row.detected_title = refreshed.detected_title.clone();
-        row.suggested_button_label = refreshed.suggested_button_label.clone();
-        row.role_id = refreshed.role_id.clone();
-        row.is_static_copy = refreshed.is_static_copy;
-        row.domain_override = refreshed.domain_override.clone();
-        row.domain_override_is_explicit = refreshed.domain_override_is_explicit;
-        row.workspace_inference = refreshed.workspace_inference.clone();
-        row.workspace_shape = refreshed.workspace_shape.clone();
-        row.analysis = refreshed.analysis.clone();
-    }
-    Ok(())
-}
-
 #[derive(Debug, Deserialize)]
 struct ConfirmTemplatesRequest {
     rows: Vec<TemplateConfirmationRow>,
@@ -617,11 +554,12 @@ fn confirm_template_setup(
     }
 
     let requested_rows = req.rows;
-    let (mut rows, _inference_workspace, _inference_summary) = infer_static_template_rows(
-        &app,
-        &requested_rows,
-        req.auto_infer_static_templates,
-    )?;
+    let (
+        mut rows,
+        _inference_workspace,
+        _inference_summary,
+        compiler_fields_by_document,
+    ) = infer_static_template_rows(&app, &requested_rows, req.auto_infer_static_templates)?;
     ensure_persistence_available(&state)?;
     let _persistence_guard = state
         .persistence_gate
@@ -643,6 +581,7 @@ fn confirm_template_setup(
         &mut rows,
         &template_snapshots,
         &existing_pack,
+        &compiler_fields_by_document,
     )?;
     let existing_document_ids = existing_pack
         .documents
@@ -1115,6 +1054,7 @@ fn render_docx(
     let prepared_template =
         prepare_medical_template_for_render(&app, &doc, template_snapshot.path())?;
     let template_text = prepared_template.template_text.clone();
+    let effective_document = &prepared_template.effective_document;
     // Both paths are anchored: an installed app must not depend on the process CWD.
     let desired_output = resolve_user_path(&app, &req.output_path)?;
     let reservation = UniqueFileReservation::acquire(&desired_output)?;
@@ -1133,8 +1073,8 @@ fn render_docx(
     };
     let render_case = dokkomplekt_core::domains::case_for_document_render(
         &hydrated.case,
-        &doc.category,
-        &doc.role_id,
+        &effective_document.category,
+        &effective_document.role_id,
     );
     let render_result = render_docx_with_assets(
         &app,
@@ -1153,7 +1093,7 @@ fn render_docx(
         }
     };
     if let Err(error) = ensure_rendered_document_complete(
-        &doc,
+        effective_document,
         &template_text,
         &render_case,
         &proof.visible_text,
@@ -1387,6 +1327,7 @@ fn render_docx_batch(
     let rendered = (|| -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
         let mut report_case = base_case.clone();
+        let mut used_field_ids = BTreeSet::new();
         for document in &documents {
             let template_snapshot = template_snapshots
                 .get(&document.id)
@@ -1394,6 +1335,8 @@ fn render_docx_batch(
             let prepared_template =
                 prepare_medical_template_for_render(&app, document, template_snapshot.path())?;
             let template_text = prepared_template.template_text.clone();
+            let effective_document = &prepared_template.effective_document;
+            used_field_ids.extend(effective_document.placeholders.iter().cloned());
             let hydrated = hydrate_case_with_persistent_template_data(
                 &app,
                 &base_case,
@@ -1418,8 +1361,8 @@ fn render_docx_batch(
             let reservation = UniqueFileReservation::acquire(&desired_name)?;
             let render_case = dokkomplekt_core::domains::case_for_document_render(
                 &hydrated.case,
-                &document.category,
-                &document.role_id,
+                &effective_document.category,
+                &effective_document.role_id,
             );
             let proof = render_docx_with_assets(
                 &app,
@@ -1431,7 +1374,7 @@ fn render_docx_batch(
             )
             .map_err(|error| format!("Не создан «{}»: {error}", document.button_label))?;
             if let Err(error) = ensure_rendered_document_complete(
-                document,
+                effective_document,
                 &template_text,
                 &render_case,
                 &proof.visible_text,
@@ -1457,10 +1400,6 @@ fn render_docx_batch(
                 .map(|source| source.copy_to_directory(&stage, "Исходный - "))
                 .transpose()?
         };
-        let used_field_ids = documents
-            .iter()
-            .flat_map(|document| document.placeholders.iter().cloned())
-            .collect::<BTreeSet<_>>();
         if privacy.write_trust_report {
             let provenance = state
                 .source_provenance

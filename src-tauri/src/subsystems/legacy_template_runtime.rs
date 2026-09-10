@@ -414,29 +414,49 @@ fn validate_medical_template_output_contract(
     ))
 }
 
+fn merge_compiler_fields_into_analysis(
+    analysis: &mut dokkomplekt_core::TemplateAnalysis,
+    compiled_text: &str,
+    compiler_fields: &[String],
+) -> Result<(), String> {
+    for field_id in compiler_fields {
+        let token = format!("{{{{{field_id}}}}}");
+        if !compiled_text.contains(&token) {
+            return Err(format!(
+                "Compiler не подтвердил созданное semantic-поле {field_id}."
+            ));
+        }
+        if !analysis.placeholders.iter().any(|item| item == field_id) {
+            analysis.placeholders.push(field_id.clone());
+        }
+    }
+    analysis.placeholders.sort();
+    analysis.placeholders.dedup();
+    if !compiler_fields.is_empty() {
+        analysis.is_static = false;
+        analysis.warnings.retain(|warning| {
+            !warning.contains("Шаблон не содержит placeholder-полей")
+        });
+    }
+    Ok(())
+}
+
 fn apply_compiled_contract_to_document_with_compiler_fields(
     document: &mut DocumentTemplateSpec,
     compiled_text: &str,
     compiler_fields: &[String],
 ) -> Result<(), String> {
-    let analysis = analyze_template_text_with_domain_hint(compiled_text, Some(&document.category));
-    let mut placeholders = analysis.placeholders.clone();
-    for field_id in compiler_fields {
-        let token = format!("{{{{{field_id}}}}}");
-        if compiled_text.contains(&token) && !placeholders.iter().any(|item| item == field_id) {
-            placeholders.push(field_id.clone());
-        }
-    }
-    placeholders.sort();
-    placeholders.dedup();
-    if placeholders.is_empty() {
+    let mut analysis =
+        analyze_template_text_with_domain_hint(compiled_text, Some(&document.category));
+    merge_compiler_fields_into_analysis(&mut analysis, compiled_text, compiler_fields)?;
+    if analysis.placeholders.is_empty() {
         return Err(format!(
             "Скомпилированный шаблон «{}» не содержит semantic-placeholders.",
             document.button_label
         ));
     }
-    document.placeholders = placeholders.clone();
-    document.required_fields.extend(placeholders);
+    document.placeholders = analysis.placeholders.clone();
+    document.required_fields.extend(analysis.placeholders);
     document.required_fields.sort();
     document.required_fields.dedup();
     document.is_static_copy = false;
@@ -539,6 +559,7 @@ fn migrate_loaded_medical_template_contracts(
 struct PreparedMedicalRenderTemplate {
     path: PathBuf,
     template_text: String,
+    effective_document: DocumentTemplateSpec,
     _workspace: Option<LegacyTemplateInferenceWorkspace>,
 }
 
@@ -552,6 +573,7 @@ fn prepare_medical_template_for_render(
         return Ok(PreparedMedicalRenderTemplate {
             path: template_path.to_path_buf(),
             template_text,
+            effective_document: document.clone(),
             _workspace: None,
         });
     }
@@ -589,12 +611,14 @@ fn prepare_medical_template_for_render(
         return Ok(PreparedMedicalRenderTemplate {
             path: template_path.to_path_buf(),
             template_text,
+            effective_document,
             _workspace: None,
         });
     }
     Ok(PreparedMedicalRenderTemplate {
         path: compiled.path,
         template_text: compiled.template_text,
+        effective_document,
         _workspace: Some(LegacyTemplateInferenceWorkspace { root }),
     })
 }
@@ -618,10 +642,12 @@ fn infer_static_template_rows(
     Vec<TemplateConfirmationRow>,
     Option<LegacyTemplateInferenceWorkspace>,
     LegacyTemplateInferenceSummary,
+    BTreeMap<String, Vec<String>>,
 ), String> {
     let mut updated_rows = rows.to_vec();
     let mut workspace: Option<LegacyTemplateInferenceWorkspace> = None;
     let mut summary = LegacyTemplateInferenceSummary::default();
+    let mut compiler_fields_by_document = BTreeMap::<String, Vec<String>>::new();
 
     for row in &mut updated_rows {
         let domain = row
@@ -702,22 +728,121 @@ fn infer_static_template_rows(
             continue;
         }
 
-        let derived_analysis = analyze_template_text_with_domain_hint(
+        let mut derived_analysis = analyze_template_text_with_domain_hint(
             &compiled.template_text,
             row.domain_override.as_ref(),
         );
+        merge_compiler_fields_into_analysis(
+            &mut derived_analysis,
+            &compiled.template_text,
+            &compiled.applied_field_ids,
+        )?;
         row.template_path = compiled.path.display().to_string();
         row.detected_title = derived_analysis.title.clone();
         row.suggested_button_label = derived_analysis.suggested_button_label.clone();
         row.role_id = derived_analysis.role_id.clone();
         row.is_static_copy = false;
         row.analysis = derived_analysis;
+        if !compiled.applied_field_ids.is_empty() {
+            compiler_fields_by_document
+                .insert(row.document_id.clone(), compiled.applied_field_ids.clone());
+        }
         summary.upgraded_documents += 1;
         summary.inferred_fields += compiled.applied_field_ids.len();
     }
 
-    Ok((updated_rows, workspace, summary))
+    Ok((
+        updated_rows,
+        workspace,
+        summary,
+        compiler_fields_by_document,
+    ))
 }
+
+fn reanalyze_confirmation_rows_from_snapshots(
+    rows: &mut [TemplateConfirmationRow],
+    snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+    existing_pack: &DocumentPack,
+    compiler_fields_by_document: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let candidates = rows
+        .iter()
+        .map(|row| {
+            if row.domain_override_is_explicit && row.domain_override.is_none() {
+                return Err(format!(
+                    "Для шаблона «{}» отмечен явный профиль, но профиль не указан.",
+                    row.editable_button_label
+                ));
+            }
+            let snapshot = snapshots
+                .get(&row.document_id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
+                format!(
+                    "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
+                    row.editable_button_label
+                )
+            })?;
+            Ok(TemplateCandidate {
+                document_id: row.document_id.clone(),
+                template_path: row.template_path.clone(),
+                extracted_text,
+                preferred_button_label: Some(row.editable_button_label.clone()),
+                domain_override: row
+                    .domain_override
+                    .clone()
+                    .filter(|_| row.domain_override_is_explicit),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let refreshed_by_id = prepare_template_confirmations_with_existing_pack(
+        &candidates,
+        Some(existing_pack),
+    )
+    .into_iter()
+    .map(|row| (row.document_id.clone(), row))
+    .collect::<BTreeMap<_, _>>();
+
+    for row in rows {
+        let refreshed = refreshed_by_id
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не удалось повторно проанализировать шаблон {}.", row.document_id))?;
+        if !row.popup_fields_edited {
+            row.popup_fields = refreshed.popup_fields.clone();
+        }
+        row.detected_title = refreshed.detected_title.clone();
+        row.suggested_button_label = refreshed.suggested_button_label.clone();
+        row.role_id = refreshed.role_id.clone();
+        row.is_static_copy = refreshed.is_static_copy;
+        row.domain_override = refreshed.domain_override.clone();
+        row.domain_override_is_explicit = refreshed.domain_override_is_explicit;
+        row.workspace_inference = refreshed.workspace_inference.clone();
+        row.workspace_shape = refreshed.workspace_shape.clone();
+        let mut refreshed_analysis = refreshed.analysis.clone();
+        if let Some(compiler_fields) = compiler_fields_by_document.get(&row.document_id) {
+            let snapshot = snapshots
+                .get(&row.document_id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
+                format!(
+                    "Не удалось подтвердить compiler-owned поля шаблона «{}» после snapshot: {error}",
+                    row.editable_button_label
+                )
+            })?;
+            merge_compiler_fields_into_analysis(
+                &mut refreshed_analysis,
+                &extracted_text,
+                compiler_fields,
+            )?;
+            if !compiler_fields.is_empty() {
+                row.is_static_copy = false;
+            }
+        }
+        row.analysis = refreshed_analysis;
+    }
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod legacy_template_runtime_tests {
@@ -1220,14 +1345,52 @@ mod legacy_template_runtime_tests {
             .any(|field| field == "medical.profile_status"));
         let body = extract_docx_text(&compiled.path).expect("compiled text");
         assert!(body.contains("{{medical.profile_status}}"), "{body}");
-        // The global template parser is intentionally confused by the earlier
-        // doctor-owned literal `{{`; compiler confirmation must not depend on it.
+        // The strict parser must recover from the earlier doctor-owned literal
+        // opener and still recognize the exact compiler-owned field.
         let reparsed = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
-        assert!(!reparsed
+        assert!(reparsed
             .placeholders
             .iter()
             .any(|field| field == "medical.profile_status"));
+        assert!(reparsed.template_errors.is_empty(), "{:?}", reparsed.template_errors);
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "medical.profile_status", "Спокоен, ориентирован.");
+        let rendered = render_text_template(&body, &case, true);
+        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
+        assert!(rendered.unknown_fields.is_empty(), "{:?}", rendered.unknown_fields);
+        assert!(rendered.template_errors.is_empty(), "{:?}", rendered.template_errors);
+        assert!(rendered.output_text.contains("Спокоен, ориентирован."));
+        assert!(rendered.output_text.contains("Служебная пометка {{"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compiler_owned_analysis_evidence_is_merged_only_when_exact_token_exists() {
+        let mut analysis =
+            analyze_template_text_with_domain_hint("Выписной эпикриз", Some(&DomainKind::Medical));
+        let fields = vec!["medical.profile_status".to_string()];
+        merge_compiler_fields_into_analysis(
+            &mut analysis,
+            "Выписной эпикриз\n{{medical.profile_status}}",
+            &fields,
+        )
+        .expect("exact compiler token must become analysis evidence");
+        assert!(analysis
+            .placeholders
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        assert!(!analysis.is_static);
+
+        let mut rejected =
+            analyze_template_text_with_domain_hint("Выписной эпикриз", Some(&DomainKind::Medical));
+        let error = merge_compiler_fields_into_analysis(
+            &mut rejected,
+            "Выписной эпикриз",
+            &fields,
+        )
+        .expect_err("missing physical compiler token must fail closed");
+        assert!(error.contains("medical.profile_status"));
+        assert!(rejected.placeholders.is_empty());
     }
 
 }

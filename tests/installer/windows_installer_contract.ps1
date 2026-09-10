@@ -390,6 +390,7 @@ function New-MedicalStoryDocxFixture {
         $admission = '20.08.2026'
         $diagnosis = 'F20.0 шаблонная формулировка'
         $treatment = 'старое лечение'
+        $profileStatus = 'Шаблонный психический статус старого пациента'
         $workplace = 'Старый завод'
         $position = 'старый инженер'
       } else {
@@ -398,6 +399,7 @@ function New-MedicalStoryDocxFixture {
         $admission = '26.08.2026'
         $diagnosis = 'F20.0 Параноидная шизофрения'
         $treatment = 'рисперидон 4 мг/сут'
+        $profileStatus = 'Контактен, ориентирован, эмоционально напряжён'
         $workplace = 'Новый завод'
         $position = 'инженер'
       }
@@ -414,6 +416,7 @@ function New-MedicalStoryDocxFixture {
           '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $caseNumber + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $diagnosis + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $treatment + '</w:t></w:r></w:p></w:tc></w:tr>' +
+          '<w:tr><w:tc><w:p><w:r><w:t>Психический статус</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $profileStatus + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $workplace + '</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $position + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '</w:tbl>'
       } else {
@@ -422,6 +425,7 @@ function New-MedicalStoryDocxFixture {
           '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Лечение: ' + $treatment + '</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Психический статус: ' + $profileStatus + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Место работы: ' + $workplace + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Должность: ' + $position + '</w:t></w:r></w:p>'
       }
@@ -429,6 +433,7 @@ function New-MedicalStoryDocxFixture {
         '<w:p><w:r><w:t>Первичный осмотр</w:t></w:r></w:p>' +
         $patientBlock +
         '<w:p><w:r><w:t>Дата поступления: ' + $admission + '</w:t></w:r></w:p>' +
+        $(if ($Variant -eq 'template') { '<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>' } else { '' }) +
         $structuredFields +
         '<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>' +
@@ -1033,6 +1038,10 @@ try {
     if ($createdXml -match 'шаблонная формулировка') { throw 'Installed medical generation leaked the old tabular diagnosis.' }
     if ($createdXml -notmatch 'рисперидон 4 мг/сут') { throw 'Installed medical generation did not render current treatment into the tabular template.' }
     if ($createdXml -match 'старое лечение') { throw 'Installed medical generation leaked old tabular treatment.' }
+    if ($createdXml -notmatch 'Контактен, ориентирован, эмоционально напряжён') { throw 'Installed medical generation did not render medical.profile_status from the current primary source.' }
+    if ($createdXml -match 'Шаблонный психический статус старого пациента') { throw 'Installed medical generation leaked the old template medical.profile_status.' }
+    if ($createdXml -match '\{\{medical\.profile_status\}\}') { throw 'Installed medical generation left the compiler-owned medical.profile_status placeholder unresolved.' }
+    if ($createdXml -notmatch 'Служебная пометка \{\{') { throw 'Strict medical generation did not preserve the doctor-owned literal opener used by the profile-status regression.' }
     if ($createdXml -notmatch 'Новый завод') { throw 'Installed medical generation did not render current workplace.' }
     if ($createdXml -match 'Старый завод') { throw 'Installed medical generation leaked old workplace.' }
     if ($createdXml -notmatch '>инженер<') { throw 'Installed medical generation did not render current position.' }

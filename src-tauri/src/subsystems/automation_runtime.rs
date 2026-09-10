@@ -878,7 +878,7 @@ fn perform_created_documents_intake(
             let mut counter_reservations = Vec::new();
             let render_result = (|| -> Result<Vec<String>, String> {
                 let mut names = Vec::new();
-                let mut report_case = planning_case.case.clone();
+                let mut trust_document_evidence = Vec::new();
                 for out in &outputs {
                     let doc = pack
                         .documents
@@ -894,22 +894,39 @@ fn perform_created_documents_intake(
                         .find(|configured| configured.spec.id == out.document_id)
                         .map(|configured| configured.template_text.clone())
                         .ok_or_else(|| "configured document not found".to_string())?;
+                    let trust_field_ids = dokkomplekt_core::document_required_input_fields(doc, &flags)
+                        .into_iter()
+                        .chain(doc.placeholders.iter().cloned())
+                        .collect::<BTreeSet<_>>();
                     let fingerprint_case = hydrate_case_with_persistent_template_data(
                         app,
                         &case,
                         std::slice::from_ref(&template_text),
                         false,
                     )?;
-                    let input_fingerprint = resume_engine::document_input_fingerprint(
-                        &out.document_id,
-                        template_snapshot.path(),
-                        &template_text,
-                        &fingerprint_case.case,
-                        permit.watermark.as_deref(),
-                    )?;
+                    // Fingerprint the same profession-scoped case that would be
+                    // rendered. This makes derived render values (for example an
+                    // expert paragraph assembled from workplace/sick-leave inputs)
+                    // part of checkpoint identity, so changed source inputs can never
+                    // reuse a DOCX whose trust evidence was produced from old values.
+                    let fingerprint_render_case =
+                        dokkomplekt_core::domains::case_for_document_render(
+                            &fingerprint_case.case,
+                            &doc.category,
+                            &doc.role_id,
+                        );
+                    let input_fingerprint =
+                        resume_engine::document_input_fingerprint_with_additional_fields(
+                            &out.document_id,
+                            template_snapshot.path(),
+                            &template_text,
+                            &fingerprint_render_case,
+                            &trust_field_ids,
+                            permit.watermark.as_deref(),
+                        )?;
                     let reusable = resume_engine::template_is_resume_safe(
                         &template_text,
-                        &fingerprint_case.case,
+                        &fingerprint_render_case,
                     )
                     .then(|| {
                         resume_engine::reusable_checkpoint(
@@ -919,10 +936,12 @@ fn perform_created_documents_intake(
                         )
                     })
                     .flatten();
+                    let evidence_case;
                     let reused_from = if let Some(previous) = reusable {
                         std::fs::copy(&previous.output_path, &out_path).map_err(|error| {
                             format!("Не удалось восстановить «{}» из checkpoint: {error}", doc.button_label)
                         })?;
+                        evidence_case = fingerprint_render_case.clone();
                         reused_documents = reused_documents.saturating_add(1);
                         Some(previous.case_id.clone())
                     } else {
@@ -932,9 +951,6 @@ fn perform_created_documents_intake(
                             std::slice::from_ref(&template_text),
                             true,
                         )?;
-                        for (field_id, value) in &hydrated.case.values {
-                            report_case.values.insert(field_id.clone(), value.clone());
-                        }
                         counter_reservations.extend(hydrated.counter_reservations);
                         let render_case = dokkomplekt_core::domains::case_for_document_render(
                             &hydrated.case,
@@ -957,9 +973,15 @@ fn perform_created_documents_intake(
                             &proof.visible_text,
                             &out_path,
                         )?;
+                        evidence_case = render_case;
                         rerendered_documents = rerendered_documents.saturating_add(1);
                         None
                     };
+                    trust_document_evidence.push(capture_trust_document_evidence(
+                        out.file_name.clone(),
+                        &evidence_case,
+                        trust_field_ids,
+                    ));
                     let checkpoint = resume_engine::persist_checkpoint(
                         &out_path,
                         &app_data,
@@ -999,12 +1021,11 @@ fn perform_created_documents_intake(
                 if privacy.write_trust_report {
                     if let Err(error) = write_trust_report(
                         &stage,
-                        &report_case,
                         TrustReportContext {
                             source_name: &file_name,
                             source_sha256: &source_sha256,
                             generated_names: &names,
-                            used_field_ids: &required_for_automation,
+                            document_evidence: &trust_document_evidence,
                             include_values: privacy.include_values_in_trust_report,
                             source_warnings: &source_report.warnings,
                         },

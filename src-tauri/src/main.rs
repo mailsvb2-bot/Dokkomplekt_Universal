@@ -48,10 +48,10 @@ use dokkomplekt_docx::{
     apply_template_learning_map_file, apply_template_markup_file, compare_docx_structures,
     compile_labeled_template_file, create_docx_from_text, extract_docx_story_texts,
     extract_docx_text, extract_docx_text_from_bytes, inject_docx_images,
-    insert_text_paragraph_before_first_matching_file, render_docx_file_with_watermark_proof,
-    validate_safe_template_file, RenderedDocxProof, TemplateLearningMapField,
-    TemplateLearningMapReport, TemplateMarkupReplacement, TemplateMarkupReport,
-    TemplateRegressionReport,
+    insert_text_paragraph_before_first_matching_file, inspect_docx_structure,
+    render_docx_file_with_watermark_proof, validate_safe_template_file, RenderedDocxProof,
+    TemplateLearningMapField, TemplateLearningMapReport, TemplateMarkupReplacement,
+    TemplateMarkupReport, TemplateRegressionReport,
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,
@@ -2444,12 +2444,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_json_bytes, current_year_utc, is_forbidden_public_download_host,
-        is_forbidden_public_download_ip, load_or_create_local_data_key,
-        local_trial_access_decision, normalized_picker_output, parse_semver, pdf_print_settings,
-        plan_label, reject_parent_traversal, safe_update_file_name, signed_plan_to_product_plan,
-        validate_printable_file, validate_update_url, write_trust_report, SourceProvenance,
-        TrustReportContext, TRIAL_DOCUMENT_LIMIT_MONTH,
+        canonical_json_bytes, capture_trust_document_evidence, current_year_utc,
+        is_forbidden_public_download_host, is_forbidden_public_download_ip,
+        load_or_create_local_data_key, local_trial_access_decision, normalized_picker_output,
+        parse_semver, pdf_print_settings, plan_label, reject_parent_traversal,
+        safe_update_file_name, signed_plan_to_product_plan, validate_printable_file,
+        validate_update_url, write_trust_report, SourceProvenance, TrustReportContext,
+        TRIAL_DOCUMENT_LIMIT_MONTH,
     };
     use base64::Engine as _;
 
@@ -2911,16 +2912,20 @@ mod tests {
                 1.0,
             ),
         );
-        let used = ["contract.number".to_string()].into_iter().collect();
+        let used = ["contract.number".to_string()];
         let generated_names = ["contract.docx".into()];
+        let document_evidence = [capture_trust_document_evidence(
+            "contract.docx",
+            &semantic_case,
+            used,
+        )];
         let report = write_trust_report(
             &root,
-            &semantic_case,
             TrustReportContext {
                 source_name: "source.docx",
                 source_sha256: &"a".repeat(64),
                 generated_names: &generated_names,
-                used_field_ids: &used,
+                document_evidence: &document_evidence,
                 include_values: false,
                 source_warnings: &[],
             },

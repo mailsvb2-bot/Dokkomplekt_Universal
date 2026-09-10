@@ -2800,6 +2800,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn strict_docx_render_recovers_later_field_after_literal_opening_braces() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-literal-braces-strict-render-{}",
+            std::process::id()
+        ));
+        let tpl = dir.join("literal-braces.docx");
+        let out = dir.join("rendered.docx");
+        create_docx_from_text(
+            &tpl,
+            "Служебная пометка {{\nПсихический статус: {{medical.profile_status}}",
+        )
+        .expect("create regression DOCX");
+        let case = case_with(&[("medical.profile_status", "Спокоен, ориентирован.")]);
+        let proof = render_docx_file_with_watermark_proof(&tpl, &out, &case, true, None)
+            .expect("strict renderer must recover the later semantic field");
+        assert!(proof.visible_text.contains("Служебная пометка {{"));
+        assert!(proof.visible_text.contains("Спокоен, ориентирован."));
+        assert!(proof.render_result.missing_fields.is_empty());
+        assert!(proof.render_result.unknown_fields.is_empty());
+        assert!(proof.render_result.template_errors.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn read_zip_text(archive: &mut ZipArchive<File>, name: &str) -> String {
         let mut entry = archive.by_name(name).expect("required OOXML part");
         let mut text = String::new();

@@ -1,4 +1,11 @@
-# Dokkomplekt Universal 18.4.4 — corrective repair report
+# Dokkomplekt Universal 18.4.5 — corrective repair report
+
+## 18.4.5 — real generation blocker
+
+- Устранён пользовательский отказ создания документов `Compiler не подтвердил созданное semantic-поле medical.profile_status`.
+- Подтверждение поля compiler теперь опирается на exact semantic-token в итоговом DOCX, а не на повторный глобальный parse всего doctor-owned текста.
+- Fail-closed сохранён: отсутствие реально записанного токена по-прежнему блокирует публикацию.
+- Добавлен regression на DOCX с literal `{{` перед разделом «Психический статус».
 
 ## 18.4.4 — structural template compiler closure
 

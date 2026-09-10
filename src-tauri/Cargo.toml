@@ -1,6 +1,6 @@
 [package]
 name = "dokkomplekt-tauri"
-version = "18.4.4"
+version = "18.4.5"
 description = "Dokkomplekt Universal desktop shell"
 edition.workspace = true
 rust-version.workspace = true

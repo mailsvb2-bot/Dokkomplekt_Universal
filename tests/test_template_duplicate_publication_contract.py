@@ -78,6 +78,14 @@ class TemplateDuplicatePublicationContractTests(unittest.TestCase):
         self.assertIn("ensure_rendered_document_complete(", single)
         self.assertIn("effective_document,", single)
         self.assertIn("used_field_ids.extend(effective_document.placeholders.iter().cloned())", batch)
+        self.assertNotIn("for (field_id, value) in &hydrated.case.values", batch)
+        self.assertIn("for field_id in &effective_document.placeholders", batch)
+        self.assertIn("render_case.values.get(field_id)", batch)
+        self.assertIn("report_case.values.remove(field_id)", batch)
+        self.assertLess(
+            batch.index("ensure_rendered_document_complete("),
+            batch.index("for field_id in &effective_document.placeholders"),
+        )
         self.assertIn("&effective_document.category", batch)
         self.assertIn("&effective_document.role_id", batch)
         self.assertIn("ensure_rendered_document_complete(", batch)

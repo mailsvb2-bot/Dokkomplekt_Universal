@@ -1343,9 +1343,6 @@ fn render_docx_batch(
                 std::slice::from_ref(&template_text),
                 true,
             )?;
-            for (field_id, value) in &hydrated.case.values {
-                report_case.values.insert(field_id.clone(), value.clone());
-            }
             counter_reservations.extend(hydrated.counter_reservations);
             let extension = template_snapshot
                 .path()
@@ -1382,6 +1379,18 @@ fn render_docx_batch(
             ) {
                 let _ = std::fs::remove_file(&reservation.path);
                 return Err(error);
+            }
+            // Trust evidence must come from the exact scoped case that produced
+            // this successfully rendered document. Runtime medical scoping can
+            // deliberately replace or remove persistent values (for example the
+            // derived expert anamnesis), so copying the earlier hydrated case can
+            // otherwise record stale source text that was never rendered.
+            for field_id in &effective_document.placeholders {
+                if let Some(value) = render_case.values.get(field_id) {
+                    report_case.values.insert(field_id.clone(), value.clone());
+                } else {
+                    report_case.values.remove(field_id);
+                }
             }
             paths.push(reservation.commit()?);
         }

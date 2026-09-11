@@ -3,6 +3,7 @@ import base64, hashlib, json, os, sys
 from pathlib import Path
 from ed25519_compat import BadSignatureError, VerifyKey
 from source_fingerprint import source_fingerprint
+from release_source_identity import resolve_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / 'Cargo.lock'
@@ -118,8 +119,11 @@ if (payload.get('commercial_crates_evidence_sha256') != commercial_evidence_hash
         or payload.get('commercial_crates_audit_sha256') != commercial_audit_hash):
     print('Release packaging is blocked: signed Cargo gate does not bind commercial Rust evidence.')
     sys.exit(1)
-expected_sha = os.environ.get('GITHUB_SHA', '').strip()
-if expected_sha and payload.get('commit_sha') != expected_sha:
-    print('Release packaging is blocked: signed Cargo gate belongs to another commit.')
+identity = resolve_identity(ROOT)
+if payload.get('repository') != identity['source_repository']:
+    print('Release packaging is blocked: signed Cargo gate belongs to another repository.')
+    sys.exit(1)
+if payload.get('commit_sha') != identity['release_sha']:
+    print('Release packaging is blocked: signed Cargo gate belongs to another checked-out commit.')
     sys.exit(1)
 print(f"RELEASE READY: signed Rust attestation matches sources ({actual_source[:12]}…).")

@@ -4,6 +4,7 @@ import base64, hashlib, json, os, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from ed25519_compat import SigningKey
+from release_source_identity import resolve_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '.cargo-gate' / 'CARGO_GATE_ATTESTATION.json'
@@ -69,6 +70,7 @@ def main() -> int:
         raise SystemExit('Commercial Rust lock evidence changed after the gate')
     if commercial.get('audit_report_sha256') != sha(COMMERCIAL_AUDIT):
         raise SystemExit('Commercial RustSec report changed after the gate')
+    identity = resolve_identity(ROOT)
     payload = {
         'schema': 'dokkomplekt.cargo-gate.v4',
         'result': 'passed',
@@ -77,8 +79,8 @@ def main() -> int:
         'cargo_lock_sha256': sha(ROOT / 'Cargo.lock'),
         'cargo': command('cargo', '--version'),
         'rustc': command('rustc', '--version'),
-        'repository': os.environ.get('GITHUB_REPOSITORY', ''),
-        'commit_sha': os.environ.get('GITHUB_SHA', ''),
+        'repository': identity['source_repository'],
+        'commit_sha': identity['release_sha'],
         'workflow_run_id': os.environ.get('GITHUB_RUN_ID', ''),
         'workflow_run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''),
         'runner_os': os.environ.get('RUNNER_OS', os.name),

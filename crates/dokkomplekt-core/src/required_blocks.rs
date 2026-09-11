@@ -244,6 +244,21 @@ pub fn missing_medical_template_render_paths(spec: &DocumentTemplateSpec) -> Vec
         );
     }
 
+    // Role-scoped medical placeholders and their historical shared ids describe
+    // the same physical render slot only inside the current document role. This
+    // is publication-time render equivalence, not storage aliasing: protocol/date
+    // values remain independent between VK MSE and sick-leave VK documents.
+    for (scoped_id, shared_id) in
+        crate::domains::medical_semantics::role_scoped_bindings(&spec.role_id)
+    {
+        let scoped = canonical_storage_field_id(scoped_id);
+        let shared = canonical_storage_field_id(shared_id);
+        if renderable.contains(&scoped) || renderable.contains(&shared) {
+            renderable.insert(scoped);
+            renderable.insert(shared);
+        }
+    }
+
     required
         .into_iter()
         .filter(|field| !renderable.contains(field))
@@ -727,6 +742,67 @@ mod tests {
         assert_eq!(
             missing_medical_template_render_paths(&document),
             vec!["medical.treatment".to_string()]
+        );
+    }
+
+    #[test]
+    fn sick_leave_vk_scoped_work_placeholders_satisfy_legacy_shared_requirements() {
+        let mut document = spec("sick_leave_vk", DomainKind::Medical);
+        document.placeholders =
+            build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false)
+                .required_fields;
+        document.placeholders.push("subject.name".into());
+        document.required_fields = vec!["medical.workplace".into(), "medical.position".into()];
+
+        assert!(
+            missing_medical_template_render_paths(&document).is_empty(),
+            "same-role scoped work placeholders must satisfy legacy shared publication requirements"
+        );
+    }
+
+    #[test]
+    fn sick_leave_vk_work_placeholders_cannot_satisfy_vk_mse_role() {
+        let mut document = spec("vk_mse", DomainKind::Medical);
+        document.placeholders =
+            build_medical_render_plan(MedicalDocumentRole::VkMse, false, false).required_fields;
+        document.placeholders.push("subject.name".into());
+        document.placeholders.retain(|field| {
+            field != "medical.vk_mse.workplace" && field != "medical.vk_mse.position"
+        });
+        document.placeholders.extend([
+            "medical.sick_leave_vk.workplace".into(),
+            "medical.sick_leave_vk.position".into(),
+        ]);
+
+        let missing = missing_medical_template_render_paths(&document);
+        assert!(
+            missing.contains(&"medical.vk_mse.workplace".to_string()),
+            "{missing:?}"
+        );
+        assert!(
+            missing.contains(&"medical.vk_mse.position".to_string()),
+            "{missing:?}"
+        );
+    }
+
+    #[test]
+    fn vk_protocol_render_paths_remain_role_specific() {
+        let mut document = spec("sick_leave_vk", DomainKind::Medical);
+        document.placeholders =
+            build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false)
+                .required_fields;
+        document.placeholders.push("subject.name".into());
+        document
+            .placeholders
+            .retain(|field| field != "medical.sick_leave_vk.protocol_number");
+        document
+            .placeholders
+            .push("medical.vk_mse.protocol_number".into());
+
+        let missing = missing_medical_template_render_paths(&document);
+        assert!(
+            missing.contains(&"medical.sick_leave_vk.protocol_number".to_string()),
+            "foreign VK protocol field must not satisfy sick-leave VK: {missing:?}"
         );
     }
 

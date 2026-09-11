@@ -542,7 +542,7 @@ fn push_donor_candidate(
         .trim()
         .trim_matches(|ch: char| ch == ',' || ch == ';')
         .trim();
-    if value.is_empty() || contains_template_delimiters(&value) {
+    if value.is_empty() || contains_template_delimiters(value) {
         return;
     }
     out.push(LabeledTemplateValueCandidate {

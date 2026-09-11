@@ -2334,11 +2334,17 @@ fn replace_visible_text_once_from(
     let mut local_end = 0;
     for (i, n) in nodes.iter().enumerate() {
         let next = offset + n.decoded.len();
-        if start_node.is_none() && start_byte >= offset && start_byte <= next {
+        // Visible text is a concatenation of independent w:t nodes. A match
+        // that starts exactly at a node boundary belongs to the *next* node,
+        // while a match that ends at that boundary belongs to the previous one.
+        // Using closed intervals for both sides relocates replacements into the
+        // preceding cell/paragraph (for example a profile-status blank can be
+        // appended to the previous table cell).
+        if start_node.is_none() && start_byte >= offset && start_byte < next {
             start_node = Some(i);
             local_start = start_byte - offset;
         }
-        if end_byte >= offset && end_byte <= next {
+        if end_byte > offset && end_byte <= next {
             end_node = Some(i);
             local_end = end_byte - offset;
             break;
@@ -3984,6 +3990,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("external/active relationship"), "{error}");
+    }
+
+    #[test]
+    fn visible_text_replacement_starting_at_node_boundary_stays_in_own_node() {
+        let xml = concat!(
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+            "<w:p><w:r><w:t>Психический статус: ______ после компиляции</w:t></w:r></w:p>"
+        );
+        let result = replace_visible_text_once(
+            xml,
+            "Психический статус: ______ после компиляции",
+            "Психический статус: {{medical.profile_status}} после компиляции",
+        )
+        .expect("boundary-aligned visible text must be replaced");
+
+        assert!(result.contains(">старый инженер</w:t>"), "{result}");
+        assert!(
+            result
+                .contains(">Психический статус: {{medical.profile_status}} после компиляции</w:t>"),
+            "{result}"
+        );
+        assert!(
+            !result.contains("старый инженерПсихический статус"),
+            "{result}"
+        );
     }
 
     #[test]

@@ -169,6 +169,7 @@ fn selected_filled_medical_markup_by_story(
     ))
 }
 
+#[cfg(test)]
 fn structural_template_bindings_for_stories(
     stories: &BTreeMap<String, String>,
     domain: &DomainKind,
@@ -290,7 +291,6 @@ fn compile_template_contract_copy(
     infer_blank_zones: bool,
 ) -> Result<TemplateContractCompilation, String> {
     let template_text = extract_docx_text(input_path).map_err(|error| error.to_string())?;
-    let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
     let blank_candidates_by_story = if infer_blank_zones {
         blank_template_fields_by_story(input_path, domain, role_id)?
     } else {
@@ -1557,14 +1557,11 @@ mod legacy_template_runtime_tests {
             "word/document.xml".to_string(),
             "ВК по больничному\nДолжность: {{medical.sick_leave_vk.position}}".to_string(),
         )]);
-        let provenance = BTreeMap::from([(
-            field_id.clone(),
-            BTreeSet::from(["word/document.xml".to_string()]),
-        )]);
+        let mut ownership = CompilerOwnership::default();
+        ownership.record_field(&field_id, "word/document.xml");
         validate_compiler_owned_field_stories(
             &stories,
-            std::slice::from_ref(&field_id),
-            &provenance,
+            &ownership,
             &DomainKind::Medical,
             "sick_leave_vk",
         )
@@ -1586,14 +1583,11 @@ mod legacy_template_runtime_tests {
             "word/document.xml".to_string(),
             story_text,
         )]);
-        let provenance = BTreeMap::from([(
-            field_id.clone(),
-            BTreeSet::from(["word/document.xml".to_string()]),
-        )]);
+        let mut ownership = CompilerOwnership::default();
+        ownership.record_field(&field_id, "word/document.xml");
         validate_compiler_owned_field_stories(
             &stories,
-            std::slice::from_ref(&field_id),
-            &provenance,
+            &ownership,
             &DomainKind::Medical,
             "sick_leave_vk",
         )
@@ -1607,14 +1601,11 @@ mod legacy_template_runtime_tests {
             "word/document.xml".to_string(),
             "ВК больничный\nДолжность: {{medical.position}}".to_string(),
         )]);
-        let provenance = BTreeMap::from([(
-            field_id.clone(),
-            BTreeSet::from(["word/document.xml".to_string()]),
-        )]);
+        let mut ownership = CompilerOwnership::default();
+        ownership.record_field(&field_id, "word/document.xml");
         let error = validate_compiler_owned_field_stories(
             &stories,
-            std::slice::from_ref(&field_id),
-            &provenance,
+            &ownership,
             &DomainKind::Medical,
             "vk_mse",
         )

@@ -2,6 +2,10 @@ name: Build Signed Offline Installers
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ['FULL DOKKOMPLEKT AUTOPILOT']
+    types: [completed]
+    branches: [main]
   release:
     types: [published]
 
@@ -13,8 +17,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-plan:
+    name: Resolve exact production release candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      should_release: ${{ steps.plan.outputs.should_release }}
+      release_sha: ${{ steps.plan.outputs.release_sha }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 1
+      - name: Decide whether this exact source needs a production release
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse --verify HEAD)"
+          version="$(tr -d '\r\n' < VERSION)"
+          test -n "$version"
+          tag="v${version}"
+          should_release=true
+
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            if [ "$WORKFLOW_CONCLUSION" != "success" ]; then
+              should_release=false
+            elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              should_release=false
+            fi
+          elif [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_TAG"
+            test -n "$tag"
+            if [[ "$RELEASE_BODY" == *'<!-- dokkomplekt-validated-release -->'* ]]; then
+              should_release=false
+            fi
+          fi
+
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Production release plan: event=$EVENT_NAME sha=$release_sha tag=$tag should_release=$should_release"
+
   release-gate:
     name: REQUIRED Rust / dependency / contract gate
+    needs: release-plan
+    if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     env:
@@ -29,6 +84,8 @@ jobs:
       DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
@@ -86,6 +143,8 @@ jobs:
       DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
@@ -223,6 +282,8 @@ jobs:
       DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
@@ -266,6 +327,8 @@ jobs:
       DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
@@ -303,12 +366,20 @@ jobs:
 
   publish-release-assets:
     name: Publish only verified signed release assets
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: >-
+      always() &&
+      needs.windows-hardware-e2e.result == 'success' &&
+      needs.linux-bundles.result == 'success' &&
+      (github.event_name == 'workflow_run' ||
+       (github.event_name == 'release' && github.event.action == 'published'))
     needs: [windows-hardware-e2e, linux-bundles]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: Dokkomplekt-Windows-NSIS-Signed-Offline
@@ -330,8 +401,37 @@ jobs:
       - name: Attach artifacts only after signing and hardware E2E
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         shell: bash
         run: |
+          set -euo pipefail
           mapfile -d '' files < <(find release -type f -print0)
-          gh release upload "$TAG" "${files[@]}" --clobber
+          test "${#files[@]}" -gt 0
+
+          release_sha="$(git rev-parse --verify HEAD)"
+          version="$(tr -d '\r\n' < VERSION)"
+          test -n "$version"
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_TAG"
+            test -n "$tag"
+            gh release upload "$tag" "${files[@]}" --clobber
+            exit 0
+          fi
+
+          tag="v${version}"
+          marker='<!-- dokkomplekt-validated-release -->'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            existing_target="$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')"
+            if [ "$existing_target" != "$release_sha" ]; then
+              echo "Release $tag already targets $existing_target, expected $release_sha" >&2
+              exit 1
+            fi
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            notes="$marker"$'\n'"Production-validated release for commit $release_sha. Signed Windows installers, hardware E2E evidence, Linux bundles and SHA256SUMS.txt were produced before publication."
+            gh release create "$tag" "${files[@]}" \
+              --target "$release_sha" \
+              --title "Dokkomplekt Universal $version" \
+              --notes "$notes"
+          fi

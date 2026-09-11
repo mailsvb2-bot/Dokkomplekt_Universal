@@ -151,8 +151,19 @@ def test_local_windows_release_signs_binary_and_installer_with_hsm_only() -> Non
 def test_release_assets_wait_for_hardware_e2e() -> None:
     workflow = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
     assert "types: [published]" in workflow
+    assert "workflows: ['FULL DOKKOMPLEKT AUTOPILOT']" in workflow
+    assert "types: [completed]" in workflow
+    assert "branches: [main]" in workflow
     assert "needs: [windows-hardware-e2e, linux-bundles]" in workflow
+    assert "needs.windows-hardware-e2e.result == 'success'" in workflow
+    assert "needs.linux-bundles.result == 'success'" in workflow
+    assert "github.event.workflow_run.head_sha || github.sha" in workflow
+    assert "git ls-remote --exit-code --tags origin" in workflow
     assert "Publish only verified signed release assets" in workflow
+    assert "<!-- dokkomplekt-validated-release -->" in workflow
+    assert 'release_sha="$(git rev-parse --verify HEAD)"' in workflow
+    assert 'gh release create "$tag"' in workflow
+    assert '--target "$release_sha"' in workflow
 
 
 def test_source_archive_excludes_virtual_environments_and_ascii_launchers_exist() -> None:

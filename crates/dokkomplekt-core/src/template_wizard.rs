@@ -153,6 +153,16 @@ pub fn suggest_filled_medical_template_markup(
             if value.len() < 2 {
                 return None;
             }
+            // This helper scans already-filled doctor documents. A complete
+            // `{{...}}` value is template syntax, not patient/case data. This
+            // matters after structural compilation: the source parser can read
+            // a role-scoped token such as `{{medical.sick_leave_vk.position}}`
+            // as the visible value following `Должность:`. Feeding it back into
+            // compatibility markup would downgrade the compiler-owned token to
+            // a generic field and invalidate exact Word-story provenance.
+            if value.starts_with("{{") && value.ends_with("}}") {
+                return None;
+            }
             let occurrences = text.matches(value).count();
             if occurrences == 0 {
                 return None;
@@ -580,6 +590,18 @@ mod tests {
         assert!(
             !icd.selected_by_default,
             "nested ICD must not compete with the diagnosis replacement"
+        );
+    }
+
+    #[test]
+    fn filled_medical_markup_does_not_reingest_semantic_placeholder_as_patient_value() {
+        let text = "ВК по больничному\nСлужебная пометка {{ \"черновик без конца\nМесто работы: {{medical.sick_leave_vk.workplace}}\nДолжность: {{medical.sick_leave_vk.position}}";
+        let candidates = suggest_filled_medical_template_markup(text, 2026);
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.value != "{{medical.sick_leave_vk.position}}"),
+            "semantic placeholder was re-ingested as filled patient data: {candidates:?}"
         );
     }
 

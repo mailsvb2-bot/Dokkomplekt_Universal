@@ -1,6 +1,6 @@
 use dokkomplekt_core::{
     analyze_template_text_with_domain_hint, missing_medical_template_render_paths,
-    DocumentTemplateSpec, DomainKind,
+    suggest_filled_medical_template_markup, DocumentTemplateSpec, DomainKind,
 };
 use dokkomplekt_docx::{
     compile_labeled_template_file, extract_docx_story_texts, extract_docx_text,
@@ -66,6 +66,94 @@ fn write_tabular_primary_fixture(path: &std::path::Path) {
         zip.write_all(data.as_bytes()).expect("part bytes");
     }
     zip.finish().expect("finish fixture");
+}
+
+fn write_sick_leave_vk_runtime_fixture(path: &std::path::Path) {
+    let file = File::create(path).expect("fixture");
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>ВК по больничному</w:t></w:r></w:p>
+<w:p><w:r><w:t>Дата поступления: 20.08.2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>Ф.И.О.</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Иванов Иван Иванович</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1111</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>F20.0 шаблонная формулировка</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старое лечение</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Психический статус</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Шаблонный психический статус старого пациента</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый завод</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+<w:tbl>
+<w:tr><w:tc><w:p><w:r><w:t>Дата ВК по больничному</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.09.2026</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Номер протокола ВК по больничному</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>234</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Дата протокола ВК по больничному</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.09.2026</w:t></w:r></w:p></w:tc></w:tr>
+<w:tr><w:tc><w:p><w:r><w:t>Дата комиссии по больничному листу</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.09.2026</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:p><w:r><w:t>Заведующий отделением __________</w:t></w:r></w:p>
+</w:body></w:document>"#;
+    for (name, data) in [
+        ("[Content_Types].xml", "<Types/>"),
+        ("word/document.xml", body),
+    ] {
+        zip.start_file(name, options).expect("part");
+        zip.write_all(data.as_bytes()).expect("part bytes");
+    }
+    zip.finish().expect("finish fixture");
+}
+
+#[test]
+fn sick_leave_vk_structural_stage_keeps_scoped_position_with_full_runtime_fixture() {
+    let root =
+        std::env::temp_dir().join(format!("dok-sick-leave-vk-runtime-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("root");
+    let input = root.join("vk.docx");
+    let output = root.join("compiled.docx");
+    write_sick_leave_vk_runtime_fixture(&input);
+
+    let report =
+        compile_labeled_template_file(&input, &output, &DomainKind::Medical, "sick_leave_vk")
+            .expect("compile full sick-leave VK fixture");
+    let text = extract_docx_text(&output).expect("compiled text");
+    assert!(
+        text.contains("{{medical.sick_leave_vk.position}}"),
+        "structural output lost scoped position: {text}"
+    );
+    assert!(
+        !text.contains("{{medical.position}}"),
+        "structural stage unexpectedly downgraded scoped position: {text}"
+    );
+    assert!(
+        report
+            .applied_field_stories
+            .get("medical.sick_leave_vk.position")
+            .is_some_and(|stories| stories.iter().any(|story| story == "word/document.xml")),
+        "missing scoped story provenance: {report:?}"
+    );
+
+    let analysis = analyze_template_text_with_domain_hint(&text, Some(&DomainKind::Medical));
+    let mut excluded = analysis
+        .placeholders
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    excluded.extend(report.applied_field_ids.iter().cloned());
+    let selected = suggest_filled_medical_template_markup(&text, 2026)
+        .into_iter()
+        .filter(|candidate| {
+            candidate.selected_by_default && !excluded.contains(&candidate.field_id)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        selected.iter().all(|candidate| {
+            candidate.value != "{{medical.sick_leave_vk.position}}"
+                && candidate.field_id != "medical.position"
+        }),
+        "fallback would rewrite compiler-owned scoped position: {selected:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

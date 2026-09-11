@@ -3207,6 +3207,47 @@ mod tests {
     }
 
     #[test]
+    fn sick_leave_vk_filled_table_uses_role_scoped_tokens_and_provenance() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-sick-leave-vk-filled-table-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled-table.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>ВК по больничному</w:t></w:r></w:p>
+<w:tbl><w:tr>
+<w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый завод</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc>
+</w:tr></w:tbl>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "sick_leave_vk")
+                .expect("sick-leave VK table must compile by role-scoped ownership");
+        let text = extract_docx_text(&compiled).expect("compiled sick-leave VK table text");
+        for field_id in [
+            "medical.sick_leave_vk.workplace",
+            "medical.sick_leave_vk.position",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing applied role-scoped field {field_id}: {report:?}"
+            );
+            assert_eq!(
+                report.applied_field_stories.get(field_id),
+                Some(&vec!["word/document.xml".to_string()]),
+                "missing exact story provenance for {field_id}: {report:?}"
+            );
+            assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
+        }
+        assert!(!text.contains("{{medical.workplace}}"), "{text:?}");
+        assert!(!text.contains("{{medical.position}}"), "{text:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn filled_table_ownership_preserves_repeated_structural_binding_elsewhere() {
         let dir = std::env::temp_dir().join(format!(
             "dokkomplekt-repeated-medical-binding-{}",

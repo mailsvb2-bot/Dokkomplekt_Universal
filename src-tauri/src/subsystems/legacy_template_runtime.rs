@@ -73,6 +73,24 @@ fn selected_filled_medical_markup_for_stories(
     grouped
 }
 
+fn exclude_role_equivalent_medical_fields(
+    excluded_fields: &mut BTreeSet<String>,
+    domain: &DomainKind,
+    role_id: &str,
+) {
+    if domain != &DomainKind::Medical {
+        return;
+    }
+    for (scoped_id, shared_id) in
+        dokkomplekt_core::domains::medical_semantics::role_scoped_bindings(role_id)
+    {
+        if excluded_fields.contains(*scoped_id) || excluded_fields.contains(*shared_id) {
+            excluded_fields.insert((*scoped_id).to_string());
+            excluded_fields.insert((*shared_id).to_string());
+        }
+    }
+}
+
 fn selected_filled_medical_markup_by_story(
     template_path: &Path,
     excluded_fields: &BTreeSet<String>,
@@ -349,6 +367,10 @@ fn compile_template_contract_copy(
         .cloned()
         .collect::<BTreeSet<_>>();
     fallback_excluded_fields.extend(applied_field_ids.iter().cloned());
+    // Scoped VK fields and their shared workplace/position compatibility IDs
+    // describe one physical render slot. Once any compiler stage owns one side,
+    // the legacy value fallback must not re-bind that slot through the other side.
+    exclude_role_equivalent_medical_fields(&mut fallback_excluded_fields, domain, role_id);
     let fallback_by_story = if domain == &DomainKind::Medical {
         selected_filled_medical_markup_by_story(&current_input, &fallback_excluded_fields)?
     } else {

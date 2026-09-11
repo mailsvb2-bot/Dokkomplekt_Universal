@@ -1,5 +1,15 @@
 # Changelog
 
+## 18.4.6 — compiler Word-story provenance hotfix
+
+- fixed the real installed 18.4.5 blocker on `medical.sick_leave_vk.position`;
+- replaced inferred before/after token-count ownership with explicit `field -> Word story` provenance emitted by DOCX compilation stages;
+- kept strict per-story validation so a valid header/footer token cannot mask malformed body markup;
+- preserved already-tokenized fields during snapshot/reanalysis without trusting a weaker flattened-document parse;
+- changed the Windows installed-app adversarial smoke to exercise the `sick_leave_vk` role, its role-scoped position, protocol and commission dates through a physical generated DOCX;
+- fixed role-scoped VK table labels such as `Номер протокола ВК по больничному`: the structural compiler now matches the full role-specific title before shorter generic aliases, so it replaces the adjacent value cell instead of rewriting the label and leaving stale patient data such as `234` or old dates in the generated DOCX.
+
+
 ## 18.4.5 — real Word compiler confirmation hotfix
 
 - fixed a real user-path blocker where document creation could stop with `Compiler не подтвердил созданное semantic-поле medical.profile_status`;

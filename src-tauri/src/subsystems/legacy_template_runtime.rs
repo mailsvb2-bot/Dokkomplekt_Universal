@@ -73,6 +73,24 @@ fn selected_filled_medical_markup_for_stories(
     grouped
 }
 
+fn exclude_role_equivalent_medical_fields(
+    excluded_fields: &mut BTreeSet<String>,
+    domain: &DomainKind,
+    role_id: &str,
+) {
+    if domain != &DomainKind::Medical {
+        return;
+    }
+    for (scoped_id, shared_id) in
+        dokkomplekt_core::domains::medical_semantics::role_scoped_bindings(role_id)
+    {
+        if excluded_fields.contains(*scoped_id) || excluded_fields.contains(*shared_id) {
+            excluded_fields.insert((*scoped_id).to_string());
+            excluded_fields.insert((*shared_id).to_string());
+        }
+    }
+}
+
 fn selected_filled_medical_markup_by_story(
     template_path: &Path,
     excluded_fields: &BTreeSet<String>,
@@ -151,6 +169,63 @@ fn blank_template_fields_by_story(
     Ok(blank_template_fields_for_stories(&stories, domain, role_id))
 }
 
+fn validate_compiler_owned_field_stories(
+    compiled_stories: &BTreeMap<String, String>,
+    applied_field_ids: &[String],
+    applied_field_stories: &BTreeMap<String, BTreeSet<String>>,
+    domain: &DomainKind,
+    role_id: &str,
+) -> Result<(), String> {
+    for field_id in applied_field_ids {
+        let token = format!("{{{{{field_id}}}}}");
+        let owner_stories = applied_field_stories.get(field_id).ok_or_else(|| {
+            format!(
+                "Compiler заявил semantic-поле {field_id}, но не сохранил provenance Word story."
+            )
+        })?;
+        if owner_stories.is_empty() {
+            return Err(format!(
+                "Compiler заявил semantic-поле {field_id}, но список provenance Word story пуст."
+            ));
+        }
+        for story_name in owner_stories {
+            let story_text = compiled_stories.get(story_name).ok_or_else(|| {
+                format!(
+                    "Compiler заявил semantic-поле {field_id} в Word story {story_name}, но story отсутствует в итоговом DOCX."
+                )
+            })?;
+            if !story_text.contains(&token) {
+                return Err(format!(
+                    "Compiler заявил semantic-поле {field_id} в Word story {story_name}, но exact token отсутствует."
+                ));
+            }
+            let story_analysis =
+                analyze_template_text_with_domain_hint(story_text, Some(domain));
+            let parser_confirmed = story_analysis
+                .placeholders
+                .iter()
+                .any(|item| item == field_id)
+                || (domain == &DomainKind::Medical
+                    && dokkomplekt_core::domains::medical_semantics::role_scoped_bindings(role_id)
+                        .iter()
+                        .any(|(scoped_id, shared_id)| {
+                            *shared_id == field_id.as_str()
+                                && story_analysis
+                                    .placeholders
+                                    .iter()
+                                    .any(|item| item == *scoped_id)
+                        }));
+            if !parser_confirmed || !story_analysis.template_errors.is_empty() {
+                return Err(format!(
+                    "Compiler не подтвердил semantic-поле {field_id} в Word story {story_name} для strict render: {:?}",
+                    story_analysis.template_errors
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn compile_template_contract_copy(
     input_path: &Path,
     output_path: &Path,
@@ -160,8 +235,6 @@ fn compile_template_contract_copy(
     infer_blank_zones: bool,
 ) -> Result<TemplateContractCompilation, String> {
     let template_text = extract_docx_text(input_path).map_err(|error| error.to_string())?;
-    let original_stories =
-        extract_docx_story_texts(input_path).map_err(|error| error.to_string())?;
     let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
     let blank_candidates_by_story = if infer_blank_zones {
         blank_template_fields_by_story(input_path, domain, role_id)?
@@ -230,6 +303,7 @@ fn compile_template_contract_copy(
 
     let mut current_input = input_path.to_path_buf();
     let mut applied_field_ids = Vec::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
     let mut changed = false;
 
     if blank_binding_count > 0 {
@@ -245,6 +319,12 @@ fn compile_template_contract_copy(
                 "Не все story-scoped пустые зоны удалось скомпилировать: {}",
                 report.skipped_bindings.join(", ")
             ));
+        }
+        for (field_id, stories) in &report.applied_field_stories {
+            applied_field_stories
+                .entry(field_id.clone())
+                .or_default()
+                .extend(stories.iter().cloned());
         }
         applied_field_ids.extend(report.applied_field_ids);
         current_input = blank_output;
@@ -262,6 +342,12 @@ fn compile_template_contract_copy(
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
         if report.binding_count > 0 {
+            for (field_id, stories) in &report.applied_field_stories {
+                applied_field_stories
+                    .entry(field_id.clone())
+                    .or_default()
+                    .extend(stories.iter().cloned());
+            }
             applied_field_ids.extend(report.applied_field_ids);
             current_input = structural_output;
             changed = true;
@@ -281,6 +367,10 @@ fn compile_template_contract_copy(
         .cloned()
         .collect::<BTreeSet<_>>();
     fallback_excluded_fields.extend(applied_field_ids.iter().cloned());
+    // Scoped VK fields and their shared workplace/position compatibility IDs
+    // describe one physical render slot. Once any compiler stage owns one side,
+    // the legacy value fallback must not re-bind that slot through the other side.
+    exclude_role_equivalent_medical_fields(&mut fallback_excluded_fields, domain, role_id);
     let fallback_by_story = if domain == &DomainKind::Medical {
         selected_filled_medical_markup_by_story(&current_input, &fallback_excluded_fields)?
     } else {
@@ -302,6 +392,12 @@ fn compile_template_contract_copy(
                 "Story-scoped fallback не смог безопасно привязать значения: {}",
                 report.skipped_bindings.join(", ")
             ));
+        }
+        for (field_id, stories) in &report.applied_field_stories {
+            applied_field_stories
+                .entry(field_id.clone())
+                .or_default()
+                .extend(stories.iter().cloned());
         }
         applied_field_ids.extend(report.applied_field_ids);
         current_input = output_path.to_path_buf();
@@ -348,6 +444,10 @@ fn compile_template_contract_copy(
                 current_input = role_output;
                 changed = true;
                 applied_field_ids.push(expert_field.to_string());
+                applied_field_stories
+                    .entry(expert_field.to_string())
+                    .or_default()
+                    .insert("word/document.xml".to_string());
             }
         }
     }
@@ -369,43 +469,20 @@ fn compile_template_contract_copy(
     if derived_analysis.is_static && applied_field_ids.is_empty() {
         return Err("Скомпилированная копия не содержит placeholder-полей.".into());
     }
-    // Word renders body/header/footer as independent template stories. Prove every
-    // compiler-owned field in the exact story where this compilation added it; a
-    // valid duplicate in another story must never mask malformed markup in the owner.
+    // Word renders body/header/footer as independent template stories. Do not
+    // reconstruct ownership from token-count deltas: a compiler can legitimately
+    // handle an already-tokenized field, in which case the count does not grow.
+    // Instead, trust only explicit story provenance emitted by the stage that
+    // performed the binding and validate that exact story with the strict parser.
     let compiled_stories = extract_docx_story_texts(&current_input)
         .map_err(|error| format!("Не удалось проверить Word stories compiler-копии: {error}"))?;
-    for field_id in &applied_field_ids {
-        let token = format!("{{{{{field_id}}}}}");
-        let mut owner_story_count = 0_usize;
-        for (story_name, story_text) in &compiled_stories {
-            let before_count = original_stories
-                .get(story_name)
-                .map(|text| text.matches(&token).count())
-                .unwrap_or_default();
-            let after_count = story_text.matches(&token).count();
-            if after_count <= before_count {
-                continue;
-            }
-            owner_story_count += 1;
-            let story_analysis =
-                analyze_template_text_with_domain_hint(story_text, Some(domain));
-            let parser_confirmed = story_analysis
-                .placeholders
-                .iter()
-                .any(|item| item == field_id);
-            if !parser_confirmed || !story_analysis.template_errors.is_empty() {
-                return Err(format!(
-                    "Compiler не подтвердил semantic-поле {field_id} в Word story {story_name} для strict render: {:?}",
-                    story_analysis.template_errors
-                ));
-            }
-        }
-        if owner_story_count == 0 {
-            return Err(format!(
-                "Compiler заявил semantic-поле {field_id}, но не найдено Word story, где его token был реально добавлен."
-            ));
-        }
-    }
+    validate_compiler_owned_field_stories(
+        &compiled_stories,
+        &applied_field_ids,
+        &applied_field_stories,
+        domain,
+        role_id,
+    )?;
     Ok(TemplateContractCompilation {
         changed: true,
         path: current_input,
@@ -446,11 +523,18 @@ fn merge_compiler_fields_into_analysis(
 ) -> Result<(), String> {
     for field_id in compiler_fields {
         let token = format!("{{{{{field_id}}}}}");
-        let parser_confirmed = analysis.placeholders.iter().any(|item| item == field_id);
-        if !compiled_text.contains(&token) || !parser_confirmed {
+        if !compiled_text.contains(&token) {
             return Err(format!(
-                "Compiler не подтвердил созданное semantic-поле {field_id} для strict render."
+                "Compiler не подтвердил созданное semantic-поле {field_id}: exact token отсутствует после snapshot."
             ));
+        }
+        // `compiler_fields` are admitted only after story-scoped strict validation
+        // in `compile_template_contract_copy`. A second flattened-document parse
+        // must not be allowed to erase that stronger evidence: Word stories are
+        // rendered independently and flattened text can create impossible
+        // cross-story delimiter combinations.
+        if !analysis.placeholders.iter().any(|item| item == field_id) {
+            analysis.placeholders.push(field_id.clone());
         }
     }
     analysis.placeholders.sort();
@@ -1424,6 +1508,79 @@ mod legacy_template_runtime_tests {
         assert!(error.contains("medical.profile_status"), "{error}");
         assert!(error.contains("word/document.xml"), "{error}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sick_leave_vk_position_story_provenance_does_not_require_token_count_growth() {
+        let field_id = "medical.sick_leave_vk.position".to_string();
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            "ВК по больничному\nДолжность: {{medical.sick_leave_vk.position}}".to_string(),
+        )]);
+        let provenance = BTreeMap::from([(
+            field_id.clone(),
+            BTreeSet::from(["word/document.xml".to_string()]),
+        )]);
+        validate_compiler_owned_field_stories(
+            &stories,
+            std::slice::from_ref(&field_id),
+            &provenance,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+        )
+        .expect("explicit compiler provenance must validate an existing role-scoped token");
+    }
+
+    #[test]
+    fn shared_vk_position_story_is_confirmed_by_role_scoped_parser_identity() {
+        let field_id = "medical.position".to_string();
+        let story_text = "ВК больничный\nДолжность: {{medical.position}}".to_string();
+        let analysis =
+            analyze_template_text_with_domain_hint(&story_text, Some(&DomainKind::Medical));
+        assert!(analysis
+            .placeholders
+            .iter()
+            .any(|item| item == "medical.sick_leave_vk.position"));
+        assert!(!analysis.placeholders.iter().any(|item| item == &field_id));
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            story_text,
+        )]);
+        let provenance = BTreeMap::from([(
+            field_id.clone(),
+            BTreeSet::from(["word/document.xml".to_string()]),
+        )]);
+        validate_compiler_owned_field_stories(
+            &stories,
+            std::slice::from_ref(&field_id),
+            &provenance,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+        )
+        .expect("shared VK field must validate through its exact role-scoped parser identity");
+    }
+
+    #[test]
+    fn shared_vk_position_story_is_not_accepted_for_a_different_vk_role() {
+        let field_id = "medical.position".to_string();
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            "ВК больничный\nДолжность: {{medical.position}}".to_string(),
+        )]);
+        let provenance = BTreeMap::from([(
+            field_id.clone(),
+            BTreeSet::from(["word/document.xml".to_string()]),
+        )]);
+        let error = validate_compiler_owned_field_stories(
+            &stories,
+            std::slice::from_ref(&field_id),
+            &provenance,
+            &DomainKind::Medical,
+            "vk_mse",
+        )
+        .expect_err("a different VK role must not satisfy story-scoped semantic proof");
+        assert!(error.contains("medical.position"), "{error}");
+        assert!(error.contains("word/document.xml"), "{error}");
     }
 
     #[test]

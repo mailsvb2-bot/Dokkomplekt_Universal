@@ -16,9 +16,9 @@ class PilotExpansionContracts(unittest.TestCase):
         return project_text(relative)
 
     def test_version_is_synchronized(self) -> None:
-        self.assertEqual(self.text("VERSION").strip(), "18.4.5")
-        self.assertEqual(json.loads(self.text("package.json"))["version"], "18.4.5")
-        self.assertEqual(json.loads(self.text("src-tauri/tauri.conf.json"))["version"], "18.4.5")
+        self.assertEqual(self.text("VERSION").strip(), "18.4.6")
+        self.assertEqual(json.loads(self.text("package.json"))["version"], "18.4.6")
+        self.assertEqual(json.loads(self.text("src-tauri/tauri.conf.json"))["version"], "18.4.6")
 
     def test_starter_packs_have_real_hash_verified_draft_templates(self) -> None:
         total = 0

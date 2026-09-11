@@ -60,4 +60,12 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "old template medical.profile_status" in source
     assert "compiler-owned medical.profile_status placeholder unresolved" in source
     assert "doctor-owned literal opener used by the profile-status regression" in source
+    assert "-Role 'sick_leave_vk'" in source
+    assert "medical.sick_leave_vk.position" in source
+    assert "New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'sick_leave_vk'" in source
+    assert "if ($Role -ne 'sick_leave_vk')" in source
+    assert "'medical.position' = 'инженер'" in source
+    assert "canonical shared medical.position prompt" in source
+    assert "Installed sick_leave_vk generation did not render the current protocol number" in source
+    assert "Installed sick_leave_vk generation left medical.sick_leave_vk.position unresolved" in source
     assert "Installed end-to-end document generation OK" in source

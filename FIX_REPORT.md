@@ -6,6 +6,7 @@
 - Владелец compiler-owned поля больше не восстанавливается по разнице количества `{{token}}` между исходным и итоговым DOCX. Каждый DOCX-compiler возвращает точный provenance `field -> Word story`, а runtime проверяет именно эту story strict-parser'ом.
 - Повторная обработка уже размеченного semantic-token больше не даёт false-negative, при этом body/header/footer остаются независимыми границами и не могут маскировать ошибку друг друга.
 - Windows installed-app smoke переведён на роль `sick_leave_vk` и обязан реально пройти `medical.sick_leave_vk.position`, протокол и даты до физического DOCX.
+- Устранён следующий найденный installed-app regression: длинная подпись `Номер протокола ВК по больничному` больше не разбирается как короткая generic-подпись `Номер протокола` плюс inline-значение. Compiler сначала распознаёт полный role-scoped title и заменяет соседнюю value-cell; regression доказывает, что старые `234` и `10.09.2026` исчезают, а текущие `987` и `09.09.2026` попадают в физический DOCX.
 
 
 ## 18.4.5 — real generation blocker

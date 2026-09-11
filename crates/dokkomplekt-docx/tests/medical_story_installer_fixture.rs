@@ -1,13 +1,15 @@
 use dokkomplekt_core::{
     analyze_template_text_with_domain_hint, missing_medical_template_render_paths,
-    suggest_filled_medical_template_markup, DocumentTemplateSpec, DomainKind,
+    suggest_filled_medical_template_markup, DocumentTemplateSpec, DomainKind, SemanticCase,
+    SemanticValue, ValueSource,
 };
 use dokkomplekt_docx::{
     compile_labeled_template_file, extract_docx_story_texts, extract_docx_text,
-    insert_text_paragraph_before_first_matching_file,
+    insert_text_paragraph_before_first_matching_file, render_docx_file,
 };
+use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
@@ -152,6 +154,84 @@ fn sick_leave_vk_structural_stage_keeps_scoped_position_with_full_runtime_fixtur
                 && candidate.field_id != "medical.position"
         }),
         "fallback would rewrite compiler-owned scoped position: {selected:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn sick_leave_vk_current_protocol_number_replaces_stale_template_value() {
+    let root = std::env::temp_dir().join(format!(
+        "dok-sick-leave-vk-current-protocol-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("root");
+    let input = root.join("vk.docx");
+    let compiled = root.join("compiled.docx");
+    let rendered = root.join("rendered.docx");
+    write_sick_leave_vk_runtime_fixture(&input);
+    compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "sick_leave_vk")
+        .expect("compile sick-leave VK fixture");
+
+    let mut values = BTreeMap::new();
+    for (field_id, value) in [
+        ("subject.name", "Петров Пётр Петрович"),
+        ("medical.case_number", "2222"),
+        ("medical.admission_date", "20.08.2026"),
+        ("medical.diagnosis", "F20.0 актуальный диагноз"),
+        ("medical.treatment", "актуальное лечение"),
+        ("medical.profile_status", "Контактен, ориентирован"),
+        ("medical.workplace", "Новый завод"),
+        ("medical.position", "инженер"),
+        ("medical.sick_leave_vk.commission_date", "09.09.2026"),
+        ("medical.sick_leave_vk.protocol_number", "987"),
+        ("medical.sick_leave_vk.protocol_date", "09.09.2026"),
+        ("medical.sick_leave_commission_date", "09.09.2026"),
+    ] {
+        values.insert(
+            field_id.to_string(),
+            SemanticValue::new(field_id, value, ValueSource::UserConfirmed, 1.0),
+        );
+    }
+    let case = SemanticCase {
+        values,
+        ..Default::default()
+    };
+    let render_case =
+        dokkomplekt_core::domains::medical_semantics::case_for_medical_document_render(
+            &case,
+            "sick_leave_vk",
+        );
+    render_docx_file(&compiled, &rendered, &render_case, true)
+        .expect("render current sick-leave VK values");
+
+    let file = File::open(&rendered).expect("rendered docx");
+    let mut archive = zip::ZipArchive::new(file).expect("zip");
+    let mut xml = String::new();
+    archive
+        .by_name("word/document.xml")
+        .expect("body")
+        .read_to_string(&mut xml)
+        .expect("body xml");
+    assert!(
+        xml.contains(">987<"),
+        "current protocol number missing: {xml}"
+    );
+    assert!(
+        !xml.contains(">234<"),
+        "stale protocol number survived: {xml}"
+    );
+    assert!(
+        xml.contains(">09.09.2026<"),
+        "current VK dates missing: {xml}"
+    );
+    assert!(
+        !xml.contains(">10.09.2026<"),
+        "stale VK date survived: {xml}"
+    );
+    assert!(
+        !xml.contains("{{medical.sick_leave_vk.protocol_number}}"),
+        "scoped protocol placeholder remained unresolved: {xml}"
     );
     let _ = std::fs::remove_dir_all(root);
 }

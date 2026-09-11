@@ -739,6 +739,31 @@ fn match_labeled_template_anchor(
             replaceable: false,
         });
     }
+    // Role-scoped medical fields have deliberately more specific visual titles than
+    // their legacy generic aliases (for example, `Номер протокола ВК по больничному`
+    // versus `Номер протокола`). Match that full title first. Otherwise a table label
+    // cell is misread as `generic label + inline value`, and the compiler rewrites the
+    // label itself while leaving the adjacent old patient's value untouched.
+    if matches!(preferred_domain, Some(DomainKind::Medical)) {
+        for (scoped_id, _) in
+            crate::domains::medical_semantics::role_scoped_bindings(role_id.unwrap_or_default())
+        {
+            let Some(label) =
+                crate::domains::medical_semantics::title_for_role_scoped_field(scoped_id)
+            else {
+                continue;
+            };
+            let Some(remainder) = strip_label_prefix(line, label) else {
+                continue;
+            };
+            return Some(LabeledTemplateAnchor {
+                field_id: (*scoped_id).to_string(),
+                label: label.to_string(),
+                remainder: remainder.to_string(),
+                replaceable: true,
+            });
+        }
+    }
     for (label, replaceable) in catalog {
         let Some(remainder) = strip_label_prefix(line, label) else {
             continue;

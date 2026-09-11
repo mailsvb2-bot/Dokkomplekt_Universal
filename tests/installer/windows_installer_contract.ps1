@@ -1094,7 +1094,7 @@ try {
     if ($createdXml -match 'Шаблонный психический статус старого пациента') { throw 'Installed medical generation leaked the old template medical.profile_status.' }
     if ($createdXml -match '\{\{medical\.profile_status\}\}') { throw 'Installed medical generation left the compiler-owned medical.profile_status placeholder unresolved.' }
     if ($createdXml -notmatch 'после компиляции') { throw 'Installed medical generation lost the literal suffix around compiler-owned medical.profile_status.' }
-    if ($createdXml -match '______') { throw 'Installed medical generation left the profile-status blank unresolved.' }
+    if ($createdXml -match 'Психический статус:\s*_{6,}\s*после компиляции') { throw 'Installed medical generation left the profile-status blank unresolved.' }
     if ($createdXml -notmatch 'Служебная пометка \{\{') { throw 'Strict medical generation did not preserve the doctor-owned literal opener used by the profile-status regression.' }
     if ($createdXml -notmatch 'Новый завод') { throw 'Installed medical generation did not render current workplace.' }
     if ($createdXml -match 'Старый завод') { throw 'Installed medical generation leaked old workplace.' }

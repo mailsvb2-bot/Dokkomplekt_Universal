@@ -174,6 +174,20 @@ fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result
     }
 }
 
+#[cfg(windows)]
+fn atomic_publish_error_is_transient(error: &std::io::Error) -> bool {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION and
+    // ERROR_USER_MAPPED_FILE can all be transient when another process is
+    // reading/replacing the same validated DOCX. Persistent permission errors
+    // still fail closed after the bounded publication window.
+    matches!(error.raw_os_error(), Some(5 | 32 | 33 | 1224))
+}
+
+#[cfg(not(windows))]
+fn atomic_publish_error_is_transient(_error: &std::io::Error) -> bool {
+    false
+}
+
 fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
     if medical_diary_template_is_usable(path) {
         return Ok(());
@@ -201,19 +215,31 @@ fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
         // different processes, so another process may have repaired the target
         // after our initial check. Atomic replacement keeps the path continuously
         // backed by either the previous file or our fully validated temp file.
-        match replace_file_atomically(&temp_path, path) {
-            Ok(()) => {}
-            Err(_) if medical_diary_template_is_usable(path) => {
-                // Another process published the same complete template first.
-                let _ = std::fs::remove_file(&temp_path);
-                return Ok(());
+        let mut attempt = 0_u8;
+        let publish_result = loop {
+            match replace_file_atomically(&temp_path, path) {
+                Ok(()) => break Ok(()),
+                Err(error) => {
+                    // A competing UI/watcher process can briefly hold the shared
+                    // destination open on Windows while validating the DOCX. Never
+                    // accept the loser merely because the path exists: only a fully
+                    // readable canonical diary template proves that another publisher
+                    // completed the same atomic repair. Otherwise retry only known
+                    // Windows sharing/access contention for a bounded interval.
+                    if medical_diary_template_is_usable(path) {
+                        break Ok(());
+                    }
+                    if !atomic_publish_error_is_transient(&error) || attempt >= 40 {
+                        break Err(error);
+                    }
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
             }
-            Err(error) => {
-                return Err(format!(
-                    "Не удалось атомарно опубликовать локальный шаблон дневников: {error}"
-                ));
-            }
-        }
+        };
+        publish_result.map_err(|error| {
+            format!("Не удалось атомарно опубликовать локальный шаблон дневников: {error}")
+        })?;
 
         if !medical_diary_template_is_usable(path) {
             return Err("Опубликованный шаблон дневников не содержит обязательную структуру календаря".into());

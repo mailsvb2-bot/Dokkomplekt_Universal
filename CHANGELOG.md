@@ -1,5 +1,15 @@
 # Changelog
 
+## 18.4.7 — unified compiler ownership and profile-status pipeline repair
+
+- fixed the real installed 18.4.6 blocker where `medical.profile_status` was reported as compiler-owned in `word/document.xml` but its exact token disappeared before final snapshot validation;
+- introduced one canonical template-delimiter policy in `dokkomplekt-core::template_engine`: compatibility fallback rejects complete, partial and embedded `{{`/`}}` syntax instead of treating compiler-owned markup as old patient data;
+- unified compiler-stage state under one `CompilerOwnership` accumulator so semantic field IDs and exact Word-story provenance cannot drift as two independent collections;
+- compiler stages now fail immediately if their reported field IDs and story-provenance keys disagree or any field is reported without an owning Word story;
+- removed speculative structural pre-scan from runtime compilation: ownership is derived only from stages that actually modified the DOCX;
+- migrated legacy structural inference and DOCX ownership boundaries to the same canonical delimiter predicate;
+- added physical DOCX and Tauri-runtime regressions for `Психический статус: ______ после компиляции` plus an unrelated literal `{{`, and strengthened the Windows installed-app smoke to require the current profile status, preserved suffix and no unresolved blank/token.
+
 ## 18.4.6 — compiler Word-story provenance hotfix
 
 - fixed the real installed 18.4.5 blocker on `medical.sick_leave_vk.position`;

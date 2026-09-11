@@ -1,4 +1,12 @@
-# Dokkomplekt Universal 18.4.6 — corrective repair report
+# Dokkomplekt Universal 18.4.7 — corrective repair report
+
+## 18.4.7 — единый compiler ownership и реальный profile_status repair
+
+- Подтверждён механизм пользовательского отказа 18.4.6: compatibility fallback мог повторно принять значение, внутри которого уже находился `{{medical.profile_status}}`, за старые данные пациента и уничтожить token, ранее созданный compiler stage.
+- Правило template-syntax теперь одно для core/runtime: complete, partial и embedded `{{`/`}}` являются границей ownership и никогда автоматически не подаются в legacy value fallback.
+- Runtime больше не ведёт `applied_field_ids` и `applied_field_stories` как два независимых состояния. Единый `CompilerOwnership` одновременно хранит semantic IDs и точные Word stories и немедленно отклоняет несогласованный stage report.
+- Удалён предварительный structural pre-scan: финальный ownership строится только по фактически выполненным blank/structural/fallback compiler stages.
+- Добавлены регрессии на физическом DOCX и runtime `compile_template_contract_copy`; Windows installed-app smoke теперь использует пустую profile-status зону с literal suffix и обязан пройти до реально созданного DOCX без unresolved token/blank.
 
 ## 18.4.6 — real sick_leave_vk story-provenance repair
 

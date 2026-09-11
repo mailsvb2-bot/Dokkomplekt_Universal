@@ -1,6 +1,6 @@
 [package]
 name = "dokkomplekt-morph"
-version = "18.4.6"
+version = "18.4.7"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

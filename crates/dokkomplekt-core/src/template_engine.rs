@@ -54,6 +54,21 @@ pub struct CounterRequest {
 pub fn inspect_template_syntax(t: &str) -> Vec<String> {
     parse(t).errors
 }
+/// Return true when visible text contains a template delimiter, even when the
+/// syntax is incomplete. Compiler stages use this as a hard ownership boundary:
+/// compatibility/legacy inference must never reinterpret text containing an
+/// existing semantic token (or a doctor-owned literal brace opener) as patient data.
+pub fn contains_template_delimiters(text: &str) -> bool {
+    text.contains("{{") || text.contains("}}")
+}
+
+/// Compatibility fallback may only consume plain literal legacy values. Any
+/// template delimiters make the value compiler/template-owned and therefore
+/// ineligible for automatic value replacement.
+pub fn is_safe_compatibility_fallback_value(text: &str) -> bool {
+    !text.trim().is_empty() && !contains_template_delimiters(text)
+}
+
 pub fn template_uses_advanced_syntax(t: &str) -> bool {
     [
         "{{#if",
@@ -1632,6 +1647,22 @@ fn apply_modifier(v: &str, m: &str) -> Result<String, String> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compatibility_fallback_rejects_complete_partial_and_embedded_template_delimiters() {
+        for value in [
+            "{{medical.profile_status}}",
+            "prefix {{medical.profile_status}} suffix",
+            "doctor literal {{ without close",
+            "orphan close }} text",
+        ] {
+            assert!(super::contains_template_delimiters(value));
+            assert!(!super::is_safe_compatibility_fallback_value(value));
+        }
+        assert!(super::is_safe_compatibility_fallback_value(
+            "старое значение пациента"
+        ));
+    }
+
     use super::*;
     use crate::{SemanticValue, ValueSource};
     fn c() -> SemanticCase {

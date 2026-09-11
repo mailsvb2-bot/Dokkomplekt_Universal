@@ -153,14 +153,17 @@ pub fn suggest_filled_medical_template_markup(
             if value.len() < 2 {
                 return None;
             }
-            // This helper scans already-filled doctor documents. A complete
-            // `{{...}}` value is template syntax, not patient/case data. This
-            // matters after structural compilation: the source parser can read
-            // a role-scoped token such as `{{medical.sick_leave_vk.position}}`
-            // as the visible value following `Должность:`. Feeding it back into
-            // compatibility markup would downgrade the compiler-owned token to
-            // a generic field and invalidate exact Word-story provenance.
-            if value.starts_with("{{") && value.ends_with("}}") {
+            // This helper scans already-filled doctor documents. Any value that
+            // contains template delimiters is compiler/template syntax, not safe
+            // patient/case data for compatibility replacement. It is not enough
+            // to reject only a value that is *entirely* `{{...}}`: multiline or
+            // partially compiled legacy blocks can contain an already-created
+            // semantic token inside surrounding literal text. Re-ingesting such
+            // a value lets the fallback replace the whole block and erase a token
+            // owned by an earlier compiler stage (for example profile_status).
+            // Ambiguous doctor-owned literal braces are also deliberately left
+            // untouched by the automatic fallback.
+            if !crate::is_safe_compatibility_fallback_value(value) {
                 return None;
             }
             let occurrences = text.matches(value).count();
@@ -602,6 +605,22 @@ mod tests {
                 .iter()
                 .all(|candidate| candidate.value != "{{medical.sick_leave_vk.position}}"),
             "semantic placeholder was re-ingested as filled patient data: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn filled_medical_markup_never_reingests_value_containing_semantic_placeholder() {
+        let text = concat!(
+            "Выписной эпикриз\n",
+            "Психический статус: до компиляции {{medical.profile_status}} после компиляции\n",
+            "Диагноз: F20.0"
+        );
+        let candidates = suggest_filled_medical_template_markup(text, 2026);
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| crate::is_safe_compatibility_fallback_value(&candidate.value)),
+            "compatibility fallback must never consume a value containing semantic template syntax: {candidates:?}"
         );
     }
 

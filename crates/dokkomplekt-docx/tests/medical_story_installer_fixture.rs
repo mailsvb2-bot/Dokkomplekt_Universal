@@ -4,8 +4,9 @@ use dokkomplekt_core::{
     SemanticValue, ValueSource,
 };
 use dokkomplekt_docx::{
-    compile_labeled_template_file, extract_docx_story_texts, extract_docx_text,
-    insert_text_paragraph_before_first_matching_file, render_docx_file,
+    apply_story_template_learning_map_file, compile_labeled_template_file,
+    extract_docx_story_texts, extract_docx_text, insert_text_paragraph_before_first_matching_file,
+    render_docx_file, TemplateLearningMapField,
 };
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -103,6 +104,92 @@ fn write_sick_leave_vk_runtime_fixture(path: &std::path::Path) {
         zip.write_all(data.as_bytes()).expect("part bytes");
     }
     zip.finish().expect("finish fixture");
+}
+
+#[test]
+fn compiler_owned_profile_status_inside_prefixed_value_survives_fallback_and_renders() {
+    let root = std::env::temp_dir().join(format!(
+        "dok-profile-status-prefixed-runtime-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("root");
+    let input = root.join("profile-blank.docx");
+    let compiled = root.join("profile-compiled.docx");
+    let rendered = root.join("profile-rendered.docx");
+
+    let file = File::create(&input).expect("fixture");
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    zip.start_file("[Content_Types].xml", options)
+        .expect("content types");
+    zip.write_all(b"<Types/>").expect("content types bytes");
+    zip.start_file("word/document.xml", options).expect("body");
+    zip.write_all(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: до компиляции ______ после компиляции</w:t></w:r></w:p>
+</w:body></w:document>"#.as_bytes(),
+    )
+    .expect("body bytes");
+    zip.finish().expect("finish fixture");
+
+    let fields = BTreeMap::from([(
+        "word/document.xml".to_string(),
+        vec![TemplateLearningMapField {
+            field_id: "medical.profile_status".into(),
+            line_index: 2,
+            blank_line: "до компиляции ______ после компиляции".into(),
+            common_prefix: "до компиляции ".into(),
+            common_suffix: " после компиляции".into(),
+        }],
+    )]);
+    let report = apply_story_template_learning_map_file(&input, &compiled, &fields)
+        .expect("compile prefixed profile-status token");
+    assert_eq!(report.applied_binding_count, 1, "{report:?}");
+    assert_eq!(
+        report.applied_field_stories.get("medical.profile_status"),
+        Some(&vec!["word/document.xml".to_string()])
+    );
+
+    let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+    assert!(
+        compiled_text.contains("до компиляции {{medical.profile_status}} после компиляции"),
+        "{compiled_text}"
+    );
+    let fallback = suggest_filled_medical_template_markup(&compiled_text, 2026);
+    assert!(
+        fallback
+            .iter()
+            .all(|candidate| !candidate.value.contains("{{") && !candidate.value.contains("}}")),
+        "fallback attempted to consume compiler-owned profile_status: {fallback:?}"
+    );
+
+    let mut values = BTreeMap::new();
+    values.insert(
+        "medical.profile_status".to_string(),
+        SemanticValue::new(
+            "medical.profile_status",
+            "Контактен, ориентирован, эмоционально напряжён",
+            ValueSource::UserConfirmed,
+            1.0,
+        ),
+    );
+    let case = SemanticCase {
+        values,
+        ..Default::default()
+    };
+    render_docx_file(&compiled, &rendered, &case, true)
+        .expect("strict render must preserve and resolve compiler-owned profile_status");
+    let rendered_text = extract_docx_text(&rendered).expect("rendered text");
+    assert!(
+        rendered_text.contains("Контактен, ориентирован, эмоционально напряжён"),
+        "{rendered_text}"
+    );
+    assert!(!rendered_text.contains("{{medical.profile_status}}"));
+    assert!(rendered_text.contains("Служебная пометка {{"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

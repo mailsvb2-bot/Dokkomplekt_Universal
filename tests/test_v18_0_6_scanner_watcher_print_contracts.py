@@ -111,7 +111,7 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
 
     def test_release_version_is_synchronized(self) -> None:
         expected = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertEqual(expected, "18.4.6")
+        self.assertEqual(expected, "18.4.7")
 
 
 if __name__ == "__main__":

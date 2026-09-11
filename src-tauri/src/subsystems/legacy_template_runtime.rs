@@ -24,6 +24,66 @@ struct TemplateContractCompilation {
     applied_field_ids: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+struct CompilerOwnership {
+    field_ids: BTreeSet<String>,
+    field_stories: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl CompilerOwnership {
+    fn record_stage(
+        &mut self,
+        stage: &str,
+        field_ids: Vec<String>,
+        stories: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        let ids = field_ids.into_iter().collect::<BTreeSet<_>>();
+        let story_ids = stories.keys().cloned().collect::<BTreeSet<_>>();
+        if ids != story_ids {
+            return Err(format!(
+                "Compiler stage {stage} вернул несогласованный ownership: fields={ids:?}, stories={story_ids:?}."
+            ));
+        }
+        for (field_id, owners) in stories {
+            if owners.is_empty() {
+                return Err(format!(
+                    "Compiler stage {stage} заявил semantic-поле {field_id} без Word story provenance."
+                ));
+            }
+            self.field_stories
+                .entry(field_id.clone())
+                .or_default()
+                .extend(owners.iter().cloned());
+        }
+        self.field_ids.extend(ids);
+        Ok(())
+    }
+
+    fn record_field(&mut self, field_id: &str, story: &str) {
+        self.field_ids.insert(field_id.to_string());
+        self.field_stories
+            .entry(field_id.to_string())
+            .or_default()
+            .insert(story.to_string());
+    }
+
+    fn protected_fields(
+        &self,
+        existing_placeholders: &[String],
+        domain: &DomainKind,
+        role_id: &str,
+    ) -> BTreeSet<String> {
+        let mut protected = existing_placeholders.iter().cloned().collect::<BTreeSet<_>>();
+        protected.extend(self.field_ids.iter().cloned());
+        exclude_role_equivalent_medical_fields(&mut protected, domain, role_id);
+        protected
+    }
+
+    fn sorted_field_ids(&self) -> Vec<String> {
+        self.field_ids.iter().cloned().collect()
+    }
+}
+
 fn selected_filled_medical_markup(
     template_text: &str,
     excluded_fields: &BTreeSet<String>,
@@ -34,7 +94,14 @@ fn selected_filled_medical_markup(
     dokkomplekt_core::suggest_filled_medical_template_markup(template_text, current_year_utc())
         .into_iter()
         .filter(|candidate| {
-            candidate.selected_by_default && !excluded_fields.contains(&candidate.field_id)
+            candidate.selected_by_default
+                && !excluded_fields.contains(&candidate.field_id)
+                // Defense in depth: compatibility fallback must never consume
+                // text that already contains semantic/template delimiters. The
+                // core wizard enforces the same invariant, but runtime keeps its
+                // own guard so a future parser change cannot erase a token owned
+                // by an earlier compiler stage.
+                && dokkomplekt_core::is_safe_compatibility_fallback_value(&candidate.value)
         })
         .map(|candidate| TemplateMarkupReplacement {
             field_id: candidate.field_id,
@@ -121,17 +188,6 @@ fn structural_template_bindings_for_stories(
     (binding_count, field_ids)
 }
 
-fn structural_template_bindings_by_story(
-    template_path: &Path,
-    domain: &DomainKind,
-    role_id: &str,
-) -> Result<(usize, BTreeSet<String>), String> {
-    let stories = extract_docx_story_texts(template_path).map_err(|error| error.to_string())?;
-    Ok(structural_template_bindings_for_stories(
-        &stories, domain, role_id,
-    ))
-}
-
 fn blank_template_fields_for_stories(
     stories: &BTreeMap<String, String>,
     domain: &DomainKind,
@@ -171,14 +227,13 @@ fn blank_template_fields_by_story(
 
 fn validate_compiler_owned_field_stories(
     compiled_stories: &BTreeMap<String, String>,
-    applied_field_ids: &[String],
-    applied_field_stories: &BTreeMap<String, BTreeSet<String>>,
+    ownership: &CompilerOwnership,
     domain: &DomainKind,
     role_id: &str,
 ) -> Result<(), String> {
-    for field_id in applied_field_ids {
+    for field_id in &ownership.field_ids {
         let token = format!("{{{{{field_id}}}}}");
-        let owner_stories = applied_field_stories.get(field_id).ok_or_else(|| {
+        let owner_stories = ownership.field_stories.get(field_id).ok_or_else(|| {
             format!(
                 "Compiler заявил semantic-поле {field_id}, но не сохранил provenance Word story."
             )
@@ -242,43 +297,7 @@ fn compile_template_contract_copy(
         BTreeMap::new()
     };
     let blank_binding_count = blank_candidates_by_story.values().map(Vec::len).sum::<usize>();
-    let blank_field_ids = blank_candidates_by_story
-        .values()
-        .flatten()
-        .map(|candidate| candidate.field_id.clone())
-        .collect::<BTreeSet<_>>();
-    let (structural_binding_count, structural_field_ids) = if domain == &DomainKind::Medical {
-        structural_template_bindings_by_story(input_path, domain, role_id)?
-    } else {
-        (0, BTreeSet::new())
-    };
-    let mut initial_excluded_fields = analysis
-        .placeholders
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    initial_excluded_fields.extend(blank_field_ids.iter().cloned());
-    initial_excluded_fields.extend(structural_field_ids.iter().cloned());
-    let initial_story_fallback = if domain == &DomainKind::Medical {
-        selected_filled_medical_markup_by_story(input_path, &initial_excluded_fields)?
-    } else {
-        BTreeMap::new()
-    };
-    let primary_expert_field =
-        dokkomplekt_core::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
-    let needs_primary_expert_insertion = domain == &DomainKind::Medical
-        && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "primary"
-        && !analysis
-            .placeholders
-            .iter()
-            .any(|field| field == primary_expert_field);
-
-    if domain != &DomainKind::Medical
-        && blank_binding_count == 0
-        && structural_binding_count == 0
-        && initial_story_fallback.is_empty()
-        && !needs_primary_expert_insertion
-    {
+    if domain != &DomainKind::Medical && blank_binding_count == 0 {
         return Ok(TemplateContractCompilation {
             changed: false,
             path: input_path.to_path_buf(),
@@ -302,8 +321,7 @@ fn compile_template_contract_copy(
     }
 
     let mut current_input = input_path.to_path_buf();
-    let mut applied_field_ids = Vec::new();
-    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut ownership = CompilerOwnership::default();
     let mut changed = false;
 
     if blank_binding_count > 0 {
@@ -320,13 +338,11 @@ fn compile_template_contract_copy(
                 report.skipped_bindings.join(", ")
             ));
         }
-        for (field_id, stories) in &report.applied_field_stories {
-            applied_field_stories
-                .entry(field_id.clone())
-                .or_default()
-                .extend(stories.iter().cloned());
-        }
-        applied_field_ids.extend(report.applied_field_ids);
+        ownership.record_stage(
+            "blank_learning",
+            report.applied_field_ids,
+            &report.applied_field_stories,
+        )?;
         current_input = blank_output;
         changed = true;
     }
@@ -342,13 +358,11 @@ fn compile_template_contract_copy(
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
         if report.binding_count > 0 {
-            for (field_id, stories) in &report.applied_field_stories {
-                applied_field_stories
-                    .entry(field_id.clone())
-                    .or_default()
-                    .extend(stories.iter().cloned());
-            }
-            applied_field_ids.extend(report.applied_field_ids);
+            ownership.record_stage(
+                "structural",
+                report.applied_field_ids,
+                &report.applied_field_stories,
+            )?;
             current_input = structural_output;
             changed = true;
         }
@@ -361,16 +375,11 @@ fn compile_template_contract_copy(
     let current_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось перечитать compiler-stage шаблона: {error}"))?;
     let current_analysis = analyze_template_text_with_domain_hint(&current_text, Some(domain));
-    let mut fallback_excluded_fields = current_analysis
-        .placeholders
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    fallback_excluded_fields.extend(applied_field_ids.iter().cloned());
-    // Scoped VK fields and their shared workplace/position compatibility IDs
-    // describe one physical render slot. Once any compiler stage owns one side,
-    // the legacy value fallback must not re-bind that slot through the other side.
-    exclude_role_equivalent_medical_fields(&mut fallback_excluded_fields, domain, role_id);
+    let fallback_excluded_fields = ownership.protected_fields(
+        &current_analysis.placeholders,
+        domain,
+        role_id,
+    );
     let fallback_by_story = if domain == &DomainKind::Medical {
         selected_filled_medical_markup_by_story(&current_input, &fallback_excluded_fields)?
     } else {
@@ -393,13 +402,11 @@ fn compile_template_contract_copy(
                 report.skipped_bindings.join(", ")
             ));
         }
-        for (field_id, stories) in &report.applied_field_stories {
-            applied_field_stories
-                .entry(field_id.clone())
-                .or_default()
-                .extend(stories.iter().cloned());
-        }
-        applied_field_ids.extend(report.applied_field_ids);
+        ownership.record_stage(
+            "compatibility_fallback",
+            report.applied_field_ids,
+            &report.applied_field_stories,
+        )?;
         current_input = output_path.to_path_buf();
         changed = true;
     } else if changed {
@@ -443,11 +450,7 @@ fn compile_template_contract_copy(
             if inserted {
                 current_input = role_output;
                 changed = true;
-                applied_field_ids.push(expert_field.to_string());
-                applied_field_stories
-                    .entry(expert_field.to_string())
-                    .or_default()
-                    .insert("word/document.xml".to_string());
+                ownership.record_field(expert_field, "word/document.xml");
             }
         }
     }
@@ -461,8 +464,7 @@ fn compile_template_contract_copy(
         });
     }
 
-    applied_field_ids.sort();
-    applied_field_ids.dedup();
+    let applied_field_ids = ownership.sorted_field_ids();
     let derived_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось проверить скомпилированную копию: {error}"))?;
     let derived_analysis = analyze_template_text_with_domain_hint(&derived_text, Some(domain));
@@ -476,13 +478,7 @@ fn compile_template_contract_copy(
     // performed the binding and validate that exact story with the strict parser.
     let compiled_stories = extract_docx_story_texts(&current_input)
         .map_err(|error| format!("Не удалось проверить Word stories compiler-копии: {error}"))?;
-    validate_compiler_owned_field_stories(
-        &compiled_stories,
-        &applied_field_ids,
-        &applied_field_stories,
-        domain,
-        role_id,
-    )?;
+    validate_compiler_owned_field_stories(&compiled_stories, &ownership, domain, role_id)?;
     Ok(TemplateContractCompilation {
         changed: true,
         path: current_input,
@@ -1470,6 +1466,50 @@ mod legacy_template_runtime_tests {
         assert!(rendered.template_errors.is_empty(), "{:?}", rendered.template_errors);
         assert!(rendered.output_text.contains("Спокоен, ориентирован."));
         assert!(rendered.output_text.contains("Служебная пометка {{ \"черновик без конца"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compiler_owned_profile_status_from_blank_suffix_survives_compatibility_fallback() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-profile-status-ownership-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("sick-leave-vk.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>ВК по больничному</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: ______ после компиляции</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+            true,
+        )
+        .expect("compiler-owned profile_status must survive later fallback stages");
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        let body = &stories["word/document.xml"];
+        assert!(
+            body.contains("Психический статус: {{medical.profile_status}} после компиляции"),
+            "{body}"
+        );
+        assert!(body.contains("Служебная пометка {{"), "{body}");
         let _ = std::fs::remove_dir_all(root);
     }
 

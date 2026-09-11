@@ -417,9 +417,12 @@ function New-MedicalStoryDocxFixture {
           '<w:tr><w:tc><w:p><w:r><w:t>История болезни №</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $caseNumber + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '<w:tr><w:tc><w:p><w:r><w:t>Диагноз</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $diagnosis + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '<w:tr><w:tc><w:p><w:r><w:t>План лечения</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $treatment + '</w:t></w:r></w:p></w:tc></w:tr>' +
-          '<w:tr><w:tc><w:p><w:r><w:t>Психический статус</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $profileStatus + '</w:t></w:r></w:p></w:tc></w:tr>' +
           '<w:tr><w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $workplace + '</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>' + $position + '</w:t></w:r></w:p></w:tc></w:tr>' +
-          '</w:tbl>'
+          '</w:tbl>' +
+          # 18.4.7 regression: blank compiler owns profile_status while a
+          # literal suffix remains in the same visible value. Compatibility
+          # fallback must never consume the compiler-owned semantic token.
+          '<w:p><w:r><w:t>Психический статус: ______ после компиляции</w:t></w:r></w:p>'
       } else {
         $patientBlock = '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>'
         $structuredFields =
@@ -1090,6 +1093,8 @@ try {
     if ($createdXml -notmatch 'Контактен, ориентирован, эмоционально напряжён') { throw 'Installed medical generation did not render medical.profile_status from the current primary source.' }
     if ($createdXml -match 'Шаблонный психический статус старого пациента') { throw 'Installed medical generation leaked the old template medical.profile_status.' }
     if ($createdXml -match '\{\{medical\.profile_status\}\}') { throw 'Installed medical generation left the compiler-owned medical.profile_status placeholder unresolved.' }
+    if ($createdXml -notmatch 'после компиляции') { throw 'Installed medical generation lost the literal suffix around compiler-owned medical.profile_status.' }
+    if ($createdXml -match '______') { throw 'Installed medical generation left the profile-status blank unresolved.' }
     if ($createdXml -notmatch 'Служебная пометка \{\{') { throw 'Strict medical generation did not preserve the doctor-owned literal opener used by the profile-status regression.' }
     if ($createdXml -notmatch 'Новый завод') { throw 'Installed medical generation did not render current workplace.' }
     if ($createdXml -match 'Старый завод') { throw 'Installed medical generation leaked old workplace.' }

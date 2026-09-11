@@ -1529,7 +1529,7 @@ fn apply_structural_binding_in_story(
         let Some(remainder) = structural_remainder_after_label(&anchor.text, &binding.label) else {
             continue;
         };
-        if anchor.text.contains("{{") || anchor.text.contains("}}") {
+        if dokkomplekt_core::contains_template_delimiters(&anchor.text) {
             continue;
         }
         let inline = !remainder.is_empty();

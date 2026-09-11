@@ -59,6 +59,9 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "medical.profile_status from the current primary source" in source
     assert "old template medical.profile_status" in source
     assert "compiler-owned medical.profile_status placeholder unresolved" in source
+    assert "Психический статус: ______ после компиляции" in source
+    assert "lost the literal suffix around compiler-owned medical.profile_status" in source
+    assert "left the profile-status blank unresolved" in source
     assert "doctor-owned literal opener used by the profile-status regression" in source
     assert "-Role 'sick_leave_vk'" in source
     assert "medical.sick_leave_vk.position" in source

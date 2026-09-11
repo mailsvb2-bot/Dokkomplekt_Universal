@@ -1,6 +1,6 @@
 [package]
 name = "dokkomplekt-license-python"
-version = "18.4.6"
+version = "18.4.7"
 edition = "2021"
 rust-version = "1.97.1"
 

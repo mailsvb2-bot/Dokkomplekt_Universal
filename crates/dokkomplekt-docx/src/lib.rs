@@ -1566,6 +1566,64 @@ fn structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
     best
 }
 
+fn is_structural_word_char(value: char) -> bool {
+    value.is_alphanumeric() || value == '_'
+}
+
+fn standalone_structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
+    let wanted = structural_fold(needle);
+    if wanted.is_empty() {
+        return None;
+    }
+    let boundaries = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect::<Vec<_>>();
+    let mut best = None::<(usize, usize)>;
+    for (start_position, start) in boundaries.iter().copied().enumerate() {
+        for end in boundaries.iter().copied().skip(start_position + 1) {
+            if structural_fold(&text[start..end]) != wanted {
+                continue;
+            }
+            let before_is_word = text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(is_structural_word_char);
+            let after_is_word = text[end..]
+                .chars()
+                .next()
+                .is_some_and(is_structural_word_char);
+            if before_is_word || after_is_word {
+                continue;
+            }
+            if best.is_none_or(|(best_start, best_end)| {
+                end - start < best_end - best_start
+                    || (end - start == best_end - best_start && start > best_start)
+            }) {
+                best = Some((start, end));
+            }
+        }
+    }
+    best
+}
+
+fn is_blank_slot_separator(value: char) -> bool {
+    value.is_whitespace() || matches!(value, ':' | ';' | ',' | '.' | '-' | '–' | '—' | '_' | '·')
+}
+
+fn blank_header_label_range(text: &str) -> Option<(usize, usize)> {
+    let (label_start, label_end) = structural_match_range(text, "Дата, время")?;
+    let (heading_start, _) = structural_match_range(text, "Выписной эпикриз")?;
+    if heading_start < label_end {
+        return None;
+    }
+    text[label_end..heading_start]
+        .chars()
+        .all(is_blank_slot_separator)
+        .then_some((label_start, label_end))
+}
+
 fn rewrite_first_paragraph_visible_text<F>(xml: &str, mut rewrite: F) -> Option<String>
 where
     F: FnMut(&str) -> Option<String>,
@@ -1620,11 +1678,11 @@ fn looks_like_donor_instruction(text: &str) -> bool {
 
 fn is_blank_discharge_donor_story(story: &str) -> bool {
     let folded = structural_fold(story);
-    folded.contains("дата, время")
+    blank_header_label_range(story).is_some()
         && folded.contains("выписной эпикриз")
         && folded.contains("зарегистрирован по адресу")
         && folded.contains("находился на лечении")
-        && folded.contains("с по")
+        && standalone_structural_match_range(story, "с по").is_some()
         && folded.contains("психический статус при поступлении")
         && folded.contains("сомато-неврологический статус")
         && (folded.contains("сюда подстав")
@@ -1650,7 +1708,7 @@ fn compile_empty_discharge_slots_in_story(
             if !structural_fold(text).contains("выписной эпикриз") {
                 return None;
             }
-            let (start, end) = structural_match_range(text, "Дата, время")?;
+            let (start, end) = blank_header_label_range(text)?;
             let mut replacement = text.to_string();
             replacement.replace_range(start..end, "{{medical.discharge_date}}");
             Some(replacement)
@@ -1719,7 +1777,7 @@ fn compile_empty_discharge_slots_in_story(
             if !structural_fold(text).contains("находился на лечении") {
                 return None;
             }
-            let (start, end) = structural_match_range(text, "с по")?;
+            let (start, end) = standalone_structural_match_range(text, "с по")?;
             let mut replacement = text.to_string();
             replacement.replace_range(
                 start..end,
@@ -3843,6 +3901,56 @@ mod tests {
         assert!(!text.contains("01.01.1980"));
         assert!(!text.contains("Н. Новгород"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn blank_discharge_period_rewrite_never_matches_s_pomoshchyu() {
+        let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Находился на лечении в стационаре с помощью родственников</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        let (compiled, applied) = compile_empty_discharge_slots_in_story(xml, true);
+        let text = xml_to_text(&compiled);
+        assert!(text.contains("с помощью родственников"), "{text}");
+        assert!(!text.contains("{{medical.admission_date}}"), "{text}");
+        assert!(!text.contains("{{medical.discharge_date}}"), "{text}");
+        assert!(!applied.iter().any(|field| {
+            field == "medical.admission_date" || field == "medical.discharge_date"
+        }));
+    }
+
+    #[test]
+    fn blank_discharge_header_rewrite_requires_an_actually_empty_date_slot() {
+        let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время: 01.09.2026 Выписной эпикриз №</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        let (compiled, applied) = compile_empty_discharge_slots_in_story(xml, true);
+        let text = xml_to_text(&compiled);
+        assert!(text.contains("01.09.2026"), "{text}");
+        assert!(!text.contains("{{medical.discharge_date}}"), "{text}");
+        assert!(!applied
+            .iter()
+            .any(|field| field == "medical.discharge_date"));
+    }
+
+    #[test]
+    fn blank_discharge_donor_proof_rejects_filled_header_and_non_period_prose() {
+        let donor = |header: &str, period: &str| {
+            format!(
+                "{header}\nзарегистрирован по адресу\nНаходился на лечении {period}\nПсихический статус при поступлении\nСомато-неврологический статус\nЛечение: Сюда подставляется информация"
+            )
+        };
+        assert!(is_blank_discharge_donor_story(&donor(
+            "Дата, время      Выписной эпикриз №",
+            "с по"
+        )));
+        assert!(!is_blank_discharge_donor_story(&donor(
+            "Дата, время: 01.09.2026 Выписной эпикриз №",
+            "с по"
+        )));
+        assert!(!is_blank_discharge_donor_story(&donor(
+            "Дата, время      Выписной эпикриз №",
+            "с помощью родственников"
+        )));
     }
 
     #[test]

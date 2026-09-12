@@ -547,6 +547,57 @@ fn merge_compiler_fields_into_analysis(
     Ok(())
 }
 
+fn synchronize_compiled_required_fields(document: &mut DocumentTemplateSpec) {
+    if document.category != DomainKind::Medical {
+        document.required_fields.extend(document.placeholders.iter().cloned());
+        document.required_fields.sort();
+        document.required_fields.dedup();
+        return;
+    }
+
+    let role = dokkomplekt_core::MedicalDocumentRole::from_role_id(&document.role_id);
+    if matches!(role, dokkomplekt_core::MedicalDocumentRole::GenericMedical) {
+        // Unknown medical roles have no canonical role plan. Preserve their
+        // explicitly persisted requirements, but never invent new ones merely
+        // because a placeholder is renderable.
+        document.required_fields.sort();
+        document.required_fields.dedup();
+        return;
+    }
+
+    let placeholder_fields = document
+        .placeholders
+        .iter()
+        .map(|field| dokkomplekt_core::canonical_storage_field_id(field))
+        .collect::<BTreeSet<_>>();
+    let mut required = document
+        .required_fields
+        .iter()
+        .map(|field| dokkomplekt_core::canonical_storage_field_id(field))
+        .filter(|field| !placeholder_fields.contains(field))
+        .collect::<BTreeSet<_>>();
+
+    // A semantic placeholder is a render path, not proof that the user must
+    // provide a value. For known medical roles the hard requirements come from
+    // the canonical role plan; user-marked required popup fields may strengthen
+    // that contract explicitly.
+    required.extend(
+        dokkomplekt_core::build_medical_render_plan(role, false, false)
+            .required_fields
+            .into_iter()
+            .map(|field| dokkomplekt_core::canonical_storage_field_id(&field)),
+    );
+    required.insert("subject.name".to_string());
+    required.extend(
+        document
+            .popup_fields
+            .iter()
+            .filter(|field| field.required)
+            .map(|field| dokkomplekt_core::canonical_storage_field_id(&field.field_id)),
+    );
+    document.required_fields = required.into_iter().collect();
+}
+
 fn apply_compiled_contract_to_document_with_compiler_fields(
     document: &mut DocumentTemplateSpec,
     compiled_text: &str,
@@ -562,9 +613,7 @@ fn apply_compiled_contract_to_document_with_compiler_fields(
         ));
     }
     document.placeholders = analysis.placeholders.clone();
-    document.required_fields.extend(analysis.placeholders);
-    document.required_fields.sort();
-    document.required_fields.dedup();
+    synchronize_compiled_required_fields(document);
     document.is_static_copy = false;
     validate_medical_template_output_contract(document)
 }
@@ -1492,12 +1541,64 @@ mod legacy_template_runtime_tests {
             "medical.discharge_condition",
         ] {
             assert!(document.placeholders.iter().any(|item| item == field_id));
-            assert!(document.required_fields.iter().any(|item| item == field_id));
         }
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.diagnosis",
+            "medical.discharge_date",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                document.required_fields.iter().any(|item| item == field_id),
+                "canonical discharge requirement was lost: {field_id}: {:?}",
+                document.required_fields
+            );
+        }
+        assert!(
+            !document
+                .required_fields
+                .iter()
+                .any(|item| item == "medical.discharge_condition"),
+            "an optional render placeholder must not become a hard-required prompt: {:?}",
+            document.required_fields
+        );
         assert_eq!(document.popup_fields, popup_before);
         assert!(document.popup_configured);
         assert!(!document.is_static_copy);
     }
+    #[test]
+    fn compiled_contract_keeps_explicitly_required_optional_popup_required() {
+        let mut document = medical_document();
+        let mut discharge_condition =
+            PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        discharge_condition.required = true;
+        document.popup_fields.push(discharge_condition);
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            concat!(
+                "Выписной эпикриз\n",
+                "{{subject.name}}\n",
+                "{{medical.case_number}}\n",
+                "{{medical.admission_date}}\n",
+                "{{medical.diagnosis}}\n",
+                "{{medical.discharge_date}}\n",
+                "{{medical.treatment}}\n",
+                "{{medical.expert_anamnesis}}\n",
+                "{{medical.discharge_condition}}"
+            ),
+            &[],
+        )
+        .expect("compiled contract");
+        assert!(document
+            .required_fields
+            .iter()
+            .any(|item| item == "medical.discharge_condition"));
+    }
+
     #[test]
     fn compiler_owned_profile_status_is_not_rejected_by_unrelated_literal_braces() {
         let root = std::env::temp_dir().join(format!(

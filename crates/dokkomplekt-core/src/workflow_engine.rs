@@ -680,6 +680,26 @@ mod tests {
     }
 
     #[test]
+    fn optional_medical_render_placeholder_is_not_promoted_to_required_by_pipeline() {
+        let mut doc = document("discharge", "medical.discharge_condition");
+        doc.category = DomainKind::Medical;
+        doc.role_id = "discharge".into();
+        doc.required_fields.clear();
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let prompt = plan
+            .prompts
+            .iter()
+            .find(|prompt| prompt.field_id == "medical.discharge_condition")
+            .expect("optional discharge condition prompt");
+        assert!(
+            !prompt.required,
+            "optional render placeholder became required: {prompt:?}"
+        );
+        assert!(!prompt.skippable);
+    }
+
+    #[test]
     fn derived_medical_paragraph_asks_for_sources_not_computed_output() {
         let mut doc = document("discharge", MEDICAL_EXPERT_ANAMNESIS);
         doc.category = DomainKind::Medical;

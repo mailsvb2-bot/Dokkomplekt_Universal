@@ -309,10 +309,21 @@ fn suppressed_prompt_fields(
         suppressed.insert("medical.treatment");
     }
 
-    // Donor contract: the sick-leave number belongs only to the discharge
-    // epicrisis and only when the doctor explicitly enabled sick leave.
+    // Donor contract: canonical medical roles keep the sick-leave number scoped
+    // to discharge epicrisis with sick leave enabled. An unknown/GenericMedical
+    // template has no canonical role contract, so an explicitly saved required
+    // popup field is the specialist-owned contract and must remain askable.
+    let generic_medical = matches!(
+        crate::domains::medical_document_plan::MedicalDocumentRole::from_role_id(&document.role_id),
+        crate::domains::medical_document_plan::MedicalDocumentRole::GenericMedical
+    );
+    let explicitly_required_sick_leave = document.popup_configured
+        && document.popup_fields.iter().any(|field| {
+            field.required
+                && canonical_storage_field_id(&field.field_id) == "medical.sick_leave_number"
+        });
     let sick_leave_allowed = role == "discharge" && flags.sick_leave_enabled;
-    if !sick_leave_allowed {
+    if !sick_leave_allowed && !(generic_medical && explicitly_required_sick_leave) {
         suppressed.insert("medical.sick_leave_number");
     }
     suppressed
@@ -680,6 +691,26 @@ mod tests {
     }
 
     #[test]
+    fn optional_medical_render_placeholder_is_not_promoted_to_required_by_pipeline() {
+        let mut doc = document("discharge", "medical.discharge_condition");
+        doc.category = DomainKind::Medical;
+        doc.role_id = "discharge".into();
+        doc.required_fields.clear();
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let prompt = plan
+            .prompts
+            .iter()
+            .find(|prompt| prompt.field_id == "medical.discharge_condition")
+            .expect("optional discharge condition prompt");
+        assert!(
+            !prompt.required,
+            "optional render placeholder became required: {prompt:?}"
+        );
+        assert!(!prompt.skippable);
+    }
+
+    #[test]
     fn derived_medical_paragraph_asks_for_sources_not_computed_output() {
         let mut doc = document("discharge", MEDICAL_EXPERT_ANAMNESIS);
         doc.category = DomainKind::Medical;
@@ -856,6 +887,29 @@ mod tests {
             ids,
             BTreeSet::from(["medical.position", "medical.workplace"])
         );
+    }
+
+    #[test]
+    fn generic_medical_explicit_required_sick_leave_is_not_suppressed() {
+        let mut doc = document("generic-medical", "medical.sick_leave_number");
+        doc.category = DomainKind::Medical;
+        doc.role_id = "custom_specialist_form".into();
+        doc.required_fields.clear();
+        doc.popup_configured = true;
+        let mut popup =
+            PopupFieldConfig::new("medical.sick_leave_number", "Номер больничного листа");
+        popup.required = true;
+        doc.popup_fields = vec![popup];
+        crate::synchronize_document_required_fields(&mut doc);
+
+        let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+        let prompt = plan
+            .prompts
+            .iter()
+            .find(|prompt| prompt.field_id == "medical.sick_leave_number")
+            .expect("explicit required generic-medical sick-leave prompt must remain askable");
+        assert!(prompt.required);
+        assert!(!prompt.skippable);
     }
 
     #[test]

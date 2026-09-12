@@ -1258,6 +1258,33 @@ mod tests {
     }
 
     #[test]
+    fn empty_mental_status_never_consumes_following_somatic_section() {
+        let candidates = infer_labeled_template_values(
+            concat!(
+                "Психический статус при поступлении:\n",
+                "Сомато-неврологический статус: Нормального питания.\n",
+                "Лечение: терапия"
+            ),
+            Some(&DomainKind::Medical),
+            Some("discharge"),
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.field_id == "medical.profile_status"),
+            "an empty mental-status section must stay empty instead of owning the next section: {candidates:?}"
+        );
+        let somatic = candidates
+            .iter()
+            .find(|candidate| candidate.field_id == "medical.somatic_status")
+            .expect("somato-neurological status must be a structural boundary and value owner");
+        assert_eq!(somatic.value, "Нормального питания.");
+        assert!(candidates.iter().any(|candidate| {
+            candidate.field_id == "medical.treatment" && candidate.value == "терапия"
+        }));
+    }
+
+    #[test]
     fn broad_unqualified_date_is_not_guessed() {
         let fields = infer_legacy_template_fields(
             "Дата: __________",

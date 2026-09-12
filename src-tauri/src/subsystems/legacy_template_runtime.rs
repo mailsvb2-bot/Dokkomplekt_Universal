@@ -322,6 +322,7 @@ fn compile_template_contract_copy(
 
     let mut current_input = input_path.to_path_buf();
     let mut ownership = CompilerOwnership::default();
+    let mut preserved_literal_field_ids = BTreeSet::<String>::new();
     let mut changed = false;
 
     if blank_binding_count > 0 {
@@ -357,6 +358,7 @@ fn compile_template_contract_copy(
             role_id,
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
+        preserved_literal_field_ids.extend(report.preserved_literal_field_ids);
         if report.binding_count > 0 {
             ownership.record_stage(
                 "structural",
@@ -375,11 +377,12 @@ fn compile_template_contract_copy(
     let current_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось перечитать compiler-stage шаблона: {error}"))?;
     let current_analysis = analyze_template_text_with_domain_hint(&current_text, Some(domain));
-    let fallback_excluded_fields = ownership.protected_fields(
+    let mut fallback_excluded_fields = ownership.protected_fields(
         &current_analysis.placeholders,
         domain,
         role_id,
     );
+    fallback_excluded_fields.extend(preserved_literal_field_ids);
     let fallback_by_story = if domain == &DomainKind::Medical {
         selected_filled_medical_markup_by_story(&current_input, &fallback_excluded_fields)?
     } else {
@@ -544,6 +547,10 @@ fn merge_compiler_fields_into_analysis(
     Ok(())
 }
 
+fn synchronize_compiled_required_fields(document: &mut DocumentTemplateSpec) {
+    dokkomplekt_core::synchronize_document_required_fields(document);
+}
+
 fn apply_compiled_contract_to_document_with_compiler_fields(
     document: &mut DocumentTemplateSpec,
     compiled_text: &str,
@@ -559,9 +566,7 @@ fn apply_compiled_contract_to_document_with_compiler_fields(
         ));
     }
     document.placeholders = analysis.placeholders.clone();
-    document.required_fields.extend(analysis.placeholders);
-    document.required_fields.sort();
-    document.required_fields.dedup();
+    synchronize_compiled_required_fields(document);
     document.is_static_copy = false;
     validate_medical_template_output_contract(document)
 }
@@ -1271,6 +1276,86 @@ mod legacy_template_runtime_tests {
     }
 
     #[test]
+    fn diary_filler_blank_discharge_becomes_publishable_without_manual_placeholders() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-diary-filler-discharge-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("3 Выписной.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р.,  зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>В 3 отделение КДП поступает</w:t></w:r></w:p>
+<w:p><w:r><w:t>Жалобы при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Анамнез жизни:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Анамнез заболевания:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Нормального питания.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла «2 первичный», который выбирается в Ui</w:t></w:r></w:p>
+<w:p><w:r><w:t>Экспертный анамнез: не работает. В выдаче ЛН не нуждается.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Зав. отд. Можарова Е.А.                    Врач-психиатр Балаганин С.В.</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "discharge",
+            true,
+        )
+        .expect("the proven blank discharge template must compile at generation time");
+        assert!(compiled.changed);
+        let body = extract_docx_text(&compiled.path).expect("compiled discharge text");
+        let analysis = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
+        let mut document = DocumentTemplateSpec {
+            id: "diary-filler-discharge".into(),
+            button_label: "Выписной".into(),
+            template_path: compiled.path.display().to_string(),
+            category: DomainKind::Medical,
+            role_id: "discharge".into(),
+            required_fields: Vec::new(),
+            placeholders: analysis.placeholders,
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        validate_medical_template_output_contract(&document)
+            .expect("blank donor discharge must have every mandatory render path");
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            &body,
+            &compiled.applied_field_ids,
+        )
+        .expect("compiled donor discharge contract must persist safely");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.diagnosis",
+            "medical.discharge_date",
+            "medical.treatment",
+        ] {
+            assert!(
+                document.placeholders.iter().any(|item| item == field_id),
+                "missing persisted render path {field_id}: {:?}",
+                document.placeholders
+            );
+        }
+        assert!(body.contains("Сомато-неврологический статус: Нормального питания."));
+        assert!(!body.contains("Сюда подставляется"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn windows_primary_fixture_compiles_without_semanticizing_signature_blanks() {
         let root = std::env::temp_dir().join(format!(
             "dokkomplekt-windows-primary-{}-{}",
@@ -1409,12 +1494,101 @@ mod legacy_template_runtime_tests {
             "medical.discharge_condition",
         ] {
             assert!(document.placeholders.iter().any(|item| item == field_id));
-            assert!(document.required_fields.iter().any(|item| item == field_id));
         }
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.diagnosis",
+            "medical.discharge_date",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                document.required_fields.iter().any(|item| item == field_id),
+                "canonical discharge requirement was lost: {field_id}: {:?}",
+                document.required_fields
+            );
+        }
+        assert!(
+            !document
+                .required_fields
+                .iter()
+                .any(|item| item == "medical.discharge_condition"),
+            "an optional render placeholder must not become a hard-required prompt: {:?}",
+            document.required_fields
+        );
         assert_eq!(document.popup_fields, popup_before);
         assert!(document.popup_configured);
         assert!(!document.is_static_copy);
     }
+    #[test]
+    fn compiled_contract_keeps_explicitly_required_optional_popup_required() {
+        let mut document = medical_document();
+        let mut discharge_condition =
+            PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        discharge_condition.required = true;
+        document.popup_fields.push(discharge_condition);
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            concat!(
+                "Выписной эпикриз\n",
+                "{{subject.name}}\n",
+                "{{medical.case_number}}\n",
+                "{{medical.admission_date}}\n",
+                "{{medical.diagnosis}}\n",
+                "{{medical.discharge_date}}\n",
+                "{{medical.treatment}}\n",
+                "{{medical.expert_anamnesis}}\n",
+                "{{medical.discharge_condition}}"
+            ),
+            &[],
+        )
+        .expect("compiled contract");
+        assert!(document
+            .required_fields
+            .iter()
+            .any(|item| item == "medical.discharge_condition"));
+    }
+
+    #[test]
+    fn compiled_contract_does_not_promote_generated_popup_defaults_to_required() {
+        let mut document = medical_document();
+        document.popup_configured = false;
+        document.required_fields = vec!["medical.discharge_date".into()];
+        let mut generated_optional =
+            PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        generated_optional.required = true;
+        document.popup_fields = vec![generated_optional];
+
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            concat!(
+                "Выписной эпикриз\n",
+                "{{subject.name}}\n",
+                "{{medical.case_number}}\n",
+                "{{medical.admission_date}}\n",
+                "{{medical.diagnosis}}\n",
+                "{{medical.discharge_date}}\n",
+                "{{medical.treatment}}\n",
+                "{{medical.expert_anamnesis}}\n",
+                "{{medical.discharge_condition}}"
+            ),
+            &[],
+        )
+        .expect("compiled contract");
+
+        assert!(
+            !document
+                .required_fields
+                .iter()
+                .any(|item| item == "medical.discharge_condition"),
+            "generated popup defaults must not strengthen the medical contract: {:?}",
+            document.required_fields
+        );
+    }
+
     #[test]
     fn compiler_owned_profile_status_is_not_rejected_by_unrelated_literal_braces() {
         let root = std::env::temp_dir().join(format!(

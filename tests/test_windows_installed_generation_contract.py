@@ -72,3 +72,19 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Installed sick_leave_vk generation did not render the current protocol number" in source
     assert "Installed sick_leave_vk generation left medical.sick_leave_vk.position unresolved" in source
     assert "Installed end-to-end document generation OK" in source
+
+
+def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+    assert "$env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '0'" in source
+    assert "The unsigned Preview is an independent installed-app lane" in source
+    assert "function New-BlankDischargeDocxFixture" in source
+    assert "Дата, время      Выписной эпикриз №" in source
+    assert "Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с по" in source
+    assert "Психический статус при поступлении:" in source
+    assert "Сомато-неврологический статус: Нормального питания." in source
+    assert "if ($adversarialMedicalRole -eq 'discharge')" in source
+    assert "Installed discharge preflight did not expose medical.discharge_date" in source
+    assert "Blank discharge template did not render the current diagnosis" in source
+    assert "Blank discharge compiler consumed the following somatic-status section" in source
+    assert "Blank discharge generation left a semantic placeholder unresolved" in source

@@ -2,9 +2,9 @@ use crate::{
     analyze_template_text_with_context, best_domain, create_document_spec,
     default_popup_fields_for_document, infer_legacy_template_fields, infer_workspace_profile,
     infer_workspace_workflow_shape, normalize_popup_fields,
-    reinforce_workspace_inference_with_pack, DocumentPack, DocumentTemplateSpec, DomainKind,
-    PopupFieldConfig, TemplateAnalysis, WorkspaceProfileInference, WorkspaceShapeDocumentInput,
-    WorkspaceWorkflowShape,
+    reinforce_workspace_inference_with_pack, synchronize_document_required_fields, DocumentPack,
+    DocumentTemplateSpec, DomainKind, PopupFieldConfig, TemplateAnalysis,
+    WorkspaceProfileInference, WorkspaceShapeDocumentInput, WorkspaceWorkflowShape,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -287,16 +287,20 @@ pub fn create_pack_from_confirmations(
             let detected_category = doc.category.clone();
             let detected_popup_fields = normalize_popup_fields(&doc.popup_fields);
             let submitted_popup_fields = normalize_popup_fields(&row.popup_fields);
-            let user_popup_changes = submitted_popup_fields
-                .iter()
-                .filter(|submitted| {
-                    detected_popup_fields
-                        .iter()
-                        .find(|default| default.field_id == submitted.field_id)
-                        != Some(*submitted)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
+            let user_popup_changes = if row.popup_fields_edited {
+                submitted_popup_fields
+                    .iter()
+                    .filter(|submitted| {
+                        detected_popup_fields
+                            .iter()
+                            .find(|default| default.field_id == submitted.field_id)
+                            != Some(*submitted)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
 
             if let Some(domain_override) = &row.domain_override {
                 match domain_override {
@@ -330,12 +334,12 @@ pub fn create_pack_from_confirmations(
                 }
                 doc.popup_fields = normalize_popup_fields(&rebuilt);
                 doc.popup_configured = !user_popup_changes.is_empty();
-            } else if !row.popup_fields.is_empty() {
+            } else if row.popup_fields_edited {
                 doc.popup_fields = submitted_popup_fields;
                 doc.popup_configured = true;
             }
 
-            synchronize_required_fields(&mut doc);
+            synchronize_document_required_fields(&mut doc);
 
             if doc.is_static_copy {
                 warnings.push(format!(
@@ -355,26 +359,6 @@ pub fn create_pack_from_confirmations(
         confirmations: rows.to_vec(),
         warnings,
     }
-}
-
-/// A button's requirements are derived from the final template + final popup
-/// configuration. Never carry requirements from a previously detected domain
-/// after the user changes the profession/profile.
-fn synchronize_required_fields(document: &mut DocumentTemplateSpec) {
-    document.required_fields = document
-        .placeholders
-        .iter()
-        .cloned()
-        .chain(
-            document
-                .popup_fields
-                .iter()
-                .filter(|field| field.required)
-                .map(|field| field.field_id.clone()),
-        )
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
 }
 
 pub fn merge_document_pack(existing: &mut DocumentPack, incoming: DocumentPack) -> Vec<String> {
@@ -678,6 +662,31 @@ mod tests {
     }
 
     #[test]
+    fn generated_medical_popup_metadata_is_not_treated_as_user_configuration() {
+        let rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "discharge".into(),
+            template_path: "discharge.docx".into(),
+            extracted_text: "Выписной эпикриз\n{{medical.discharge_condition}}".into(),
+            preferred_button_label: None,
+            domain_override: Some(DomainKind::Medical),
+        }]);
+        assert!(!rows[0].popup_fields_edited);
+        assert!(!rows[0].popup_fields.is_empty());
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        let document = &result.pack.documents[0];
+        assert!(!document.popup_configured);
+        assert!(document
+            .placeholders
+            .iter()
+            .any(|field| field == "medical.discharge_condition"));
+        assert!(!document
+            .required_fields
+            .iter()
+            .any(|field| field == "medical.discharge_condition"));
+    }
+
+    #[test]
     fn domain_override_rebuilds_unedited_popup_defaults_for_new_domain() {
         let mut rows = prepare_template_confirmations(&[TemplateCandidate {
             document_id: "profiled".into(),
@@ -744,6 +753,7 @@ mod tests {
         rows[0]
             .popup_fields
             .push(PopupFieldConfig::new("custom.site", "Site"));
+        rows[0].popup_fields_edited = true;
         rows[0].domain_override = Some(DomainKind::Custom("architecture".into()));
 
         let result = create_pack_from_confirmations("default", "Pack", &rows);

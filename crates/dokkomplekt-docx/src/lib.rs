@@ -1047,10 +1047,10 @@ fn infer_structural_bindings_by_story(
             Some(preferred_domain),
             Some(role_id),
         );
-        if blank_discharge_donor {
-            // In the proven legacy discharge form this is fixed boilerplate, not
-            // a patient-owned value. It still acts as a section boundary during
-            // inference, but must not become a required runtime prompt/token.
+        if blank_discharge_donor && has_exact_blank_discharge_somatic_boilerplate(&story_text) {
+            // Only the exact verified donor phrase is fixed boilerplate. A filled
+            // patient-specific somatic status must remain a binding so old patient
+            // data cannot survive compilation as literal text.
             bindings.retain(|binding| binding.field_id != "medical.somatic_status");
         }
         if !bindings.is_empty() {
@@ -1444,7 +1444,9 @@ pub fn compile_labeled_template_file(
                 && dokkomplekt_core::domains::medical::canonical_medical_role(role_id)
                     == "discharge"
                 && is_blank_discharge_donor_story(&xml_to_text(&xml));
-            if blank_discharge_donor {
+            if blank_discharge_donor
+                && has_exact_blank_discharge_somatic_boilerplate(&xml_to_text(&xml))
+            {
                 preserved_literal_field_ids.insert("medical.somatic_status".to_string());
             }
             if let Some(bindings) = owned_table_bindings_by_story.get(&name) {
@@ -1536,34 +1538,104 @@ pub fn compile_labeled_template_file(
     })
 }
 
-fn structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
-    let wanted = structural_fold(needle);
-    if wanted.is_empty() {
-        return None;
-    }
-    let boundaries = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect::<Vec<_>>();
-    let mut best = None::<(usize, usize)>;
-    for (start_position, start) in boundaries.iter().copied().enumerate() {
-        for end in boundaries.iter().copied().skip(start_position + 1) {
-            if structural_fold(&text[start..end]) != wanted {
+#[derive(Debug, Clone, Copy)]
+struct StructuralFoldSpan {
+    folded_start: usize,
+    folded_end: usize,
+    original_start: usize,
+    original_end: usize,
+}
+
+#[derive(Debug)]
+struct StructuralFoldIndex {
+    folded: String,
+    spans: Vec<StructuralFoldSpan>,
+}
+
+impl StructuralFoldIndex {
+    fn new(text: &str) -> Self {
+        let mut folded = String::with_capacity(text.len());
+        let mut spans = Vec::<StructuralFoldSpan>::new();
+        let mut pending_whitespace = None::<(usize, usize)>;
+
+        for (original_start, character) in text.char_indices() {
+            let original_end = original_start + character.len_utf8();
+            if character.is_whitespace() {
+                if !folded.is_empty() {
+                    pending_whitespace = Some(match pending_whitespace {
+                        Some((start, _)) => (start, original_end),
+                        None => (original_start, original_end),
+                    });
+                }
                 continue;
             }
-            // Prefer the tightest visible range. A folded match may otherwise
-            // start in the whitespace before a marker (`… №2  с по`) and eat
-            // that layout spacing when the semantic slot is inserted.
-            if best.is_none_or(|(best_start, best_end)| {
-                end - start < best_end - best_start
-                    || (end - start == best_end - best_start && start > best_start)
-            }) {
-                best = Some((start, end));
+
+            if let Some((space_start, space_end)) = pending_whitespace.take() {
+                let folded_start = folded.len();
+                folded.push(' ');
+                spans.push(StructuralFoldSpan {
+                    folded_start,
+                    folded_end: folded.len(),
+                    original_start: space_start,
+                    original_end: space_end,
+                });
+            }
+
+            for lowercase in character.to_lowercase() {
+                let normalized = if lowercase == 'ё' { 'е' } else { lowercase };
+                let folded_start = folded.len();
+                folded.push(normalized);
+                spans.push(StructuralFoldSpan {
+                    folded_start,
+                    folded_end: folded.len(),
+                    original_start,
+                    original_end,
+                });
             }
         }
+
+        Self { folded, spans }
     }
-    best
+
+    fn original_range(&self, folded_start: usize, folded_end: usize) -> Option<(usize, usize)> {
+        let first = self
+            .spans
+            .binary_search_by_key(&folded_start, |span| span.folded_start)
+            .ok()?;
+        let last = self
+            .spans
+            .binary_search_by_key(&folded_end, |span| span.folded_end)
+            .ok()?;
+        Some((
+            self.spans[first].original_start,
+            self.spans[last].original_end,
+        ))
+    }
+}
+
+fn structural_match_ranges(text: &str, needle: &str) -> Vec<(usize, usize)> {
+    let wanted = structural_fold(needle);
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let index = StructuralFoldIndex::new(text);
+    index
+        .folded
+        .match_indices(&wanted)
+        .filter_map(|(start, matched)| index.original_range(start, start + matched.len()))
+        .collect()
+}
+
+fn structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
+    structural_match_ranges(text, needle)
+        .into_iter()
+        // Prefer the tightest visible range. A folded match may otherwise include
+        // layout whitespace around a marker and erase it during replacement.
+        .min_by(|left, right| {
+            let left_len = left.1 - left.0;
+            let right_len = right.1 - right.0;
+            left_len.cmp(&right_len).then_with(|| right.0.cmp(&left.0))
+        })
 }
 
 fn is_structural_word_char(value: char) -> bool {
@@ -1571,41 +1643,24 @@ fn is_structural_word_char(value: char) -> bool {
 }
 
 fn standalone_structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
-    let wanted = structural_fold(needle);
-    if wanted.is_empty() {
-        return None;
-    }
-    let boundaries = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect::<Vec<_>>();
-    let mut best = None::<(usize, usize)>;
-    for (start_position, start) in boundaries.iter().copied().enumerate() {
-        for end in boundaries.iter().copied().skip(start_position + 1) {
-            if structural_fold(&text[start..end]) != wanted {
-                continue;
-            }
-            let before_is_word = text[..start]
+    structural_match_ranges(text, needle)
+        .into_iter()
+        .filter(|(start, end)| {
+            let before_is_word = text[..*start]
                 .chars()
                 .next_back()
                 .is_some_and(is_structural_word_char);
-            let after_is_word = text[end..]
+            let after_is_word = text[*end..]
                 .chars()
                 .next()
                 .is_some_and(is_structural_word_char);
-            if before_is_word || after_is_word {
-                continue;
-            }
-            if best.is_none_or(|(best_start, best_end)| {
-                end - start < best_end - best_start
-                    || (end - start == best_end - best_start && start > best_start)
-            }) {
-                best = Some((start, end));
-            }
-        }
-    }
-    best
+            !before_is_word && !after_is_word
+        })
+        .min_by(|left, right| {
+            let left_len = left.1 - left.0;
+            let right_len = right.1 - right.0;
+            left_len.cmp(&right_len).then_with(|| right.0.cmp(&left.0))
+        })
 }
 
 fn is_blank_slot_separator(value: char) -> bool {
@@ -1674,6 +1729,14 @@ fn looks_like_donor_instruction(text: &str) -> bool {
         || folded.contains("подставить")
         || folded.contains("выбирается в ui")
         || folded.contains("из файла")
+}
+
+fn has_exact_blank_discharge_somatic_boilerplate(story: &str) -> bool {
+    let expected = structural_fold("Нормального питания.");
+    story.lines().any(|line| {
+        structural_remainder_after_label(line, "Сомато-неврологический статус")
+            .is_some_and(|value| structural_fold(&value) == expected)
+    })
 }
 
 fn is_blank_discharge_donor_story(story: &str) -> bool {
@@ -2004,24 +2067,10 @@ fn structural_remainder_after_label(text: &str, label: &str) -> Option<String> {
 }
 
 fn structural_match_end(text: &str, needle: &str) -> Option<usize> {
-    let wanted = structural_fold(needle);
-    if wanted.is_empty() {
-        return None;
-    }
-    let boundaries = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect::<Vec<_>>();
-    for (start_position, start) in boundaries.iter().copied().enumerate() {
-        for end in boundaries.iter().copied().skip(start_position + 1) {
-            let candidate = &text[start..end];
-            if structural_fold(candidate) == wanted {
-                return Some(end);
-            }
-        }
-    }
-    None
+    structural_match_ranges(text, needle)
+        .into_iter()
+        .min_by_key(|(start, end)| (*start, *end))
+        .map(|(_, end)| end)
 }
 
 fn structural_fold(value: &str) -> String {
@@ -3951,6 +4000,78 @@ mod tests {
             "Дата, время      Выписной эпикриз №",
             "с помощью родственников"
         )));
+    }
+
+    #[test]
+    fn blank_discharge_only_preserves_the_exact_verified_somatic_boilerplate() {
+        let exact = concat!(
+            "Дата, время      Выписной эпикриз №\n",
+            "зарегистрирован по адресу\n",
+            "Находился на лечении с по\n",
+            "Психический статус при поступлении\n",
+            "Сомато-неврологический статус: Нормального питания.\n",
+            "Лечение: Сюда подставляется информация"
+        );
+        let patient_specific = exact.replace(
+            "Нормального питания.",
+            "Кожные покровы бледные, АД 150/90 мм рт. ст.",
+        );
+        assert!(has_exact_blank_discharge_somatic_boilerplate(exact));
+        assert!(!has_exact_blank_discharge_somatic_boilerplate(
+            &patient_specific
+        ));
+        assert!(is_blank_discharge_donor_story(&patient_specific));
+    }
+
+    #[test]
+    fn structural_matchers_scale_with_long_word_story() {
+        let mut story = "служебный текст ".repeat(4_000);
+        story.push_str("Дата,   время      Выписной эпикриз №\n");
+        story.push_str(&"длинный раздел ".repeat(4_000));
+        story.push_str("Находился на лечении с     по");
+
+        assert!(structural_match_range(&story, "Дата, время").is_some());
+        assert!(structural_match_range(&story, "Выписной эпикриз").is_some());
+        let period = standalone_structural_match_range(&story, "с по")
+            .expect("standalone blank period in long story");
+        assert_eq!(structural_fold(&story[period.0..period.1]), "с по");
+    }
+
+    #[test]
+    fn blank_discharge_patient_specific_somatic_status_is_compiled_not_preserved() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-blank-donor-patient-somatic-{}",
+            std::process::id()
+        ));
+        let input = dir.join("patient-somatic.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р., зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2 с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Кожные покровы бледные, АД 150/90 мм рт. ст.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("patient-specific somatic status must compile as a render field");
+        let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+        assert!(
+            compiled_text.contains("{{medical.somatic_status}}"),
+            "{compiled_text}"
+        );
+        assert!(
+            !compiled_text.contains("Кожные покровы бледные"),
+            "stale patient somatic status survived: {compiled_text}"
+        );
+        assert!(!report
+            .preserved_literal_field_ids
+            .iter()
+            .any(|field| field == "medical.somatic_status"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

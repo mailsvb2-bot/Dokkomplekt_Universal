@@ -548,60 +548,7 @@ fn merge_compiler_fields_into_analysis(
 }
 
 fn synchronize_compiled_required_fields(document: &mut DocumentTemplateSpec) {
-    if document.category != DomainKind::Medical {
-        document.required_fields.extend(document.placeholders.iter().cloned());
-        document.required_fields.sort();
-        document.required_fields.dedup();
-        return;
-    }
-
-    let role = dokkomplekt_core::MedicalDocumentRole::from_role_id(&document.role_id);
-    if matches!(role, dokkomplekt_core::MedicalDocumentRole::GenericMedical) {
-        // Unknown medical roles have no canonical role plan. Preserve their
-        // explicitly persisted requirements, but never invent new ones merely
-        // because a placeholder is renderable.
-        document.required_fields.sort();
-        document.required_fields.dedup();
-        return;
-    }
-
-    let placeholder_fields = document
-        .placeholders
-        .iter()
-        .map(|field| dokkomplekt_core::canonical_storage_field_id(field))
-        .collect::<BTreeSet<_>>();
-    let mut required = document
-        .required_fields
-        .iter()
-        .map(|field| dokkomplekt_core::canonical_storage_field_id(field))
-        .filter(|field| !placeholder_fields.contains(field))
-        .collect::<BTreeSet<_>>();
-
-    // A semantic placeholder is a render path, not proof that the user must
-    // provide a value. For known medical roles the hard requirements come from
-    // the canonical role plan; user-marked required popup fields may strengthen
-    // that contract explicitly.
-    required.extend(
-        dokkomplekt_core::build_medical_render_plan(role, false, false)
-            .required_fields
-            .into_iter()
-            .map(|field| dokkomplekt_core::canonical_storage_field_id(&field)),
-    );
-    required.insert("subject.name".to_string());
-    // `popup_fields` are also populated automatically for untouched templates.
-    // Those generated defaults describe UI presentation only; they are not user
-    // intent and must never strengthen the canonical medical contract. Only a
-    // popup graph explicitly saved by the specialist may add hard requirements.
-    if document.popup_configured {
-        required.extend(
-            document
-                .popup_fields
-                .iter()
-                .filter(|field| field.required)
-                .map(|field| dokkomplekt_core::canonical_storage_field_id(&field.field_id)),
-        );
-    }
-    document.required_fields = required.into_iter().collect();
+    dokkomplekt_core::synchronize_document_required_fields(document);
 }
 
 fn apply_compiled_contract_to_document_with_compiler_fields(

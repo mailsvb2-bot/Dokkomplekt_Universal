@@ -159,6 +159,69 @@ const NON_SIGNER_FILLER_WORDS: &[&str] = &[
     "комиссии",
 ];
 
+/// Rebuild the persisted hard-required field contract without confusing a
+/// renderable placeholder with a mandatory user input.
+///
+/// Medical roles have a canonical requirement plan. Render placeholders outside
+/// that plan stay optional unless the specialist explicitly saved them as
+/// required in the popup designer. Non-medical domains retain the historical
+/// placeholder-required behavior until their domain contracts become equally
+/// explicit.
+pub fn synchronize_document_required_fields(spec: &mut DocumentTemplateSpec) {
+    if !matches!(spec.category, DomainKind::Medical) {
+        spec.required_fields = spec
+            .placeholders
+            .iter()
+            .cloned()
+            .chain(
+                spec.popup_fields
+                    .iter()
+                    .filter(|field| field.required)
+                    .map(|field| field.field_id.clone()),
+            )
+            .map(|field| canonical_storage_field_id(&field))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        return;
+    }
+
+    let role = MedicalDocumentRole::from_role_id(&spec.role_id);
+    if matches!(role, MedicalDocumentRole::GenericMedical) {
+        spec.required_fields.sort();
+        spec.required_fields.dedup();
+        return;
+    }
+
+    let placeholder_fields = spec
+        .placeholders
+        .iter()
+        .map(|field| canonical_storage_field_id(field))
+        .collect::<BTreeSet<_>>();
+    let mut required = spec
+        .required_fields
+        .iter()
+        .map(|field| canonical_storage_field_id(field))
+        .filter(|field| !placeholder_fields.contains(field))
+        .collect::<BTreeSet<_>>();
+    required.extend(
+        build_medical_render_plan(role, false, false)
+            .required_fields
+            .into_iter()
+            .map(|field| canonical_storage_field_id(&field)),
+    );
+    required.insert("subject.name".to_string());
+    if spec.popup_configured {
+        required.extend(
+            spec.popup_fields
+                .iter()
+                .filter(|field| field.required)
+                .map(|field| canonical_storage_field_id(&field.field_id)),
+        );
+    }
+    spec.required_fields = required.into_iter().collect();
+}
+
 /// Mandatory composite blocks for a configured document.
 pub fn required_blocks_for(
     spec: &DocumentTemplateSpec,

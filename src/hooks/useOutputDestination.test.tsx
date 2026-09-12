@@ -55,11 +55,13 @@ describe('useOutputDestination durable output/watcher contract', () => {
     const { result } = renderHook(() => useOutputDestination(runAction, status));
     expect(result.current.outputRoot).toBe('C:/Stale');
     expect(result.current.outputPreferencesReady).toBe(false);
+    expect(result.current.outputPreferencesLoading).toBe(true);
     await act(async () => {
       resolvePreferences({ output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: true });
       await preferences;
     });
     await waitFor(() => expect(result.current.outputPreferencesReady).toBe(true));
+    expect(result.current.outputPreferencesLoading).toBe(false);
     expect(result.current.outputRoot).toBe('D:/Ready');
   });
 
@@ -120,6 +122,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
 
     const { result } = renderHook(() => useOutputDestination(runAction, status));
     await waitFor(() => expect(status).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.outputPreferencesLoading).toBe(false));
     expect(result.current.outputPreferencesReady).toBe(false);
     expect(result.current.folderNamingConfirmed).toBe(false);
   });

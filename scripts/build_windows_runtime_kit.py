@@ -21,9 +21,11 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path, validate_source_reference
+    from scripts._runtime_profile import FULL_PROFILE, PROFILES, normalize_profile, profile_tools
     from scripts.create_runtime_lock import REQUIRED_TOOLS, SUPPORTED_TOOLS, build_lock
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path, validate_source_reference
+    from _runtime_profile import FULL_PROFILE, PROFILES, normalize_profile, profile_tools
     from create_runtime_lock import REQUIRED_TOOLS, SUPPORTED_TOOLS, build_lock
 
 SCHEMA = "dokkomplekt.windows-runtime-kit.v1"
@@ -134,13 +136,28 @@ def enumerate_tree(root: Path, target_root: str, tool: str) -> list[tuple[Path, 
 
 
 def build_catalog(
-    spec_path: Path, output_dir: Path
+    spec_path: Path, output_dir: Path, profile: str | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     data = json.loads(spec_path.read_text(encoding="utf-8"))
     if data.get("schema") != SPEC_SCHEMA:
         raise ValueError("runtime-kit spec schema must be 1")
     if str(data.get("target", "")).strip() != TARGET:
         raise ValueError(f"runtime-kit target must be {TARGET}")
+    selected_profile = profile or data.get("runtime_profile") or FULL_PROFILE
+    selected_profile = normalize_profile(
+        selected_profile, semantic_model_required=(selected_profile == FULL_PROFILE)
+    )
+    declared_profile = data.get("runtime_profile")
+    if declared_profile is not None:
+        declared = normalize_profile(
+            declared_profile, semantic_model_required=data.get("semantic_model_required")
+        )
+        if profile is not None and declared != selected_profile:
+            raise ValueError(
+                f"runtime-kit spec profile mismatch: requested {selected_profile!r}, "
+                f"declared {declared!r}"
+            )
+    expected_tools = set(profile_tools(selected_profile))
     review = parse_review(data)
     components = data.get("components")
     if not isinstance(components, list) or not components:
@@ -163,6 +180,8 @@ def build_catalog(
                 f"runtime-kit spec must declare exactly one reviewed root per tool: {tool}"
             )
         seen_tools.add(tool)
+        if tool not in expected_tools:
+            continue
 
         root = resolve_path(
             spec_path.parent,
@@ -231,11 +250,12 @@ def build_catalog(
             }
         )
 
-    missing = sorted(PRODUCTION_REQUIRED_TOOLS - seen_tools)
-    extra = sorted(seen_tools - PRODUCTION_REQUIRED_TOOLS)
+    processed_tools = set(inventory_tools)
+    missing = sorted(expected_tools - processed_tools)
+    extra = sorted(processed_tools - expected_tools)
     if missing or extra:
         raise ValueError(
-            "runtime-kit component set must exactly match production requirements; "
+            f"runtime-kit component set must exactly match profile {selected_profile!r}; "
             f"missing={missing}; extra={extra}"
         )
 
@@ -243,6 +263,7 @@ def build_catalog(
         "schema": 1,
         "target": TARGET,
         "generated_by": "scripts/build_windows_runtime_kit.py",
+        "runtime_profile": selected_profile,
         "tools": {tool: inventory_tools[tool] for tool in sorted(inventory_tools)},
     }
     inventory_path = output_dir / "runtime-inventory.json"
@@ -251,6 +272,8 @@ def build_catalog(
     catalog = {
         "schema": 1,
         "target": TARGET,
+        "runtime_profile": selected_profile,
+        "semantic_model_required": selected_profile == FULL_PROFILE,
         "artifacts": artifacts,
         "distribution_review": {
             "complete_portable_tree": True,
@@ -263,6 +286,7 @@ def build_catalog(
     report = {
         "schema": SCHEMA,
         "target": TARGET,
+        "runtime_profile": selected_profile,
         "network_used": False,
         "complete_portable_tree": True,
         "review": review,
@@ -283,17 +307,18 @@ def main() -> int:
     )
     parser.add_argument("spec", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--profile", choices=PROFILES)
     args = parser.parse_args()
 
     spec_path = args.spec.resolve()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    catalog, report = build_catalog(spec_path, output_dir)
+    catalog, report = build_catalog(spec_path, output_dir, args.profile)
     catalog_path = output_dir / "runtime-catalog.json"
     atomic_json(catalog_path, catalog)
 
-    lock = build_lock(catalog_path)
+    lock = build_lock(catalog_path, args.profile)
     lock_path = output_dir / "windows-x86_64-manifest.json"
     atomic_json(lock_path, lock)
 
@@ -314,7 +339,7 @@ def main() -> int:
 
     print(
         "WINDOWS PRODUCTION RUNTIME KIT LOCKED: "
-        f"components={report['component_count']}; files={report['file_count']}; "
+        f"profile={report['runtime_profile']}; components={report['component_count']}; files={report['file_count']}; "
         f"manifest={lock_path}"
     )
     return 0

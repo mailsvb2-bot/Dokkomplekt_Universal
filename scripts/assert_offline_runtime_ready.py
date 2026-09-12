@@ -19,8 +19,16 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import (
+        CORE_PROFILE, FULL_PROFILE, PROFILES, normalize_profile,
+        profile_requires_semantic, validate_profile_file_set,
+    )
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import (
+        CORE_PROFILE, FULL_PROFILE, PROFILES, normalize_profile,
+        profile_requires_semantic, validate_profile_file_set,
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
@@ -224,6 +232,7 @@ def verify_required_runtime(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="windows-x86_64")
+    parser.add_argument("--profile", choices=PROFILES)
     parser.add_argument("--require-semantic-model", action="store_true")
     parser.add_argument("--require-supply-chain", action="store_true")
     parser.add_argument("--production", action="store_true", help="reject test/placeholder payloads")
@@ -235,20 +244,40 @@ def main() -> int:
     args = parser.parse_args()
 
     target_dir, status = load_status(args.target)
+    selected_profile = args.profile or (FULL_PROFILE if args.require_semantic_model else CORE_PROFILE)
+    selected_profile = normalize_profile(
+        selected_profile, semantic_model_required=(selected_profile == FULL_PROFILE)
+    )
+    if args.require_semantic_model and selected_profile != FULL_PROFILE:
+        raise ValueError("--require-semantic-model is incompatible with --profile core")
+    declared_profile = status.get("runtime_profile")
+    if declared_profile is not None:
+        staged_profile = normalize_profile(
+            declared_profile, semantic_model_required=status.get("semantic_model_required")
+        )
+        if staged_profile != selected_profile:
+            raise ValueError(
+                f"staged runtime profile mismatch: expected {selected_profile!r}, got {staged_profile!r}"
+            )
+    elif args.production:
+        raise ValueError("production runtime status must bind runtime_profile")
+
+    validate_profile_file_set(selected_profile, status["files"])
     tools = verify_entries(target_dir, status)
     if args.require_supply_chain:
         verify_supply_chain(target_dir, status)
-    verify_required_runtime(tools, args.require_semantic_model)
+    require_model = profile_requires_semantic(selected_profile)
+    verify_required_runtime(tools, require_model)
     if args.require_distribution_review or args.production:
         verify_distribution_review(target_dir, status, tools)
     if args.production:
         verify_production_plausibility(target_dir, tools)
-    model_note = " + llama.cpp/GGUF" if args.require_semantic_model else ""
+    model_note = " + llama.cpp/GGUF" if require_model else ""
     supply_note = " + provenance/licenses" if args.require_supply_chain else ""
     review_note = " + reviewed-portable-tree" if (args.require_distribution_review or args.production) else ""
     production_note = " + production-plausibility" if args.production else ""
     print(
-        f"OFFLINE RUNTIME READY: target={args.target}; "
+        f"OFFLINE RUNTIME READY: target={args.target}; profile={selected_profile}; "
         f"files={sum(len(items) for items in tools.values())}{model_note}{supply_note}{review_note}{production_note}"
     )
     return 0

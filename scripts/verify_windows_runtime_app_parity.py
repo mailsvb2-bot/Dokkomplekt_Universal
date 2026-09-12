@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Prove that a staged production Windows runtime is launchable by the desktop app.
+"""Prove a staged production Windows runtime is launchable by the desktop app.
 
-Supply-chain verification proves that staged files are approved and intact. This
-additional gate proves a different invariant: the staged directory layout and
-entry-point names must match the paths the installed Rust application resolves.
-It also verifies that the offline Tauri config strips the staging target prefix
-(`windows-x86_64`) when embedding resources into the installed application.
-
-Outlook MSG is parsed inside the Rust core and therefore has no external Windows
-runtime component or executable entry point in this parity gate.
+The gate is profile-aware: ``core`` verifies the exact document-processing
+surface embedded by the stock installer, while ``full`` additionally requires
+one llama.cpp server and exactly one GGUF model. Outlook MSG is parsed inside
+the Rust core and therefore never appears as an external sidecar.
 """
 from __future__ import annotations
 
@@ -19,8 +15,16 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import (
+        CORE_PROFILE,
+        FULL_PROFILE,
+        PROFILES,
+        normalize_profile,
+        profile_tools,
+    )
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import CORE_PROFILE, FULL_PROFILE, PROFILES, normalize_profile, profile_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
@@ -29,18 +33,9 @@ WINDOWS_TARGET = "windows-x86_64"
 RESOURCE_SOURCE = f"resources/tools/{WINDOWS_TARGET}/"
 RESOURCE_TARGET = "resources/tools/"
 
-EXPECTED_RUNTIME_TOOLS = {
-    "tesseract",
-    "poppler",
-    "libreoffice",
-    "sumatrapdf",
-    "7zip",
-    "llama_cpp",
-    "semantic_model",
-}
+EXPECTED_RUNTIME_TOOLS = set(profile_tools(FULL_PROFILE))
+CORE_RUNTIME_TOOLS = set(profile_tools(CORE_PROFILE))
 
-# These are installed-resource paths relative to `$RESOURCE/resources/tools/`.
-# They intentionally mirror the Rust resolver's canonical tool directories.
 REQUIRED_EXACT_PATHS: dict[str, tuple[str, ...]] = {
     "tesseract": ("tesseract/tesseract.exe",),
     "poppler": ("poppler/bin/pdftotext.exe", "poppler/bin/pdftoppm.exe"),
@@ -48,10 +43,7 @@ REQUIRED_EXACT_PATHS: dict[str, tuple[str, ...]] = {
     "sumatrapdf": ("sumatrapdf/SumatraPDF.exe",),
     "7zip": ("7zip/7z.exe",),
 }
-SEMANTIC_SERVER_CHOICES = (
-    "llama_cpp/llama-server.exe",
-    "llama_cpp/server.exe",
-)
+SEMANTIC_SERVER_CHOICES = ("llama_cpp/llama-server.exe", "llama_cpp/server.exe")
 SEMANTIC_MODEL_PREFIX = "semantic_model/"
 
 
@@ -71,6 +63,30 @@ def load_status(target: str = WINDOWS_TARGET) -> dict[str, Any]:
     if not isinstance(data.get("files"), list) or not data["files"]:
         raise ValueError("sidecar status has no staged files")
     return data
+
+
+def selected_profile(status: dict[str, Any], requested: str | None) -> str:
+    if requested:
+        profile = normalize_profile(requested, semantic_model_required=(requested == FULL_PROFILE))
+    else:
+        declared = status.get("runtime_profile")
+        if declared:
+            profile = normalize_profile(
+                declared,
+                semantic_model_required=status.get("semantic_model_required"),
+            )
+        else:
+            # Compatibility for older callers/tests whose runtime surface was full.
+            profile = FULL_PROFILE
+    declared = status.get("runtime_profile")
+    if declared:
+        actual = normalize_profile(
+            declared,
+            semantic_model_required=status.get("semantic_model_required"),
+        )
+        if actual != profile:
+            raise ValueError(f"runtime profile mismatch: expected {profile!r}, staged {actual!r}")
+    return profile
 
 
 def paths_by_tool(status: dict[str, Any]) -> dict[str, set[str]]:
@@ -94,46 +110,40 @@ def paths_by_tool(status: dict[str, Any]) -> dict[str, set[str]]:
     return tools
 
 
-def verify_entry_points(tools: dict[str, set[str]]) -> None:
+def verify_entry_points(tools: dict[str, set[str]], profile: str = FULL_PROFILE) -> None:
+    expected_tools = set(profile_tools(profile))
     actual_tools = set(tools)
-    if actual_tools != EXPECTED_RUNTIME_TOOLS:
-        missing = sorted(EXPECTED_RUNTIME_TOOLS - actual_tools)
-        extra = sorted(actual_tools - EXPECTED_RUNTIME_TOOLS)
+    if actual_tools != expected_tools:
+        missing = sorted(expected_tools - actual_tools)
+        extra = sorted(actual_tools - expected_tools)
         raise ValueError(
             "production Windows runtime component set does not match the application contract: "
-            f"missing={missing}; extra={extra}"
+            f"profile={profile}; missing={missing}; extra={extra}"
         )
 
-    lower_tools = {
-        tool: {path.lower() for path in paths}
-        for tool, paths in tools.items()
-    }
+    lower_tools = {tool: {path.lower() for path in paths} for tool, paths in tools.items()}
     for tool, required in REQUIRED_EXACT_PATHS.items():
         available = lower_tools.get(tool, set())
         for path in required:
             if path.lower() not in available:
-                raise ValueError(
-                    f"production runtime is not launchable by the app: missing {path}"
-                )
+                raise ValueError(f"production runtime is not launchable by the app: missing {path}")
 
-    llama = lower_tools.get("llama_cpp", set())
-    if not any(path.lower() in llama for path in SEMANTIC_SERVER_CHOICES):
-        raise ValueError(
-            "production semantic runtime is missing an application-resolvable "
-            f"llama.cpp server: expected one of {list(SEMANTIC_SERVER_CHOICES)}"
+    if profile == FULL_PROFILE:
+        llama = lower_tools.get("llama_cpp", set())
+        if not any(path.lower() in llama for path in SEMANTIC_SERVER_CHOICES):
+            raise ValueError(
+                "production semantic runtime is missing an application-resolvable "
+                f"llama.cpp server: expected one of {list(SEMANTIC_SERVER_CHOICES)}"
+            )
+        models = sorted(
+            path for path in tools.get("semantic_model", set())
+            if path.lower().startswith(SEMANTIC_MODEL_PREFIX) and path.lower().endswith(".gguf")
         )
-
-    models = sorted(
-        path
-        for path in tools.get("semantic_model", set())
-        if path.lower().startswith(SEMANTIC_MODEL_PREFIX)
-        and path.lower().endswith(".gguf")
-    )
-    if len(models) != 1:
-        raise ValueError(
-            "production semantic runtime must contain exactly one deterministic "
-            f"semantic_model/*.gguf; found {len(models)}"
-        )
+        if len(models) != 1:
+            raise ValueError(
+                "production semantic runtime must contain exactly one deterministic "
+                f"semantic_model/*.gguf; found {len(models)}"
+            )
 
 
 def verify_offline_resource_mapping(config_path: Path = OFFLINE_TAURI_CONFIG) -> None:
@@ -151,22 +161,23 @@ def verify_offline_resource_mapping(config_path: Path = OFFLINE_TAURI_CONFIG) ->
         )
 
 
-def verify_status(status: dict[str, Any]) -> None:
+def verify_status(status: dict[str, Any], profile: str | None = None) -> None:
+    resolved = selected_profile(status, profile)
     tools = paths_by_tool(status)
-    verify_entry_points(tools)
+    verify_entry_points(tools, resolved)
     verify_offline_resource_mapping()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default=WINDOWS_TARGET)
+    parser.add_argument("--profile", choices=PROFILES)
     args = parser.parse_args()
     status = load_status(args.target)
-    verify_status(status)
-    print(
-        "WINDOWS RUNTIME APP PARITY PASSED: "
-        f"target={args.target}; tools={len(paths_by_tool(status))}"
-    )
+    profile = selected_profile(status, args.profile)
+    verify_entry_points(paths_by_tool(status), profile)
+    verify_offline_resource_mapping()
+    print(f"WINDOWS RUNTIME/APP PARITY OK: target={args.target}; profile={profile}")
     return 0
 
 
@@ -174,5 +185,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"ERROR: {exc}")
+        print(f"ERROR: {exc}", file=__import__('sys').stderr)
         raise SystemExit(1)

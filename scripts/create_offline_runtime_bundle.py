@@ -5,6 +5,14 @@ The script never downloads dependencies. It only packages files that were
 previously staged by ``prepare_sidecars.py`` and revalidated by
 ``assert_offline_runtime_ready.py``. A release signature is detached from the
 ZIP so the application/installer can verify it before extraction.
+
+Windows runtime composition has two canonical profiles:
+- ``core``: OCR/PDF/office/print/archive tools used by normal document flows;
+- ``full``: core plus the separately approved semantic runtime/model.
+
+The stock NSIS package consumes ``core``.  Semantic functionality remains an
+optional signed component because the approved candidate model can exceed the
+stock NSIS data limit.
 """
 from __future__ import annotations
 
@@ -21,8 +29,26 @@ from typing import Any
 
 try:
     from scripts._release_policy import validate_relative_runtime_path
+    from scripts._runtime_profile import (
+        CORE_PROFILE,
+        FULL_PROFILE,
+        PROFILES,
+        include_tool,
+        normalize_profile,
+        profile_requires_semantic,
+        validate_profile_file_set,
+    )
 except ModuleNotFoundError:
     from _release_policy import validate_relative_runtime_path
+    from _runtime_profile import (
+        CORE_PROFILE,
+        FULL_PROFILE,
+        PROFILES,
+        include_tool,
+        normalize_profile,
+        profile_requires_semantic,
+        validate_profile_file_set,
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = ROOT / "src-tauri" / "resources" / "tools"
@@ -47,22 +73,54 @@ def validate_target(target: str) -> str:
     return target
 
 
-def load_verified_status(target: str, require_model: bool, require_supply_chain: bool) -> tuple[Path, dict[str, Any]]:
+def staged_profile(status: dict[str, Any], requested_profile: str) -> str:
+    """Resolve the profile that must be verified before deriving a bundle.
+
+    A bounded ``core`` bundle may be derived from a verified ``full`` stage, but
+    the source stage must first pass its own stronger full-profile contract.
+    Legacy full stages predate ``runtime_profile`` and are recognized only when
+    their semantic requirement or complete semantic tool pair proves that shape.
+    """
+    declared = status.get("runtime_profile")
+    if declared is not None:
+        return normalize_profile(
+            declared, semantic_model_required=status.get("semantic_model_required")
+        )
+    if status.get("semantic_model_required") is True:
+        return FULL_PROFILE
+    tools = {str(item.get("tool", "")).strip().lower() for item in status.get("files", [])}
+    if {"llama_cpp", "semantic_model"}.issubset(tools):
+        return FULL_PROFILE
+    return normalize_profile(
+        requested_profile, semantic_model_required=(requested_profile == FULL_PROFILE)
+    )
+
+
+def load_verified_status(target: str, profile: str, require_supply_chain: bool) -> tuple[Path, dict[str, Any]]:
+    target_dir = (TOOLS_ROOT / target).resolve()
+    target_dir.relative_to(TOOLS_ROOT.resolve())
+    status_path = target_dir / "sidecar-status.json"
+    before = status_path.read_bytes()
+    status = json.loads(before.decode("utf-8"))
+    source_profile = staged_profile(status, profile)
+    require_model = profile_requires_semantic(source_profile)
     command = [
         sys.executable,
         str(ROOT / "scripts" / "assert_offline_runtime_ready.py"),
         "--target",
         target,
+        "--profile",
+        source_profile,
     ]
     if require_model:
         command.append("--require-semantic-model")
     if require_supply_chain:
         command.append("--require-supply-chain")
     subprocess.run(command, cwd=ROOT, check=True)
-    target_dir = (TOOLS_ROOT / target).resolve()
-    target_dir.relative_to(TOOLS_ROOT.resolve())
-    status = json.loads((target_dir / "sidecar-status.json").read_text("utf-8"))
-    return target_dir, status
+    after = status_path.read_bytes()
+    if after != before:
+        raise ValueError("staged runtime status changed during bundle preflight verification")
+    return target_dir, json.loads(after.decode("utf-8"))
 
 
 def zip_info(name: str, executable: bool = False) -> zipfile.ZipInfo:
@@ -74,7 +132,19 @@ def zip_info(name: str, executable: bool = False) -> zipfile.ZipInfo:
     return info
 
 
-def bundled_distribution_review(target_dir: Path, status: dict[str, Any]) -> tuple[dict[str, Any] | None, Path | None]:
+def bundled_distribution_review(
+    target_dir: Path,
+    status: dict[str, Any],
+    entries: list[dict[str, Any]],
+    profile: str,
+) -> tuple[dict[str, Any] | None, bytes | None]:
+    """Bind the review to the exact profile-specific bundle inventory.
+
+    The reviewed staged inventory is first revalidated against the complete
+    staged status. A core bundle then derives a deterministic subset containing
+    only the reviewed core files; it never reuses a full inventory while
+    stripping semantic payloads.
+    """
     raw = status.get("distribution_review")
     if raw is None:
         return None, None
@@ -86,36 +156,82 @@ def bundled_distribution_review(target_dir: Path, status: dict[str, Any]) -> tup
         if not value:
             raise ValueError(f"distribution_review is missing {key}")
         review[key] = value
+
     relative = Path(validate_relative_runtime_path(review["inventory_path"], "distribution inventory path"))
     source = target_dir / relative
     if not source.is_file():
         raise FileNotFoundError(f"staged distribution inventory is missing: {source}")
-    actual = sha256_file(source)
+    source_bytes = source.read_bytes()
+    actual = hashlib.sha256(source_bytes).hexdigest()
     if actual != review["inventory_sha256"].lower():
         raise ValueError("staged distribution inventory SHA-256 mismatch")
-    review["inventory_path"] = relative.as_posix()
-    review["inventory_sha256"] = actual
-    return review, source
+    source_inventory = json.loads(source_bytes.decode("utf-8"))
+    if source_inventory.get("schema") != 1 or not isinstance(source_inventory.get("tools"), dict):
+        raise ValueError("staged distribution inventory has an incompatible schema")
+
+    staged_tools: dict[str, list[str]] = {}
+    for item in status.get("files", []):
+        tool = str(item.get("tool", "")).strip().lower()
+        path = validate_relative_runtime_path(item.get("path"), "staged runtime path")
+        staged_tools.setdefault(tool, []).append(path)
+    staged_tools = {tool: sorted(paths) for tool, paths in sorted(staged_tools.items())}
+    declared_tools = {
+        str(tool).strip().lower(): sorted(
+            validate_relative_runtime_path(path, f"distribution inventory {tool}")
+            for path in paths
+        )
+        for tool, paths in source_inventory["tools"].items()
+        if isinstance(paths, list)
+    }
+    if declared_tools != staged_tools:
+        raise ValueError("staged runtime does not match the reviewed source inventory before profile filtering")
+
+    profile_tools_map: dict[str, list[str]] = {}
+    for item in entries:
+        tool = str(item["tool"]).strip().lower()
+        profile_tools_map.setdefault(tool, []).append(str(item["path"]))
+    profile_inventory = {
+        "schema": 1,
+        "target": status.get("target"),
+        "generated_by": "scripts/create_offline_runtime_bundle.py",
+        "runtime_profile": profile,
+        "tools": {tool: sorted(paths) for tool, paths in sorted(profile_tools_map.items())},
+    }
+    inventory_bytes = canonical_json(profile_inventory)
+    review["inventory_path"] = f"_evidence/runtime-inventory-{profile}.json"
+    review["inventory_sha256"] = hashlib.sha256(inventory_bytes).hexdigest()
+    return review, inventory_bytes
 
 
 def create_bundle(
     target: str,
     output_dir: Path,
-    require_model: bool,
+    require_model: bool = False,
     require_supply_chain: bool = False,
+    *,
+    profile: str | None = None,
 ) -> tuple[Path, Path, dict[str, Any]]:
     """Build a deterministic runtime archive from an already verified stage.
 
-    ``require_supply_chain`` was added after the original v18.1.2 helper API was
-    published. Keep a conservative default for callers that only requested the
-    earlier model-ready contract, while release entry points explicitly pass
-    ``True`` and therefore remain fail-closed.
+    ``require_model`` remains for compatibility with older callers. New release
+    entry points should pass ``profile`` explicitly. A core bundle filters
+    semantic files out even when the local verified stage also contains them.
     """
     target = validate_target(target)
-    target_dir, status = load_verified_status(target, require_model, require_supply_chain)
+    selected_profile = profile or (FULL_PROFILE if require_model else CORE_PROFILE)
+    selected_profile = normalize_profile(
+        selected_profile,
+        semantic_model_required=(selected_profile == FULL_PROFILE),
+    )
+    if require_model and selected_profile != FULL_PROFILE:
+        raise ValueError("--require-semantic-model is incompatible with runtime profile 'core'")
+    require_model = profile_requires_semantic(selected_profile)
+    target_dir, status = load_verified_status(target, selected_profile, require_supply_chain)
     output_dir.mkdir(parents=True, exist_ok=True)
-    entries = []
+    entries: list[dict[str, Any]] = []
     for raw in status["files"]:
+        if not include_tool(selected_profile, raw.get("tool")):
+            continue
         relative = Path(validate_relative_runtime_path(raw["path"], "staged runtime path"))
         source = target_dir / relative
         actual = sha256_file(source)
@@ -133,6 +249,8 @@ def create_bundle(
                 entry[metadata_key] = raw[metadata_key]
         entries.append(entry)
     entries.sort(key=lambda item: item["path"])
+    validate_profile_file_set(selected_profile, entries)
+
     license_entries = []
     seen_licenses = set()
     for item in entries:
@@ -151,10 +269,13 @@ def create_bundle(
             "size_bytes": source.stat().st_size,
         })
     license_entries.sort(key=lambda item: item["path"])
-    distribution_review, inventory_source = bundled_distribution_review(target_dir, status)
+    distribution_review, inventory_bytes = bundled_distribution_review(
+        target_dir, status, entries, selected_profile
+    )
     sbom = {
         "schema": "dokkomplekt.offline-runtime.sbom.v1",
         "target": target,
+        "runtime_profile": selected_profile,
         "network_used": False,
         "semantic_model_required": require_model,
         "supply_chain_locked": status.get("supply_chain_locked") is True,
@@ -180,15 +301,16 @@ def create_bundle(
                 zip_info(f"runtime/{target}/{item['path']}", False),
                 source.read_bytes(),
             )
-        if distribution_review is not None and inventory_source is not None:
+        if distribution_review is not None and inventory_bytes is not None:
             archive.writestr(
                 zip_info(f"runtime/{target}/{distribution_review['inventory_path']}", False),
-                inventory_source.read_bytes(),
+                inventory_bytes,
             )
     temporary.replace(output)
     payload = {
         "schema": "dokkomplekt.offline-runtime.signature.v1",
         "target": target,
+        "runtime_profile": selected_profile,
         "bundle": output.name,
         "bundle_sha256": sha256_file(output),
         "bundle_size_bytes": output.stat().st_size,
@@ -262,6 +384,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="windows-x86_64")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "release-runtime")
+    parser.add_argument("--profile", choices=PROFILES)
     parser.add_argument("--require-semantic-model", action="store_true")
     parser.add_argument("--require-supply-chain", action="store_true")
     parser.add_argument("--signing-key", type=Path)
@@ -269,11 +392,15 @@ def main() -> int:
     parser.add_argument("--require-signature", action="store_true")
     args = parser.parse_args()
 
+    selected_profile = args.profile or (FULL_PROFILE if args.require_semantic_model else CORE_PROFILE)
+    if args.require_semantic_model and selected_profile != FULL_PROFILE:
+        raise ValueError("--require-semantic-model is incompatible with --profile core")
     bundle, payload_path, payload = create_bundle(
         args.target,
         args.output_dir.resolve(),
         args.require_semantic_model,
         args.require_supply_chain,
+        profile=selected_profile,
     )
     signature = None
     key_id = None
@@ -291,6 +418,7 @@ def main() -> int:
         json.dumps(
             {
                 "bundle": str(bundle),
+                "runtime_profile": payload["runtime_profile"],
                 "sha256": payload["bundle_sha256"],
                 "signature": str(signature) if signature else None,
                 "signing_key_id": key_id,

@@ -62,6 +62,21 @@ def test_valid_production_layout_matches_application_contract() -> None:
     module.verify_entry_points(tools)
 
 
+
+def test_core_production_layout_requires_only_document_runtime() -> None:
+    module = load_module()
+    status = valid_status()
+    status["runtime_profile"] = "core"
+    status["semantic_model_required"] = False
+    status["files"] = [
+        item for item in status["files"]
+        if item["tool"] not in {"llama_cpp", "semantic_model"}
+    ]
+    tools = module.paths_by_tool(status)
+    assert set(tools) == module.CORE_RUNTIME_TOOLS
+    module.verify_entry_points(tools, "core")
+    module.verify_status(status, "core")
+
 def test_external_msgconvert_component_is_rejected_after_native_msg_migration() -> None:
     module = load_module()
     status = valid_status()

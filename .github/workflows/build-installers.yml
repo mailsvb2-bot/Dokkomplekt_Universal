@@ -71,6 +71,7 @@ jobs:
     needs: release-plan
     if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
+    environment: windows-production-signing
     timeout-minutes: 65
     env:
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
@@ -314,6 +315,7 @@ jobs:
     name: Linux AppImage / deb / rpm
     needs: release-gate
     runs-on: ubuntu-24.04
+    environment: windows-production-signing
     timeout-minutes: 90
     env:
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}

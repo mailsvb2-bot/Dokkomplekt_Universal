@@ -188,8 +188,23 @@ pub fn synchronize_document_required_fields(spec: &mut DocumentTemplateSpec) {
 
     let role = MedicalDocumentRole::from_role_id(&spec.role_id);
     if matches!(role, MedicalDocumentRole::GenericMedical) {
-        spec.required_fields.sort();
-        spec.required_fields.dedup();
+        // Unknown medical roles have no canonical role plan, so preserve their
+        // existing hard requirements. Explicit popup configuration is still
+        // specialist intent and must be allowed to strengthen that contract.
+        let mut required = spec
+            .required_fields
+            .iter()
+            .map(|field| canonical_storage_field_id(field))
+            .collect::<BTreeSet<_>>();
+        if spec.popup_configured {
+            required.extend(
+                spec.popup_fields
+                    .iter()
+                    .filter(|field| field.required)
+                    .map(|field| canonical_storage_field_id(&field.field_id)),
+            );
+        }
+        spec.required_fields = required.into_iter().collect();
         return;
     }
 
@@ -561,6 +576,32 @@ mod tests {
             active_domains: vec![],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn generic_medical_role_honors_explicit_required_popup_fields() {
+        let mut document = spec("clinic_custom_form", DomainKind::Medical);
+        document.placeholders = vec!["medical.discharge_condition".into()];
+        let mut popup =
+            crate::PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        popup.required = true;
+        document.popup_fields = vec![popup];
+        document.popup_configured = true;
+
+        synchronize_document_required_fields(&mut document);
+
+        assert_eq!(
+            document.required_fields,
+            vec!["medical.discharge_condition".to_string()]
+        );
+        let blocks = required_blocks_for(&document, "");
+        assert!(blocks.iter().any(|block| {
+            matches!(
+                &block.requirement,
+                BlockRequirement::AnyRenderedField(fields)
+                    if fields == &vec!["medical.discharge_condition".to_string()]
+            )
+        }));
     }
 
     #[test]

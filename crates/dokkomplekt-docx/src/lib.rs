@@ -1048,10 +1048,14 @@ fn infer_structural_bindings_by_story(
             Some(role_id),
         );
         if blank_discharge_donor && has_exact_blank_discharge_somatic_boilerplate(&story_text) {
-            // Only the exact verified donor phrase is fixed boilerplate. A filled
-            // patient-specific somatic status must remain a binding so old patient
-            // data cannot survive compilation as literal text.
-            bindings.retain(|binding| binding.field_id != "medical.somatic_status");
+            // Preserve only the concrete verified boilerplate occurrence. A story
+            // may legitimately contain another somatic-status section with patient
+            // data; that separate occurrence must remain structurally owned and be
+            // replaced instead of being exempted field-wide.
+            bindings.retain(|binding| {
+                binding.field_id != "medical.somatic_status"
+                    || !is_exact_blank_discharge_somatic_boilerplate_value(&binding.value)
+            });
         }
         if !bindings.is_empty() {
             bindings_by_story.insert(name, bindings);
@@ -1446,7 +1450,16 @@ pub fn compile_labeled_template_file(
                 && is_blank_discharge_donor_story(&xml_to_text(&xml));
             if blank_discharge_donor
                 && has_exact_blank_discharge_somatic_boilerplate(&xml_to_text(&xml))
+                && !bindings_by_story.get(&name).is_some_and(|bindings| {
+                    bindings
+                        .iter()
+                        .any(|binding| binding.field_id == "medical.somatic_status")
+                })
             {
+                // The report is field-scoped, so mark the field preserved only when
+                // there is no second patient-specific occurrence of the same field.
+                // Mixed stories rely on structural ownership to protect the rewritten
+                // occurrence while leaving the exact boilerplate paragraph literal.
                 preserved_literal_field_ids.insert("medical.somatic_status".to_string());
             }
             if let Some(bindings) = owned_table_bindings_by_story.get(&name) {
@@ -1731,11 +1744,14 @@ fn looks_like_donor_instruction(text: &str) -> bool {
         || folded.contains("из файла")
 }
 
+fn is_exact_blank_discharge_somatic_boilerplate_value(value: &str) -> bool {
+    structural_fold(value) == structural_fold("Нормального питания.")
+}
+
 fn has_exact_blank_discharge_somatic_boilerplate(story: &str) -> bool {
-    let expected = structural_fold("Нормального питания.");
     story.lines().any(|line| {
         structural_remainder_after_label(line, "Сомато-неврологический статус")
-            .is_some_and(|value| structural_fold(&value) == expected)
+            .is_some_and(|value| is_exact_blank_discharge_somatic_boilerplate_value(&value))
     })
 }
 
@@ -4021,6 +4037,46 @@ mod tests {
             &patient_specific
         ));
         assert!(is_blank_discharge_donor_story(&patient_specific));
+    }
+
+    #[test]
+    fn blank_discharge_mixed_somatic_occurrences_preserve_only_boilerplate_occurrence() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-blank-donor-mixed-somatic-{}",
+            std::process::id()
+        ));
+        let input = dir.join("mixed-somatic.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р., зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2 с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Нормального питания.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Кожные покровы бледные, АД 150/90 мм рт. ст.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("mixed somatic occurrences must compile without stale patient data");
+        let text = extract_docx_text(&compiled).expect("compiled mixed somatic text");
+        assert!(
+            text.contains("Сомато-неврологический статус: Нормального питания."),
+            "{text}"
+        );
+        assert!(text.contains("{{medical.somatic_status}}"), "{text}");
+        assert!(!text.contains("Кожные покровы бледные"), "{text}");
+        assert!(report
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.somatic_status"));
+        assert!(!report
+            .preserved_literal_field_ids
+            .iter()
+            .any(|field| field == "medical.somatic_status"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

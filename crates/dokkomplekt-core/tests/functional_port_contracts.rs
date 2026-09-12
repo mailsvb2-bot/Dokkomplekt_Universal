@@ -16,6 +16,29 @@ fn functional_port_creates_dynamic_button_from_template() {
 }
 
 #[test]
+fn functional_port_keeps_optional_medical_placeholder_out_of_required_fields() {
+    let doc = create_button_from_template_text(
+        "Выписной эпикриз\n{{medical.discharge_condition}}",
+        "discharge-optional",
+        "discharge.docx",
+        None,
+    );
+    assert!(doc
+        .placeholders
+        .contains(&"medical.discharge_condition".to_string()));
+    assert!(!doc
+        .required_fields
+        .contains(&"medical.discharge_condition".to_string()));
+    let popup = doc
+        .popup_fields
+        .iter()
+        .find(|field| field.field_id == "medical.discharge_condition")
+        .expect("generated optional popup");
+    assert!(!popup.required);
+    assert!(!doc.popup_configured);
+}
+
+#[test]
 fn functional_port_blocks_unsafe_placeholder_but_keeps_custom_fields() {
     let doc = create_button_from_template_text(
         "Документ\n{{custom.local_note}}\n{{../bad}}",

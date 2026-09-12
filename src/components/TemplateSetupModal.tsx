@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
+import { canonicalStorageFieldId } from '../lib/fieldAliases';
 import { PopupFieldEditor, ensurePopupField } from './PopupFieldEditor';
 
 interface PendingTemplateView {
@@ -14,6 +15,7 @@ interface PendingTemplateView {
 }
 
 interface TemplateSetupModalProps {
+  busy: boolean;
   templateText: string;
   buttonLabel: string;
   previewTitle: string;
@@ -54,8 +56,11 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   );
   const invalidLabel = props.pendingTemplates.find((item) => !item.button_label.trim());
   const invalidDomain = props.pendingTemplates.find((item) => hasInvalidCustomDomain(item.domain_override));
-  const batchReady = hasBatch && !invalidLabel && !invalidDomain;
-  const manualReady = Boolean(props.templateText.trim()) && !hasInvalidCustomDomain(props.draftDomainOverride);
+  const normalizedLabels = props.pendingTemplates.map(item => normalizeTemplateButtonLabel(item.button_label).toLocaleLowerCase('ru-RU'));
+  const duplicateLabel = normalizedLabels.find((label, index) => Boolean(label) && normalizedLabels.indexOf(label) !== index) ?? null;
+  const invalidPopup = props.pendingTemplates.find(item => !popupFieldsAreValid(item.popup_fields));
+  const batchReady = hasBatch && !invalidLabel && !invalidDomain && !duplicateLabel && !invalidPopup && !marking;
+  const manualReady = Boolean(props.templateText.trim()) && !hasInvalidCustomDomain(props.draftDomainOverride) && popupFieldsAreValid(props.draftPopupFields) && !marking;
   const confirmLabel = hasBatch ? `Создать кнопки (${props.pendingTemplates.length})` : 'Создать кнопку';
 
   useEffect(() => {
@@ -116,10 +121,11 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         onDrop={(event: DragEvent<HTMLDivElement>) => {
           event.preventDefault();
           const files = Array.from(event.dataTransfer.files ?? []);
-          if (files.length) props.onDropFiles(files);
+          if (!props.busy && files.length) props.onDropFiles(files);
         }}
       >
         <h2>Создать свои кнопки</h2>
+        <fieldset disabled={props.busy} className="modalInteractionGuard">
         <p className="hint">Выберите рабочие шаблоны Word. Каждый DOCX или DOCM сразу станет отдельной кнопкой.</p>
         <p className="hint">Сначала создайте кнопки и начните работать. Автоматические поля, вопросы и разметку можно добавить позже для каждой кнопки.</p>
 
@@ -195,12 +201,18 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
             <div className={`readyMessage templateReadyMessage ${batchReady ? '' : 'warning'}`}>
               <i className={batchReady ? 'ti ti-circle-check' : 'ti ti-alert-triangle'} aria-hidden="true" />
               <div>
-                <strong>{batchReady ? 'Кнопки готовы к созданию' : invalidDomain ? 'Укажите свою профессию / профиль' : 'Укажите название кнопки'}</strong>
+                <strong>{batchReady ? 'Кнопки готовы к созданию' : marking ? 'Завершаем разметку шаблона' : invalidDomain ? 'Укажите свою профессию / профиль' : duplicateLabel ? 'Названия кнопок должны отличаться' : invalidPopup ? 'Исправьте уточняющие вопросы' : 'Укажите название кнопки'}</strong>
                 <span>{batchReady
                   ? 'Нажмите кнопку ниже. Неразмеченные шаблоны сохранят свою форму и будут доступны сразу.'
-                  : invalidDomain
-                    ? `Не заполнена своя профессия / профиль для ${invalidDomain.file_name}.`
-                    : `Не заполнено название для ${invalidLabel?.file_name ?? 'одного шаблона'}.`}</span>
+                  : marking
+                    ? 'Дождитесь сохранения безопасной копии шаблона; после этого создание кнопок станет доступно.'
+                    : invalidDomain
+                      ? `Не заполнена своя профессия / профиль для ${invalidDomain.file_name}.`
+                      : duplicateLabel
+                        ? 'Две или больше кнопок имеют одинаковое название. Переименуйте их, чтобы пользователь не мог выбрать не тот документ.'
+                        : invalidPopup
+                          ? `В ${invalidPopup.file_name} есть пустое, повторяющееся или некорректно связанное смысловое поле.`
+                          : `Не заполнено название для ${invalidLabel?.file_name ?? 'одного шаблона'}.`}</span>
               </div>
             </div>
 
@@ -268,8 +280,9 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
         <div className="modalActions">
           <span className="spacer" />
           <button className="softBtn" onClick={props.onCancel}>Отмена</button>
-          <button className="primaryBtn" onClick={props.onConfirm} disabled={hasBatch ? !batchReady : !manualReady}>{confirmLabel}</button>
+          <button className="primaryBtn" onClick={props.onConfirm} disabled={props.busy || (hasBatch ? !batchReady : !manualReady)}>{confirmLabel}</button>
         </div>
+        </fieldset>
       </div>
     </div>
   );
@@ -362,6 +375,21 @@ function domainLabel(domain: DomainKind | null): string {
     Education: 'образование',
     Generic: 'универсальный документооборот',
   } as Record<string, string>)[domain] ?? String(domain);
+}
+
+function popupFieldsAreValid(fields: PopupFieldConfig[]): boolean {
+  const rawIds = fields.map(field => field.field_id.trim());
+  if (rawIds.some(id => !id)) return false;
+  const ids = rawIds.map(canonicalStorageFieldId);
+  if (new Set(ids).size !== ids.length) return false;
+  const known = new Set(ids);
+  return fields.every(field => {
+    const fieldId = canonicalStorageFieldId(field.field_id.trim());
+    const linked = field.linked_to?.trim();
+    if (!linked) return true;
+    const linkedId = canonicalStorageFieldId(linked);
+    return linkedId !== fieldId && known.has(linkedId);
+  });
 }
 
 function hasInvalidCustomDomain(value: DomainKind | null | undefined): boolean {

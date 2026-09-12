@@ -68,3 +68,16 @@ def test_derived_medical_outputs_are_replaced_by_real_input_facts() -> None:
     assert "MEDICAL_EXPERT_ANAMNESIS" in profiles
     assert "MEDICAL_WORK_POSITION" in profiles
     assert '"medical.sick_leave_number"' in profiles
+
+
+def test_canonical_patient_root_can_be_the_watcher_inbox_without_recursive_self_processing() -> None:
+    frontend = (ROOT / "src/hooks/useOutputDestination.ts").read_text("utf-8")
+    watcher = (ROOT / "src-tauri/src/subsystems/watcher_commands.rs").read_text("utf-8")
+
+    assert "Рабочая папка и папка готовых документов должны быть разными" not in frontend
+    assert "Рабочая папка фонового агента и папка готовых документов должны быть разными" not in watcher
+    assert "RecursiveMode::NonRecursive" in watcher
+    assert "fn watcher_path_is_processable" in watcher
+    assert "path.is_file()" in watcher
+    assert "watcher_path_is_processable(&path)" in watcher
+

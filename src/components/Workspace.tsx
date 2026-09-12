@@ -258,7 +258,7 @@ export function Workspace(props: WorkspaceProps) {
               <strong>Ссылка</strong>
               <p>Загрузить страницу, открытый файл или данные из API.</p>
               <div className="inlineInput">
-                <input value={props.webSourceUrl} onChange={(event) => props.setWebSourceUrl(event.target.value)} placeholder="https://..." aria-label="Адрес источника" />
+                <input value={props.webSourceUrl} disabled={props.busy} onChange={(event) => props.setWebSourceUrl(event.target.value)} placeholder="https://..." aria-label="Адрес источника" />
                 <button className="softBtn" onClick={props.onLoadWebSource} disabled={props.busy || !props.webSourceUrl.trim()}>Загрузить</button>
               </div>
             </div>
@@ -267,6 +267,7 @@ export function Workspace(props: WorkspaceProps) {
               <p>Вставить содержимое вручную, если файла нет.</p>
               <textarea
       value={props.sourceText}
+      disabled={props.busy}
       onChange={(event) => props.setSourceText(event.target.value)}
       onSelect={(event) => {
         const target = event.currentTarget;
@@ -420,7 +421,7 @@ export function Workspace(props: WorkspaceProps) {
                 {props.semantic.fields.map((field) => (
                   <li key={field.field_id}>
                     <div><strong>{field.value}</strong><small>{field.field_id} · уверенность {(field.confidence * 100).toFixed(0)}%</small></div>
-                    <div><button className="textBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy || !props.sourceFilePath} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Здесь ошибка</button></div>
+                    <div><button className="textBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Здесь ошибка</button></div>
                   </li>
                 ))}
               </ul>
@@ -445,7 +446,7 @@ export function Workspace(props: WorkspaceProps) {
           <section>
             <h3>Диагностика форматов</h3>
             {props.intakeCapabilities.length ? <ul className="capabilityList">{props.intakeCapabilities.map(item => <li key={item.format}><strong>{item.format}</strong><span>{item.ready ? 'готово' : 'требуется компонент'}</span><small>{item.detail}</small></li>)}</ul> : <p>Сведения появятся после проверки компонентов.</p>}
-            <details className="modelDetails"><summary>Дополнительные данные распознавания</summary><textarea value={props.modelOutput} onChange={(event) => props.setModelOutput(event.target.value)} placeholder="Служебные данные в формате JSON" spellCheck={false} /></details>
+            <details className="modelDetails"><summary>Дополнительные данные распознавания</summary><textarea disabled={props.busy} value={props.modelOutput} onChange={(event) => props.setModelOutput(event.target.value)} placeholder="Служебные данные в формате JSON" spellCheck={false} /></details>
           </section>
         </div>
       </details>

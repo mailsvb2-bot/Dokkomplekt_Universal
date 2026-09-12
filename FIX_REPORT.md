@@ -1,4 +1,28 @@
-# Dokkomplekt Universal 18.4.4 — corrective repair report
+# Dokkomplekt Universal 18.4.7 — corrective repair report
+
+## 18.4.7 — единый compiler ownership и реальный profile_status repair
+
+- Подтверждён механизм пользовательского отказа 18.4.6: compatibility fallback мог повторно принять значение, внутри которого уже находился `{{medical.profile_status}}`, за старые данные пациента и уничтожить token, ранее созданный compiler stage.
+- Правило template-syntax теперь одно для core/runtime: complete, partial и embedded `{{`/`}}` являются границей ownership и никогда автоматически не подаются в legacy value fallback.
+- Runtime больше не ведёт `applied_field_ids` и `applied_field_stories` как два независимых состояния. Единый `CompilerOwnership` одновременно хранит semantic IDs и точные Word stories и немедленно отклоняет несогласованный stage report.
+- Удалён предварительный structural pre-scan: финальный ownership строится только по фактически выполненным blank/structural/fallback compiler stages.
+- Добавлены регрессии на физическом DOCX и runtime `compile_template_contract_copy`; Windows installed-app smoke теперь использует пустую profile-status зону с literal suffix и обязан пройти до реально созданного DOCX без unresolved token/blank.
+
+## 18.4.6 — real sick_leave_vk story-provenance repair
+
+- Устранён подтверждённый пользователем отказ 18.4.5: `Compiler заявил semantic-поле medical.sick_leave_vk.position, но не найдено Word story, где его token был реально добавлен.`
+- Владелец compiler-owned поля больше не восстанавливается по разнице количества `{{token}}` между исходным и итоговым DOCX. Каждый DOCX-compiler возвращает точный provenance `field -> Word story`, а runtime проверяет именно эту story strict-parser'ом.
+- Повторная обработка уже размеченного semantic-token больше не даёт false-negative, при этом body/header/footer остаются независимыми границами и не могут маскировать ошибку друг друга.
+- Windows installed-app smoke переведён на роль `sick_leave_vk` и обязан реально пройти `medical.sick_leave_vk.position`, протокол и даты до физического DOCX.
+- Устранён следующий найденный installed-app regression: длинная подпись `Номер протокола ВК по больничному` больше не разбирается как короткая generic-подпись `Номер протокола` плюс inline-значение. Compiler сначала распознаёт полный role-scoped title и заменяет соседнюю value-cell; regression доказывает, что старые `234` и `10.09.2026` исчезают, а текущие `987` и `09.09.2026` попадают в физический DOCX.
+
+
+## 18.4.5 — real generation blocker
+
+- Устранён пользовательский отказ создания документов `Compiler не подтвердил созданное semantic-поле medical.profile_status`.
+- Подтверждение поля compiler теперь опирается на exact semantic-token в итоговом DOCX, а не на повторный глобальный parse всего doctor-owned текста.
+- Fail-closed сохранён: отсутствие реально записанного токена по-прежнему блокирует публикацию.
+- Добавлен regression на DOCX с literal `{{` перед разделом «Психический статус».
 
 ## 18.4.4 — structural template compiler closure
 

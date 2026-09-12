@@ -57,10 +57,10 @@ export function DocumentRail(props: DocumentRailProps) {
                   return (
                     <div key={document.id} className={`packageItem ${selected ? 'selected' : ''} ${active ? 'active' : ''}`}>
                       <label className="packageCheck">
-                        <input type="checkbox" checked={selected} aria-label={`Добавить ${document.button_label} в комплект`} onChange={() => props.onToggleSelected(document.id)} />
+                        <input type="checkbox" checked={selected} disabled={props.busy} aria-label={`Добавить ${document.button_label} в комплект`} onChange={() => props.onToggleSelected(document.id)} />
                         <span aria-hidden="true"><i className="ti ti-check" /></span>
                       </label>
-                      <button className="packageOpen" onClick={() => props.onSelect(document)} aria-label={document.button_label}>
+                      <button className="packageOpen" disabled={props.busy} onClick={() => props.onSelect(document)} aria-label={document.button_label}>
                         <i className="ti ti-file-text" aria-hidden="true" /><span>{document.button_label}</span><small>{selected ? 'в комплекте' : 'не выбран'}</small>
                       </button>
                     </div>
@@ -71,8 +71,8 @@ export function DocumentRail(props: DocumentRailProps) {
           </div>
 
           <div className="packageSelectionActions">
-            <button className="textBtn" onClick={props.onSelectAll}>Выбрать всё</button>
-            <button className="textBtn" onClick={props.onClearSelected} disabled={!selectedCount}>Снять выбор</button>
+            <button className="textBtn" onClick={props.onSelectAll} disabled={props.busy}>Выбрать всё</button>
+            <button className="textBtn" onClick={props.onClearSelected} disabled={props.busy || !selectedCount}>Снять выбор</button>
             <button className="textBtn" onClick={props.onAdd} disabled={props.busy}>Добавить шаблоны</button>
             <button className="textBtn" onClick={props.onAddFromText} disabled={props.busy}>Создать из текста</button>
           </div>
@@ -82,11 +82,11 @@ export function DocumentRail(props: DocumentRailProps) {
             <div className="packageSettingsBody">
               {props.activeDocumentId ? (
                 <>
-                  <button className="softBtn" onClick={props.onConfigurePopups}>Настроить уточнения</button>
-                  <button className="softBtn" onClick={props.onScanTemplate}>Разметить шаблон</button>
-                  <button className="softBtn" onClick={props.onRename}>Переименовать</button>
-                  <button className="softBtn" onClick={props.onApprove}>Подтвердить версию</button>
-                  <button className="softBtn danger" onClick={props.onRemove}>Убрать из набора</button>
+                  <button className="softBtn" disabled={props.busy} onClick={props.onConfigurePopups}>Настроить уточнения</button>
+                  <button className="softBtn" disabled={props.busy} onClick={props.onScanTemplate}>Разметить шаблон</button>
+                  <button className="softBtn" disabled={props.busy} onClick={props.onRename}>Переименовать</button>
+                  <button className="softBtn" disabled={props.busy} onClick={props.onApprove}>Подтвердить версию</button>
+                  <button className="softBtn danger" disabled={props.busy} onClick={props.onRemove}>Убрать из набора</button>
                 </>
               ) : (
                 <small>Откройте нужную кнопку документа, чтобы изменить её настройки.</small>
@@ -96,7 +96,7 @@ export function DocumentRail(props: DocumentRailProps) {
                 {props.documents.map(document => (
                   <label key={document.id}>
                     <span>{document.button_label}</span>
-                    <input type="number" min={0} max={99} value={props.printCopies[document.id] ?? 1} aria-label={`Количество копий для ${document.button_label}`} onChange={(event) => props.onPrintCopiesChange(document.id, Number(event.target.value))} />
+                    <input type="number" min={0} max={99} disabled={props.busy} value={props.printCopies[document.id] ?? 1} aria-label={`Количество копий для ${document.button_label}`} onChange={(event) => props.onPrintCopiesChange(document.id, Number(event.target.value))} />
                   </label>
                 ))}
               </details>
@@ -113,7 +113,7 @@ export function DocumentRail(props: DocumentRailProps) {
         </div>
       )}
 
-      <button className="settingsLink" onClick={props.onToggleUtilities}>
+      <button className="settingsLink" disabled={props.busy} onClick={props.onToggleUtilities}>
         <i className="ti ti-adjustments-horizontal" aria-hidden="true" /> Настройки программы
       </button>
     </aside>

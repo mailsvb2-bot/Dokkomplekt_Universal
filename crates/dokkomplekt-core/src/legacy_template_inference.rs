@@ -1,3 +1,4 @@
+use crate::template_engine::contains_template_delimiters;
 use crate::{canonical_field_id_for_domain, title_for_field, DomainKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,7 +44,7 @@ pub fn infer_legacy_template_fields(
     let mut candidates = Vec::new();
     for (line_index, raw_line) in lines.iter().enumerate() {
         let line = raw_line.trim();
-        if line.is_empty() || line.contains("{{") || line.contains("}}") {
+        if line.is_empty() || contains_template_delimiters(line) {
             continue;
         }
 
@@ -61,10 +62,7 @@ pub fn infer_legacy_template_fields(
                 continue;
             }
             let previous = lines[previous_index].trim();
-            if previous.contains("{{")
-                || previous.contains("}}")
-                || find_explicit_blank(previous).is_some()
-            {
+            if contains_template_delimiters(previous) || find_explicit_blank(previous).is_some() {
                 continue;
             }
             let label = clean_label(previous);
@@ -231,7 +229,7 @@ pub fn infer_labeled_template_values(
         let inline = clean_structural_value(&anchor.remainder);
         let multiline = is_multiline_structural_field(&anchor.field_id);
         let mut owned = Vec::new();
-        if !inline.is_empty() && !is_blank_only(&inline) && !inline.contains("{{") {
+        if !inline.is_empty() && !is_blank_only(&inline) && !contains_template_delimiters(&inline) {
             owned.push(inline);
         }
         if multiline || owned.is_empty() {
@@ -243,7 +241,7 @@ pub fn infer_labeled_template_values(
                 if next.is_empty() {
                     continue;
                 }
-                if next.contains("{{") || next.contains("}}") {
+                if contains_template_delimiters(next) {
                     break;
                 }
                 owned.push(next.to_string());
@@ -253,8 +251,7 @@ pub fn infer_labeled_template_values(
             }
         }
         let value = owned.join("\n").trim().to_string();
-        if value.is_empty() || is_blank_only(&value) || value.contains("{{") || value.contains("}}")
-        {
+        if value.is_empty() || is_blank_only(&value) || contains_template_delimiters(&value) {
             continue;
         }
         candidates.push(LabeledTemplateValueCandidate {
@@ -277,13 +274,13 @@ pub fn infer_labeled_template_values(
     // anchor intentionally fails closed on placeholders, so inspect only
     // explicitly separated placeholder-free segments and bind them by containment.
     for (line_index, raw_line) in lines.iter().enumerate() {
-        if !(raw_line.contains("{{") || raw_line.contains("}}")) {
+        if !contains_template_delimiters(raw_line) {
             continue;
         }
         for cell in raw_line.split('\t') {
             for segment in cell.split(';') {
                 let segment = segment.trim();
-                if segment.is_empty() || segment.contains("{{") || segment.contains("}}") {
+                if segment.is_empty() || contains_template_delimiters(segment) {
                     continue;
                 }
                 let Some(anchor) =
@@ -334,7 +331,7 @@ fn infer_tabular_labeled_template_values(
 
     let mut candidates = Vec::new();
     for (cell_index, cell) in cells.iter().enumerate() {
-        if cell.is_empty() || cell.contains("{{") || cell.contains("}}") {
+        if cell.is_empty() || contains_template_delimiters(cell) {
             continue;
         }
         let Some(anchor) = match_labeled_template_anchor(cell, catalog, preferred_domain, role_id)
@@ -358,7 +355,7 @@ fn infer_tabular_labeled_template_values(
                 if next.is_empty() {
                     continue;
                 }
-                if next.contains("{{") || next.contains("}}") {
+                if contains_template_delimiters(next) {
                     break;
                 }
                 if match_labeled_template_anchor(next, catalog, preferred_domain, role_id).is_some()
@@ -545,7 +542,7 @@ fn push_donor_candidate(
         .trim()
         .trim_matches(|ch: char| ch == ',' || ch == ';')
         .trim();
-    if value.is_empty() || value.contains("{{") || value.contains("}}") {
+    if value.is_empty() || contains_template_delimiters(value) {
         return;
     }
     out.push(LabeledTemplateValueCandidate {
@@ -728,7 +725,7 @@ fn match_labeled_template_anchor(
     preferred_domain: Option<&DomainKind>,
     role_id: Option<&str>,
 ) -> Option<LabeledTemplateAnchor> {
-    if line.is_empty() || line.contains("{{") || line.contains("}}") {
+    if line.is_empty() || contains_template_delimiters(line) {
         return None;
     }
     if let Some(label) = signer_boundary_label(line) {
@@ -738,6 +735,31 @@ fn match_labeled_template_anchor(
             remainder: String::new(),
             replaceable: false,
         });
+    }
+    // Role-scoped medical fields have deliberately more specific visual titles than
+    // their legacy generic aliases (for example, `Номер протокола ВК по больничному`
+    // versus `Номер протокола`). Match that full title first. Otherwise a table label
+    // cell is misread as `generic label + inline value`, and the compiler rewrites the
+    // label itself while leaving the adjacent old patient's value untouched.
+    if matches!(preferred_domain, Some(DomainKind::Medical)) {
+        for (scoped_id, _) in
+            crate::domains::medical_semantics::role_scoped_bindings(role_id.unwrap_or_default())
+        {
+            let Some(label) =
+                crate::domains::medical_semantics::title_for_role_scoped_field(scoped_id)
+            else {
+                continue;
+            };
+            let Some(remainder) = strip_label_prefix(line, label) else {
+                continue;
+            };
+            return Some(LabeledTemplateAnchor {
+                field_id: (*scoped_id).to_string(),
+                label: label.to_string(),
+                remainder: remainder.to_string(),
+                replaceable: true,
+            });
+        }
     }
     for (label, replaceable) in catalog {
         let Some(remainder) = strip_label_prefix(line, label) else {
@@ -1233,6 +1255,33 @@ mod tests {
             .find(|binding| binding.field_id == "medical.case_number")
             .expect("case number binding");
         assert_eq!(case_number.value, "4213");
+    }
+
+    #[test]
+    fn empty_mental_status_never_consumes_following_somatic_section() {
+        let candidates = infer_labeled_template_values(
+            concat!(
+                "Психический статус при поступлении:\n",
+                "Сомато-неврологический статус: Нормального питания.\n",
+                "Лечение: терапия"
+            ),
+            Some(&DomainKind::Medical),
+            Some("discharge"),
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.field_id == "medical.profile_status"),
+            "an empty mental-status section must stay empty instead of owning the next section: {candidates:?}"
+        );
+        let somatic = candidates
+            .iter()
+            .find(|candidate| candidate.field_id == "medical.somatic_status")
+            .expect("somato-neurological status must be a structural boundary and value owner");
+        assert_eq!(somatic.value, "Нормального питания.");
+        assert!(candidates.iter().any(|candidate| {
+            candidate.field_id == "medical.treatment" && candidate.value == "терапия"
+        }));
     }
 
     #[test]

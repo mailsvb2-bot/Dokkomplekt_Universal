@@ -625,12 +625,17 @@ describe('Полный прогон пользовательских сцена�
     fireEvent.click(screen.getByText('Расширенные инструменты'));
     expect((screen.getByRole('button', { name: 'Показать значение в Word' }) as HTMLButtonElement).disabled).toBe(true);
 
+    const zeroTouchPath = screen.getByPlaceholderText('Путь к файлу') as HTMLInputElement;
+    fireEvent.change(zeroTouchPath, { target: { value: 'C:/watch/старый-пациент.docx' } });
+    expect(zeroTouchPath.value).toBe('C:/watch/старый-пациент.docx');
+
     await click(/Проверить и создать \(2\)/);
     preflight = await screen.findByRole('dialog', { name: 'Проверка перед созданием' });
     fireEvent.click(within(preflight).getByRole('button', { name: 'Создать документы' }));
     await screen.findByRole('status', { name: 'Комплект готов' });
     await click(/Новый комплект/);
     await waitFor(() => expect(calls.filter((call) => call.command === 'reset_case').length).toBeGreaterThan(0));
+    expect(zeroTouchPath.value).toBe('');
     expect(screen.queryByRole('status', { name: 'Комплект готов' })).toBeNull();
     expect(screen.getByRole('heading', { name: 'Добавьте исходный файл' })).toBeTruthy();
   });

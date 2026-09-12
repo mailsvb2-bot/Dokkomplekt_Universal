@@ -60,7 +60,7 @@ def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
         "medical-diary-program-calendar-{MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION}.docx"
         in profile_sources
     )
-    assert "program_calendar_diary_template(app).map(Some)" in profile_sources
+    assert "return program_calendar_diary_template(app);" in profile_sources
     assert "select_diary_template_for_admission" not in profile_sources
     assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
     assert "{{#each diaries}}" in profile_sources
@@ -112,3 +112,35 @@ def test_dynamic_sick_leave_epicrisis_is_donor_owned_and_not_a_frontend_second_b
     for frontend_owner in (preflight, linked_answers):
         assert "medical.diary_sick_leave_epicrisis" not in frontend_owner
         assert "medical.diary_treatment_correction" not in frontend_owner
+
+
+def test_generation_routes_share_diary_template_without_mutating_generic_candidate_snapshots() -> None:
+    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    snapshots = read("src-tauri/src/template_snapshot.rs")
+    manual = read("src-tauri/src/subsystems/document_commands.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+    mail_merge = read("src-tauri/src/subsystems/automation_mail_merge.rs")
+    assert "fn effective_generation_template_path" in profile_sources
+    assert "return program_calendar_diary_template(app);" in profile_sources
+    assert "resolve_user_path(app, &document.template_path)" in profile_sources
+    assert "let live_path = resolve_user_path(app, configured_path)?;" in snapshots
+    assert "fn effective_registered_generation_path" not in snapshots
+    assert "app.state::<super::AppState>()" not in snapshots
+    assert "pub(crate) fn capture_generation" in snapshots
+    assert "super::effective_generation_template_path(app, document)?" in snapshots
+    assert manual.count("TemplateSnapshot::capture_generation(") >= 2
+    assert "TemplateSnapshot::capture_generation(app, document)" in automation
+    assert "TemplateSnapshot::capture_generation(app, document)" in mail_merge
+
+
+
+def test_program_calendar_template_repair_never_unlinks_a_concurrent_winner():
+    profile_sources = read("src-tauri/src/subsystems/profile_sources.rs")
+    ensure = profile_sources[
+        profile_sources.index("fn ensure_program_calendar_diary_template(") :
+        profile_sources.index("fn program_calendar_diary_template(")
+    ]
+    assert "replace_file_atomically(&temp_path, path)" in ensure
+    assert "std::fs::remove_file(path)" not in ensure
+    assert "MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH" in profile_sources
+    assert "std::fs::rename(source, destination)" in profile_sources

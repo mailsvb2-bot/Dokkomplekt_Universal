@@ -59,6 +59,7 @@ def test_mail_merge_snapshot_helper_extracts_text_from_immutable_snapshot() -> N
     helper = text.split("fn capture_mail_merge_template_snapshot(", 1)[1].split(
         "fn ensure_mail_merge_templates_current", 1
     )[0]
-    assert "TemplateSnapshot::capture(app, configured_path, button_label)" in helper
+    assert "TemplateSnapshot::capture_generation(app, document)" in helper
     assert "extract_docx_text(snapshot.path())" in helper
+    assert "TemplateSnapshot::capture(app, configured_path, button_label)" not in helper
     assert "resolve_user_path" not in helper

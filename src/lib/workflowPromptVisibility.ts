@@ -1,5 +1,14 @@
 import type { PromptSpec } from './types';
 
+export const INTERNAL_WORKFLOW_PROMPT_IDS = new Set([
+  'medical.diary_day_start_time',
+  'medical.diary_day_end_time',
+]);
+
+export function isInternalWorkflowPrompt(fieldId: string): boolean {
+  return INTERNAL_WORKFLOW_PROMPT_IDS.has(fieldId);
+}
+
 export function isAffirmativeWorkflowValue(value: string): boolean {
   return ['да', 'yes', 'true'].includes(
     value.trim().toLowerCase().replaceAll('ё', 'е'),

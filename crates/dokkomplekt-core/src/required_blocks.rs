@@ -159,6 +159,84 @@ const NON_SIGNER_FILLER_WORDS: &[&str] = &[
     "комиссии",
 ];
 
+/// Rebuild the persisted hard-required field contract without confusing a
+/// renderable placeholder with a mandatory user input.
+///
+/// Medical roles have a canonical requirement plan. Render placeholders outside
+/// that plan stay optional unless the specialist explicitly saved them as
+/// required in the popup designer. Non-medical domains retain the historical
+/// placeholder-required behavior until their domain contracts become equally
+/// explicit.
+pub fn synchronize_document_required_fields(spec: &mut DocumentTemplateSpec) {
+    if !matches!(spec.category, DomainKind::Medical) {
+        spec.required_fields = spec
+            .placeholders
+            .iter()
+            .cloned()
+            .chain(
+                spec.popup_fields
+                    .iter()
+                    .filter(|field| field.required)
+                    .map(|field| field.field_id.clone()),
+            )
+            .map(|field| canonical_storage_field_id(&field))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        return;
+    }
+
+    let role = MedicalDocumentRole::from_role_id(&spec.role_id);
+    if matches!(role, MedicalDocumentRole::GenericMedical) {
+        // Unknown medical roles have no canonical role plan, so preserve their
+        // existing hard requirements. Explicit popup configuration is still
+        // specialist intent and must be allowed to strengthen that contract.
+        let mut required = spec
+            .required_fields
+            .iter()
+            .map(|field| canonical_storage_field_id(field))
+            .collect::<BTreeSet<_>>();
+        if spec.popup_configured {
+            required.extend(
+                spec.popup_fields
+                    .iter()
+                    .filter(|field| field.required)
+                    .map(|field| canonical_storage_field_id(&field.field_id)),
+            );
+        }
+        spec.required_fields = required.into_iter().collect();
+        return;
+    }
+
+    let placeholder_fields = spec
+        .placeholders
+        .iter()
+        .map(|field| canonical_storage_field_id(field))
+        .collect::<BTreeSet<_>>();
+    let mut required = spec
+        .required_fields
+        .iter()
+        .map(|field| canonical_storage_field_id(field))
+        .filter(|field| !placeholder_fields.contains(field))
+        .collect::<BTreeSet<_>>();
+    required.extend(
+        build_medical_render_plan(role, false, false)
+            .required_fields
+            .into_iter()
+            .map(|field| canonical_storage_field_id(&field)),
+    );
+    required.insert("subject.name".to_string());
+    if spec.popup_configured {
+        required.extend(
+            spec.popup_fields
+                .iter()
+                .filter(|field| field.required)
+                .map(|field| canonical_storage_field_id(&field.field_id)),
+        );
+    }
+    spec.required_fields = required.into_iter().collect();
+}
+
 /// Mandatory composite blocks for a configured document.
 pub fn required_blocks_for(
     spec: &DocumentTemplateSpec,
@@ -242,6 +320,21 @@ pub fn missing_medical_template_render_paths(spec: &DocumentTemplateSpec) -> Vec
             .into_iter()
             .map(|field| canonical_storage_field_id(&field)),
         );
+    }
+
+    // Role-scoped medical placeholders and their historical shared ids describe
+    // the same physical render slot only inside the current document role. This
+    // is publication-time render equivalence, not storage aliasing: protocol/date
+    // values remain independent between VK MSE and sick-leave VK documents.
+    for (scoped_id, shared_id) in
+        crate::domains::medical_semantics::role_scoped_bindings(&spec.role_id)
+    {
+        let scoped = canonical_storage_field_id(scoped_id);
+        let shared = canonical_storage_field_id(shared_id);
+        if renderable.contains(&scoped) || renderable.contains(&shared) {
+            renderable.insert(scoped);
+            renderable.insert(shared);
+        }
     }
 
     required
@@ -486,6 +579,32 @@ mod tests {
     }
 
     #[test]
+    fn generic_medical_role_honors_explicit_required_popup_fields() {
+        let mut document = spec("clinic_custom_form", DomainKind::Medical);
+        document.placeholders = vec!["medical.discharge_condition".into()];
+        let mut popup =
+            crate::PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        popup.required = true;
+        document.popup_fields = vec![popup];
+        document.popup_configured = true;
+
+        synchronize_document_required_fields(&mut document);
+
+        assert_eq!(
+            document.required_fields,
+            vec!["medical.discharge_condition".to_string()]
+        );
+        let blocks = required_blocks_for(&document, "");
+        assert!(blocks.iter().any(|block| {
+            matches!(
+                &block.requirement,
+                BlockRequirement::AnyRenderedField(fields)
+                    if fields == &vec!["medical.discharge_condition".to_string()]
+            )
+        }));
+    }
+
+    #[test]
     fn generic_role_has_no_mandatory_blocks() {
         let blocks = required_blocks_for(&spec("generic", DomainKind::Generic), "любой текст");
         assert!(blocks.is_empty());
@@ -727,6 +846,67 @@ mod tests {
         assert_eq!(
             missing_medical_template_render_paths(&document),
             vec!["medical.treatment".to_string()]
+        );
+    }
+
+    #[test]
+    fn sick_leave_vk_scoped_work_placeholders_satisfy_legacy_shared_requirements() {
+        let mut document = spec("sick_leave_vk", DomainKind::Medical);
+        document.placeholders =
+            build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false)
+                .required_fields;
+        document.placeholders.push("subject.name".into());
+        document.required_fields = vec!["medical.workplace".into(), "medical.position".into()];
+
+        assert!(
+            missing_medical_template_render_paths(&document).is_empty(),
+            "same-role scoped work placeholders must satisfy legacy shared publication requirements"
+        );
+    }
+
+    #[test]
+    fn sick_leave_vk_work_placeholders_cannot_satisfy_vk_mse_role() {
+        let mut document = spec("vk_mse", DomainKind::Medical);
+        document.placeholders =
+            build_medical_render_plan(MedicalDocumentRole::VkMse, false, false).required_fields;
+        document.placeholders.push("subject.name".into());
+        document.placeholders.retain(|field| {
+            field != "medical.vk_mse.workplace" && field != "medical.vk_mse.position"
+        });
+        document.placeholders.extend([
+            "medical.sick_leave_vk.workplace".into(),
+            "medical.sick_leave_vk.position".into(),
+        ]);
+
+        let missing = missing_medical_template_render_paths(&document);
+        assert!(
+            missing.contains(&"medical.vk_mse.workplace".to_string()),
+            "{missing:?}"
+        );
+        assert!(
+            missing.contains(&"medical.vk_mse.position".to_string()),
+            "{missing:?}"
+        );
+    }
+
+    #[test]
+    fn vk_protocol_render_paths_remain_role_specific() {
+        let mut document = spec("sick_leave_vk", DomainKind::Medical);
+        document.placeholders =
+            build_medical_render_plan(MedicalDocumentRole::SickLeaveCommission, false, false)
+                .required_fields;
+        document.placeholders.push("subject.name".into());
+        document
+            .placeholders
+            .retain(|field| field != "medical.sick_leave_vk.protocol_number");
+        document
+            .placeholders
+            .push("medical.vk_mse.protocol_number".into());
+
+        let missing = missing_medical_template_render_paths(&document);
+        assert!(
+            missing.contains(&"medical.sick_leave_vk.protocol_number".to_string()),
+            "foreign VK protocol field must not satisfy sick-leave VK: {missing:?}"
         );
     }
 

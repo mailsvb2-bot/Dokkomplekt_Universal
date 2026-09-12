@@ -77,4 +77,38 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Проверочная кнопка.docx" not in source
     assert "[System.IO.Compression.ZipFile]::OpenRead" in source
     assert "Created DOCX lost the template content" in source
+    assert "Психический статус" in source
+    assert "Шаблонный психический статус старого пациента" in source
+    assert "Контактен, ориентирован, эмоционально напряжён" in source
+    assert "medical.profile_status from the current primary source" in source
+    assert "old template medical.profile_status" in source
+    assert "compiler-owned medical.profile_status placeholder unresolved" in source
+    assert "Психический статус: ______ после компиляции" in source
+    assert "lost the literal suffix around compiler-owned medical.profile_status" in source
+    assert "left the profile-status blank unresolved" in source
+    assert "doctor-owned literal opener used by the profile-status regression" in source
+    assert "-Role 'sick_leave_vk'" in source
+    assert "medical.sick_leave_vk.position" in source
+    assert "New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'sick_leave_vk'" in source
+    assert "if ($Role -ne 'sick_leave_vk')" in source
+    assert "'medical.position' = 'инженер'" in source
+    assert "canonical shared medical.position prompt" in source
+    assert "Installed sick_leave_vk generation did not render the current protocol number" in source
+    assert "Installed sick_leave_vk generation left medical.sick_leave_vk.position unresolved" in source
     assert "Installed end-to-end document generation OK" in source
+
+
+def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+    assert "$env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '0'" in source
+    assert "The unsigned Preview is an independent installed-app lane" in source
+    assert "function New-BlankDischargeDocxFixture" in source
+    assert "Дата, время      Выписной эпикриз №" in source
+    assert "Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с по" in source
+    assert "Психический статус при поступлении:" in source
+    assert "Сомато-неврологический статус: Нормального питания." in source
+    assert "if ($adversarialMedicalRole -eq 'discharge')" in source
+    assert "Installed discharge preflight did not expose medical.discharge_date" in source
+    assert "Blank discharge template did not render the current diagnosis" in source
+    assert "Blank discharge compiler consumed the following somatic-status section" in source
+    assert "Blank discharge generation left a semantic placeholder unresolved" in source

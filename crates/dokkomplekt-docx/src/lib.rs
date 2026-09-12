@@ -985,6 +985,15 @@ pub fn promote_table_row_loops(xml: &str) -> String {
 pub struct StructuralTemplateCompilationReport {
     pub output_path: String,
     pub applied_field_ids: Vec<String>,
+    /// Exact Word stories where the compiler handled each semantic field.
+    /// A field may already be tokenized, so ownership cannot be reconstructed
+    /// reliably from before/after token counts alone.
+    #[serde(default)]
+    pub applied_field_stories: BTreeMap<String, Vec<String>>,
+    /// Semantic-looking donor literals that are intentionally fixed boilerplate.
+    /// Compatibility fallback must not convert these literals into runtime fields.
+    #[serde(default)]
+    pub preserved_literal_field_ids: Vec<String>,
     pub binding_count: usize,
 }
 
@@ -1029,11 +1038,25 @@ fn infer_structural_bindings_by_story(
             )?;
         }
         let story_text = xml_to_text(&xml);
-        let bindings = dokkomplekt_core::infer_structural_template_values(
+        let blank_discharge_donor = name == "word/document.xml"
+            && *preferred_domain == DomainKind::Medical
+            && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "discharge"
+            && is_blank_discharge_donor_story(&story_text);
+        let mut bindings = dokkomplekt_core::infer_structural_template_values(
             &story_text,
             Some(preferred_domain),
             Some(role_id),
         );
+        if blank_discharge_donor && has_exact_blank_discharge_somatic_boilerplate(&story_text) {
+            // Preserve only the concrete verified boilerplate occurrence. A story
+            // may legitimately contain another somatic-status section with patient
+            // data; that separate occurrence must remain structurally owned and be
+            // replaced instead of being exempted field-wide.
+            bindings.retain(|binding| {
+                binding.field_id != "medical.somatic_status"
+                    || !is_exact_blank_discharge_somatic_boilerplate_value(&binding.value)
+            });
+        }
         if !bindings.is_empty() {
             bindings_by_story.insert(name, bindings);
         }
@@ -1387,7 +1410,7 @@ pub fn compile_labeled_template_file(
         role_id,
         &owned_table_bindings_by_story,
     )?;
-    let binding_count = bindings_by_story.values().map(Vec::len).sum::<usize>()
+    let mut binding_count = bindings_by_story.values().map(Vec::len).sum::<usize>()
         + owned_table_bindings_by_story
             .values()
             .map(Vec::len)
@@ -1401,6 +1424,8 @@ pub fn compile_labeled_template_file(
     let output = File::create(&temporary)?;
     let mut writer = ZipWriter::new(output);
     let mut applied_field_ids = Vec::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut preserved_literal_field_ids = BTreeSet::<String>::new();
     let mut skipped = Vec::new();
     let mut total_uncompressed = 0_u64;
 
@@ -1418,6 +1443,25 @@ pub fn compile_labeled_template_file(
             ensure_text_part_size(&name, entry.size())?;
             let mut xml = String::new();
             entry.read_to_string(&mut xml)?;
+            let blank_discharge_donor = name == "word/document.xml"
+                && *preferred_domain == DomainKind::Medical
+                && dokkomplekt_core::domains::medical::canonical_medical_role(role_id)
+                    == "discharge"
+                && is_blank_discharge_donor_story(&xml_to_text(&xml));
+            if blank_discharge_donor
+                && has_exact_blank_discharge_somatic_boilerplate(&xml_to_text(&xml))
+                && !bindings_by_story.get(&name).is_some_and(|bindings| {
+                    bindings
+                        .iter()
+                        .any(|binding| binding.field_id == "medical.somatic_status")
+                })
+            {
+                // The report is field-scoped, so mark the field preserved only when
+                // there is no second patient-specific occurrence of the same field.
+                // Mixed stories rely on structural ownership to protect the rewritten
+                // occurrence while leaving the exact boilerplate paragraph literal.
+                preserved_literal_field_ids.insert("medical.somatic_status".to_string());
+            }
             if let Some(bindings) = owned_table_bindings_by_story.get(&name) {
                 let Some((next, applied)) =
                     apply_owned_table_cell_bindings_in_story(&xml, bindings)
@@ -1429,6 +1473,12 @@ pub fn compile_labeled_template_file(
                     continue;
                 };
                 xml = next;
+                for field_id in &applied {
+                    applied_field_stories
+                        .entry(field_id.clone())
+                        .or_default()
+                        .insert(name.clone());
+                }
                 applied_field_ids.extend(applied);
             }
             if let Some(bindings) = bindings_by_story.get(&name) {
@@ -1436,8 +1486,36 @@ pub fn compile_labeled_template_file(
                     if let Some(next) = apply_structural_binding_in_story(&xml, binding) {
                         xml = next;
                         applied_field_ids.push(binding.field_id.clone());
+                        applied_field_stories
+                            .entry(binding.field_id.clone())
+                            .or_default()
+                            .insert(name.clone());
                     } else {
                         skipped.push(format!("{}:{} ({})", name, binding.field_id, binding.label));
+                    }
+                }
+            }
+            // A proven donor medical template is often intentionally blank rather
+            // than previously filled.  The old application rendered these slots by
+            // stable Word markers (for example `Дата, время  Выписной эпикриз №`
+            // and `Находился ... с по`) and never required the doctor to type
+            // technical `{{...}}` tokens into Word.  Compile those deterministic
+            // role-owned empty slots into the same strict semantic contract used by
+            // filled legacy templates.  This remains fail-closed: only the main Word
+            // story and exact role markers are eligible, and every emitted token is
+            // reported with story provenance for the higher-level verifier.
+            if name == "word/document.xml" && *preferred_domain == DomainKind::Medical {
+                let (next, fields) =
+                    compile_empty_medical_role_slots_in_story(&xml, role_id, blank_discharge_donor);
+                if !fields.is_empty() {
+                    xml = next;
+                    binding_count += fields.len();
+                    for field_id in fields {
+                        applied_field_stories
+                            .entry(field_id.clone())
+                            .or_default()
+                            .insert(name.clone());
+                        applied_field_ids.push(field_id);
                     }
                 }
             }
@@ -1464,8 +1542,387 @@ pub fn compile_labeled_template_file(
     Ok(StructuralTemplateCompilationReport {
         output_path: output_path.display().to_string(),
         applied_field_ids,
+        applied_field_stories: applied_field_stories
+            .into_iter()
+            .map(|(field_id, stories)| (field_id, stories.into_iter().collect()))
+            .collect(),
+        preserved_literal_field_ids: preserved_literal_field_ids.into_iter().collect(),
         binding_count,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StructuralFoldSpan {
+    folded_start: usize,
+    folded_end: usize,
+    original_start: usize,
+    original_end: usize,
+}
+
+#[derive(Debug)]
+struct StructuralFoldIndex {
+    folded: String,
+    spans: Vec<StructuralFoldSpan>,
+}
+
+impl StructuralFoldIndex {
+    fn new(text: &str) -> Self {
+        let mut folded = String::with_capacity(text.len());
+        let mut spans = Vec::<StructuralFoldSpan>::new();
+        let mut pending_whitespace = None::<(usize, usize)>;
+
+        for (original_start, character) in text.char_indices() {
+            let original_end = original_start + character.len_utf8();
+            if character.is_whitespace() {
+                if !folded.is_empty() {
+                    pending_whitespace = Some(match pending_whitespace {
+                        Some((start, _)) => (start, original_end),
+                        None => (original_start, original_end),
+                    });
+                }
+                continue;
+            }
+
+            if let Some((space_start, space_end)) = pending_whitespace.take() {
+                let folded_start = folded.len();
+                folded.push(' ');
+                spans.push(StructuralFoldSpan {
+                    folded_start,
+                    folded_end: folded.len(),
+                    original_start: space_start,
+                    original_end: space_end,
+                });
+            }
+
+            for lowercase in character.to_lowercase() {
+                let normalized = if lowercase == 'ё' { 'е' } else { lowercase };
+                let folded_start = folded.len();
+                folded.push(normalized);
+                spans.push(StructuralFoldSpan {
+                    folded_start,
+                    folded_end: folded.len(),
+                    original_start,
+                    original_end,
+                });
+            }
+        }
+
+        Self { folded, spans }
+    }
+
+    fn original_range(&self, folded_start: usize, folded_end: usize) -> Option<(usize, usize)> {
+        let first = self
+            .spans
+            .binary_search_by_key(&folded_start, |span| span.folded_start)
+            .ok()?;
+        let last = self
+            .spans
+            .binary_search_by_key(&folded_end, |span| span.folded_end)
+            .ok()?;
+        Some((
+            self.spans[first].original_start,
+            self.spans[last].original_end,
+        ))
+    }
+}
+
+fn structural_match_ranges(text: &str, needle: &str) -> Vec<(usize, usize)> {
+    let wanted = structural_fold(needle);
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let index = StructuralFoldIndex::new(text);
+    index
+        .folded
+        .match_indices(&wanted)
+        .filter_map(|(start, matched)| index.original_range(start, start + matched.len()))
+        .collect()
+}
+
+fn structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
+    structural_match_ranges(text, needle)
+        .into_iter()
+        // Prefer the tightest visible range. A folded match may otherwise include
+        // layout whitespace around a marker and erase it during replacement.
+        .min_by(|left, right| {
+            let left_len = left.1 - left.0;
+            let right_len = right.1 - right.0;
+            left_len.cmp(&right_len).then_with(|| right.0.cmp(&left.0))
+        })
+}
+
+fn is_structural_word_char(value: char) -> bool {
+    value.is_alphanumeric() || value == '_'
+}
+
+fn standalone_structural_match_range(text: &str, needle: &str) -> Option<(usize, usize)> {
+    structural_match_ranges(text, needle)
+        .into_iter()
+        .filter(|(start, end)| {
+            let before_is_word = text[..*start]
+                .chars()
+                .next_back()
+                .is_some_and(is_structural_word_char);
+            let after_is_word = text[*end..]
+                .chars()
+                .next()
+                .is_some_and(is_structural_word_char);
+            !before_is_word && !after_is_word
+        })
+        .min_by(|left, right| {
+            let left_len = left.1 - left.0;
+            let right_len = right.1 - right.0;
+            left_len.cmp(&right_len).then_with(|| right.0.cmp(&left.0))
+        })
+}
+
+fn is_blank_slot_separator(value: char) -> bool {
+    value.is_whitespace() || matches!(value, ':' | ';' | ',' | '.' | '-' | '–' | '—' | '_' | '·')
+}
+
+fn blank_header_label_range(text: &str) -> Option<(usize, usize)> {
+    let (label_start, label_end) = structural_match_range(text, "Дата, время")?;
+    let (heading_start, _) = structural_match_range(text, "Выписной эпикриз")?;
+    if heading_start < label_end {
+        return None;
+    }
+    text[label_end..heading_start]
+        .chars()
+        .all(is_blank_slot_separator)
+        .then_some((label_start, label_end))
+}
+
+fn rewrite_first_paragraph_visible_text<F>(xml: &str, mut rewrite: F) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    for span in paragraph_spans(xml) {
+        let Some(replacement) = rewrite(&span.text) else {
+            continue;
+        };
+        if replacement == span.text {
+            continue;
+        }
+        let paragraph = &xml[span.start..span.end];
+        let rewritten = replace_visible_text_once(paragraph, &span.text, &replacement)?;
+        let mut output = xml.to_string();
+        output.replace_range(span.start..span.end, &rewritten);
+        return Some(output);
+    }
+    None
+}
+
+fn insert_plain_paragraph_before_first_marker(
+    xml: &str,
+    markers: &[&str],
+    paragraph_text: &str,
+) -> Option<String> {
+    let marker_folds = markers
+        .iter()
+        .map(|marker| structural_fold(marker))
+        .collect::<Vec<_>>();
+    let target = paragraph_spans(xml).into_iter().find(|span| {
+        let text = structural_fold(span.text.trim());
+        marker_folds.iter().any(|marker| text.starts_with(marker))
+    })?;
+    let paragraph = format!(
+        "<w:p><w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+        escape_xml_text(paragraph_text)
+    );
+    let mut output = xml.to_string();
+    output.insert_str(target.start, &paragraph);
+    Some(output)
+}
+
+fn looks_like_donor_instruction(text: &str) -> bool {
+    let folded = structural_fold(text);
+    folded.is_empty()
+        || folded.contains("сюда подстав")
+        || folded.contains("подставляется")
+        || folded.contains("подставить")
+        || folded.contains("выбирается в ui")
+        || folded.contains("из файла")
+}
+
+fn is_exact_blank_discharge_somatic_boilerplate_value(value: &str) -> bool {
+    structural_fold(value) == structural_fold("Нормального питания.")
+}
+
+fn has_exact_blank_discharge_somatic_boilerplate(story: &str) -> bool {
+    story.lines().any(|line| {
+        structural_remainder_after_label(line, "Сомато-неврологический статус")
+            .is_some_and(|value| is_exact_blank_discharge_somatic_boilerplate_value(&value))
+    })
+}
+
+fn is_blank_discharge_donor_story(story: &str) -> bool {
+    let folded = structural_fold(story);
+    blank_header_label_range(story).is_some()
+        && folded.contains("выписной эпикриз")
+        && folded.contains("зарегистрирован по адресу")
+        && folded.contains("находился на лечении")
+        && standalone_structural_match_range(story, "с по").is_some()
+        && folded.contains("психический статус при поступлении")
+        && folded.contains("сомато-неврологический статус")
+        && (folded.contains("сюда подстав")
+            || folded.contains("лечение из файла")
+            || folded.contains("лечение выбирается в ui"))
+}
+
+fn compile_empty_discharge_slots_in_story(
+    xml: &str,
+    proven_blank_donor: bool,
+) -> (String, Vec<String>) {
+    if !proven_blank_donor {
+        return (xml.to_string(), Vec::new());
+    }
+
+    let mut output = xml.to_string();
+    let mut applied = Vec::<String>::new();
+    let has = |xml: &str, field_id: &str| xml_to_text(xml).contains(&format!("{{{{{field_id}}}}}"));
+
+    // Empty donor header: `Дата, время      Выписной эпикриз №`.
+    if !has(&output, "medical.discharge_date") {
+        if let Some(next) = rewrite_first_paragraph_visible_text(&output, |text| {
+            if !structural_fold(text).contains("выписной эпикриз") {
+                return None;
+            }
+            let (start, end) = blank_header_label_range(text)?;
+            let mut replacement = text.to_string();
+            replacement.replace_range(start..end, "{{medical.discharge_date}}");
+            Some(replacement)
+        }) {
+            output = next;
+            applied.push("medical.discharge_date".into());
+        }
+    }
+    if !has(&output, "medical.case_number") {
+        if let Some(next) = rewrite_first_paragraph_visible_text(&output, |text| {
+            let heading_end = structural_match_end(text, "Выписной эпикриз")?;
+            let suffix = text[heading_end..].trim();
+            if !suffix.is_empty() && suffix != "№" && suffix != "№." && suffix != "№:" {
+                return None;
+            }
+            let mut replacement = text.trim_end().to_string();
+            if suffix.is_empty() {
+                replacement.push_str(" №");
+            }
+            replacement.push_str(" {{medical.case_number}}");
+            Some(replacement)
+        }) {
+            output = next;
+            applied.push("medical.case_number".into());
+        }
+    }
+
+    // Donor patient line deliberately leaves the name/birth positions blank but
+    // can carry a sample address.  Replace the whole role-owned identity line so
+    // sample patient/location data can never leak into a generated document.
+    if !has(&output, "subject.name")
+        || !has(&output, "subject.birth_date")
+        || !has(&output, "subject.address")
+    {
+        if let Some(next) = rewrite_first_paragraph_visible_text(&output, |text| {
+            let folded = structural_fold(text);
+            if !folded.contains("зарегистрирован по адресу") {
+                return None;
+            }
+            let donor_identity = folded.starts_with("г р")
+                || text.contains("{{subject.name}}")
+                || text.contains("{{subject.address}}");
+            donor_identity.then(|| {
+                "{{subject.name}}, {{subject.birth_date}} г.р., зарегистрирован по адресу: {{subject.address}}".into()
+            })
+        }) {
+            let name_missing = !has(&output, "subject.name");
+            let birth_missing = !has(&output, "subject.birth_date");
+            let address_missing = !has(&output, "subject.address");
+            output = next;
+            if name_missing {
+                applied.push("subject.name".into());
+            }
+            if birth_missing {
+                applied.push("subject.birth_date".into());
+            }
+            if address_missing {
+                applied.push("subject.address".into());
+            }
+        }
+    }
+
+    // Empty treatment period from the proven donor template: `... с по`.
+    if !has(&output, "medical.admission_date") || !has(&output, "medical.discharge_date") {
+        if let Some(next) = rewrite_first_paragraph_visible_text(&output, |text| {
+            if !structural_fold(text).contains("находился на лечении") {
+                return None;
+            }
+            let (start, end) = standalone_structural_match_range(text, "с по")?;
+            let mut replacement = text.to_string();
+            replacement.replace_range(
+                start..end,
+                "с {{medical.admission_date}} по {{medical.discharge_date}}",
+            );
+            Some(replacement)
+        }) {
+            let admission_missing = !has(&output, "medical.admission_date");
+            let discharge_missing = !has(&output, "medical.discharge_date");
+            output = next;
+            if admission_missing {
+                applied.push("medical.admission_date".into());
+            }
+            if discharge_missing {
+                applied.push("medical.discharge_date".into());
+            }
+        }
+    }
+
+    // Empty/instruction-only treatment section is a deterministic donor slot.
+    if !has(&output, "medical.treatment") {
+        if let Some(next) = rewrite_first_paragraph_visible_text(&output, |text| {
+            let remainder = structural_remainder_after_label(text, "Лечение")?;
+            looks_like_donor_instruction(&remainder)
+                .then(|| "Лечение: {{medical.treatment}}".to_string())
+        }) {
+            output = next;
+            applied.push("medical.treatment".into());
+        }
+    }
+
+    // The donor discharge template may omit a diagnosis row entirely.  The old
+    // renderer inserted the current diagnosis immediately before somatic status;
+    // compile the same role-owned slot instead of forcing users to redesign Word.
+    if !has(&output, "medical.diagnosis") {
+        if let Some(next) = rewrite_first_paragraph_visible_text(&output, |text| {
+            let remainder = structural_remainder_after_label(text, "Диагноз")?;
+            looks_like_donor_instruction(&remainder)
+                .then(|| "Диагноз: {{medical.diagnosis}}".to_string())
+        }) {
+            output = next;
+            applied.push("medical.diagnosis".into());
+        } else if let Some(next) = insert_plain_paragraph_before_first_marker(
+            &output,
+            &["Сомато-неврологический статус", "Соматический статус"],
+            "Диагноз: {{medical.diagnosis}}",
+        ) {
+            output = next;
+            applied.push("medical.diagnosis".into());
+        }
+    }
+
+    applied.sort();
+    applied.dedup();
+    (output, applied)
+}
+
+fn compile_empty_medical_role_slots_in_story(
+    xml: &str,
+    role_id: &str,
+    proven_blank_discharge_donor: bool,
+) -> (String, Vec<String>) {
+    match dokkomplekt_core::domains::medical::canonical_medical_role(role_id).as_str() {
+        "discharge" => compile_empty_discharge_slots_in_story(xml, proven_blank_discharge_donor),
+        _ => (xml.to_string(), Vec::new()),
+    }
 }
 
 fn apply_structural_binding_in_story(
@@ -1509,7 +1966,7 @@ fn apply_structural_binding_in_story(
         let Some(remainder) = structural_remainder_after_label(&anchor.text, &binding.label) else {
             continue;
         };
-        if anchor.text.contains("{{") || anchor.text.contains("}}") {
+        if dokkomplekt_core::contains_template_delimiters(&anchor.text) {
             continue;
         }
         let inline = !remainder.is_empty();
@@ -1626,24 +2083,10 @@ fn structural_remainder_after_label(text: &str, label: &str) -> Option<String> {
 }
 
 fn structural_match_end(text: &str, needle: &str) -> Option<usize> {
-    let wanted = structural_fold(needle);
-    if wanted.is_empty() {
-        return None;
-    }
-    let boundaries = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect::<Vec<_>>();
-    for (start_position, start) in boundaries.iter().copied().enumerate() {
-        for end in boundaries.iter().copied().skip(start_position + 1) {
-            let candidate = &text[start..end];
-            if structural_fold(candidate) == wanted {
-                return Some(end);
-            }
-        }
-    }
-    None
+    structural_match_ranges(text, needle)
+        .into_iter()
+        .min_by_key(|(start, end)| (*start, *end))
+        .map(|(_, end)| end)
 }
 
 fn structural_fold(value: &str) -> String {
@@ -1683,6 +2126,8 @@ pub struct TemplateMarkupReport {
 pub struct StoryTemplateMarkupReport {
     pub output_path: String,
     pub applied_field_ids: Vec<String>,
+    #[serde(default)]
+    pub applied_field_stories: BTreeMap<String, Vec<String>>,
     pub applied_binding_count: usize,
     pub replaced_occurrences: usize,
     pub skipped_bindings: Vec<String>,
@@ -1729,6 +2174,7 @@ pub fn apply_story_template_markup_file(
     let output = File::create(&temp)?;
     let mut writer = ZipWriter::new(output);
     let mut applied_fields = BTreeSet::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
     let mut applied_binding_count = 0_usize;
     let mut replaced_occurrences = 0_usize;
     let mut skipped_bindings = Vec::new();
@@ -1774,6 +2220,10 @@ pub fn apply_story_template_markup_file(
                     };
                     xml = next;
                     applied_fields.insert(replacement.field_id.clone());
+                    applied_field_stories
+                        .entry(replacement.field_id.clone())
+                        .or_default()
+                        .insert(name.clone());
                     applied_binding_count += 1;
                     replaced_occurrences += 1;
                 }
@@ -1805,6 +2255,10 @@ pub fn apply_story_template_markup_file(
     Ok(StoryTemplateMarkupReport {
         output_path: output_path.display().to_string(),
         applied_field_ids: applied_fields.into_iter().collect(),
+        applied_field_stories: applied_field_stories
+            .into_iter()
+            .map(|(field_id, stories)| (field_id, stories.into_iter().collect()))
+            .collect(),
         applied_binding_count,
         replaced_occurrences,
         skipped_bindings,
@@ -1926,6 +2380,8 @@ pub struct TemplateLearningMapReport {
 pub struct StoryTemplateLearningMapReport {
     pub output_path: String,
     pub applied_field_ids: Vec<String>,
+    #[serde(default)]
+    pub applied_field_stories: BTreeMap<String, Vec<String>>,
     pub applied_binding_count: usize,
     pub skipped_bindings: Vec<String>,
 }
@@ -1949,6 +2405,7 @@ pub fn apply_story_template_learning_map_file(
     let output = File::create(&temporary)?;
     let mut writer = ZipWriter::new(output);
     let mut applied_fields = BTreeSet::new();
+    let mut applied_field_stories = BTreeMap::<String, BTreeSet<String>>::new();
     let mut applied_binding_count = 0_usize;
     let mut skipped_bindings = Vec::new();
     let mut seen_stories = BTreeSet::new();
@@ -1996,6 +2453,10 @@ pub fn apply_story_template_learning_map_file(
                     };
                     xml = next;
                     applied_fields.insert(field_id.to_string());
+                    applied_field_stories
+                        .entry(field_id.to_string())
+                        .or_default()
+                        .insert(name.clone());
                     applied_binding_count += 1;
                 }
             }
@@ -2026,6 +2487,10 @@ pub fn apply_story_template_learning_map_file(
     Ok(StoryTemplateLearningMapReport {
         output_path: output_path.display().to_string(),
         applied_field_ids: applied_fields.into_iter().collect(),
+        applied_field_stories: applied_field_stories
+            .into_iter()
+            .map(|(field_id, stories)| (field_id, stories.into_iter().collect()))
+            .collect(),
         applied_binding_count,
         skipped_bindings,
     })
@@ -2292,11 +2757,17 @@ fn replace_visible_text_once_from(
     let mut local_end = 0;
     for (i, n) in nodes.iter().enumerate() {
         let next = offset + n.decoded.len();
-        if start_node.is_none() && start_byte >= offset && start_byte <= next {
+        // Visible text is a concatenation of independent w:t nodes. A match
+        // that starts exactly at a node boundary belongs to the *next* node,
+        // while a match that ends at that boundary belongs to the previous one.
+        // Using closed intervals for both sides relocates replacements into the
+        // preceding cell/paragraph (for example a profile-status blank can be
+        // appended to the previous table cell).
+        if start_node.is_none() && start_byte >= offset && start_byte < next {
             start_node = Some(i);
             local_start = start_byte - offset;
         }
-        if end_byte >= offset && end_byte <= next {
+        if end_byte > offset && end_byte <= next {
             end_node = Some(i);
             local_end = end_byte - offset;
             break;
@@ -2800,6 +3271,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn strict_docx_render_recovers_later_field_after_literal_opening_braces() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-literal-braces-strict-render-{}",
+            std::process::id()
+        ));
+        let tpl = dir.join("literal-braces.docx");
+        let out = dir.join("rendered.docx");
+        create_docx_from_text(
+            &tpl,
+            "Служебная пометка {{\nПсихический статус: {{medical.profile_status}}",
+        )
+        .expect("create regression DOCX");
+        let case = case_with(&[("medical.profile_status", "Спокоен, ориентирован.")]);
+        let proof = render_docx_file_with_watermark_proof(&tpl, &out, &case, true, None)
+            .expect("strict renderer must recover the later semantic field");
+        assert!(proof.visible_text.contains("Служебная пометка {{"));
+        assert!(proof.visible_text.contains("Спокоен, ориентирован."));
+        assert!(proof.render_result.missing_fields.is_empty());
+        assert!(proof.render_result.unknown_fields.is_empty());
+        assert!(proof.render_result.template_errors.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn read_zip_text(archive: &mut ZipArchive<File>, name: &str) -> String {
         let mut entry = archive.by_name(name).expect("required OOXML part");
         let mut text = String::new();
@@ -2890,6 +3385,10 @@ mod tests {
             .expect("story-scoped blank markup");
         assert_eq!(report.applied_binding_count, 1);
         assert!(report.skipped_bindings.is_empty());
+        assert_eq!(
+            report.applied_field_stories.get("medical.complaints"),
+            Some(&vec!["word/document.xml".to_string()])
+        );
         let stories = extract_docx_story_texts(&marked).expect("story texts");
         assert!(stories["word/document.xml"].contains("{{medical.complaints}}"));
         assert_eq!(stories["word/header1.xml"].trim(), "________");
@@ -2923,6 +3422,10 @@ mod tests {
             .expect("story-scoped markup");
         assert_eq!(report.applied_binding_count, 1);
         assert!(report.skipped_bindings.is_empty());
+        assert_eq!(
+            report.applied_field_stories.get("medical.treatment"),
+            Some(&vec!["word/document.xml".to_string()])
+        );
         let stories = extract_docx_story_texts(&marked).expect("story texts");
         assert!(stories["word/document.xml"].contains("{{medical.treatment}}"));
         assert!(stories["word/header1.xml"].contains("старая схема"));
@@ -2965,6 +3468,49 @@ mod tests {
     }
 
     #[test]
+    fn story_report_keeps_owner_when_existing_token_is_reapplied_without_count_growth() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-existing-token-provenance-{}",
+            std::process::id()
+        ));
+        let input = dir.join("existing-token.docx");
+        let marked = dir.join("marked.docx");
+        let token = "{{medical.sick_leave_vk.position}}";
+        write_test_docx(
+            &input,
+            &format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{token}</w:t></w:r></w:p></w:body></w:document>"#
+            ),
+            None,
+        );
+        let replacements = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            vec![TemplateMarkupReplacement {
+                field_id: "medical.sick_leave_vk.position".into(),
+                value: token.into(),
+                action: TemplateMarkupAction::Replace,
+            }],
+        )]);
+        let before = extract_docx_story_texts(&input).expect("before stories");
+        let report = apply_story_template_markup_file(&input, &marked, &replacements)
+            .expect("existing semantic token can be handled idempotently");
+        let after = extract_docx_story_texts(&marked).expect("after stories");
+        assert_eq!(report.applied_binding_count, 1, "{report:?}");
+        assert_eq!(
+            report
+                .applied_field_stories
+                .get("medical.sick_leave_vk.position"),
+            Some(&vec!["word/document.xml".to_string()])
+        );
+        assert_eq!(
+            before["word/document.xml"].matches(token).count(),
+            after["word/document.xml"].matches(token).count(),
+            "this regression must exercise a real compiler application with zero token-count delta"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn blank_medical_table_value_cells_compile_into_semantic_placeholders() {
         let dir = std::env::temp_dir().join(format!(
             "dokkomplekt-blank-medical-table-{}",
@@ -2999,6 +3545,19 @@ mod tests {
             );
         }
         assert_eq!(report.binding_count, 5, "{report:?}");
+        for field_id in [
+            "medical.case_number",
+            "medical.diagnosis",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert_eq!(
+                report.applied_field_stories.get(field_id),
+                Some(&vec!["word/document.xml".to_string()]),
+                "missing exact story provenance for {field_id}: {report:?}"
+            );
+        }
         let text = extract_docx_text(&compiled).expect("compiled table text");
         for field_id in [
             "medical.case_number",
@@ -3073,6 +3632,47 @@ mod tests {
                 "stale value survived: {stale}: {text:?}"
             );
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sick_leave_vk_filled_table_uses_role_scoped_tokens_and_provenance() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-sick-leave-vk-filled-table-{}",
+            std::process::id()
+        ));
+        let input = dir.join("filled-table.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>ВК по больничному</w:t></w:r></w:p>
+<w:tbl><w:tr>
+<w:tc><w:p><w:r><w:t>Место работы</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Старый завод</w:t></w:r></w:p></w:tc>
+<w:tc><w:p><w:r><w:t>Должность</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc>
+</w:tr></w:tbl>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "sick_leave_vk")
+                .expect("sick-leave VK table must compile by role-scoped ownership");
+        let text = extract_docx_text(&compiled).expect("compiled sick-leave VK table text");
+        for field_id in [
+            "medical.sick_leave_vk.workplace",
+            "medical.sick_leave_vk.position",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id),
+                "missing applied role-scoped field {field_id}: {report:?}"
+            );
+            assert_eq!(
+                report.applied_field_stories.get(field_id),
+                Some(&vec!["word/document.xml".to_string()]),
+                "missing exact story provenance for {field_id}: {report:?}"
+            );
+            assert!(text.contains(&format!("{{{{{field_id}}}}}")), "{text:?}");
+        }
+        assert!(!text.contains("{{medical.workplace}}"), "{text:?}");
+        assert!(!text.contains("{{medical.position}}"), "{text:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -3365,6 +3965,254 @@ mod tests {
         assert!(!text.contains("09.09.2026"));
         assert!(!text.contains("01.01.1980"));
         assert!(!text.contains("Н. Новгород"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn blank_discharge_period_rewrite_never_matches_s_pomoshchyu() {
+        let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Находился на лечении в стационаре с помощью родственников</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        let (compiled, applied) = compile_empty_discharge_slots_in_story(xml, true);
+        let text = xml_to_text(&compiled);
+        assert!(text.contains("с помощью родственников"), "{text}");
+        assert!(!text.contains("{{medical.admission_date}}"), "{text}");
+        assert!(!text.contains("{{medical.discharge_date}}"), "{text}");
+        assert!(!applied.iter().any(|field| {
+            field == "medical.admission_date" || field == "medical.discharge_date"
+        }));
+    }
+
+    #[test]
+    fn blank_discharge_header_rewrite_requires_an_actually_empty_date_slot() {
+        let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время: 01.09.2026 Выписной эпикриз №</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        let (compiled, applied) = compile_empty_discharge_slots_in_story(xml, true);
+        let text = xml_to_text(&compiled);
+        assert!(text.contains("01.09.2026"), "{text}");
+        assert!(!text.contains("{{medical.discharge_date}}"), "{text}");
+        assert!(!applied
+            .iter()
+            .any(|field| field == "medical.discharge_date"));
+    }
+
+    #[test]
+    fn blank_discharge_donor_proof_rejects_filled_header_and_non_period_prose() {
+        let donor = |header: &str, period: &str| {
+            format!(
+                "{header}\nзарегистрирован по адресу\nНаходился на лечении {period}\nПсихический статус при поступлении\nСомато-неврологический статус\nЛечение: Сюда подставляется информация"
+            )
+        };
+        assert!(is_blank_discharge_donor_story(&donor(
+            "Дата, время      Выписной эпикриз №",
+            "с по"
+        )));
+        assert!(!is_blank_discharge_donor_story(&donor(
+            "Дата, время: 01.09.2026 Выписной эпикриз №",
+            "с по"
+        )));
+        assert!(!is_blank_discharge_donor_story(&donor(
+            "Дата, время      Выписной эпикриз №",
+            "с помощью родственников"
+        )));
+    }
+
+    #[test]
+    fn blank_discharge_only_preserves_the_exact_verified_somatic_boilerplate() {
+        let exact = concat!(
+            "Дата, время      Выписной эпикриз №\n",
+            "зарегистрирован по адресу\n",
+            "Находился на лечении с по\n",
+            "Психический статус при поступлении\n",
+            "Сомато-неврологический статус: Нормального питания.\n",
+            "Лечение: Сюда подставляется информация"
+        );
+        let patient_specific = exact.replace(
+            "Нормального питания.",
+            "Кожные покровы бледные, АД 150/90 мм рт. ст.",
+        );
+        assert!(has_exact_blank_discharge_somatic_boilerplate(exact));
+        assert!(!has_exact_blank_discharge_somatic_boilerplate(
+            &patient_specific
+        ));
+        assert!(is_blank_discharge_donor_story(&patient_specific));
+    }
+
+    #[test]
+    fn blank_discharge_mixed_somatic_occurrences_preserve_only_boilerplate_occurrence() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-blank-donor-mixed-somatic-{}",
+            std::process::id()
+        ));
+        let input = dir.join("mixed-somatic.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р., зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2 с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Нормального питания.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Кожные покровы бледные, АД 150/90 мм рт. ст.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("mixed somatic occurrences must compile without stale patient data");
+        let text = extract_docx_text(&compiled).expect("compiled mixed somatic text");
+        assert!(
+            text.contains("Сомато-неврологический статус: Нормального питания."),
+            "{text}"
+        );
+        assert!(text.contains("{{medical.somatic_status}}"), "{text}");
+        assert!(!text.contains("Кожные покровы бледные"), "{text}");
+        assert!(report
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.somatic_status"));
+        assert!(!report
+            .preserved_literal_field_ids
+            .iter()
+            .any(|field| field == "medical.somatic_status"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn structural_matchers_scale_with_long_word_story() {
+        let mut story = "служебный текст ".repeat(4_000);
+        story.push_str("Дата,   время      Выписной эпикриз №\n");
+        story.push_str(&"длинный раздел ".repeat(4_000));
+        story.push_str("Находился на лечении с     по");
+
+        assert!(structural_match_range(&story, "Дата, время").is_some());
+        assert!(structural_match_range(&story, "Выписной эпикриз").is_some());
+        let period = standalone_structural_match_range(&story, "с по")
+            .expect("standalone blank period in long story");
+        assert_eq!(structural_fold(&story[period.0..period.1]), "с по");
+    }
+
+    #[test]
+    fn blank_discharge_patient_specific_somatic_status_is_compiled_not_preserved() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-blank-donor-patient-somatic-{}",
+            std::process::id()
+        ));
+        let input = dir.join("patient-somatic.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р., зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2 с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Кожные покровы бледные, АД 150/90 мм рт. ст.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("patient-specific somatic status must compile as a render field");
+        let compiled_text = extract_docx_text(&compiled).expect("compiled text");
+        assert!(
+            compiled_text.contains("{{medical.somatic_status}}"),
+            "{compiled_text}"
+        );
+        assert!(
+            !compiled_text.contains("Кожные покровы бледные"),
+            "stale patient somatic status survived: {compiled_text}"
+        );
+        assert!(!report
+            .preserved_literal_field_ids
+            .iter()
+            .any(|field| field == "medical.somatic_status"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn blank_diary_filler_discharge_template_compiles_real_role_slots() {
+        let dir = std::env::temp_dir().join(format!(
+            "dokkomplekt-blank-donor-discharge-{}",
+            std::process::id()
+        ));
+        let input = dir.join("3 Выписной.docx");
+        let compiled = dir.join("compiled.docx");
+        let body = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р.,  зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>В 3 отделение КДП поступает</w:t></w:r></w:p>
+<w:p><w:r><w:t>Жалобы при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Анамнез жизни:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Анамнез заболевания:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Нормального питания.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла «2 первичный», который выбирается в Ui</w:t></w:r></w:p>
+<w:p><w:r><w:t>Экспертный анамнез: не работает. В выдаче ЛН не нуждается.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Зав. отд. Можарова Е.А.                    Врач-психиатр Балаганин С.В.</w:t></w:r></w:p>
+</w:body></w:document>"#;
+        write_test_docx(&input, body, None);
+
+        let report =
+            compile_labeled_template_file(&input, &compiled, &DomainKind::Medical, "discharge")
+                .expect("blank donor discharge must compile without manual placeholders");
+        let compiled_text = extract_docx_text(&compiled).expect("compiled donor text");
+
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.discharge_date",
+            "medical.diagnosis",
+            "medical.treatment",
+        ] {
+            assert!(
+                report.applied_field_ids.iter().any(|item| item == field_id)
+                    || compiled_text.contains(&format!("{{{{{field_id}}}}}")),
+                "missing blank donor render path {field_id}: report={report:?}, text={compiled_text:?}"
+            );
+            assert!(
+                compiled_text.contains(&format!("{{{{{field_id}}}}}")),
+                "physical token for {field_id} is missing: {compiled_text:?}"
+            );
+        }
+        assert!(
+            compiled_text.contains("{{subject.birth_date}}"),
+            "{compiled_text}"
+        );
+        assert!(
+            compiled_text.contains("{{subject.address}}"),
+            "{compiled_text}"
+        );
+        assert!(!compiled_text.contains("Н. Новгород"), "{compiled_text}");
+        assert!(
+            !compiled_text.contains("Сюда подставляется"),
+            "{compiled_text}"
+        );
+        assert!(
+            compiled_text.contains(
+                "Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с {{medical.admission_date}} по {{medical.discharge_date}}"
+            ),
+            "{compiled_text}"
+        );
+        assert!(
+            compiled_text.find("Диагноз: {{medical.diagnosis}}")
+                < compiled_text.find("Сомато-неврологический статус"),
+            "diagnosis must be inserted before somatic status: {compiled_text}"
+        );
+        assert!(
+            compiled_text.contains("Сомато-неврологический статус: Нормального питания."),
+            "blank donor fixed somatic boilerplate must remain literal: {compiled_text}"
+        );
+        assert!(
+            !compiled_text.contains("{{medical.somatic_status}}"),
+            "blank donor fixed somatic boilerplate must not become a runtime field: {compiled_text}"
+        );
+        assert_eq!(
+            report.preserved_literal_field_ids,
+            vec!["medical.somatic_status".to_string()]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -3813,6 +4661,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("external/active relationship"), "{error}");
+    }
+
+    #[test]
+    fn visible_text_replacement_starting_at_node_boundary_stays_in_own_node() {
+        let xml = concat!(
+            "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>старый инженер</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+            "<w:p><w:r><w:t>Психический статус: ______ после компиляции</w:t></w:r></w:p>"
+        );
+        let result = replace_visible_text_once(
+            xml,
+            "Психический статус: ______ после компиляции",
+            "Психический статус: {{medical.profile_status}} после компиляции",
+        )
+        .expect("boundary-aligned visible text must be replaced");
+
+        assert!(result.contains(">старый инженер</w:t>"), "{result}");
+        assert!(
+            result
+                .contains(">Психический статус: {{medical.profile_status}} после компиляции</w:t>"),
+            "{result}"
+        );
+        assert!(
+            !result.contains("старый инженерПсихический статус"),
+            "{result}"
+        );
     }
 
     #[test]

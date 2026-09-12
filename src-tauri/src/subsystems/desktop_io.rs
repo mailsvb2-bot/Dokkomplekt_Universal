@@ -1521,25 +1521,47 @@ fn value_source_label(source: ValueSource) -> &'static str {
     }
 }
 
+struct TrustDocumentEvidence {
+    document_name: String,
+    values: BTreeMap<String, dokkomplekt_core::SemanticValue>,
+}
+
+fn capture_trust_document_evidence(
+    document_name: impl Into<String>,
+    semantic_case: &SemanticCase,
+    used_field_ids: impl IntoIterator<Item = String>,
+) -> TrustDocumentEvidence {
+    let values = used_field_ids
+        .into_iter()
+        .filter_map(|field_id| {
+            semantic_case
+                .values
+                .get(&field_id)
+                .cloned()
+                .map(|value| (field_id, value))
+        })
+        .collect();
+    TrustDocumentEvidence {
+        document_name: document_name.into(),
+        values,
+    }
+}
+
 struct TrustReportContext<'a> {
     source_name: &'a str,
     source_sha256: &'a str,
     generated_names: &'a [String],
-    used_field_ids: &'a BTreeSet<String>,
+    document_evidence: &'a [TrustDocumentEvidence],
     include_values: bool,
     source_warnings: &'a [String],
 }
 
-fn write_trust_report(
-    folder: &Path,
-    semantic_case: &SemanticCase,
-    context: TrustReportContext<'_>,
-) -> Result<PathBuf, String> {
+fn write_trust_report(folder: &Path, context: TrustReportContext<'_>) -> Result<PathBuf, String> {
     let TrustReportContext {
         source_name,
         source_sha256,
         generated_names,
-        used_field_ids,
+        document_evidence,
         include_values,
         source_warnings,
     } = context;
@@ -1581,6 +1603,14 @@ fn write_trust_report(
     } else {
         report.push_str(&format!("Источник SHA-256: {source_sha256}\n"));
     }
+    if document_evidence.len() != generated_names.len()
+        || document_evidence
+            .iter()
+            .zip(generated_names)
+            .any(|(evidence, name)| evidence.document_name != *name)
+    {
+        return Err("Отчёт проверяемости не совпал с фактически созданным списком документов.".into());
+    }
     report.push_str(&format!("Создано документов: {}\n", generated_names.len()));
     for name in generated_names {
         report.push_str(&format!("- {name}\n"));
@@ -1591,29 +1621,31 @@ fn write_trust_report(
             report.push_str(&format!("- {}\n", warning.replace(['\r', '\n', '\t'], " ")));
         }
     }
-    report.push_str("\nПоля, реально использованные выбранными шаблонами:\n");
-    let mut written = 0usize;
-    for field_id in used_field_ids {
-        let Some(value) = semantic_case.values.get(field_id) else {
-            continue;
-        };
-        written += 1;
-        let confidence = (value.confidence.clamp(0.0, 1.0) * 100.0).round() as u32;
-        if include_values {
-            let safe_value = value.value.replace(['\r', '\n', '\t'], " ");
-            report.push_str(&format!(
-                "- {field_id}: {safe_value} | {} | {confidence}%\n",
-                value_source_label(value.source)
-            ));
-        } else {
-            report.push_str(&format!(
-                "- {field_id}: [значение скрыто политикой конфиденциальности] | {} | {confidence}%\n",
-                value_source_label(value.source)
-            ));
-        }
-    }
-    if written == 0 {
+    report.push_str("\nПоля, реально использованные выбранными шаблонами, по документам:\n");
+    if document_evidence.is_empty() {
         report.push_str("- динамические поля отсутствуют\n");
+    }
+    for evidence in document_evidence {
+        let safe_document_name = evidence.document_name.replace(['\r', '\n', '\t'], " ");
+        report.push_str(&format!("\nДокумент: {safe_document_name}\n"));
+        for (field_id, value) in &evidence.values {
+            let confidence = (value.confidence.clamp(0.0, 1.0) * 100.0).round() as u32;
+            if include_values {
+                let safe_value = value.value.replace(['\r', '\n', '\t'], " ");
+                report.push_str(&format!(
+                    "- {field_id}: {safe_value} | {} | {confidence}%\n",
+                    value_source_label(value.source)
+                ));
+            } else {
+                report.push_str(&format!(
+                    "- {field_id}: [значение скрыто политикой конфиденциальности] | {} | {confidence}%\n",
+                    value_source_label(value.source)
+                ));
+            }
+        }
+        if evidence.values.is_empty() {
+            report.push_str("- динамические поля отсутствуют\n");
+        }
     }
     report.push_str("\nВсе перечисленные значения прошли типовые, межполевые и риск-зависимые проверки до публикации комплекта.\n");
     report.push_str("Отчёт создаётся локально и не отправляется наружу.\n");
@@ -1636,12 +1668,11 @@ mod trust_report_routing_tests {
         std::fs::create_dir_all(&stage).unwrap();
         let report = write_trust_report(
             &stage,
-            &SemanticCase::default(),
             TrustReportContext {
                 source_name: "Первичный.docx",
                 source_sha256: &"a".repeat(64),
                 generated_names: &[],
-                used_field_ids: &BTreeSet::new(),
+                document_evidence: &[],
                 include_values: false,
                 source_warnings: &[],
             },
@@ -1652,6 +1683,59 @@ mod trust_report_routing_tests {
             report.parent().and_then(|path| path.file_name()).and_then(|name| name.to_str()),
             Some("_служебные_отчёты")
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trust_report_preserves_conflicting_scoped_values_per_document() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-trust-report-per-document-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut primary = SemanticCase::default();
+        primary.values.insert(
+            "medical.expert_anamnesis".into(),
+            dokkomplekt_core::SemanticValue::new(
+                "medical.expert_anamnesis",
+                "Первичный вариант",
+                ValueSource::SafeDefault,
+                1.0,
+            ),
+        );
+        let mut discharge = SemanticCase::default();
+        discharge.values.insert(
+            "medical.expert_anamnesis".into(),
+            dokkomplekt_core::SemanticValue::new(
+                "medical.expert_anamnesis",
+                "Выписной вариант с больничным",
+                ValueSource::SafeDefault,
+                1.0,
+            ),
+        );
+        let field = "medical.expert_anamnesis".to_string();
+        let evidence = [
+            capture_trust_document_evidence("Первичный.docx", &primary, [field.clone()]),
+            capture_trust_document_evidence("Выписной.docx", &discharge, [field]),
+        ];
+        let names = ["Первичный.docx".into(), "Выписной.docx".into()];
+        let report = write_trust_report(
+            &root,
+            TrustReportContext {
+                source_name: "source.docx",
+                source_sha256: &"b".repeat(64),
+                generated_names: &names,
+                document_evidence: &evidence,
+                include_values: true,
+                source_warnings: &[],
+            },
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(report).unwrap();
+        assert!(text.contains("Документ: Первичный.docx"));
+        assert!(text.contains("Первичный вариант"));
+        assert!(text.contains("Документ: Выписной.docx"));
+        assert!(text.contains("Выписной вариант с больничным"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

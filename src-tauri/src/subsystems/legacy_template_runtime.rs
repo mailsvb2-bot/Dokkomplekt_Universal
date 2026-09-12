@@ -24,6 +24,66 @@ struct TemplateContractCompilation {
     applied_field_ids: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+struct CompilerOwnership {
+    field_ids: BTreeSet<String>,
+    field_stories: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl CompilerOwnership {
+    fn record_stage(
+        &mut self,
+        stage: &str,
+        field_ids: Vec<String>,
+        stories: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        let ids = field_ids.into_iter().collect::<BTreeSet<_>>();
+        let story_ids = stories.keys().cloned().collect::<BTreeSet<_>>();
+        if ids != story_ids {
+            return Err(format!(
+                "Compiler stage {stage} вернул несогласованный ownership: fields={ids:?}, stories={story_ids:?}."
+            ));
+        }
+        for (field_id, owners) in stories {
+            if owners.is_empty() {
+                return Err(format!(
+                    "Compiler stage {stage} заявил semantic-поле {field_id} без Word story provenance."
+                ));
+            }
+            self.field_stories
+                .entry(field_id.clone())
+                .or_default()
+                .extend(owners.iter().cloned());
+        }
+        self.field_ids.extend(ids);
+        Ok(())
+    }
+
+    fn record_field(&mut self, field_id: &str, story: &str) {
+        self.field_ids.insert(field_id.to_string());
+        self.field_stories
+            .entry(field_id.to_string())
+            .or_default()
+            .insert(story.to_string());
+    }
+
+    fn protected_fields(
+        &self,
+        existing_placeholders: &[String],
+        domain: &DomainKind,
+        role_id: &str,
+    ) -> BTreeSet<String> {
+        let mut protected = existing_placeholders.iter().cloned().collect::<BTreeSet<_>>();
+        protected.extend(self.field_ids.iter().cloned());
+        exclude_role_equivalent_medical_fields(&mut protected, domain, role_id);
+        protected
+    }
+
+    fn sorted_field_ids(&self) -> Vec<String> {
+        self.field_ids.iter().cloned().collect()
+    }
+}
+
 fn selected_filled_medical_markup(
     template_text: &str,
     excluded_fields: &BTreeSet<String>,
@@ -34,7 +94,14 @@ fn selected_filled_medical_markup(
     dokkomplekt_core::suggest_filled_medical_template_markup(template_text, current_year_utc())
         .into_iter()
         .filter(|candidate| {
-            candidate.selected_by_default && !excluded_fields.contains(&candidate.field_id)
+            candidate.selected_by_default
+                && !excluded_fields.contains(&candidate.field_id)
+                // Defense in depth: compatibility fallback must never consume
+                // text that already contains semantic/template delimiters. The
+                // core wizard enforces the same invariant, but runtime keeps its
+                // own guard so a future parser change cannot erase a token owned
+                // by an earlier compiler stage.
+                && dokkomplekt_core::is_safe_compatibility_fallback_value(&candidate.value)
         })
         .map(|candidate| TemplateMarkupReplacement {
             field_id: candidate.field_id,
@@ -73,6 +140,24 @@ fn selected_filled_medical_markup_for_stories(
     grouped
 }
 
+fn exclude_role_equivalent_medical_fields(
+    excluded_fields: &mut BTreeSet<String>,
+    domain: &DomainKind,
+    role_id: &str,
+) {
+    if domain != &DomainKind::Medical {
+        return;
+    }
+    for (scoped_id, shared_id) in
+        dokkomplekt_core::domains::medical_semantics::role_scoped_bindings(role_id)
+    {
+        if excluded_fields.contains(*scoped_id) || excluded_fields.contains(*shared_id) {
+            excluded_fields.insert((*scoped_id).to_string());
+            excluded_fields.insert((*shared_id).to_string());
+        }
+    }
+}
+
 fn selected_filled_medical_markup_by_story(
     template_path: &Path,
     excluded_fields: &BTreeSet<String>,
@@ -84,6 +169,7 @@ fn selected_filled_medical_markup_by_story(
     ))
 }
 
+#[cfg(test)]
 fn structural_template_bindings_for_stories(
     stories: &BTreeMap<String, String>,
     domain: &DomainKind,
@@ -101,17 +187,6 @@ fn structural_template_bindings_for_stories(
         field_ids.extend(bindings.into_iter().map(|binding| binding.field_id));
     }
     (binding_count, field_ids)
-}
-
-fn structural_template_bindings_by_story(
-    template_path: &Path,
-    domain: &DomainKind,
-    role_id: &str,
-) -> Result<(usize, BTreeSet<String>), String> {
-    let stories = extract_docx_story_texts(template_path).map_err(|error| error.to_string())?;
-    Ok(structural_template_bindings_for_stories(
-        &stories, domain, role_id,
-    ))
 }
 
 fn blank_template_fields_for_stories(
@@ -151,6 +226,62 @@ fn blank_template_fields_by_story(
     Ok(blank_template_fields_for_stories(&stories, domain, role_id))
 }
 
+fn validate_compiler_owned_field_stories(
+    compiled_stories: &BTreeMap<String, String>,
+    ownership: &CompilerOwnership,
+    domain: &DomainKind,
+    role_id: &str,
+) -> Result<(), String> {
+    for field_id in &ownership.field_ids {
+        let token = format!("{{{{{field_id}}}}}");
+        let owner_stories = ownership.field_stories.get(field_id).ok_or_else(|| {
+            format!(
+                "Compiler заявил semantic-поле {field_id}, но не сохранил provenance Word story."
+            )
+        })?;
+        if owner_stories.is_empty() {
+            return Err(format!(
+                "Compiler заявил semantic-поле {field_id}, но список provenance Word story пуст."
+            ));
+        }
+        for story_name in owner_stories {
+            let story_text = compiled_stories.get(story_name).ok_or_else(|| {
+                format!(
+                    "Compiler заявил semantic-поле {field_id} в Word story {story_name}, но story отсутствует в итоговом DOCX."
+                )
+            })?;
+            if !story_text.contains(&token) {
+                return Err(format!(
+                    "Compiler заявил semantic-поле {field_id} в Word story {story_name}, но exact token отсутствует."
+                ));
+            }
+            let story_analysis =
+                analyze_template_text_with_domain_hint(story_text, Some(domain));
+            let parser_confirmed = story_analysis
+                .placeholders
+                .iter()
+                .any(|item| item == field_id)
+                || (domain == &DomainKind::Medical
+                    && dokkomplekt_core::domains::medical_semantics::role_scoped_bindings(role_id)
+                        .iter()
+                        .any(|(scoped_id, shared_id)| {
+                            *shared_id == field_id.as_str()
+                                && story_analysis
+                                    .placeholders
+                                    .iter()
+                                    .any(|item| item == *scoped_id)
+                        }));
+            if !parser_confirmed || !story_analysis.template_errors.is_empty() {
+                return Err(format!(
+                    "Compiler не подтвердил semantic-поле {field_id} в Word story {story_name} для strict render: {:?}",
+                    story_analysis.template_errors
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn compile_template_contract_copy(
     input_path: &Path,
     output_path: &Path,
@@ -160,50 +291,13 @@ fn compile_template_contract_copy(
     infer_blank_zones: bool,
 ) -> Result<TemplateContractCompilation, String> {
     let template_text = extract_docx_text(input_path).map_err(|error| error.to_string())?;
-    let analysis = analyze_template_text_with_domain_hint(&template_text, Some(domain));
     let blank_candidates_by_story = if infer_blank_zones {
         blank_template_fields_by_story(input_path, domain, role_id)?
     } else {
         BTreeMap::new()
     };
     let blank_binding_count = blank_candidates_by_story.values().map(Vec::len).sum::<usize>();
-    let blank_field_ids = blank_candidates_by_story
-        .values()
-        .flatten()
-        .map(|candidate| candidate.field_id.clone())
-        .collect::<BTreeSet<_>>();
-    let (structural_binding_count, structural_field_ids) = if domain == &DomainKind::Medical {
-        structural_template_bindings_by_story(input_path, domain, role_id)?
-    } else {
-        (0, BTreeSet::new())
-    };
-    let mut initial_excluded_fields = analysis
-        .placeholders
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    initial_excluded_fields.extend(blank_field_ids.iter().cloned());
-    initial_excluded_fields.extend(structural_field_ids.iter().cloned());
-    let initial_story_fallback = if domain == &DomainKind::Medical {
-        selected_filled_medical_markup_by_story(input_path, &initial_excluded_fields)?
-    } else {
-        BTreeMap::new()
-    };
-    let primary_expert_field =
-        dokkomplekt_core::domains::medical_semantics::MEDICAL_EXPERT_ANAMNESIS;
-    let needs_primary_expert_insertion = domain == &DomainKind::Medical
-        && dokkomplekt_core::domains::medical::canonical_medical_role(role_id) == "primary"
-        && !analysis
-            .placeholders
-            .iter()
-            .any(|field| field == primary_expert_field);
-
-    if domain != &DomainKind::Medical
-        && blank_binding_count == 0
-        && structural_binding_count == 0
-        && initial_story_fallback.is_empty()
-        && !needs_primary_expert_insertion
-    {
+    if domain != &DomainKind::Medical && blank_binding_count == 0 {
         return Ok(TemplateContractCompilation {
             changed: false,
             path: input_path.to_path_buf(),
@@ -227,7 +321,8 @@ fn compile_template_contract_copy(
     }
 
     let mut current_input = input_path.to_path_buf();
-    let mut applied_field_ids = Vec::new();
+    let mut ownership = CompilerOwnership::default();
+    let mut preserved_literal_field_ids = BTreeSet::<String>::new();
     let mut changed = false;
 
     if blank_binding_count > 0 {
@@ -244,7 +339,11 @@ fn compile_template_contract_copy(
                 report.skipped_bindings.join(", ")
             ));
         }
-        applied_field_ids.extend(report.applied_field_ids);
+        ownership.record_stage(
+            "blank_learning",
+            report.applied_field_ids,
+            &report.applied_field_stories,
+        )?;
         current_input = blank_output;
         changed = true;
     }
@@ -259,8 +358,13 @@ fn compile_template_contract_copy(
             role_id,
         )
         .map_err(|error| format!("Не удалось скомпилировать структурные якоря: {error}"))?;
+        preserved_literal_field_ids.extend(report.preserved_literal_field_ids);
         if report.binding_count > 0 {
-            applied_field_ids.extend(report.applied_field_ids);
+            ownership.record_stage(
+                "structural",
+                report.applied_field_ids,
+                &report.applied_field_stories,
+            )?;
             current_input = structural_output;
             changed = true;
         }
@@ -273,12 +377,12 @@ fn compile_template_contract_copy(
     let current_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось перечитать compiler-stage шаблона: {error}"))?;
     let current_analysis = analyze_template_text_with_domain_hint(&current_text, Some(domain));
-    let mut fallback_excluded_fields = current_analysis
-        .placeholders
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    fallback_excluded_fields.extend(applied_field_ids.iter().cloned());
+    let mut fallback_excluded_fields = ownership.protected_fields(
+        &current_analysis.placeholders,
+        domain,
+        role_id,
+    );
+    fallback_excluded_fields.extend(preserved_literal_field_ids);
     let fallback_by_story = if domain == &DomainKind::Medical {
         selected_filled_medical_markup_by_story(&current_input, &fallback_excluded_fields)?
     } else {
@@ -301,7 +405,11 @@ fn compile_template_contract_copy(
                 report.skipped_bindings.join(", ")
             ));
         }
-        applied_field_ids.extend(report.applied_field_ids);
+        ownership.record_stage(
+            "compatibility_fallback",
+            report.applied_field_ids,
+            &report.applied_field_stories,
+        )?;
         current_input = output_path.to_path_buf();
         changed = true;
     } else if changed {
@@ -345,7 +453,7 @@ fn compile_template_contract_copy(
             if inserted {
                 current_input = role_output;
                 changed = true;
-                applied_field_ids.push(expert_field.to_string());
+                ownership.record_field(expert_field, "word/document.xml");
             }
         }
     }
@@ -359,25 +467,21 @@ fn compile_template_contract_copy(
         });
     }
 
-    applied_field_ids.sort();
-    applied_field_ids.dedup();
+    let applied_field_ids = ownership.sorted_field_ids();
     let derived_text = extract_docx_text(&current_input)
         .map_err(|error| format!("Не удалось проверить скомпилированную копию: {error}"))?;
     let derived_analysis = analyze_template_text_with_domain_hint(&derived_text, Some(domain));
-    if derived_analysis.is_static {
+    if derived_analysis.is_static && applied_field_ids.is_empty() {
         return Err("Скомпилированная копия не содержит placeholder-полей.".into());
     }
-    for field_id in &applied_field_ids {
-        if !derived_analysis
-            .placeholders
-            .iter()
-            .any(|candidate| candidate == field_id)
-        {
-            return Err(format!(
-                "Compiler не подтвердил созданное semantic-поле {field_id}."
-            ));
-        }
-    }
+    // Word renders body/header/footer as independent template stories. Do not
+    // reconstruct ownership from token-count deltas: a compiler can legitimately
+    // handle an already-tokenized field, in which case the count does not grow.
+    // Instead, trust only explicit story provenance emitted by the stage that
+    // performed the binding and validate that exact story with the strict parser.
+    let compiled_stories = extract_docx_story_texts(&current_input)
+        .map_err(|error| format!("Не удалось проверить Word stories compiler-копии: {error}"))?;
+    validate_compiler_owned_field_stories(&compiled_stories, &ownership, domain, role_id)?;
     Ok(TemplateContractCompilation {
         changed: true,
         path: current_input,
@@ -411,23 +515,58 @@ fn validate_medical_template_output_contract(
     ))
 }
 
-fn apply_compiled_contract_to_document(
+fn merge_compiler_fields_into_analysis(
+    analysis: &mut dokkomplekt_core::TemplateAnalysis,
+    compiled_text: &str,
+    compiler_fields: &[String],
+) -> Result<(), String> {
+    for field_id in compiler_fields {
+        let token = format!("{{{{{field_id}}}}}");
+        if !compiled_text.contains(&token) {
+            return Err(format!(
+                "Compiler не подтвердил созданное semantic-поле {field_id}: exact token отсутствует после snapshot."
+            ));
+        }
+        // `compiler_fields` are admitted only after story-scoped strict validation
+        // in `compile_template_contract_copy`. A second flattened-document parse
+        // must not be allowed to erase that stronger evidence: Word stories are
+        // rendered independently and flattened text can create impossible
+        // cross-story delimiter combinations.
+        if !analysis.placeholders.iter().any(|item| item == field_id) {
+            analysis.placeholders.push(field_id.clone());
+        }
+    }
+    analysis.placeholders.sort();
+    analysis.placeholders.dedup();
+    if !compiler_fields.is_empty() {
+        analysis.is_static = false;
+        analysis.warnings.retain(|warning| {
+            !warning.contains("Шаблон не содержит placeholder-полей")
+        });
+    }
+    Ok(())
+}
+
+fn synchronize_compiled_required_fields(document: &mut DocumentTemplateSpec) {
+    dokkomplekt_core::synchronize_document_required_fields(document);
+}
+
+fn apply_compiled_contract_to_document_with_compiler_fields(
     document: &mut DocumentTemplateSpec,
     compiled_text: &str,
+    compiler_fields: &[String],
 ) -> Result<(), String> {
-    let analysis = analyze_template_text_with_domain_hint(compiled_text, Some(&document.category));
-    if analysis.is_static || analysis.placeholders.is_empty() {
+    let mut analysis =
+        analyze_template_text_with_domain_hint(compiled_text, Some(&document.category));
+    merge_compiler_fields_into_analysis(&mut analysis, compiled_text, compiler_fields)?;
+    if analysis.placeholders.is_empty() {
         return Err(format!(
             "Скомпилированный шаблон «{}» не содержит semantic-placeholders.",
             document.button_label
         ));
     }
     document.placeholders = analysis.placeholders.clone();
-    document
-        .required_fields
-        .extend(analysis.placeholders.iter().cloned());
-    document.required_fields.sort();
-    document.required_fields.dedup();
+    synchronize_compiled_required_fields(document);
     document.is_static_copy = false;
     validate_medical_template_output_contract(document)
 }
@@ -482,8 +621,12 @@ fn migrate_loaded_medical_template_contracts(
             continue;
         }
         let mut candidate_document = document.clone();
-        if apply_compiled_contract_to_document(&mut candidate_document, &compiled.template_text)
-            .is_err()
+        if apply_compiled_contract_to_document_with_compiler_fields(
+            &mut candidate_document,
+            &compiled.template_text,
+            &compiled.applied_field_ids,
+        )
+        .is_err()
         {
             // A deterministic partial repair is still not publishable. Keep the
             // previous version intact and let the runtime safety-net explain the
@@ -524,6 +667,7 @@ fn migrate_loaded_medical_template_contracts(
 struct PreparedMedicalRenderTemplate {
     path: PathBuf,
     template_text: String,
+    effective_document: DocumentTemplateSpec,
     _workspace: Option<LegacyTemplateInferenceWorkspace>,
 }
 
@@ -537,6 +681,7 @@ fn prepare_medical_template_for_render(
         return Ok(PreparedMedicalRenderTemplate {
             path: template_path.to_path_buf(),
             template_text,
+            effective_document: document.clone(),
             _workspace: None,
         });
     }
@@ -565,17 +710,23 @@ fn prepare_medical_template_for_render(
     } else {
         template_text.clone()
     };
-    apply_compiled_contract_to_document(&mut effective_document, &effective_text)?;
+    apply_compiled_contract_to_document_with_compiler_fields(
+        &mut effective_document,
+        &effective_text,
+        &compiled.applied_field_ids,
+    )?;
     if !compiled.changed {
         return Ok(PreparedMedicalRenderTemplate {
             path: template_path.to_path_buf(),
             template_text,
+            effective_document,
             _workspace: None,
         });
     }
     Ok(PreparedMedicalRenderTemplate {
         path: compiled.path,
         template_text: compiled.template_text,
+        effective_document,
         _workspace: Some(LegacyTemplateInferenceWorkspace { root }),
     })
 }
@@ -591,18 +742,22 @@ fn should_attempt_template_contract_compilation(
     matches!(domain, DomainKind::Medical)
 }
 
+struct LegacyTemplateInferenceResult {
+    rows: Vec<TemplateConfirmationRow>,
+    workspace: Option<LegacyTemplateInferenceWorkspace>,
+    summary: LegacyTemplateInferenceSummary,
+    compiler_fields_by_document: BTreeMap<String, Vec<String>>,
+}
+
 fn infer_static_template_rows(
     app: &tauri::AppHandle,
     rows: &[TemplateConfirmationRow],
     infer_blank_zones: bool,
-) -> Result<(
-    Vec<TemplateConfirmationRow>,
-    Option<LegacyTemplateInferenceWorkspace>,
-    LegacyTemplateInferenceSummary,
-), String> {
+) -> Result<LegacyTemplateInferenceResult, String> {
     let mut updated_rows = rows.to_vec();
     let mut workspace: Option<LegacyTemplateInferenceWorkspace> = None;
     let mut summary = LegacyTemplateInferenceSummary::default();
+    let mut compiler_fields_by_document = BTreeMap::<String, Vec<String>>::new();
 
     for row in &mut updated_rows {
         let domain = row
@@ -683,22 +838,121 @@ fn infer_static_template_rows(
             continue;
         }
 
-        let derived_analysis = analyze_template_text_with_domain_hint(
+        let mut derived_analysis = analyze_template_text_with_domain_hint(
             &compiled.template_text,
             row.domain_override.as_ref(),
         );
+        merge_compiler_fields_into_analysis(
+            &mut derived_analysis,
+            &compiled.template_text,
+            &compiled.applied_field_ids,
+        )?;
         row.template_path = compiled.path.display().to_string();
         row.detected_title = derived_analysis.title.clone();
         row.suggested_button_label = derived_analysis.suggested_button_label.clone();
         row.role_id = derived_analysis.role_id.clone();
         row.is_static_copy = false;
         row.analysis = derived_analysis;
+        if !compiled.applied_field_ids.is_empty() {
+            compiler_fields_by_document
+                .insert(row.document_id.clone(), compiled.applied_field_ids.clone());
+        }
         summary.upgraded_documents += 1;
         summary.inferred_fields += compiled.applied_field_ids.len();
     }
 
-    Ok((updated_rows, workspace, summary))
+    Ok(LegacyTemplateInferenceResult {
+        rows: updated_rows,
+        workspace,
+        summary,
+        compiler_fields_by_document,
+    })
 }
+
+fn reanalyze_confirmation_rows_from_snapshots(
+    rows: &mut [TemplateConfirmationRow],
+    snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+    existing_pack: &DocumentPack,
+    compiler_fields_by_document: &BTreeMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let candidates = rows
+        .iter()
+        .map(|row| {
+            if row.domain_override_is_explicit && row.domain_override.is_none() {
+                return Err(format!(
+                    "Для шаблона «{}» отмечен явный профиль, но профиль не указан.",
+                    row.editable_button_label
+                ));
+            }
+            let snapshot = snapshots
+                .get(&row.document_id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
+                format!(
+                    "Не удалось проверить зафиксированный снимок шаблона «{}»: {error}",
+                    row.editable_button_label
+                )
+            })?;
+            Ok(TemplateCandidate {
+                document_id: row.document_id.clone(),
+                template_path: row.template_path.clone(),
+                extracted_text,
+                preferred_button_label: Some(row.editable_button_label.clone()),
+                domain_override: row
+                    .domain_override
+                    .clone()
+                    .filter(|_| row.domain_override_is_explicit),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let refreshed_by_id = prepare_template_confirmations_with_existing_pack(
+        &candidates,
+        Some(existing_pack),
+    )
+    .into_iter()
+    .map(|row| (row.document_id.clone(), row))
+    .collect::<BTreeMap<_, _>>();
+
+    for row in rows {
+        let refreshed = refreshed_by_id
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не удалось повторно проанализировать шаблон {}.", row.document_id))?;
+        if !row.popup_fields_edited {
+            row.popup_fields = refreshed.popup_fields.clone();
+        }
+        row.detected_title = refreshed.detected_title.clone();
+        row.suggested_button_label = refreshed.suggested_button_label.clone();
+        row.role_id = refreshed.role_id.clone();
+        row.is_static_copy = refreshed.is_static_copy;
+        row.domain_override = refreshed.domain_override.clone();
+        row.domain_override_is_explicit = refreshed.domain_override_is_explicit;
+        row.workspace_inference = refreshed.workspace_inference.clone();
+        row.workspace_shape = refreshed.workspace_shape.clone();
+        let mut refreshed_analysis = refreshed.analysis.clone();
+        if let Some(compiler_fields) = compiler_fields_by_document.get(&row.document_id) {
+            let snapshot = snapshots
+                .get(&row.document_id)
+                .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+            let extracted_text = extract_docx_text(snapshot.path()).map_err(|error| {
+                format!(
+                    "Не удалось подтвердить compiler-owned поля шаблона «{}» после snapshot: {error}",
+                    row.editable_button_label
+                )
+            })?;
+            merge_compiler_fields_into_analysis(
+                &mut refreshed_analysis,
+                &extracted_text,
+                compiler_fields,
+            )?;
+            if !compiler_fields.is_empty() {
+                row.is_static_copy = false;
+            }
+        }
+        row.analysis = refreshed_analysis;
+    }
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod legacy_template_runtime_tests {
@@ -1022,6 +1276,86 @@ mod legacy_template_runtime_tests {
     }
 
     #[test]
+    fn diary_filler_blank_discharge_becomes_publishable_without_manual_placeholders() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-diary-filler-discharge-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("3 Выписной.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>
+<w:p><w:r><w:t>г.р.,  зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>
+<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с по</w:t></w:r></w:p>
+<w:p><w:r><w:t>В 3 отделение КДП поступает</w:t></w:r></w:p>
+<w:p><w:r><w:t>Жалобы при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Анамнез жизни:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Анамнез заболевания:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>
+<w:p><w:r><w:t>Сомато-неврологический статус: Нормального питания.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла «2 первичный», который выбирается в Ui</w:t></w:r></w:p>
+<w:p><w:r><w:t>Экспертный анамнез: не работает. В выдаче ЛН не нуждается.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Зав. отд. Можарова Е.А.                    Врач-психиатр Балаганин С.В.</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "discharge",
+            true,
+        )
+        .expect("the proven blank discharge template must compile at generation time");
+        assert!(compiled.changed);
+        let body = extract_docx_text(&compiled.path).expect("compiled discharge text");
+        let analysis = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
+        let mut document = DocumentTemplateSpec {
+            id: "diary-filler-discharge".into(),
+            button_label: "Выписной".into(),
+            template_path: compiled.path.display().to_string(),
+            category: DomainKind::Medical,
+            role_id: "discharge".into(),
+            required_fields: Vec::new(),
+            placeholders: analysis.placeholders,
+            is_static_copy: false,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        validate_medical_template_output_contract(&document)
+            .expect("blank donor discharge must have every mandatory render path");
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            &body,
+            &compiled.applied_field_ids,
+        )
+        .expect("compiled donor discharge contract must persist safely");
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.diagnosis",
+            "medical.discharge_date",
+            "medical.treatment",
+        ] {
+            assert!(
+                document.placeholders.iter().any(|item| item == field_id),
+                "missing persisted render path {field_id}: {:?}",
+                document.placeholders
+            );
+        }
+        assert!(body.contains("Сомато-неврологический статус: Нормального питания."));
+        assert!(!body.contains("Сюда подставляется"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn windows_primary_fixture_compiles_without_semanticizing_signature_blanks() {
         let root = std::env::temp_dir().join(format!(
             "dokkomplekt-windows-primary-{}-{}",
@@ -1090,7 +1424,7 @@ mod legacy_template_runtime_tests {
         };
         validate_medical_template_output_contract(&document)
             .expect("compiled primary role contract must be complete");
-        apply_compiled_contract_to_document(&mut document, body)
+        apply_compiled_contract_to_document_with_compiler_fields(&mut document, body, &[])
             .expect("compiled primary contract must persist safely");
         assert!(stories["word/header1.xml"].contains("НКЦПЗ"));
         assert!(!stories["word/header1.xml"].contains("Экспертный анамнез"));
@@ -1134,7 +1468,7 @@ mod legacy_template_runtime_tests {
     fn compiled_contract_becomes_the_persisted_document_contract_without_losing_popup_customization() {
         let mut document = medical_document();
         let popup_before = document.popup_fields.clone();
-        apply_compiled_contract_to_document(
+        apply_compiled_contract_to_document_with_compiler_fields(
             &mut document,
             concat!(
                 "Выписной эпикриз\n",
@@ -1147,6 +1481,7 @@ mod legacy_template_runtime_tests {
                 "{{medical.expert_anamnesis}}\n",
                 "{{medical.discharge_condition}}"
             ),
+            &[],
         )
         .expect("compiled contract");
         for field_id in [
@@ -1159,10 +1494,324 @@ mod legacy_template_runtime_tests {
             "medical.discharge_condition",
         ] {
             assert!(document.placeholders.iter().any(|item| item == field_id));
-            assert!(document.required_fields.iter().any(|item| item == field_id));
         }
+        for field_id in [
+            "subject.name",
+            "medical.case_number",
+            "medical.admission_date",
+            "medical.diagnosis",
+            "medical.discharge_date",
+            "medical.treatment",
+            "medical.workplace",
+            "medical.position",
+        ] {
+            assert!(
+                document.required_fields.iter().any(|item| item == field_id),
+                "canonical discharge requirement was lost: {field_id}: {:?}",
+                document.required_fields
+            );
+        }
+        assert!(
+            !document
+                .required_fields
+                .iter()
+                .any(|item| item == "medical.discharge_condition"),
+            "an optional render placeholder must not become a hard-required prompt: {:?}",
+            document.required_fields
+        );
         assert_eq!(document.popup_fields, popup_before);
         assert!(document.popup_configured);
         assert!(!document.is_static_copy);
     }
+    #[test]
+    fn compiled_contract_keeps_explicitly_required_optional_popup_required() {
+        let mut document = medical_document();
+        let mut discharge_condition =
+            PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        discharge_condition.required = true;
+        document.popup_fields.push(discharge_condition);
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            concat!(
+                "Выписной эпикриз\n",
+                "{{subject.name}}\n",
+                "{{medical.case_number}}\n",
+                "{{medical.admission_date}}\n",
+                "{{medical.diagnosis}}\n",
+                "{{medical.discharge_date}}\n",
+                "{{medical.treatment}}\n",
+                "{{medical.expert_anamnesis}}\n",
+                "{{medical.discharge_condition}}"
+            ),
+            &[],
+        )
+        .expect("compiled contract");
+        assert!(document
+            .required_fields
+            .iter()
+            .any(|item| item == "medical.discharge_condition"));
+    }
+
+    #[test]
+    fn compiled_contract_does_not_promote_generated_popup_defaults_to_required() {
+        let mut document = medical_document();
+        document.popup_configured = false;
+        document.required_fields = vec!["medical.discharge_date".into()];
+        let mut generated_optional =
+            PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        generated_optional.required = true;
+        document.popup_fields = vec![generated_optional];
+
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            concat!(
+                "Выписной эпикриз\n",
+                "{{subject.name}}\n",
+                "{{medical.case_number}}\n",
+                "{{medical.admission_date}}\n",
+                "{{medical.diagnosis}}\n",
+                "{{medical.discharge_date}}\n",
+                "{{medical.treatment}}\n",
+                "{{medical.expert_anamnesis}}\n",
+                "{{medical.discharge_condition}}"
+            ),
+            &[],
+        )
+        .expect("compiled contract");
+
+        assert!(
+            !document
+                .required_fields
+                .iter()
+                .any(|item| item == "medical.discharge_condition"),
+            "generated popup defaults must not strengthen the medical contract: {:?}",
+            document.required_fields
+        );
+    }
+
+    #[test]
+    fn compiler_owned_profile_status_is_not_rejected_by_unrelated_literal_braces() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-profile-status-braces-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("discharge.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: В сознании, ориентирован, контактен.</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "discharge",
+            true,
+        )
+        .expect("compiler-owned exact token must survive unrelated literal braces");
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        let body = extract_docx_text(&compiled.path).expect("compiled text");
+        assert!(body.contains("{{medical.profile_status}}"), "{body}");
+        // The strict parser must recover from the earlier doctor-owned literal
+        // opener and still recognize the exact compiler-owned field.
+        let reparsed = analyze_template_text_with_domain_hint(&body, Some(&DomainKind::Medical));
+        assert!(reparsed
+            .placeholders
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        assert!(reparsed.template_errors.is_empty(), "{:?}", reparsed.template_errors);
+        let mut case = SemanticCase::default();
+        set_user_value(&mut case, "medical.profile_status", "Спокоен, ориентирован.");
+        let rendered = render_text_template(&body, &case, true);
+        assert!(rendered.missing_fields.is_empty(), "{:?}", rendered.missing_fields);
+        assert!(rendered.unknown_fields.is_empty(), "{:?}", rendered.unknown_fields);
+        assert!(rendered.template_errors.is_empty(), "{:?}", rendered.template_errors);
+        assert!(rendered.output_text.contains("Спокоен, ориентирован."));
+        assert!(rendered.output_text.contains("Служебная пометка {{ \"черновик без конца"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compiler_owned_profile_status_from_blank_suffix_survives_compatibility_fallback() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-profile-status-ownership-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("sick-leave-vk.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>ВК по больничному</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная пометка {{ &quot;черновик без конца</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: ______ после компиляции</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач __________</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            None,
+        );
+
+        let compiled = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+            true,
+        )
+        .expect("compiler-owned profile_status must survive later fallback stages");
+        assert!(compiled
+            .applied_field_ids
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        let stories = extract_docx_story_texts(&compiled.path).expect("compiled stories");
+        let body = &stories["word/document.xml"];
+        assert!(
+            body.contains("Психический статус: {{medical.profile_status}} после компиляции"),
+            "{body}"
+        );
+        assert!(body.contains("Служебная пометка {{"), "{body}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compiler_field_in_header_cannot_mask_malformed_owner_story() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-story-proof-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let input = root.join("discharge.docx");
+        let output = root.join("compiled.docx");
+        let scratch = root.join("scratch");
+        write_story_test_docx(
+            &input,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>Выписной эпикриз</w:t></w:r></w:p>
+<w:p><w:r><w:t>Служебная {{ &quot;черновик</w:t></w:r></w:p>
+<w:p><w:r><w:t>Психический статус: В сознании, ориентирован, контактен.</w:t></w:r></w:p>
+<w:p><w:r><w:t>Лечащий врач &quot; Иванов И.И.</w:t></w:r></w:p>
+<w:sectPr/></w:body></w:document>"#,
+            Some(
+                r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>{{medical.profile_status}}</w:t></w:r></w:p></w:hdr>"#,
+            ),
+        );
+
+        let error = compile_template_contract_copy(
+            &input,
+            &output,
+            &scratch,
+            &DomainKind::Medical,
+            "discharge",
+            true,
+        )
+        .expect_err("valid header duplicate must not mask malformed body owner story");
+        assert!(error.contains("medical.profile_status"), "{error}");
+        assert!(error.contains("word/document.xml"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sick_leave_vk_position_story_provenance_does_not_require_token_count_growth() {
+        let field_id = "medical.sick_leave_vk.position".to_string();
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            "ВК по больничному\nДолжность: {{medical.sick_leave_vk.position}}".to_string(),
+        )]);
+        let mut ownership = CompilerOwnership::default();
+        ownership.record_field(&field_id, "word/document.xml");
+        validate_compiler_owned_field_stories(
+            &stories,
+            &ownership,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+        )
+        .expect("explicit compiler provenance must validate an existing role-scoped token");
+    }
+
+    #[test]
+    fn shared_vk_position_story_is_confirmed_by_role_scoped_parser_identity() {
+        let field_id = "medical.position".to_string();
+        let story_text = "ВК больничный\nДолжность: {{medical.position}}".to_string();
+        let analysis =
+            analyze_template_text_with_domain_hint(&story_text, Some(&DomainKind::Medical));
+        assert!(analysis
+            .placeholders
+            .iter()
+            .any(|item| item == "medical.sick_leave_vk.position"));
+        assert!(!analysis.placeholders.iter().any(|item| item == &field_id));
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            story_text,
+        )]);
+        let mut ownership = CompilerOwnership::default();
+        ownership.record_field(&field_id, "word/document.xml");
+        validate_compiler_owned_field_stories(
+            &stories,
+            &ownership,
+            &DomainKind::Medical,
+            "sick_leave_vk",
+        )
+        .expect("shared VK field must validate through its exact role-scoped parser identity");
+    }
+
+    #[test]
+    fn shared_vk_position_story_is_not_accepted_for_a_different_vk_role() {
+        let field_id = "medical.position".to_string();
+        let stories = BTreeMap::from([(
+            "word/document.xml".to_string(),
+            "ВК больничный\nДолжность: {{medical.position}}".to_string(),
+        )]);
+        let mut ownership = CompilerOwnership::default();
+        ownership.record_field(&field_id, "word/document.xml");
+        let error = validate_compiler_owned_field_stories(
+            &stories,
+            &ownership,
+            &DomainKind::Medical,
+            "vk_mse",
+        )
+        .expect_err("a different VK role must not satisfy story-scoped semantic proof");
+        assert!(error.contains("medical.position"), "{error}");
+        assert!(error.contains("word/document.xml"), "{error}");
+    }
+
+    #[test]
+    fn compiler_owned_analysis_evidence_is_merged_only_when_exact_token_exists() {
+        let compiled_text = "Выписной эпикриз\n{{medical.profile_status}}";
+        let mut analysis =
+            analyze_template_text_with_domain_hint(compiled_text, Some(&DomainKind::Medical));
+        let fields = vec!["medical.profile_status".to_string()];
+        merge_compiler_fields_into_analysis(&mut analysis, compiled_text, &fields)
+            .expect("strict-parser-confirmed compiler token must become analysis evidence");
+        assert!(analysis
+            .placeholders
+            .iter()
+            .any(|field| field == "medical.profile_status"));
+        assert!(!analysis.is_static);
+
+        let mut rejected =
+            analyze_template_text_with_domain_hint("Выписной эпикриз", Some(&DomainKind::Medical));
+        let error = merge_compiler_fields_into_analysis(
+            &mut rejected,
+            "Выписной эпикриз",
+            &fields,
+        )
+        .expect_err("missing physical compiler token must fail closed");
+        assert!(error.contains("medical.profile_status"));
+        assert!(rejected.placeholders.is_empty());
+    }
+
 }

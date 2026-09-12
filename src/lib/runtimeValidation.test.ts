@@ -51,6 +51,28 @@ describe('runtime backend contracts', () => {
     expect(() => validateRustResponse('lookup_business_registry', 'bad')).toThrow(/объектом/);
   });
 
+  it('accepts persisted specialist bundle decisions and rejects unknown decision sources', () => {
+    const response = {
+      semantic_case: { values: {} },
+      report: { warnings: [] },
+      routing: { recommended_document_ids: ['doc'], matches: [], reasons: [], auto_select: true, review_required: false },
+      bundle_decision: {
+        document_ids: ['doc'],
+        source: 'persisted_specialist_rule',
+        confidence: 1,
+        auto_apply: true,
+        review_required: false,
+        question: null,
+        reasons: ['remembered specialist choice'],
+      },
+    };
+    expect(validateRustResponse('parse_source', response)).toBe(response);
+    expect(() => validateRustResponse('parse_source', {
+      ...response,
+      bundle_decision: { ...response.bundle_decision, source: 'unknown_future_source' },
+    })).toThrow(/bundle_decision\.source/);
+  });
+
   it('rejects a malformed workflow before React reads .length', () => {
     expect(() => validateRustResponse('get_workflow_plan', {
       document_id: 'x',

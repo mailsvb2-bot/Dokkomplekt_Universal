@@ -172,7 +172,8 @@ pub use product_access::{
     EXPIRED_DEMO_WATERMARK_TEXT, PRODUCT_ACCESS_CONTRACT_VERSION, TRIAL_WATERMARK_TEXT,
 };
 pub use required_blocks::{
-    missing_medical_template_render_paths, required_blocks_for, BlockRequirement, RequiredBlock,
+    missing_medical_template_render_paths, required_blocks_for,
+    synchronize_document_required_fields, BlockRequirement, RequiredBlock,
 };
 pub use semantic_engine::{extract_semantic, ExtractedField, ExtractionReport, FieldType};
 pub use semantic_llm::{

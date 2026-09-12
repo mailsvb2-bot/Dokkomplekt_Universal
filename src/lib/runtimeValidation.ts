@@ -1,4 +1,7 @@
+import { BUNDLE_DECISION_SOURCES } from './types';
 import type { CreatedDocumentsIntakeResult } from './types';
+
+const BUNDLE_DECISION_SOURCE_SET = new Set<string>(BUNDLE_DECISION_SOURCES);
 
 export class BackendContractError extends Error {
   readonly command: string;
@@ -121,7 +124,10 @@ function validateRouting(command: string, value: unknown): void {
 function validateBundleDecision(command: string, value: unknown): void {
   const decision = record(command, value, 'bundle_decision');
   stringArray(command, decision.document_ids, 'bundle_decision.document_ids');
-  string(command, decision.source, 'bundle_decision.source');
+  const source = string(command, decision.source, 'bundle_decision.source');
+  if (!BUNDLE_DECISION_SOURCE_SET.has(source)) {
+    throw new BackendContractError(command, `bundle_decision.source содержит неизвестное значение «${source}»`);
+  }
   number(command, decision.confidence, 'bundle_decision.confidence');
   boolean(command, decision.auto_apply, 'bundle_decision.auto_apply');
   boolean(command, decision.review_required, 'bundle_decision.review_required');
@@ -648,6 +654,8 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
       string(command, root.plan, 'plan');
       number(command, root.document_limit_month, 'document_limit_month');
       number(command, root.max_documents_per_run, 'max_documents_per_run');
+      if (root.documents_used_month !== undefined) number(command, root.documents_used_month, 'documents_used_month');
+      if (root.documents_left_month !== undefined) number(command, root.documents_left_month, 'documents_left_month');
       break;
     }
     default:

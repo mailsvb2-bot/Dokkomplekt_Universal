@@ -92,23 +92,10 @@ fn effective_watcher_folder_parts(runtime: &WatcherRuntimeConfig) -> Vec<FolderN
     }
 }
 
-fn watcher_directories_are_same(left: &Path, right: &Path) -> Result<bool, String> {
-    let left = std::fs::canonicalize(left).map_err(|error| {
-        format!("Не удалось определить фактический путь «{}»: {error}", left.display())
-    })?;
-    let right = std::fs::canonicalize(right).map_err(|error| {
-        format!("Не удалось определить фактический путь «{}»: {error}", right.display())
-    })?;
-    #[cfg(windows)]
-    {
-        Ok(left
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy()))
-    }
-    #[cfg(not(windows))]
-    {
-        Ok(left == right)
-    }
+fn watcher_path_is_processable(path: &Path) -> bool {
+    path.is_file()
+        && universal_intake::is_supported_path(path)
+        && !universal_intake::is_temporary_source(path)
 }
 
 fn watcher_owner_for_executable(exe: &Path, ready: bool) -> Result<WatcherHandoffOwner, String> {
@@ -1258,9 +1245,7 @@ fn start_watcher_thread(
                 if thread_stop.load(Ordering::SeqCst) {
                     return;
                 }
-                let is_supported = universal_intake::is_supported_path(&path);
-                let is_temp = universal_intake::is_temporary_source(&path);
-                if !path.is_file() || !is_supported || is_temp {
+                if !watcher_path_is_processable(&path) {
                     pending_paths.remove(&path);
                     stability_observations.remove(&path);
                     continue;
@@ -1418,9 +1403,6 @@ fn install_background_watcher(
     ensure_output_root_path(&watch_folder)?;
     let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
     ensure_output_root_path(&output_root)?;
-    if watcher_directories_are_same(&watch_folder, &output_root)? {
-        return Err("Рабочая папка фонового агента и папка готовых документов должны быть разными.".into());
-    }
     let default_year = req.default_year.unwrap_or_else(current_year_utc);
     validate_output_folder_parts(&req.folder_parts)?;
     let folder_parts = req.folder_parts.clone();
@@ -1602,9 +1584,6 @@ fn update_background_watcher_preferences(
         "Рабочая папка фонового агента",
     )?;
     ensure_output_root_path(&watch_folder)?;
-    if watcher_directories_are_same(&watch_folder, &output_root)? {
-        return Err("Рабочая папка фонового агента и папка готовых документов должны быть разными.".into());
-    }
     runtime.output_root = output_root.display().to_string();
     validate_output_folder_parts(&req.folder_parts)?;
     runtime.folder_parts = req.folder_parts;
@@ -1869,33 +1848,24 @@ mod watcher_handoff_tests {
     }
 
     #[test]
-    fn watcher_directory_identity_resolves_aliases_before_comparison() {
+    fn same_root_patient_subfolders_are_not_watcher_sources() {
         let root = std::env::temp_dir().join(format!(
-            "dokkomplekt-watcher-identity-{}-{}",
+            "dokkomplekt-watcher-shared-root-{}-{}",
             std::process::id(),
             Uuid::new_v4()
         ));
-        let watched = root.join("inbox");
-        let separate = root.join("ready");
-        std::fs::create_dir_all(&watched).expect("create watched folder");
-        std::fs::create_dir_all(&separate).expect("create separate folder");
-        let alias = watched.join(".");
-        assert!(watcher_directories_are_same(&watched, &alias).expect("compare alias"));
-        assert!(!watcher_directories_are_same(&watched, &separate).expect("compare distinct"));
-        let _ = std::fs::remove_dir_all(root);
-    }
+        std::fs::create_dir_all(&root).expect("create shared watcher/output root");
+        let primary = root.join("Первичный осмотр.docx");
+        let patient_output = root.join("Иванов Иван Иванович");
+        let stage_output = root.join(".dokkomplekt-stage-test");
+        std::fs::write(&primary, b"docx").expect("write source");
+        std::fs::create_dir_all(&patient_output).expect("create patient output");
+        std::fs::create_dir_all(&stage_output).expect("create stage output");
 
-    #[cfg(windows)]
-    #[test]
-    fn watcher_directory_identity_is_case_insensitive_on_windows() {
-        let root = std::env::temp_dir().join(format!(
-            "dokkomplekt-watcher-case-{}-{}",
-            std::process::id(),
-            Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).expect("create watcher case folder");
-        let different_case = PathBuf::from(root.to_string_lossy().to_ascii_uppercase());
-        assert!(watcher_directories_are_same(&root, &different_case).expect("compare case alias"));
+        assert!(watcher_path_is_processable(&primary));
+        assert!(!watcher_path_is_processable(&patient_output));
+        assert!(!watcher_path_is_processable(&stage_output));
+
         let _ = std::fs::remove_dir_all(root);
     }
 

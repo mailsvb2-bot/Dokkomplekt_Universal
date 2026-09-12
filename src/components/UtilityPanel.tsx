@@ -6,6 +6,7 @@ import { OrganizationKnowledgePanel } from './OrganizationKnowledgePanel';
 import { LearningGovernancePanel } from './LearningGovernancePanel';
 
 interface UtilityPanelProps {
+  busy: boolean;
   documents: DocumentTemplateSpec[];
   selectedDocumentIds: string[];
   onStatus(message: string): void;
@@ -59,6 +60,11 @@ const FOLDER_PART_OPTIONS: Array<{ value: FolderNamePartDto; label: string; sens
   { value: 'ShortPeriodEndDate', label: 'окончание периода · короткая дата' },
   { value: 'PeriodStartMonthName', label: 'месяц начала периода · словом' },
   { value: 'PeriodEndMonthName', label: 'месяц окончания периода · словом' },
+  { value: 'AdmissionDate', label: 'дата поступления', sensitive: true },
+  { value: 'DischargeDate', label: 'дата выписки', sensitive: true },
+  { value: 'AdmissionAndDischargeDates', label: 'даты поступления и выписки', sensitive: true },
+  { value: 'AdmissionMonth', label: 'месяц поступления', sensitive: true },
+  { value: 'DischargeMonth', label: 'месяц выписки', sensitive: true },
 ];
 
 export function UtilityPanel(props: UtilityPanelProps) {
@@ -71,6 +77,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
 
   return (
     <section className="settingsPanel" aria-label="Настройки программы">
+      <fieldset disabled={props.busy} className="settingsInteractionGuard">
       <div className="settingsSectionHeader">
         <div><strong>Основные настройки</strong><small>Результат, автоматическая обработка, обновления и лицензия.</small></div>
       </div>
@@ -198,6 +205,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
           <LearningGovernancePanel documents={props.documents} onStatus={props.onStatus} />
         </div>
       </details>
+      </fieldset>
     </section>
   );
 

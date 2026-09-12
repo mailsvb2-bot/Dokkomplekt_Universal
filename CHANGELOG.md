@@ -1,5 +1,33 @@
 # Changelog
 
+## 18.4.7 — unified compiler ownership and profile-status pipeline repair
+
+- fixed the real installed 18.4.6 blocker where `medical.profile_status` was reported as compiler-owned in `word/document.xml` but its exact token disappeared before final snapshot validation;
+- introduced one canonical template-delimiter policy in `dokkomplekt-core::template_engine`: compatibility fallback rejects complete, partial and embedded `{{`/`}}` syntax instead of treating compiler-owned markup as old patient data;
+- unified compiler-stage state under one `CompilerOwnership` accumulator so semantic field IDs and exact Word-story provenance cannot drift as two independent collections;
+- compiler stages now fail immediately if their reported field IDs and story-provenance keys disagree or any field is reported without an owning Word story;
+- removed speculative structural pre-scan from runtime compilation: ownership is derived only from stages that actually modified the DOCX;
+- migrated legacy structural inference and DOCX ownership boundaries to the same canonical delimiter predicate;
+- added physical DOCX and Tauri-runtime regressions for `Психический статус: ______ после компиляции` plus an unrelated literal `{{`, and strengthened the Windows installed-app smoke to require the current profile status, preserved suffix and no unresolved blank/token.
+
+## 18.4.6 — compiler Word-story provenance hotfix
+
+- fixed the real installed 18.4.5 blocker on `medical.sick_leave_vk.position`;
+- replaced inferred before/after token-count ownership with explicit `field -> Word story` provenance emitted by DOCX compilation stages;
+- kept strict per-story validation so a valid header/footer token cannot mask malformed body markup;
+- preserved already-tokenized fields during snapshot/reanalysis without trusting a weaker flattened-document parse;
+- changed the Windows installed-app adversarial smoke to exercise the `sick_leave_vk` role, its role-scoped position, protocol and commission dates through a physical generated DOCX;
+- fixed role-scoped VK table labels such as `Номер протокола ВК по больничному`: the structural compiler now matches the full role-specific title before shorter generic aliases, so it replaces the adjacent value cell instead of rewriting the label and leaving stale patient data such as `234` or old dates in the generated DOCX.
+
+
+## 18.4.5 — real Word compiler confirmation hotfix
+
+- fixed a real user-path blocker where document creation could stop with `Compiler не подтвердил созданное semantic-поле medical.profile_status`;
+- compiler-owned fields are now verified against the exact placeholder physically written into the final DOCX instead of depending on a second global parse of doctor-owned Word text;
+- preserved fail-closed behavior: a field reported as compiled is still rejected when its exact semantic token is absent from the final document;
+- propagated compiler-owned semantic evidence into the persisted/render contract so unrelated literal braces in user templates cannot hide a valid generated field;
+- added a regression with a real DOCX containing an earlier literal `{{` before `Психический статус`, reproducing the false-negative class.
+
 ## 18.4.4 — donor-compatible structural Word template compiler
 
 - replaced parser-first repair of filled medical DOCX templates with a donor-style structural compiler that binds values to their owning Word labels/sections;

@@ -54,6 +54,21 @@ pub struct CounterRequest {
 pub fn inspect_template_syntax(t: &str) -> Vec<String> {
     parse(t).errors
 }
+/// Return true when visible text contains a template delimiter, even when the
+/// syntax is incomplete. Compiler stages use this as a hard ownership boundary:
+/// compatibility/legacy inference must never reinterpret text containing an
+/// existing semantic token (or a doctor-owned literal brace opener) as patient data.
+pub fn contains_template_delimiters(text: &str) -> bool {
+    text.contains("{{") || text.contains("}}")
+}
+
+/// Compatibility fallback may only consume plain literal legacy values. Any
+/// template delimiters make the value compiler/template-owned and therefore
+/// ineligible for automatic value replacement.
+pub fn is_safe_compatibility_fallback_value(text: &str) -> bool {
+    !text.trim().is_empty() && !contains_template_delimiters(text)
+}
+
 pub fn template_uses_advanced_syntax(t: &str) -> bool {
     [
         "{{#if",
@@ -582,6 +597,89 @@ fn parse(t: &str) -> Parsed {
         errors,
     }
 }
+enum TagBoundary {
+    Close(usize),
+    NestedOpen(usize),
+}
+
+fn first_unquoted_tag_boundary(value: &str) -> Option<TagBoundary> {
+    let bytes = value.as_bytes();
+    let mut index = 0usize;
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut nested_open_inside_unterminated_quote = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+                index += 1;
+                continue;
+            }
+            if byte == b'\\' {
+                escaped = true;
+                index += 1;
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+                nested_open_inside_unterminated_quote = None;
+                index += 1;
+                continue;
+            }
+            if index + 1 < bytes.len() && byte == b'{' && bytes[index + 1] == b'{' {
+                nested_open_inside_unterminated_quote.get_or_insert(index);
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if index + 1 < bytes.len() {
+            if bytes[index] == b'}' && bytes[index + 1] == b'}' {
+                return Some(TagBoundary::Close(index));
+            }
+            if bytes[index] == b'{' && bytes[index + 1] == b'{' {
+                return Some(TagBoundary::NestedOpen(index));
+            }
+        }
+        index += 1;
+    }
+    // If a doctor-owned stray opener also contains an unterminated quote,
+    // there is no syntactically valid outer tag to preserve. Recover at the
+    // later opener instead of letting that malformed quote swallow a genuine
+    // compiler/user placeholder. A quote that closes normally resets this flag,
+    // so valid conditions such as `{{#if x == "{{"}}}` remain one tag.
+    if quote.is_some() {
+        nested_open_inside_unterminated_quote.map(TagBoundary::NestedOpen)
+    } else {
+        None
+    }
+}
+
+fn abandoned_opener_looks_like_template_construct(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if [
+        "#if", "#unless", "#each", "/if", "/unless", "/each", "else", "=", "sum ", "count ",
+        "block ", "counter ", "image ",
+    ]
+    .iter()
+    .any(|prefix| value == *prefix || value.starts_with(prefix))
+    {
+        return true;
+    }
+    value
+        .split_whitespace()
+        .next()
+        .is_some_and(|candidate| candidate.contains('.') && is_valid_field_id(candidate))
+}
+
 fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
     let mut out = Vec::new();
     let mut errors = Vec::new();
@@ -601,13 +699,36 @@ fn tokenize(t: &str) -> (Vec<(bool, String)>, Vec<String>) {
             continue;
         }
         if let Some(after) = rest.strip_prefix("{{") {
+            match first_unquoted_tag_boundary(after) {
+                Some(TagBoundary::NestedOpen(nested_at)) => {
+                    // A second opener before a valid close is recoverable only when
+                    // the abandoned opener is ordinary document text. If it already
+                    // looks like template syntax (for example `{{#if ...` or
+                    // `{{org.name ...`), retain a syntax error so strict rendering
+                    // cannot publish a broken template while still recovering at the
+                    // later genuine tag.
+                    let abandoned = after[..nested_at].trim();
+                    if abandoned_opener_looks_like_template_construct(abandoned) {
+                        errors.push(format!(
+                            "Незакрытый тег шаблона «{{{{{abandoned}» перед следующим тегом"
+                        ));
+                    }
+                    literal.push_str("{{");
+                    cursor += 2;
+                    continue;
+                }
+                Some(TagBoundary::Close(end)) => {
+                    if !literal.is_empty() {
+                        out.push((false, std::mem::take(&mut literal)));
+                    }
+                    out.push((true, after[..end].trim().to_string()));
+                    cursor += 2 + end + 2;
+                    continue;
+                }
+                None => {}
+            }
             if !literal.is_empty() {
                 out.push((false, std::mem::take(&mut literal)));
-            }
-            if let Some(end) = after.find("}}") {
-                out.push((true, after[..end].trim().to_string()));
-                cursor += 2 + end + 2;
-                continue;
             }
             literal.push_str(rest);
             errors.push("Незакрытый тег шаблона «{{»".into());
@@ -1526,6 +1647,22 @@ fn apply_modifier(v: &str, m: &str) -> Result<String, String> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compatibility_fallback_rejects_complete_partial_and_embedded_template_delimiters() {
+        for value in [
+            "{{medical.profile_status}}",
+            "prefix {{medical.profile_status}} suffix",
+            "doctor literal {{ without close",
+            "orphan close }} text",
+        ] {
+            assert!(super::contains_template_delimiters(value));
+            assert!(!super::is_safe_compatibility_fallback_value(value));
+        }
+        assert!(super::is_safe_compatibility_fallback_value(
+            "старое значение пациента"
+        ));
+    }
+
     use super::*;
     use crate::{SemanticValue, ValueSource};
     fn c() -> SemanticCase {
@@ -1585,6 +1722,98 @@ mod tests {
     }
 
     #[test]
+    fn quoted_opening_braces_inside_condition_are_not_mistaken_for_nested_tag() {
+        let mut case = c();
+        case.values.insert(
+            "custom.code".into(),
+            SemanticValue::new("custom.code", "{{", ValueSource::UserConfirmed, 1.0),
+        );
+        let result = render_advanced_text_template(
+            r#"{{#if custom.code == "{{"}}совпало{{else}}нет{{/if}} {{org.name}}"#,
+            &case,
+            true,
+        );
+        assert_eq!(result.output_text, "совпало Иванов Иван");
+        assert!(
+            result.missing_fields.is_empty(),
+            "{:?}",
+            result.missing_fields
+        );
+        assert!(
+            result.unknown_fields.is_empty(),
+            "{:?}",
+            result.unknown_fields
+        );
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+    }
+
+    #[test]
+    fn quoted_closing_braces_inside_condition_do_not_end_tag_early() {
+        let mut case = c();
+        case.values.insert(
+            "custom.code".into(),
+            SemanticValue::new("custom.code", "}}", ValueSource::UserConfirmed, 1.0),
+        );
+        let result = render_advanced_text_template(
+            r#"{{#if custom.code == "}}"}}совпало{{else}}нет{{/if}} {{org.name}}"#,
+            &case,
+            true,
+        );
+        assert_eq!(result.output_text, "совпало Иванов Иван");
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+    }
+
+    #[test]
+    fn malformed_value_tag_before_later_field_remains_strict_error() {
+        let result = render_advanced_text_template("{{org.name {{custom.code}}", &c(), true);
+        assert!(!result.template_errors.is_empty());
+        assert!(result
+            .template_errors
+            .iter()
+            .any(|error| error.contains("Незакрытый тег шаблона")));
+    }
+
+    #[test]
+    fn malformed_template_directive_before_later_field_remains_strict_error() {
+        let result = render_advanced_text_template("{{#if custom.flag {{org.name}}", &c(), true);
+        assert!(result.output_text.contains("{{#if custom.flag "));
+        assert!(result.output_text.contains("Иванов Иван"));
+        assert!(!result.template_errors.is_empty());
+        assert!(result
+            .template_errors
+            .iter()
+            .any(|error| error.contains("Незакрытый тег шаблона")));
+    }
+
+    #[test]
+    fn unterminated_quote_in_literal_opener_does_not_swallow_later_field() {
+        let result = render_advanced_text_template(
+            r#"Служебная {{ "черновик без конца; организация: {{org.name}}"#,
+            &c(),
+            true,
+        );
+        assert_eq!(
+            result.output_text,
+            r#"Служебная {{ "черновик без конца; организация: Иванов Иван"#
+        );
+        assert!(result.missing_fields.is_empty());
+        assert!(result.unknown_fields.is_empty());
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+    }
+
+    #[test]
     fn double_braces_inside_a_semantic_value_are_preserved() {
         let mut case = c();
         case.values.insert(
@@ -1601,6 +1830,40 @@ mod tests {
         assert!(result.missing_fields.is_empty());
         assert!(result.unknown_fields.is_empty());
         assert!(result.template_errors.is_empty());
+    }
+
+    #[test]
+    fn literal_opening_braces_before_a_later_valid_field_do_not_swallow_the_field() {
+        let result = render_advanced_text_template(
+            "Служебная пометка {{ без шаблонного смысла; организация: {{org.name}}",
+            &c(),
+            true,
+        );
+        assert_eq!(
+            result.output_text,
+            "Служебная пометка {{ без шаблонного смысла; организация: Иванов Иван"
+        );
+        assert!(
+            result.missing_fields.is_empty(),
+            "{:?}",
+            result.missing_fields
+        );
+        assert!(
+            result.unknown_fields.is_empty(),
+            "{:?}",
+            result.unknown_fields
+        );
+        assert!(
+            result.template_errors.is_empty(),
+            "{:?}",
+            result.template_errors
+        );
+        assert_eq!(
+            template_field_references(
+                "Служебная пометка {{ без шаблонного смысла; организация: {{org.name}}"
+            ),
+            vec!["org.name".to_string()]
+        );
     }
 
     #[test]

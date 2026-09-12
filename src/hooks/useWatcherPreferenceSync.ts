@@ -1,7 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getBackgroundWatcherState, updateBackgroundWatcherPreferences } from '../lib/api';
 import { errorMessage } from '../lib/appSupport';
 import type { FolderNamePartDto } from '../lib/types';
+function updateWatcherPreferencesSnapshot(
+  outputRoot: string,
+  folderParts: FolderNamePartDto[],
+  autoPrint: boolean,
+  printCopies: Record<string, number>,
+) {
+  return updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies);
+}
+
 
 type WatcherPreferenceSyncOptions = {
   outputPreferencesReady: boolean;
@@ -29,6 +38,8 @@ export function useWatcherPreferenceSync({
   setStatus,
 }: WatcherPreferenceSyncOptions): void {
   const [watcherPreferencesReady, setWatcherPreferencesReady] = useState(false);
+  const syncQueue = useRef<Promise<void>>(Promise.resolve());
+  const syncRevision = useRef(0);
 
   useEffect(() => {
     let alive = true;
@@ -51,12 +62,21 @@ export function useWatcherPreferenceSync({
 
   useEffect(() => {
     if (!watcherPreferencesReady || !outputPreferencesReady || !folderNamingConfirmed || !outputRoot.trim() || !folderParts.length) return;
-    void updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies)
-      .then((updated) => {
-        if (!updated) return; // Agent is not installed yet; preferences remain local until install.
-      })
-      .catch((error) => {
-        setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
+    const revision = ++syncRevision.current;
+    const rootSnapshot = outputRoot;
+    const partsSnapshot = [...folderParts];
+    const autoPrintSnapshot = autoPrint;
+    const copiesSnapshot = { ...printCopies };
+    syncQueue.current = syncQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await updateWatcherPreferencesSnapshot(rootSnapshot, partsSnapshot, autoPrintSnapshot, copiesSnapshot);
+        } catch (error) {
+          if (revision === syncRevision.current) {
+            setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
+          }
+        }
       });
   }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, setStatus]);
 }

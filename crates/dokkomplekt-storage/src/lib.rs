@@ -1624,6 +1624,52 @@ impl LocalRepository {
         Ok(changed == 1)
     }
 
+    /// Claims an open automation exception and persists state derived from that
+    /// exact winning confirmation in one SQLite transaction. A concurrent loser
+    /// returns false without changing app_state; a failed state write rolls the claim back.
+    pub fn resolve_exception_and_save_state_value<T: serde::Serialize + ?Sized>(
+        &self,
+        exception_id: &str,
+        resolution: &str,
+        state_key: &str,
+        state_value: &T,
+    ) -> StorageResult<bool> {
+        let Some(existing) = self.exception_by_id(exception_id)? else {
+            return Ok(false);
+        };
+        if existing.status != "open" {
+            return Ok(false);
+        }
+        let original_details = serde_json::from_str::<serde_json::Value>(&existing.details_json)
+            .unwrap_or_else(|_| serde_json::json!({ "text": existing.details_json }));
+        let merged = serde_json::json!({
+            "original": original_details,
+            "resolution": {
+                "text": resolution,
+                "resolved_at_unix": unix_timestamp_string(),
+            }
+        });
+        let encoded_details = self.encode_sensitive(&serde_json::to_string(&merged)?)?;
+        let state_json = serde_json::to_string(state_value)?;
+        let encoded_state = self.encode_sensitive(&state_json)?;
+
+        let transaction = self.conn.unchecked_transaction()?;
+        let changed = transaction.execute(
+            "UPDATE automation_exceptions SET status='resolved',details_json=?2,updated_at=CURRENT_TIMESTAMP WHERE exception_id=?1 AND status='open'",
+            params![exception_id, encoded_details],
+        )?;
+        if changed != 1 {
+            transaction.rollback()?;
+            return Ok(false);
+        }
+        transaction.execute(
+            "INSERT INTO app_state(state_key, json) VALUES (?1, ?2) ON CONFLICT(state_key) DO UPDATE SET json=excluded.json, updated_at=CURRENT_TIMESTAMP",
+            params![state_key, encoded_state],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
     pub fn append_audit_event(
         &mut self,
         event_type: &str,
@@ -2373,6 +2419,47 @@ mod tests {
         let details: serde_json::Value = serde_json::from_str(&resolved.details_json).unwrap();
         assert_eq!(details["original"]["field"], "person.full_name");
         assert_eq!(details["resolution"]["text"], "Проверено специалистом");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn losing_exception_confirmation_cannot_overwrite_winner_state() {
+        let path = temp_db("exception-state-claim");
+        let repo = LocalRepository::open_with_key(&path, [12u8; 32]).unwrap();
+        let created = repo
+            .create_exception(
+                "bundle_decision",
+                "C:/Inbox/primary.docx",
+                "Подтвердите комплект",
+                r#"{"cluster_id":"medical-primary"}"#,
+            )
+            .unwrap();
+        let first = vec!["primary".to_string(), "diaries".to_string()];
+        let second = vec!["discharge".to_string()];
+        assert!(repo
+            .resolve_exception_and_save_state_value(
+                &created.exception_id,
+                "Первое подтверждение",
+                "specialist_kit_rules.v1",
+                &first,
+            )
+            .unwrap());
+        assert!(!repo
+            .resolve_exception_and_save_state_value(
+                &created.exception_id,
+                "Конкурирующее подтверждение",
+                "specialist_kit_rules.v1",
+                &second,
+            )
+            .unwrap());
+        assert_eq!(
+            repo.load_state_value::<Vec<String>>("specialist_kit_rules.v1")
+                .unwrap(),
+            Some(first)
+        );
+        let resolved = repo.list_exceptions(true).unwrap().remove(0);
+        let details: serde_json::Value = serde_json::from_str(&resolved.details_json).unwrap();
+        assert_eq!(details["resolution"]["text"], "Первое подтверждение");
         let _ = std::fs::remove_file(path);
     }
 

@@ -17,6 +17,25 @@ impl TemplateSnapshot {
         label: &str,
     ) -> Result<Self, String> {
         let live_path = resolve_user_path(app, configured_path)?;
+        Self::capture_resolved(app, &live_path, label)
+    }
+
+    /// Generation is the only surface allowed to substitute a registered
+    /// document's effective template. Requiring the document identity here keeps
+    /// candidate/setup/learning snapshots neutral.
+    pub(crate) fn capture_generation(
+        app: &tauri::AppHandle,
+        document: &dokkomplekt_core::DocumentTemplateSpec,
+    ) -> Result<Self, String> {
+        let live_path = super::effective_generation_template_path(app, document)?;
+        Self::capture_resolved(app, &live_path, &document.button_label)
+    }
+
+    pub(crate) fn capture_resolved(
+        app: &tauri::AppHandle,
+        live_path: &Path,
+        label: &str,
+    ) -> Result<Self, String> {
         let extension = live_path
             .extension()
             .and_then(|value| value.to_str())
@@ -28,7 +47,7 @@ impl TemplateSnapshot {
                 live_path.display()
             ));
         }
-        let metadata = std::fs::metadata(&live_path)
+        let metadata = std::fs::metadata(live_path)
             .map_err(|error| format!("Не удалось прочитать шаблон «{label}»: {error}"))?;
         if !metadata.is_file() {
             return Err(format!(
@@ -47,7 +66,7 @@ impl TemplateSnapshot {
             .app_data_dir()
             .map_err(|error| error.to_string())?
             .join("template-snapshot-work");
-        Self::capture_path(&live_path, &workspace, label)
+        Self::capture_path(live_path, &workspace, label)
     }
 
     fn capture_path(live_path: &Path, workspace: &Path, label: &str) -> Result<Self, String> {

@@ -69,6 +69,7 @@ struct DependencyIds {
 /// unrelated field must not invalidate every already-rendered document in a package. Named blocks
 /// are traversed recursively and collection contents are included only when referenced. Templates
 /// with counters or images are conservatively rendered again because they depend on external state.
+#[cfg(test)]
 pub(crate) fn document_input_fingerprint(
     document_id: &str,
     template_path: &Path,
@@ -76,11 +77,34 @@ pub(crate) fn document_input_fingerprint(
     semantic_case: &SemanticCase,
     watermark: Option<&str>,
 ) -> Result<String, String> {
+    document_input_fingerprint_with_additional_fields(
+        document_id,
+        template_path,
+        template_text,
+        semantic_case,
+        &BTreeSet::new(),
+        watermark,
+    )
+}
+
+/// Build a checkpoint fingerprint that also tracks semantic facts recorded in
+/// publication/trust evidence even when they feed a derived render-only value.
+/// A reused file must therefore be invalidated whenever any fact claimed by its
+/// evidence changes, not only when a direct template placeholder changes.
+pub(crate) fn document_input_fingerprint_with_additional_fields(
+    document_id: &str,
+    template_path: &Path,
+    template_text: &str,
+    semantic_case: &SemanticCase,
+    additional_field_ids: &BTreeSet<String>,
+    watermark: Option<&str>,
+) -> Result<String, String> {
     let template_bytes = std::fs::read(template_path)
         .map_err(|error| format!("Не удалось прочитать шаблон для resume: {error}"))?;
     let mut ids = DependencyIds::default();
     let mut visited_blocks = BTreeSet::new();
     collect_dependencies(template_text, semantic_case, &mut ids, &mut visited_blocks);
+    ids.fields.extend(additional_field_ids.iter().cloned());
 
     let values = ids
         .fields
@@ -404,6 +428,62 @@ mod tests {
         assert!(reusable_checkpoint(&records, "doc-1", &"a".repeat(64)).is_some());
         std::fs::write(&output, b"tampered").unwrap();
         assert!(reusable_checkpoint(&records, "doc-1", &"a".repeat(64)).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn trust_evidence_inputs_invalidate_checkpoint_for_derived_render_value() {
+        use dokkomplekt_core::{set_user_value, DomainKind};
+
+        let dir = test_directory("derived-trust");
+        let template = dir.join("template.docx");
+        let template_text = "Экспертный анамнез: {{medical.expert_anamnesis}}";
+        std::fs::write(&template, template_text).unwrap();
+
+        let mut source_case = SemanticCase::default();
+        set_user_value(&mut source_case, "medical.workplace", "Завод А");
+        set_user_value(&mut source_case, "medical.position", "инженер");
+        let trust_fields = BTreeSet::from([
+            "medical.expert_anamnesis".to_string(),
+            "medical.workplace".to_string(),
+            "medical.position".to_string(),
+        ]);
+        let first_case = dokkomplekt_core::domains::case_for_document_render(
+            &source_case,
+            &DomainKind::Medical,
+            "primary",
+        );
+        let first = document_input_fingerprint_with_additional_fields(
+            "primary",
+            &template,
+            template_text,
+            &first_case,
+            &trust_fields,
+            None,
+        )
+        .unwrap();
+
+        set_user_value(&mut source_case, "medical.workplace", "Завод Б");
+        let second_case = dokkomplekt_core::domains::case_for_document_render(
+            &source_case,
+            &DomainKind::Medical,
+            "primary",
+        );
+        let second = document_input_fingerprint_with_additional_fields(
+            "primary",
+            &template,
+            template_text,
+            &second_case,
+            &trust_fields,
+            None,
+        )
+        .unwrap();
+
+        assert_ne!(
+            first_case.get("medical.expert_anamnesis"),
+            second_case.get("medical.expert_anamnesis")
+        );
+        assert_ne!(first, second);
         let _ = std::fs::remove_dir_all(dir);
     }
 

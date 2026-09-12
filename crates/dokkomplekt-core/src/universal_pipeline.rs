@@ -53,6 +53,22 @@ pub fn run_universal_constructor_pipeline(
     let role = canonical_role_for_domain(&domain, &template_structure.document_type);
     let required_fields =
         required_fields_for_domain(&domain, &role, &template_structure, &input.flags);
+    // Medical semantic placeholders are render paths, not an implicit declaration
+    // that the doctor must type every value. The canonical medical role plan owns
+    // hard requirements; any additional safe placeholders remain visible optional
+    // workflow inputs. Non-medical domains retain the historical template-required
+    // behavior until they have an equally explicit domain contract.
+    let optional_fields = if matches!(domain, UniversalDomain::Medical) {
+        template_structure
+            .fields
+            .iter()
+            .filter(|field| is_safe_generic_field_id(field))
+            .filter(|field| !required_fields.contains(field))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let button = Button {
         id: format!("button:{}", input.target_template.id),
         label: template_structure.suggested_button_label.clone(),
@@ -64,7 +80,7 @@ pub fn run_universal_constructor_pipeline(
     } else {
         "docx"
     };
-    let workflow = build_workflow(&button, required_fields.clone(), Vec::new(), produces);
+    let workflow = build_workflow(&button, required_fields.clone(), optional_fields, produces);
     let validation_rules = required_fields
         .iter()
         .map(|field_id| ValidationRule {
@@ -98,14 +114,19 @@ pub fn required_fields_for_domain(
 ) -> Vec<String> {
     let role = canonical_role_for_domain(domain, role);
     let mut fields = BTreeSet::<String>::new();
-    for field in &template.fields {
-        if is_safe_generic_field_id(field) {
-            fields.insert(field.clone());
-        }
-    }
     if matches!(domain, UniversalDomain::Medical) {
+        // The Medical domain has one canonical source of truth for mandatory
+        // inputs. A placeholder can be perfectly renderable while still being
+        // optional (for example `medical.discharge_condition`). Promoting every
+        // template field to required here creates a second, contradictory rule
+        // engine in the preflight UI.
         fields.extend(medical_role_fields(&role, flags));
     } else {
+        for field in &template.fields {
+            if is_safe_generic_field_id(field) {
+                fields.insert(field.clone());
+            }
+        }
         fields.extend(nonmedical_role_fields(domain, &role));
     }
     fields.into_iter().collect()
@@ -373,6 +394,37 @@ mod tests {
             .requires
             .contains(&"medical.sick_leave_number".to_string()));
         assert_eq!(result.workflow.produces, vec!["docx".to_string()]);
+    }
+
+    #[test]
+    fn medical_render_placeholder_stays_optional_unless_role_contract_requires_it() {
+        let input = UniversalPipelineInput {
+            source_document: SourceDocument {
+                id: "s".into(),
+                text: "Первичный документ".into(),
+                metadata: BTreeMap::new(),
+            },
+            target_template: TargetTemplate {
+                id: "t".into(),
+                path: "discharge.docx".into(),
+                text: "Выписной эпикриз\n{{medical.discharge_condition}}".into(),
+            },
+            domain_hint: Some(UniversalDomain::Medical),
+            flags: UniversalPipelineFlags::default(),
+        };
+        let result = run_universal_constructor_pipeline(input);
+        assert!(result
+            .workflow
+            .requires
+            .contains(&"medical.discharge_date".to_string()));
+        assert!(!result
+            .workflow
+            .requires
+            .contains(&"medical.discharge_condition".to_string()));
+        assert!(result
+            .workflow
+            .optional
+            .contains(&"medical.discharge_condition".to_string()));
     }
 
     #[test]

@@ -229,13 +229,17 @@ export interface DocumentRoutingRecommendation {
   reasons: string[];
 }
 
-export type BundleDecisionSource =
-  | 'specialist_confirmation'
-  | 'promoted_learning_rule'
-  | 'deterministic_route'
-  | 'review_proposal'
-  | 'ambiguous_candidates'
-  | 'no_safe_proposal';
+export const BUNDLE_DECISION_SOURCES = [
+  'specialist_confirmation',
+  'promoted_learning_rule',
+  'persisted_specialist_rule',
+  'deterministic_route',
+  'review_proposal',
+  'ambiguous_candidates',
+  'no_safe_proposal',
+] as const;
+
+export type BundleDecisionSource = (typeof BUNDLE_DECISION_SOURCES)[number];
 
 export interface BundleDecision {
   document_ids: string[];

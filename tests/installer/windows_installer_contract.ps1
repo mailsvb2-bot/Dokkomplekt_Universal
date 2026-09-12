@@ -7,6 +7,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $adversarial = $env:DOKKOMPLEKT_ADVERSARIAL -eq '1'
+$adversarialMedicalRole = if ($env:DOKKOMPLEKT_ADVERSARIAL_MEDICAL_ROLE -in @('sick_leave_vk', 'discharge')) {
+  [string]$env:DOKKOMPLEKT_ADVERSARIAL_MEDICAL_ROLE
+} elseif ($adversarial -and $env:DOKKOMPLEKT_REQUIRE_AUTHENTICODE -eq '0') {
+  # The unsigned Preview is an independent installed-app lane, so keep the older
+  # sick_leave_vk regression there while Quality exercises the blank discharge.
+  'sick_leave_vk'
+} else {
+  'discharge'
+}
 $baseConfig = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
 $config = Get-Content $TauriConfig -Raw | ConvertFrom-Json
 $webViewMode = [string]$config.bundle.windows.webviewInstallMode.type
@@ -372,6 +381,43 @@ function New-PlainDocxFixture {
   }
 }
 
+function New-BlankDischargeDocxFixture {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    try {
+      $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        '<w:p><w:r><w:t>Дата, время      Выписной эпикриз №</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>г.р.,  зарегистрирован по адресу: Н. Новгород,</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Находился на лечении в ГБУЗ НО «НКЦПЗ» диспансер №2  с по</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>В 3 отделение КДП поступает</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Жалобы при поступлении:</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Анамнез жизни:</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Анамнез заболевания:</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Психический статус при поступлении:</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Сомато-неврологический статус: Нормального питания.</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Лечение: Сюда подставляется информация из файла «2 первичный», который выбирается в Ui</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Экспертный анамнез: не работает. В выдаче ЛН не нуждается.</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Зав. отд. Можарова Е.А.                    Врач-психиатр Балаганин С.В.</w:t></w:r></w:p>' +
+        '<w:sectPr/></w:body></w:document>'
+      $parts = @{
+        '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+        '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+        'word/document.xml' = $body
+      }
+      foreach ($name in $parts.Keys) {
+        $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+        try { $writer.Write($parts[$name]) } finally { $writer.Dispose() }
+      }
+    } finally { $archive.Dispose() }
+  } finally { $stream.Dispose() }
+}
+
 function New-MedicalStoryDocxFixture {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -424,7 +470,9 @@ function New-MedicalStoryDocxFixture {
           # fallback must never consume the compiler-owned semantic token.
           '<w:p><w:r><w:t>Психический статус: ______ после компиляции</w:t></w:r></w:p>'
       } else {
-        $patientBlock = '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>'
+        $patientBlock = '<w:p><w:r><w:t>Ф.И.О.: ' + $patient + '</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Дата рождения: 02.02.1982</w:t></w:r></w:p>' +
+          '<w:p><w:r><w:t>Адрес регистрации: г. Нижний Новгород, ул. Тестовая, д. 1</w:t></w:r></w:p>'
         $structuredFields =
           '<w:p><w:r><w:t>Номер истории болезни: ' + $caseNumber + '</w:t></w:r></w:p>' +
           '<w:p><w:r><w:t>Диагноз: ' + $diagnosis + '</w:t></w:r></w:p>' +
@@ -697,9 +745,15 @@ if ($adversarial) {
   $plainTemplate = Join-Path $env:RUNNER_TEMP 'button-smoke.docx'
 }
 if ($adversarial) {
-  New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template' -Role 'sick_leave_vk'
-  $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
-  New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'sick_leave_vk'
+  if ($adversarialMedicalRole -eq 'discharge') {
+    New-BlankDischargeDocxFixture -Path $plainTemplate
+    $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
+    New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'primary'
+  } else {
+    New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template' -Role 'sick_leave_vk'
+    $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
+    New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'sick_leave_vk'
+  }
   $activeSourcePath = $medicalSource
 } else {
   New-PlainDocxFixture -Path $plainTemplate
@@ -942,7 +996,7 @@ $dateInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descend
 if ($null -ne $numberInput) { Set-UiValue -Element $numberInput -Value $smokeNumber }
 if ($null -ne $dateInput) { Set-UiValue -Element $dateInput -Value '26.08.2026' }
 
-if ($adversarial) {
+if ($adversarial -and $adversarialMedicalRole -eq 'sick_leave_vk') {
   # Exact regression for the real 18.4.5 failure. The installed application must
   # expose and accept the sick-leave VK role-scoped fields before generation.
   $vkPromptValues = [ordered]@{
@@ -971,6 +1025,16 @@ if ($adversarial) {
   if (-not $vkPositionSeen) {
     throw 'Installed sick_leave_vk preflight did not expose the canonical shared medical.position prompt; the real 18.4.5 regression is not being exercised.'
   }
+} elseif ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
+  $dischargeCondition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-medical-discharge_date'
+  )
+  $dischargeInput = $appWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $dischargeCondition)
+  if ($null -eq $dischargeInput) {
+    throw 'Installed discharge preflight did not expose medical.discharge_date for the blank donor template.'
+  }
+  Set-UiValue -Element $dischargeInput -Value '09.09.2026'
 }
 
 $expectedGeneratedFileName = "$expectedTemplateButtonName.docx"
@@ -1080,7 +1144,7 @@ try {
   if ($null -eq $documentEntry) { throw "Created file is not a readable Word DOCX: $($createdDoc.FullName)" }
   $reader = [System.IO.StreamReader]::new($documentEntry.Open(), [System.Text.Encoding]::UTF8)
   try { $createdXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
-  if ($adversarial) {
+  if ($adversarial -and $adversarialMedicalRole -eq 'sick_leave_vk') {
     if ($createdXml -notmatch 'ВК по больничному') { throw 'Created medical DOCX lost the sick_leave_vk template heading.' }
     if ($createdXml -notmatch 'Петров Пётр Петрович') { throw 'Installed medical generation did not render the current patient name.' }
     if ($createdXml -match 'Иванов Иван Иванович') { throw 'Installed medical generation leaked the old template patient name.' }
@@ -1111,6 +1175,20 @@ try {
     try { $createdHeaderXml = $headerReader.ReadToEnd() } finally { $headerReader.Dispose() }
     if ($createdHeaderXml -notmatch 'НКЦПЗ') { throw 'Medical compiler consumed or corrupted the fixed Word header.' }
     if ($createdHeaderXml -match '\{\{') { throw 'Medical compiler incorrectly converted fixed header text into a semantic placeholder.' }
+  } elseif ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
+    if ($createdXml -notmatch 'Выписной эпикриз') { throw 'Created discharge DOCX lost the donor template heading.' }
+    if ($createdXml -notmatch 'Петров Пётр Петрович') { throw 'Blank discharge template did not render the current patient name.' }
+    if ($createdXml -notmatch '02.02.1982') { throw 'Blank discharge template did not render the current birth date.' }
+    if ($createdXml -notmatch 'г. Нижний Новгород, ул. Тестовая, д. 1') { throw 'Blank discharge template did not render the current address.' }
+    if ($createdXml -match 'Н. Новгород') { throw 'Blank discharge template leaked the donor address.' }
+    if ($createdXml -notmatch '2222') { throw 'Blank discharge template did not render the current case number.' }
+    if ($createdXml -notmatch '26.08.2026') { throw 'Blank discharge template did not render the current admission date.' }
+    if ($createdXml -notmatch '09.09.2026') { throw 'Blank discharge template did not render the confirmed discharge date.' }
+    if ($createdXml -notmatch 'F20.0 Параноидная шизофрения') { throw 'Blank discharge template did not render the current diagnosis.' }
+    if ($createdXml -notmatch 'рисперидон 4 мг/сут') { throw 'Blank discharge template did not render the current treatment.' }
+    if ($createdXml -notmatch 'Сомато-неврологический статус: Нормального питания.') { throw 'Blank discharge compiler consumed the following somatic-status section.' }
+    if ($createdXml -match 'Сюда подставляется') { throw 'Blank discharge template leaked its donor treatment instruction.' }
+    if ($createdXml -match '\{\{(?:subject|medical)\.') { throw 'Blank discharge generation left a semantic placeholder unresolved.' }
   } elseif ($createdXml -notmatch 'Проверочная кнопка') {
     throw 'Created DOCX lost the template content.'
   }

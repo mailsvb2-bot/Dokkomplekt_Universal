@@ -588,13 +588,19 @@ fn synchronize_compiled_required_fields(document: &mut DocumentTemplateSpec) {
             .map(|field| dokkomplekt_core::canonical_storage_field_id(&field)),
     );
     required.insert("subject.name".to_string());
-    required.extend(
-        document
-            .popup_fields
-            .iter()
-            .filter(|field| field.required)
-            .map(|field| dokkomplekt_core::canonical_storage_field_id(&field.field_id)),
-    );
+    // `popup_fields` are also populated automatically for untouched templates.
+    // Those generated defaults describe UI presentation only; they are not user
+    // intent and must never strengthen the canonical medical contract. Only a
+    // popup graph explicitly saved by the specialist may add hard requirements.
+    if document.popup_configured {
+        required.extend(
+            document
+                .popup_fields
+                .iter()
+                .filter(|field| field.required)
+                .map(|field| dokkomplekt_core::canonical_storage_field_id(&field.field_id)),
+        );
+    }
     document.required_fields = required.into_iter().collect();
 }
 
@@ -1597,6 +1603,43 @@ mod legacy_template_runtime_tests {
             .required_fields
             .iter()
             .any(|item| item == "medical.discharge_condition"));
+    }
+
+    #[test]
+    fn compiled_contract_does_not_promote_generated_popup_defaults_to_required() {
+        let mut document = medical_document();
+        document.popup_configured = false;
+        document.required_fields = vec!["medical.discharge_date".into()];
+        let mut generated_optional =
+            PopupFieldConfig::new("medical.discharge_condition", "Состояние при выписке");
+        generated_optional.required = true;
+        document.popup_fields = vec![generated_optional];
+
+        apply_compiled_contract_to_document_with_compiler_fields(
+            &mut document,
+            concat!(
+                "Выписной эпикриз\n",
+                "{{subject.name}}\n",
+                "{{medical.case_number}}\n",
+                "{{medical.admission_date}}\n",
+                "{{medical.diagnosis}}\n",
+                "{{medical.discharge_date}}\n",
+                "{{medical.treatment}}\n",
+                "{{medical.expert_anamnesis}}\n",
+                "{{medical.discharge_condition}}"
+            ),
+            &[],
+        )
+        .expect("compiled contract");
+
+        assert!(
+            !document
+                .required_fields
+                .iter()
+                .any(|item| item == "medical.discharge_condition"),
+            "generated popup defaults must not strengthen the medical contract: {:?}",
+            document.required_fields
+        );
     }
 
     #[test]

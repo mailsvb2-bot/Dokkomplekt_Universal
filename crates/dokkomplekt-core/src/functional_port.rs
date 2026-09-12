@@ -122,11 +122,14 @@ pub fn create_button_from_template_text(
     );
     let role_id =
         canonical_role_for_domain(&pipeline.domain, &pipeline.template_structure.document_type);
+    // Persist only hard workflow requirements here. Optional render paths stay
+    // represented by `placeholders` and the generated popup profile, but must not
+    // be promoted into `required_fields`: that field is the fail-closed contract
+    // consumed by `plan_workflow` and by persisted template migrations.
     let mut required_fields = pipeline
         .workflow
         .requires
         .iter()
-        .chain(pipeline.workflow.optional.iter())
         .filter(|field| is_valid_field_id(field))
         .cloned()
         .collect::<Vec<_>>();

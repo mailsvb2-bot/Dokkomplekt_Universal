@@ -3,10 +3,11 @@ use crate::core::{
     OutputDocument, ParsedDocument, SourceDocument, TargetTemplate, TemplateStructure,
     ValidationRule, Workflow,
 };
+use crate::domain_plugin_layer::{required_fields_for_plugin_role, DomainPluginId};
 use crate::domains;
 use crate::domains::medical_document_plan::{build_medical_render_plan, MedicalDocumentRole};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UniversalDomain {
@@ -127,7 +128,12 @@ pub fn required_fields_for_domain(
                 fields.insert(field.clone());
             }
         }
-        fields.extend(nonmedical_role_fields(domain, &role));
+        fields.extend(required_fields_for_plugin_role(
+            &plugin_id_for_universal_domain(domain),
+            &role,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        ));
     }
     fields.into_iter().collect()
 }
@@ -182,92 +188,15 @@ mod canonical_category_role_tests {
     }
 }
 
-fn nonmedical_role_fields(domain: &UniversalDomain, role: &str) -> Vec<String> {
-    let fields: &[&str] = match (domain, role) {
-        (UniversalDomain::Legal, "contract") => &[
-            "contract.number",
-            "contract.date",
-            "contract.party_a",
-            "contract.party_b",
-        ],
-        (UniversalDomain::Legal, "acceptance_act") => &[
-            "document.number",
-            "document.date",
-            "contract.number",
-            "contract.date",
-            "contract.party_a",
-            "contract.party_b",
-        ],
-        (UniversalDomain::Legal, "claim") => &[
-            "document.number",
-            "document.date",
-            "contract.party_a",
-            "contract.party_b",
-            "legal.claim_subject",
-        ],
-        (UniversalDomain::Legal, "cover_letter") => &[
-            "document.number",
-            "document.date",
-            "org.name",
-            "counterparty.name",
-        ],
-        (UniversalDomain::Hr, "employment_contract") => &[
-            "document.date",
-            "org.name",
-            "employee.name",
-            "employee.position",
-            "employee.hire_date",
-            "employee.contract_number",
-        ],
-        (UniversalDomain::Hr, "employment_order") => &[
-            "hr.order_number",
-            "hr.order_date",
-            "employee.name",
-            "employee.position",
-            "employee.hire_date",
-        ],
-        (UniversalDomain::Hr, "personal_data_consent") => {
-            &["document.date", "org.name", "employee.name"]
-        }
-        (UniversalDomain::Hr, "familiarization_sheet") => &[
-            "document.date",
-            "org.name",
-            "employee.name",
-            "employee.position",
-        ],
-        (UniversalDomain::Education, "certificate") => &[
-            "document.number",
-            "document.date",
-            "education.student_name",
-            "education.institution",
-        ],
-        (UniversalDomain::Education, "grade_report") => &[
-            "document.date",
-            "education.student_name",
-            "education.group",
-            "education.course",
-            "education.grade",
-        ],
-        (UniversalDomain::Accounting, "invoice") => &[
-            "accounting.invoice_number",
-            "accounting.invoice_date",
-            "org.name",
-            "counterparty.name",
-            "amount.total",
-        ],
-        (UniversalDomain::Accounting, "service_act") => &[
-            "document.number",
-            "document.date",
-            "org.name",
-            "counterparty.name",
-            "amount.total",
-        ],
-        (UniversalDomain::Accounting, "reconciliation") => {
-            &["document.date", "org.name", "counterparty.name"]
-        }
-        _ => &[],
-    };
-    fields.iter().map(|field| (*field).to_string()).collect()
+fn plugin_id_for_universal_domain(domain: &UniversalDomain) -> DomainPluginId {
+    match domain {
+        UniversalDomain::Medical => DomainPluginId::Medical,
+        UniversalDomain::Legal => DomainPluginId::Legal,
+        UniversalDomain::Hr => DomainPluginId::Hr,
+        UniversalDomain::Education => DomainPluginId::Education,
+        UniversalDomain::Accounting => DomainPluginId::Accounting,
+        UniversalDomain::Custom => DomainPluginId::Custom,
+    }
 }
 
 fn medical_role_fields(role: &str, flags: &UniversalPipelineFlags) -> Vec<String> {

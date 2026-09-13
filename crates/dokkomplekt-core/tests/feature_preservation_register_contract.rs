@@ -50,7 +50,11 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
     );
 
     let baseline_commit = non_empty_string(&register["baseline"], "commit", "baseline");
-    assert_eq!(baseline_commit.len(), 40, "baseline.commit must be a full SHA-1");
+    assert_eq!(
+        baseline_commit.len(),
+        40,
+        "baseline.commit must be a full SHA-1"
+    );
     assert!(
         baseline_commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "baseline.commit must contain only hexadecimal characters"
@@ -59,14 +63,20 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
     assert_eq!(baseline["e0_exit"]["complete"], true);
     assert_eq!(baseline["e0_exit"]["generation_mechanics_changed"], false);
     assert_eq!(baseline["e0_exit"]["feature_groups_inventoried"], 23);
-    assert_eq!(baseline["resource_baseline"]["runtime_measurements"]["status"], "deferred-to-E6");
+    assert_eq!(
+        baseline["resource_baseline"]["runtime_measurements"]["status"],
+        "deferred-to-E6"
+    );
 
     for required_path in [
         "verification/KNOWN_LIMITATIONS.md",
         "tests/fixtures/docx/corpus-manifest.json",
         "tests/test_canon_u00_positioning_contract.py",
     ] {
-        assert!(root.join(required_path).exists(), "missing E0 evidence path: {required_path}");
+        assert!(
+            root.join(required_path).exists(),
+            "missing E0 evidence path: {required_path}"
+        );
     }
 
     let expected: BTreeMap<&str, &str> = [
@@ -107,11 +117,20 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
         .map(|value| value.as_str().expect("status must be a string"))
         .collect();
     for required in ["needs-runtime-proof", "known-defect", "verified"] {
-        assert!(allowed_statuses.contains(required), "missing allowed status: {required}");
+        assert!(
+            allowed_statuses.contains(required),
+            "missing allowed status: {required}"
+        );
     }
 
-    let features = register["features"].as_array().expect("features must be an array");
-    assert_eq!(features.len(), expected.len(), "Canon §3 feature groups changed");
+    let features = register["features"]
+        .as_array()
+        .expect("features must be an array");
+    assert_eq!(
+        features.len(),
+        expected.len(),
+        "Canon §3 feature groups changed"
+    );
 
     let mut seen_ids = BTreeSet::new();
     let mut seen_groups = BTreeSet::new();
@@ -123,9 +142,19 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
         let status = non_empty_string(feature, "status", id);
 
         assert!(seen_ids.insert(id), "duplicate feature id: {id}");
-        assert!(seen_groups.insert(group), "duplicate feature group: {group}");
-        assert_eq!(expected.get(id).copied(), Some(group), "unexpected Canon feature");
-        assert!(allowed_statuses.contains(status), "unsupported status for {id}: {status}");
+        assert!(
+            seen_groups.insert(group),
+            "duplicate feature group: {group}"
+        );
+        assert_eq!(
+            expected.get(id).copied(),
+            Some(group),
+            "unexpected Canon feature"
+        );
+        assert!(
+            allowed_statuses.contains(status),
+            "unsupported status for {id}: {status}"
+        );
         non_empty_string(feature, "actual_state", id);
 
         non_empty_array(feature, "entry");
@@ -155,7 +184,10 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
             .as_array()
             .unwrap_or_else(|| panic!("runtime_evidence must be an array for {id}"));
         if status == "verified" {
-            assert!(!runtime_evidence.is_empty(), "{id} cannot be verified from source inventory alone");
+            assert!(
+                !runtime_evidence.is_empty(),
+                "{id} cannot be verified from source inventory alone"
+            );
         } else {
             all_verified = false;
             non_empty_string(feature, "runtime_gap", id);

@@ -117,7 +117,9 @@ def test_dispatcher_requires_a_separate_private_target_and_correlates_runs() -> 
     assert 'target.get("private") is not True' in text
     assert "hardware validation target must be a separate private repository" in text
     assert "return str(uuid.uuid4())" in text
-    assert "request_id not in display_title" in text
+    assert "parse_phase_run_identity" in text
+    assert "run_request_id != request_id" in text
+    assert "run_prepare_id != prepare_run_id" in text
     assert '"source_repository": args.source_repository' in text
     assert '"release_sha": args.release_sha' in text
     assert '"reboot_phase": args.reboot_phase' in text

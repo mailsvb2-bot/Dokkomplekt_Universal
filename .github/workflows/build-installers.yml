@@ -171,7 +171,7 @@ jobs:
           [[ "$verify_run_id" =~ ^[1-9][0-9]*$ ]]
           mkdir -p private-release/handoff private-release/evidence
           gh run download "$prepare_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Signed-Handoff-${{ needs.release-plan.outputs.release_sha }}-$request_id"             --dir private-release/handoff
-          gh run download "$verify_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Hardware-E2E-verify-$request_id"             --dir private-release/evidence
+          gh run download "$verify_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Hardware-E2E-verify-$request_id-prepare-$prepare_run_id"             --dir private-release/evidence
           echo "DOKKOMPLEKT_RELEASE_REQUEST_ID=$request_id" >> "$GITHUB_ENV"
       - name: Cryptographically bind publication to the hardware-tested handoff
         shell: bash
@@ -282,30 +282,68 @@ jobs:
         with:
           name: Dokkomplekt-Windows-Private-Validated
           path: private-windows
-      - name: Materialize only the exact hardware-validated Windows payload
+      - name: Materialize uniquely named hardware-validated Windows payload
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release/windows release/components release/runtime release/evidence/build release/evidence/hardware release/evidence/handoff
-          cp -a private-windows/private-release/handoff/release-installers/. release/windows/
+          version="$(tr -d '\r\n' < VERSION)"
+          test -n "$version"
+          mkdir -p release/windows release/components release/runtime publication-evidence/build publication-evidence/hardware publication-evidence/handoff publication-evidence/release
+          mapfile -t thin_installers < <(find private-windows/private-release/handoff/release-installers/thin -type f -name '*.exe' -print)
+          mapfile -t offline_installers < <(find private-windows/private-release/handoff/release-installers/offline -type f -name '*.exe' -print)
+          test "${#thin_installers[@]}" -eq 1
+          test "${#offline_installers[@]}" -eq 1
+          cp "${thin_installers[0]}" "release/windows/Dokkomplekt-Universal-${version}-Windows-x64-Thin.exe"
+          cp "${offline_installers[0]}" "release/windows/Dokkomplekt-Universal-${version}-Windows-x64-Offline.exe"
           cp -a private-windows/private-release/handoff/release-components/. release/components/
           cp -a private-windows/private-release/handoff/release-runtime/. release/runtime/
-          cp -a private-windows/private-release/handoff/build-evidence/. release/evidence/build/
-          cp -a private-windows/private-release/evidence/. release/evidence/hardware/
-          cp private-windows/private-release/handoff/SIGNED_HANDOFF.json release/evidence/handoff/
-          cp private-windows/private-release/handoff/SIGNED_HANDOFF.json.sig release/evidence/handoff/
-          cp private-windows/verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json release/evidence/
-          cp private-windows/verification/release/PUBLICATION_HANDOFF_VERIFICATION.json release/evidence/
+          cp -a private-windows/private-release/handoff/build-evidence/. publication-evidence/build/
+          cp -a private-windows/private-release/evidence/. publication-evidence/hardware/
+          cp private-windows/private-release/handoff/SIGNED_HANDOFF.json publication-evidence/handoff/
+          cp private-windows/private-release/handoff/SIGNED_HANDOFF.json.sig publication-evidence/handoff/
+          cp private-windows/verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json publication-evidence/release/
+          cp private-windows/verification/release/PUBLICATION_HANDOFF_VERIFICATION.json publication-evidence/release/
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: Dokkomplekt-Linux-AppImage-deb-rpm
           path: release/linux
+      - name: Package complete production evidence into one release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < VERSION)"
+          release_sha="$(git rev-parse --verify HEAD)"
+          (
+            cd publication-evidence
+            find . -type f ! -name EVIDENCE_SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > EVIDENCE_SHA256SUMS.txt
+          )
+          mkdir -p release/evidence
+          VERSION="$version" RELEASE_SHA="$release_sha" python - <<'PYZIP'
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+          root = Path('publication-evidence')
+          output = Path('release/evidence') / f"Dokkomplekt-Production-Evidence-{os.environ['VERSION']}-{os.environ['RELEASE_SHA'][:12]}.zip"
+          with ZipFile(output, 'w', allowZip64=True) as archive:
+              for path in sorted(item for item in root.rglob('*') if item.is_file()):
+                  relative = path.relative_to(root).as_posix()
+                  info = ZipInfo(relative, (1980, 1, 1, 0, 0, 0))
+                  info.compress_type = ZIP_DEFLATED
+                  info.external_attr = 0o100644 << 16
+                  archive.writestr(info, path.read_bytes())
+          if output.stat().st_size <= 0:
+              raise SystemExit('production evidence archive is empty')
+          print(output)
+          PYZIP
       - name: Create complete release checksum register
         shell: bash
         run: |
           cd release
           find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
           test -s SHA256SUMS.txt
+      - name: Reject duplicate GitHub Release asset names
+        run: python scripts/validate_release_asset_names.py --root release
       - name: Attach artifacts only after signing and hardware E2E
         env:
           GH_TOKEN: ${{ github.token }}

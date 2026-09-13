@@ -1,5 +1,5 @@
 name: Dokkomplekt Private Windows Hardware E2E
-run-name: Dokkomplekt hardware ${{ inputs.release_sha }} ${{ inputs.reboot_phase }} ${{ inputs.request_id }}
+run-name: Dokkomplekt hardware ${{ inputs.release_sha }} ${{ inputs.reboot_phase }} ${{ inputs.request_id }} prepare-run-${{ inputs.prepare_run_id }}
 
 on:
   workflow_dispatch:
@@ -429,7 +429,7 @@ jobs:
           Copy-Item signed-handoff/SIGNED_HANDOFF.json.sig verification/release/SIGNED_HANDOFF.json.sig -Force
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
-          name: Dokkomplekt-Windows-Hardware-E2E-${{ inputs.reboot_phase }}-${{ inputs.request_id }}
+          name: Dokkomplekt-Windows-Hardware-E2E-${{ inputs.reboot_phase }}-${{ inputs.request_id }}-prepare-${{ inputs.prepare_run_id }}
           path: |
             source/verification/release/**
             source/.release-gate/**

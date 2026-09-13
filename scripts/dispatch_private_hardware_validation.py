@@ -93,7 +93,10 @@ def locate_run(
     repository: str,
     workflow: str,
     ref: str,
+    release_sha: str,
+    phase: str,
     request_id: str,
+    prepare_run_id: int | None,
     not_before: dt.datetime,
 ) -> dict[str, Any] | None:
     matches: list[dict[str, Any]] = []
@@ -101,8 +104,17 @@ def locate_run(
         created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
         if created < not_before - dt.timedelta(seconds=10):
             continue
-        display_title = str(run.get("display_title", ""))
-        if request_id not in display_title:
+        identity = parse_phase_run_identity(
+            str(run.get("display_title", "")).strip(),
+            release_sha,
+            phase,
+        )
+        if identity is None:
+            continue
+        run_request_id, run_prepare_id = identity
+        if run_request_id != request_id:
+            continue
+        if phase == "verify" and run_prepare_id != prepare_run_id:
             continue
         matches.append(run)
     if not matches:
@@ -215,6 +227,39 @@ def canonical_request_id(value: str) -> str:
     return normalized
 
 
+def parse_phase_run_identity(
+    title: str,
+    release_sha: str,
+    phase: str,
+) -> tuple[str, int | None] | None:
+    if phase not in {"prepare", "verify"}:
+        raise RuntimeError("phase must be prepare or verify")
+    prefix = f"Dokkomplekt hardware {release_sha} {phase} "
+    if not title.startswith(prefix):
+        return None
+    remainder = title[len(prefix) :].strip()
+    if not remainder:
+        return None
+    parts = remainder.split()
+    try:
+        request_id = canonical_request_id(parts[0])
+    except RuntimeError:
+        return None
+    prepare_run_id: int | None = None
+    if len(parts) > 1:
+        if len(parts) != 2 or not parts[1].startswith("prepare-run-"):
+            return None
+        raw_prepare_run_id = parts[1][len("prepare-run-") :]
+        if raw_prepare_run_id:
+            try:
+                prepare_run_id = int(raw_prepare_run_id)
+            except ValueError:
+                return None
+            if prepare_run_id <= 0:
+                return None
+    return request_id, prepare_run_id
+
+
 def find_successful_phase_run(
     api: GitHubApi,
     repository: str,
@@ -224,26 +269,25 @@ def find_successful_phase_run(
     phase: str,
     *,
     required_request_id: str | None = None,
+    required_prepare_run_id: int | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
-    if phase not in {"prepare", "verify"}:
-        raise RuntimeError("phase must be prepare or verify")
-    prefix = f"Dokkomplekt hardware {release_sha} {phase} "
     candidates: list[tuple[dt.datetime, str, dict[str, Any]]] = []
     for run in api.runs(repository, workflow, ref):
         if str(run.get("status", "")).strip().lower() != "completed":
             continue
         if str(run.get("conclusion", "")).strip().lower() != "success":
             continue
-        title = str(run.get("display_title", "")).strip()
-        if not title.startswith(prefix):
+        identity = parse_phase_run_identity(str(run.get("display_title", "")).strip(), release_sha, phase)
+        if identity is None:
             continue
-        raw_request_id = title[len(prefix) :].strip()
+        request_id, prepare_run_id = identity
         try:
-            request_id = canonical_request_id(raw_request_id)
             int(run.get("id"))
-        except (RuntimeError, TypeError, ValueError):
+        except (TypeError, ValueError):
             continue
         if required_request_id is not None and request_id != required_request_id:
+            continue
+        if required_prepare_run_id is not None and prepare_run_id != required_prepare_run_id:
             continue
         created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
         candidates.append((created, request_id, run))
@@ -290,6 +334,7 @@ def successful_verify_run(
     ref: str,
     release_sha: str,
     request_id: str,
+    prepare_run_id: int,
 ) -> dict[str, Any] | None:
     match = find_successful_phase_run(
         api,
@@ -299,6 +344,7 @@ def successful_verify_run(
         release_sha,
         "verify",
         required_request_id=request_id,
+        required_prepare_run_id=prepare_run_id,
     )
     return None if match is None else match[1]
 
@@ -408,6 +454,7 @@ def main() -> int:
             args.target_ref,
             args.release_sha,
             request_id,
+            args.prepare_run_id,
         )
         if existing_verify is not None:
             report_path = Path(args.json_report)
@@ -446,7 +493,10 @@ def main() -> int:
             args.target_repository,
             args.workflow,
             args.target_ref,
+            args.release_sha,
+            args.reboot_phase,
             request_id,
+            args.prepare_run_id,
             started,
         )
         if candidate is not None:

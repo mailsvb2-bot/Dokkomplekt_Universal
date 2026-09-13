@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import importlib.util
 import json
 from pathlib import Path
@@ -174,7 +175,7 @@ def test_successful_verify_lookup_is_bound_to_exact_prepare_request() -> None:
                     "status": "completed",
                     "conclusion": "success",
                     "created_at": "2026-09-13T08:30:00Z",
-                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id,
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id + " prepare-run-4242",
                     "html_url": "https://example.invalid/actions/runs/5001",
                 },
                 {
@@ -182,12 +183,12 @@ def test_successful_verify_lookup_is_bound_to_exact_prepare_request() -> None:
                     "status": "completed",
                     "conclusion": "success",
                     "created_at": "2026-09-13T09:00:00Z",
-                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify 11111111-1111-4111-8111-111111111111",
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id + " prepare-run-3131",
                 },
             ]
 
     run = hardware_dispatch.successful_verify_run(
-        Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40, request_id
+        Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40, request_id, 4242
     )
     assert run is not None
     assert run["id"] == 5001
@@ -209,7 +210,7 @@ def test_main_reuses_successful_verify_without_dispatch(monkeypatch: pytest.Monk
         "status": "completed",
         "conclusion": "success",
         "created_at": "2026-09-13T08:45:00Z",
-        "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id,
+        "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id + " prepare-run-4242",
         "html_url": "https://example.invalid/actions/runs/4343",
     }
 
@@ -263,3 +264,40 @@ def test_main_reuses_successful_verify_without_dispatch(monkeypatch: pytest.Monk
     assert payload["prepare_run_id"] == 4242
     assert payload["run_id"] == 4343
     assert payload["conclusion"] == "success"
+
+
+def test_locate_run_requires_exact_verify_prepare_identity() -> None:
+    request_id = "01234567-89ab-4def-8123-456789abcdef"
+    exact = {
+        "id": 9002,
+        "created_at": "2026-09-13T09:00:02Z",
+        "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id + " prepare-run-4242",
+    }
+    wrong_prepare = {
+        "id": 9003,
+        "created_at": "2026-09-13T09:00:03Z",
+        "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id + " prepare-run-3131",
+    }
+    wrong_phase = {
+        "id": 9004,
+        "created_at": "2026-09-13T09:00:04Z",
+        "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare " + request_id,
+    }
+
+    class Api:
+        def runs(self, repository, workflow, ref):
+            return [wrong_phase, wrong_prepare, exact]
+
+    found = hardware_dispatch.locate_run(
+        Api(),
+        "owner/private",
+        "windows-hardware-e2e.yml",
+        "main",
+        "a" * 40,
+        "verify",
+        request_id,
+        4242,
+        dt.datetime(2026, 9, 13, 9, 0, 0, tzinfo=dt.timezone.utc),
+    )
+    assert found is not None
+    assert found["id"] == 9002

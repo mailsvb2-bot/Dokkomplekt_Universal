@@ -168,6 +168,19 @@ function Set-UiValue {
   [System.Windows.Forms.SendKeys]::SendWait($Value)
 }
 
+function Get-UiValue {
+  param([Parameter(Mandatory = $true)]$Element)
+  if (-not $Element.Current.IsValuePatternAvailable) { throw 'UI control does not expose ValuePattern.' }
+  return [string]$Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+}
+
+function Normalize-UiValue {
+  param([AllowNull()][string]$Value)
+  if ($null -eq $Value) { return '' }
+  $normalized = $Value -replace [char]0x00A0, ' '
+  return ([regex]::Replace($normalized.Trim(), '\s+', ' '))
+}
+
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
   $open = Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')
@@ -310,6 +323,30 @@ foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-va
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $requiredMissingId)
   )
   if ($null -eq $control) { throw "E1 Accounting preflight did not expose required missing field: $requiredMissingId" }
+  if (-not [string]::IsNullOrWhiteSpace((Get-UiValue -Element $control))) {
+    throw "E1 Accounting source unexpectedly supplied intentionally missing field: $requiredMissingId"
+  }
+}
+
+# Source-owned values must come from the actual source document. The installed
+# proof is not allowed to repair these values through UI automation. When the
+# backend exposes a satisfied prompt, verify its current value but never write it.
+$sourceOwnedValues = [ordered]@{
+  'document.number' = 'E1-17'; 'document.date' = '13.09.2026'; 'org.name' = 'ООО «Альфа»';
+  'counterparty.name' = 'ООО «Бета»'; 'contract.number' = 'D-77'; 'contract.date' = '01.09.2026';
+  'contract.subject' = 'Консультационные услуги'; 'amount.total' = '125 000,00'
+}
+foreach ($fieldId in $sourceOwnedValues.Keys) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+  )
+  if ($null -ne $control) {
+    $actual = Normalize-UiValue -Value (Get-UiValue -Element $control)
+    $expected = Normalize-UiValue -Value $sourceOwnedValues[$fieldId]
+    if ($actual -ne $expected) { throw "E1 source-owned prompt drift for $fieldId`: expected '$expected', got '$actual'" }
+  }
 }
 
 $docsBeforeBlocked = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $accountingOutputName -ErrorAction SilentlyContinue).Count
@@ -338,25 +375,41 @@ $receiptsAfterBlocked = if (Test-Path -LiteralPath $completionReceiptRoot -PathT
 if ($receiptsAfterBlocked -ne $receiptsBeforeBlocked) { throw 'E1 faulty Accounting draft produced a committed receipt.' }
 Write-Host 'E1 ADVERSARIAL PASS: incomplete Accounting draft produced 0 DOCX and 0 committed receipts.'
 
-$promptValues = [ordered]@{
-  'document.number' = 'E1-17'; 'document.date' = '13.09.2026'; 'org.name' = 'ООО «Альфа»';
-  'counterparty.name' = 'ООО «Бета»'; 'contract.number' = 'D-77'; 'contract.date' = '01.09.2026';
-  'contract.subject' = 'Консультационные услуги'; 'amount.total' = '125 000,00';
+$manualPromptValues = [ordered]@{
   'amount.currency' = 'RUB'; 'amount.vat' = '20 833,33'
 }
-foreach ($fieldId in $promptValues.Keys) {
+foreach ($fieldId in $manualPromptValues.Keys) {
   $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
   $control = (Find-LiveAppWindow).FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
   )
-  if ($null -ne $control) { Set-UiValue -Element $control -Value $promptValues[$fieldId] }
+  if ($null -eq $control) { throw "E1 missing manual completion control: $fieldId" }
+  Set-UiValue -Element $control -Value $manualPromptValues[$fieldId]
 }
 Invoke-UiActionPhysicallyFromProbe -Description 'complete Accounting Create' -ActionProbe {
   $window = Find-LiveAppWindow
   if ($null -eq $window) { return $null }
   Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
 }
+
+# The first adversarial attempt intentionally left an error banner visible.
+# Require that stale UI state to clear before treating any later banner as a
+# failure of the completed generation attempt.
+$staleDeadline = [DateTime]::UtcNow.AddSeconds(15)
+$staleFailure = $null
+do {
+  $window = Find-LiveAppWindow
+  $staleFailure = if ($null -eq $window) { $null } else {
+    $window.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Документы не созданы')
+    )
+  }
+  if ($null -eq $staleFailure) { break }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $staleDeadline)
+if ($null -ne $staleFailure) { throw 'E1 stale blocked-draft error did not clear after completed preflight submission.' }
 
 $deadline = [DateTime]::UtcNow.AddSeconds(60)
 $accountingDoc = $null

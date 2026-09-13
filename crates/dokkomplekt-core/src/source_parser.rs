@@ -1276,6 +1276,37 @@ fn find_labeled_value(text: &str, labels: &[&str], multiline: bool) -> Option<St
     None
 }
 
+fn starts_with_label_boundary(lower_line: &str, raw_label: &str) -> bool {
+    let label = raw_label.trim().to_lowercase();
+    if label.is_empty() {
+        return false;
+    }
+    let mut line_chars = lower_line.chars();
+    for expected in label.chars() {
+        if line_chars.next() != Some(expected) {
+            return false;
+        }
+    }
+    line_chars
+        .next()
+        .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
+}
+
+fn registered_field_labels() -> &'static [String] {
+    static LABELS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    LABELS.get_or_init(|| {
+        let mut labels = Vec::new();
+        for field in crate::field_registry::all_fields() {
+            labels.push(field.title_ru);
+            labels.extend(field.aliases);
+        }
+        labels.retain(|label| !label.trim().is_empty());
+        labels.sort_by_key(|label| label.to_lowercase());
+        labels.dedup_by(|left, right| left.to_lowercase() == right.to_lowercase());
+        labels
+    })
+}
+
 fn looks_like_known_label(line: &str) -> bool {
     let lower = line.to_lowercase();
     if [
@@ -1293,16 +1324,11 @@ fn looks_like_known_label(line: &str) -> bool {
         "email",
     ]
     .iter()
-    .any(|label| {
-        lower.starts_with(label)
-            && lower[label.len()..]
-                .chars()
-                .next()
-                .is_none_or(|ch| ch.is_whitespace() || matches!(ch, ':' | '№' | '-' | '—'))
-    }) {
+    .any(|label| starts_with_label_boundary(&lower, label))
+    {
         return true;
     }
-    generic_rules()
+    if generic_rules()
         .into_iter()
         .chain(medical_rules())
         .any(|rule| {
@@ -1312,6 +1338,12 @@ fn looks_like_known_label(line: &str) -> bool {
                         || lower.contains(':'))
             })
         })
+    {
+        return true;
+    }
+    registered_field_labels()
+        .iter()
+        .any(|label| starts_with_label_boundary(&lower, label))
 }
 
 fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<String> {
@@ -2180,6 +2212,33 @@ mod tests {
         assert_eq!(case.get("org.name"), Some("ООО «Ромашка»"));
         assert_eq!(case.get("amount.total"), Some("125\u{00A0}000,00"));
         assert_eq!(case.get("subject.phone"), None);
+    }
+
+    #[test]
+    fn accounting_service_act_source_keeps_registered_labels_out_of_multiline_subject() {
+        let text = concat!(
+            "АКТ ОКАЗАННЫХ УСЛУГ № E1-17 от 13.09.2026\n",
+            "Исполнитель: ООО «Альфа»\n",
+            "Заказчик: ООО «Бета»\n",
+            "Договор № D-77\n",
+            "Дата договора: 01.09.2026\n",
+            "Предмет договора: Консультационные услуги\n",
+            "Сумма: 125 000,00"
+        );
+        let (case, _) = parse_source_text(text, 2026);
+        assert_eq!(case.get("document.number"), Some("E1-17"));
+        assert_eq!(case.get("document.date"), Some("13.09.2026"));
+        assert_eq!(case.get("org.name"), Some("ООО «Альфа»"));
+        assert_eq!(case.get("counterparty.name"), Some("ООО «Бета»"));
+        assert_eq!(case.get("contract.number"), Some("D-77"));
+        assert_eq!(case.get("contract.date"), Some("01.09.2026"));
+        assert_eq!(
+            case.get("contract.subject"),
+            Some("Консультационные услуги")
+        );
+        assert_eq!(case.get("amount.total"), Some("125\u{00A0}000,00"));
+        assert_eq!(case.get("amount.currency"), None);
+        assert_eq!(case.get("amount.vat"), None);
     }
 
     #[test]

@@ -14,6 +14,14 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "Название документа для service_act.docx" in source
     assert "workflow-amount-currency" in source
     assert "workflow-amount-vat" in source
+    assert "$sourceOwnedValues = [ordered]@{" in source
+    assert "E1 source-owned prompt drift" in source
+    assert "$manualPromptValues = [ordered]@{" in source
+    manual_block = source[source.index("$manualPromptValues = [ordered]@{"):source.index("foreach ($fieldId in $manualPromptValues.Keys)")]
+    assert "amount.currency" in manual_block and "amount.vat" in manual_block
+    for forbidden in ("document.number", "document.date", "org.name", "counterparty.name", "contract.number", "contract.date", "contract.subject", "amount.total"):
+        assert forbidden not in manual_block
+    assert "stale blocked-draft error did not clear" in source
     assert "faulty Accounting draft produced a physical DOCX" in source
     assert "faulty Accounting draft produced a committed receipt" in source
     assert "word/document.xml" in source

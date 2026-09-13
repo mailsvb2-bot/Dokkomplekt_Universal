@@ -134,7 +134,9 @@ Perform a real Windows restart and log back into the dedicated hardware runner a
 
 ### `verify`
 
-Run the public workflow again for the same SHA with `reboot_phase=verify`. A fresh signed handoff is independently verified and the hardware runner proves post-reboot watcher behavior and executes the full physical contour.
+You may run the public workflow again for the same SHA with `reboot_phase=verify`; alternatively, the production `Build Signed Offline Installers` hardware gate automatically resolves the newest successful private `prepare` for that exact SHA and dispatches the matching private `verify` phase with the same request UUID. A fresh signed handoff is independently verified and the hardware runner proves post-reboot watcher behavior and executes the full physical contour.
+
+The production release workflow itself always runs this bridge on GitHub-hosted Linux under `windows-hardware-dispatch`; it never schedules a self-hosted runner in the public repository. If the required prepare/reboot has not happened yet, the release fails fast rather than remaining queued.
 
 `FULL DOKKOMPLEKT AUTOPILOT` with `scope=production-hardware` may pass only after exact-SHA hardware evidence exists.
 

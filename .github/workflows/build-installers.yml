@@ -279,42 +279,48 @@ jobs:
           if-no-files-found: error
 
   windows-hardware-e2e:
-    name: REQUIRED Windows Word / printer / watcher / reboot evidence
-    needs: windows-signed-offline
-    runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]
-    timeout-minutes: 120
+    name: REQUIRED private Windows Word / printer / watcher / reboot verdict
+    needs: [release-plan, windows-signed-offline]
+    if: needs.release-plan.outputs.should_release == 'true'
+    runs-on: ubuntu-24.04
+    environment: windows-hardware-dispatch
+    timeout-minutes: 250
     env:
-      DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
-      DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
-      DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
+      DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY: mailsvb2-bot/Dokkomplekt_Hardware_Validation
+      DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW: windows-hardware-e2e.yml
+      DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN: ${{ secrets.DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: 1.97.1
-          components: rustfmt, clippy
+          ref: ${{ needs.release-plan.outputs.release_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: Dokkomplekt-Windows-NSIS-Signed-Offline
-          path: signed-release
-      - name: Execute Word, spooler, signed installer and watcher hardware checks
-        shell: pwsh
-        run: tests/windows/windows_hardware_e2e.ps1 -InstallerRoot signed-release/release-installers
-      - name: Require two-boot watcher evidence
-        shell: pwsh
+      - name: Prove private hardware dispatch boundary
+        shell: bash
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH)) { throw 'DOKKOMPLEKT_REBOOT_EVIDENCE_PATH is required.' }
-          $source = (python scripts/source_fingerprint.py).Trim()
-          tests/windows/verify_reboot_evidence.ps1 -EvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -ExpectedSourceSha256 $source
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+          set -euo pipefail
+          test -n "$DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN"
+          test "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" != "$GITHUB_REPOSITORY"
+          test "$(git rev-parse HEAD)" = '${{ needs.release-plan.outputs.release_sha }}'
+      - name: Reuse successful prepare and require private verify verdict
+        shell: bash
+        run: >-
+          python scripts/dispatch_private_hardware_validation.py
+          --source-repository "$GITHUB_REPOSITORY"
+          --target-repository "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"
+          --workflow "$DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW"
+          --target-ref main
+          --release-sha "${{ needs.release-plan.outputs.release_sha }}"
+          --reboot-phase verify
+          --reuse-latest-prepare
+          --json-report verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json
+      - name: Upload immutable private hardware verdict reference
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
           name: Dokkomplekt-Windows-Hardware-E2E-Evidence
-          path: .release-gate/**
+          path: verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json
           if-no-files-found: error
 
   linux-bundles:

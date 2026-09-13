@@ -65,6 +65,10 @@ def test_signing_script_forbids_exportable_production_pfx() -> None:
     assert "-Exportable" not in text
     assert "SignerCertificate.Thumbprint" in text
     assert "[switch] $VerifyCertificateOnly" in text
+    assert "Assert-SigningKeyOperational -Certificate $cert" in text
+    assert ".SignData(" in text
+    assert ".VerifyData(" in text
+    assert "SIGNING KEY OPERATIONAL CHALLENGE PASSED" in text
     assert "SIGNING CERTIFICATE PREFLIGHT PASSED" in text
 
 
@@ -102,3 +106,16 @@ def test_production_workflows_do_not_receive_pfx_secrets() -> None:
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT" not in hardware
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER" not in hardware
     assert "secrets." not in hardware
+
+
+def test_release_hardware_gate_routes_only_through_private_dispatcher() -> None:
+    workflow = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
+    hardware = workflow.split("  windows-hardware-e2e:\n", 1)[1].split("  linux-bundles:\n", 1)[0]
+    assert "runs-on: ubuntu-24.04" in hardware
+    assert "environment: windows-hardware-dispatch" in hardware
+    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" not in hardware
+    assert "dispatch_private_hardware_validation.py" in hardware
+    assert "--reboot-phase verify" in hardware
+    assert "--reuse-latest-prepare" in hardware
+    assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in hardware
+    assert "Dokkomplekt-Windows-Hardware-E2E-Evidence" in hardware

@@ -25,6 +25,7 @@ def dispatch_args(*, reboot_phase: str, request_id: str | None) -> argparse.Name
         release_sha="a" * 40,
         reboot_phase=reboot_phase,
         request_id=request_id,
+        reuse_latest_prepare=False,
         poll_seconds=1,
         queue_timeout_seconds=0,
         timeout_seconds=1,
@@ -44,7 +45,7 @@ def test_prepare_without_request_id_generates_canonical_uuid() -> None:
 def test_verify_requires_request_id_from_prepare_phase() -> None:
     args = dispatch_args(reboot_phase="verify", request_id="")
 
-    with pytest.raises(RuntimeError, match="verify phase requires request_id from the prepare phase"):
+    with pytest.raises(RuntimeError, match="verify phase requires request_id or --reuse-latest-prepare"):
         hardware_dispatch.validate_args(args)
 
 
@@ -73,3 +74,45 @@ def test_public_hardware_workflow_forwards_and_surfaces_request_id() -> None:
     assert "request_id:" in workflow
     assert "--request-id \"${{ inputs.request_id }}\"" in workflow
     assert "Reuse this exact request ID for the `verify` phase" in workflow
+
+
+def test_latest_successful_prepare_request_is_reused_for_verify() -> None:
+    class Api:
+        def runs(self, repository, workflow, ref):
+            return [
+                {
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2026-09-13T07:00:00Z",
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare 11111111-1111-4111-8111-111111111111",
+                },
+                {
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2026-09-13T08:00:00Z",
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare 22222222-2222-4222-8222-222222222222",
+                },
+                {
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "created_at": "2026-09-13T09:00:00Z",
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare 33333333-3333-4333-8333-333333333333",
+                },
+            ]
+
+    assert hardware_dispatch.successful_prepare_request_id(
+        Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40
+    ) == "22222222-2222-4222-8222-222222222222"
+
+
+def test_latest_prepare_lookup_fails_closed_when_none_succeeded() -> None:
+    class Api:
+        def runs(self, repository, workflow, ref):
+            return []
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="no successful private prepare run"):
+        hardware_dispatch.successful_prepare_request_id(
+            Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40
+        )

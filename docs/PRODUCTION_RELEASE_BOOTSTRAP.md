@@ -41,3 +41,5 @@ python scripts/release_environment_preflight.py --mode windows-hardware --json-r
 ```
 
 The production release remains blocked until the hosted signer produces a valid signed handoff and the physical runner proves real DOCX/Word/print, PrintService evidence, a real Windows restart/logon with watcher exactly-once behavior, and final uninstall/evidence binding to the exact release SHA/request ID. Hosted/mock tests never substitute for those physical acceptance facts.
+
+`Build Signed Offline Installers` never targets the physical runner in the public repository. Its hardware gate runs on GitHub-hosted Linux under `windows-hardware-dispatch`, resolves the newest successful private `prepare` run for the exact `release_sha`, reuses that correlation UUID, and dispatches the private `verify` phase. If no successful prepare exists, the release fails immediately with instructions to run public **Windows Hardware E2E** in `prepare` mode and perform the real reboot/logon first. This prevents an unprovisioned public self-hosted label from silently queueing a release forever.

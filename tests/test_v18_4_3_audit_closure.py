@@ -129,7 +129,9 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "SIDECAR_AUTHENTICODE.json" in release_workflow
     assert "--output-json verification/release/scanned-pdf-ocr.json" in release_workflow
     assert "verification/release/**" in release_workflow
-    assert "path: .release-gate/**" in release_workflow
+    assert "PRIVATE_HARDWARE_RELEASE_VERDICT.json" in release_workflow
+    assert "--reuse-latest-prepare" in release_workflow
+    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" not in release_workflow
     assert "needs: [windows-hardware-e2e, linux-bundles]" in release_workflow
     assert "Attach artifacts only after signing and hardware E2E" in release_workflow
 

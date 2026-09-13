@@ -204,17 +204,54 @@ def canonical_request_id(value: str) -> str:
     return normalized
 
 
+def successful_prepare_request_id(
+    api: GitHubApi,
+    repository: str,
+    workflow: str,
+    ref: str,
+    release_sha: str,
+) -> str:
+    prefix = f"Dokkomplekt hardware {release_sha} prepare "
+    candidates: list[tuple[dt.datetime, str]] = []
+    for run in api.runs(repository, workflow, ref):
+        if str(run.get("status", "")).strip().lower() != "completed":
+            continue
+        if str(run.get("conclusion", "")).strip().lower() != "success":
+            continue
+        title = str(run.get("display_title", "")).strip()
+        if not title.startswith(prefix):
+            continue
+        raw_request_id = title[len(prefix) :].strip()
+        try:
+            request_id = canonical_request_id(raw_request_id)
+        except RuntimeError:
+            continue
+        created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
+        candidates.append((created, request_id))
+    if not candidates:
+        raise RuntimeError(
+            "no successful private prepare run exists for this exact release_sha; "
+            "run the public Windows Hardware E2E workflow with reboot_phase=prepare, "
+            "perform the real Windows reboot/logon, then retry the release workflow"
+        )
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
 def resolve_request_id(args: argparse.Namespace) -> str:
     provided = str(args.request_id or "").strip()
     if provided:
         return canonical_request_id(provided)
     if args.reboot_phase == "verify":
+        if args.reuse_latest_prepare:
+            return ""
         raise RuntimeError(
-            "verify phase requires --request-id from the successful prepare phase; "
-            "a reboot evidence chain must not silently start a new correlation session"
+            "verify phase requires --request-id from the successful prepare phase, "
+            "or --reuse-latest-prepare to resolve the latest successful prepare for this release_sha"
         )
-    request_id = str(uuid.uuid4())
-    return request_id
+    if args.reuse_latest_prepare:
+        raise RuntimeError("--reuse-latest-prepare is valid only with reboot_phase=verify")
+    return str(uuid.uuid4())
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -236,8 +273,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise RuntimeError("queue_timeout_seconds must be zero or positive")
     if str(args.request_id or "").strip():
         canonical_request_id(str(args.request_id))
-    elif args.reboot_phase == "verify":
-        raise RuntimeError("verify phase requires request_id from the prepare phase")
+        if args.reuse_latest_prepare:
+            raise RuntimeError("--request-id and --reuse-latest-prepare are mutually exclusive")
+    elif args.reboot_phase == "verify" and not args.reuse_latest_prepare:
+        raise RuntimeError("verify phase requires request_id or --reuse-latest-prepare")
+    elif args.reboot_phase == "prepare" and args.reuse_latest_prepare:
+        raise RuntimeError("--reuse-latest-prepare is valid only for verify")
 
 
 def main() -> int:
@@ -251,6 +292,11 @@ def main() -> int:
     parser.add_argument(
         "--request-id",
         help="Correlation UUID. Omit for prepare to generate one; verify must reuse the prepare UUID.",
+    )
+    parser.add_argument(
+        "--reuse-latest-prepare",
+        action="store_true",
+        help="For verify, resolve the newest successful private prepare request UUID for the exact release SHA.",
     )
     parser.add_argument("--token-env", default="DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN")
     parser.add_argument("--poll-seconds", type=int, default=20)
@@ -274,6 +320,18 @@ def main() -> int:
         )
     if bool(target.get("archived")):
         raise RuntimeError("hardware validation repository is archived")
+    if args.reboot_phase == "verify" and args.reuse_latest_prepare:
+        request_id = successful_prepare_request_id(
+            api,
+            args.target_repository,
+            args.workflow,
+            args.target_ref,
+            args.release_sha,
+        )
+        print(
+            f"Resolved successful private prepare correlation: release={args.release_sha} request={request_id}",
+            flush=True,
+        )
 
     started = now_utc()
     inputs = {
@@ -321,9 +379,9 @@ def main() -> int:
             ):
                 failure = (
                     f"private hardware workflow remained in pre-start status {status!r} "
-                    f"for {prestart_seconds}s; verify that the dokkomplekt-runtime self-hosted "
-                    "Windows runner is online and registered, the windows-production-signing "
-                    "environment is approved, and no concurrency gate is blocking the private workflow"
+                    f"for {prestart_seconds}s; verify that the private dokkomplekt-hardware Windows runner is online and registered, "
+                    "the protected private workflow environments are approved, and no concurrency gate "
+                    "is blocking the private workflow"
                 )
                 write_failure_with_cancellation(api, args, request_id, run, report_path, failure)
                 return 1

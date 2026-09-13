@@ -1,6 +1,6 @@
 use crate::data_schema_engine::{UnifiedFieldDefinition, UnifiedFieldKind};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DomainPluginId {
@@ -49,6 +49,64 @@ pub fn plugin_by_id(id: &DomainPluginId) -> DomainPluginV2 {
         .unwrap_or_else(custom_plugin)
 }
 
+/// Canonical evaluation result for one domain-role contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleRequirementResolution {
+    pub required: Vec<String>,
+    pub optional: Vec<String>,
+}
+
+/// Resolve one canonical domain role against flags and values already present.
+///
+/// `DomainPluginV2.required_rules` plus this resolver are the single source of
+/// truth for domain-role requirements. Runtime constructors and scenario
+/// previews must consume this result rather than reimplementing rule matching.
+pub fn resolve_plugin_role_requirements(
+    id: &DomainPluginId,
+    role: &str,
+    flags: &BTreeMap<String, bool>,
+    present_fields: &BTreeSet<String>,
+) -> RoleRequirementResolution {
+    let mut required = BTreeSet::new();
+    let mut optional = BTreeSet::new();
+    for rule in plugin_by_id(id).required_rules {
+        if rule.role != "*" && rule.role != role {
+            continue;
+        }
+        if rule
+            .unless_present
+            .as_ref()
+            .is_some_and(|field| present_fields.contains(field))
+        {
+            continue;
+        }
+        if rule
+            .when_flag
+            .as_ref()
+            .is_some_and(|flag| !flags.get(flag).copied().unwrap_or(false))
+        {
+            optional.insert(rule.field_id);
+            continue;
+        }
+        required.insert(rule.field_id);
+    }
+    optional.retain(|field| !required.contains(field));
+    RoleRequirementResolution {
+        required: required.into_iter().collect(),
+        optional: optional.into_iter().collect(),
+    }
+}
+
+/// Compatibility projection for callers that only need the hard requirements.
+pub fn required_fields_for_plugin_role(
+    id: &DomainPluginId,
+    role: &str,
+    flags: &BTreeMap<String, bool>,
+    present_fields: &BTreeSet<String>,
+) -> Vec<String> {
+    resolve_plugin_role_requirements(id, role, flags, present_fields).required
+}
+
 fn field(
     id: &str,
     title: &str,
@@ -58,7 +116,7 @@ fn field(
     UnifiedFieldDefinition {
         id: id.into(),
         title: title.into(),
-        aliases: aliases.iter().map(|x| x.to_string()).collect(),
+        aliases: aliases.iter().map(|value| value.to_string()).collect(),
         kind,
     }
 }
@@ -258,6 +316,7 @@ fn legal_plugin() -> DomainPluginV2 {
             rule("acceptance_act", "document.number"),
             rule("acceptance_act", "document.date"),
             rule("acceptance_act", "contract.number"),
+            rule("acceptance_act", "contract.date"),
             rule("acceptance_act", "contract.party_a"),
             rule("acceptance_act", "contract.party_b"),
             rule("claim", "document.number"),
@@ -353,6 +412,7 @@ fn hr_plugin() -> DomainPluginV2 {
         ]),
         required_rules: vec![
             rule("employment_contract", "document.date"),
+            rule("employment_contract", "org.name"),
             rule("employment_contract", "employee.name"),
             rule("employment_contract", "employee.position"),
             rule("employment_contract", "employee.hire_date"),
@@ -363,8 +423,10 @@ fn hr_plugin() -> DomainPluginV2 {
             rule("employment_order", "employee.position"),
             rule("employment_order", "employee.hire_date"),
             rule("personal_data_consent", "document.date"),
+            rule("personal_data_consent", "org.name"),
             rule("personal_data_consent", "employee.name"),
             rule("familiarization_sheet", "document.date"),
+            rule("familiarization_sheet", "org.name"),
             rule("familiarization_sheet", "employee.name"),
             rule("familiarization_sheet", "employee.position"),
         ],
@@ -418,9 +480,13 @@ fn education_plugin() -> DomainPluginV2 {
             ),
         ]),
         required_rules: vec![
-            rule("certificate", "education.student_name"),
+            rule("certificate", "document.number"),
             rule("certificate", "document.date"),
+            rule("certificate", "education.student_name"),
+            rule("certificate", "education.institution"),
+            rule("grade_report", "document.date"),
             rule("grade_report", "education.student_name"),
+            rule("grade_report", "education.group"),
             rule("grade_report", "education.course"),
             rule("grade_report", "education.grade"),
         ],

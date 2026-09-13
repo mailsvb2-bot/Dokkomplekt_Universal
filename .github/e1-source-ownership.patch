@@ -1,0 +1,229 @@
+diff --git a/crates/dokkomplekt-core/src/source_parser.rs b/crates/dokkomplekt-core/src/source_parser.rs
+index c2376a0..cd3ffd8 100644
+--- a/crates/dokkomplekt-core/src/source_parser.rs
++++ b/crates/dokkomplekt-core/src/source_parser.rs
+@@ -1276,6 +1276,37 @@ fn find_labeled_value(text: &str, labels: &[&str], multiline: bool) -> Option<St
+     None
+ }
+ 
++fn starts_with_label_boundary(lower_line: &str, raw_label: &str) -> bool {
++    let label = raw_label.trim().to_lowercase();
++    if label.is_empty() {
++        return false;
++    }
++    let mut line_chars = lower_line.chars();
++    for expected in label.chars() {
++        if line_chars.next() != Some(expected) {
++            return false;
++        }
++    }
++    line_chars
++        .next()
++        .is_none_or(|ch| !ch.is_alphanumeric() && ch != '_')
++}
++
++fn registered_field_labels() -> &'static [String] {
++    static LABELS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
++    LABELS.get_or_init(|| {
++        let mut labels = Vec::new();
++        for field in crate::field_registry::all_fields() {
++            labels.push(field.title_ru);
++            labels.extend(field.aliases);
++        }
++        labels.retain(|label| !label.trim().is_empty());
++        labels.sort_by_key(|label| label.to_lowercase());
++        labels.dedup_by(|left, right| left.to_lowercase() == right.to_lowercase());
++        labels
++    })
++}
++
+ fn looks_like_known_label(line: &str) -> bool {
+     let lower = line.to_lowercase();
+     if [
+@@ -1293,16 +1324,11 @@ fn looks_like_known_label(line: &str) -> bool {
+         "email",
+     ]
+     .iter()
+-    .any(|label| {
+-        lower.starts_with(label)
+-            && lower[label.len()..]
+-                .chars()
+-                .next()
+-                .is_none_or(|ch| ch.is_whitespace() || matches!(ch, ':' | '№' | '-' | '—'))
+-    }) {
++    .any(|label| starts_with_label_boundary(&lower, label))
++    {
+         return true;
+     }
+-    generic_rules()
++    if generic_rules()
+         .into_iter()
+         .chain(medical_rules())
+         .any(|rule| {
+@@ -1312,6 +1338,12 @@ fn looks_like_known_label(line: &str) -> bool {
+                         || lower.contains(':'))
+             })
+         })
++    {
++        return true;
++    }
++    registered_field_labels()
++        .iter()
++        .any(|label| starts_with_label_boundary(&lower, label))
+ }
+ 
+ fn normalize_field_value(field: &str, value: &str, default_year: i32) -> Option<String> {
+@@ -2182,6 +2214,30 @@ mod tests {
+         assert_eq!(case.get("subject.phone"), None);
+     }
+ 
++    #[test]
++    fn accounting_service_act_source_keeps_registered_labels_out_of_multiline_subject() {
++        let text = concat!(
++            "АКТ ОКАЗАННЫХ УСЛУГ № E1-17 от 13.09.2026\n",
++            "Исполнитель: ООО «Альфа»\n",
++            "Заказчик: ООО «Бета»\n",
++            "Договор № D-77\n",
++            "Дата договора: 01.09.2026\n",
++            "Предмет договора: Консультационные услуги\n",
++            "Сумма: 125 000,00"
++        );
++        let (case, _) = parse_source_text(text, 2026);
++        assert_eq!(case.get("document.number"), Some("E1-17"));
++        assert_eq!(case.get("document.date"), Some("13.09.2026"));
++        assert_eq!(case.get("org.name"), Some("ООО «Альфа»"));
++        assert_eq!(case.get("counterparty.name"), Some("ООО «Бета»"));
++        assert_eq!(case.get("contract.number"), Some("D-77"));
++        assert_eq!(case.get("contract.date"), Some("01.09.2026"));
++        assert_eq!(case.get("contract.subject"), Some("Консультационные услуги"));
++        assert_eq!(case.get("amount.total"), Some("125\u{00A0}000,00"));
++        assert_eq!(case.get("amount.currency"), None);
++        assert_eq!(case.get("amount.vat"), None);
++    }
++
+     #[test]
+     fn invoice_header_and_requisites_remain_role_separated() {
+         let text = "СЧЁТ НА ОПЛАТУ № 88 от 21.07.2026
+diff --git a/tests/installer/windows_e1_accounting_contract.ps1 b/tests/installer/windows_e1_accounting_contract.ps1
+index 1228b35..b6a18a1 100644
+--- a/tests/installer/windows_e1_accounting_contract.ps1
++++ b/tests/installer/windows_e1_accounting_contract.ps1
+@@ -168,6 +168,19 @@ function Set-UiValue {
+   [System.Windows.Forms.SendKeys]::SendWait($Value)
+ }
+ 
++function Get-UiValue {
++  param([Parameter(Mandatory = $true)]$Element)
++  if (-not $Element.Current.IsValuePatternAvailable) { throw 'UI control does not expose ValuePattern.' }
++  return [string]$Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
++}
++
++function Normalize-UiValue {
++  param([AllowNull()][string]$Value)
++  if ($null -eq $Value) { return '' }
++  $normalized = $Value -replace [char]0x00A0, ' '
++  return ([regex]::Replace($normalized.Trim(), '\s+', ' '))
++}
++
+ function Submit-OpenFileDialog {
+   param([Parameter(Mandatory = $true)]$Dialog)
+   $open = Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')
+@@ -310,6 +323,30 @@ foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-va
+     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $requiredMissingId)
+   )
+   if ($null -eq $control) { throw "E1 Accounting preflight did not expose required missing field: $requiredMissingId" }
++  if (-not [string]::IsNullOrWhiteSpace((Get-UiValue -Element $control))) {
++    throw "E1 Accounting source unexpectedly supplied intentionally missing field: $requiredMissingId"
++  }
++}
++
++# Source-owned values must come from the actual source document. The installed
++# proof is not allowed to repair these values through UI automation. When the
++# backend exposes a satisfied prompt, verify its current value but never write it.
++$sourceOwnedValues = [ordered]@{
++  'document.number' = 'E1-17'; 'document.date' = '13.09.2026'; 'org.name' = 'ООО «Альфа»';
++  'counterparty.name' = 'ООО «Бета»'; 'contract.number' = 'D-77'; 'contract.date' = '01.09.2026';
++  'contract.subject' = 'Консультационные услуги'; 'amount.total' = '125 000,00'
++}
++foreach ($fieldId in $sourceOwnedValues.Keys) {
++  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
++  $control = (Find-LiveAppWindow).FindFirst(
++    [System.Windows.Automation.TreeScope]::Descendants,
++    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
++  )
++  if ($null -ne $control) {
++    $actual = Normalize-UiValue -Value (Get-UiValue -Element $control)
++    $expected = Normalize-UiValue -Value $sourceOwnedValues[$fieldId]
++    if ($actual -ne $expected) { throw "E1 source-owned prompt drift for $fieldId`: expected '$expected', got '$actual'" }
++  }
+ }
+ 
+ $docsBeforeBlocked = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $accountingOutputName -ErrorAction SilentlyContinue).Count
+@@ -338,19 +375,17 @@ $receiptsAfterBlocked = if (Test-Path -LiteralPath $completionReceiptRoot -PathT
+ if ($receiptsAfterBlocked -ne $receiptsBeforeBlocked) { throw 'E1 faulty Accounting draft produced a committed receipt.' }
+ Write-Host 'E1 ADVERSARIAL PASS: incomplete Accounting draft produced 0 DOCX and 0 committed receipts.'
+ 
+-$promptValues = [ordered]@{
+-  'document.number' = 'E1-17'; 'document.date' = '13.09.2026'; 'org.name' = 'ООО «Альфа»';
+-  'counterparty.name' = 'ООО «Бета»'; 'contract.number' = 'D-77'; 'contract.date' = '01.09.2026';
+-  'contract.subject' = 'Консультационные услуги'; 'amount.total' = '125 000,00';
++$manualPromptValues = [ordered]@{
+   'amount.currency' = 'RUB'; 'amount.vat' = '20 833,33'
+ }
+-foreach ($fieldId in $promptValues.Keys) {
++foreach ($fieldId in $manualPromptValues.Keys) {
+   $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+   $control = (Find-LiveAppWindow).FindFirst(
+     [System.Windows.Automation.TreeScope]::Descendants,
+     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+   )
+-  if ($null -ne $control) { Set-UiValue -Element $control -Value $promptValues[$fieldId] }
++  if ($null -eq $control) { throw "E1 missing manual completion control: $fieldId" }
++  Set-UiValue -Element $control -Value $manualPromptValues[$fieldId]
+ }
+ Invoke-UiActionPhysicallyFromProbe -Description 'complete Accounting Create' -ActionProbe {
+   $window = Find-LiveAppWindow
+@@ -358,6 +393,24 @@ Invoke-UiActionPhysicallyFromProbe -Description 'complete Accounting Create' -Ac
+   Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+ }
+ 
++# The first adversarial attempt intentionally left an error banner visible.
++# Require that stale UI state to clear before treating any later banner as a
++# failure of the completed generation attempt.
++$staleDeadline = [DateTime]::UtcNow.AddSeconds(15)
++$staleFailure = $null
++do {
++  $window = Find-LiveAppWindow
++  $staleFailure = if ($null -eq $window) { $null } else {
++    $window.FindFirst(
++      [System.Windows.Automation.TreeScope]::Descendants,
++      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Документы не созданы')
++    )
++  }
++  if ($null -eq $staleFailure) { break }
++  Start-Sleep -Milliseconds 100
++} while ([DateTime]::UtcNow -lt $staleDeadline)
++if ($null -ne $staleFailure) { throw 'E1 stale blocked-draft error did not clear after completed preflight submission.' }
++
+ $deadline = [DateTime]::UtcNow.AddSeconds(60)
+ $accountingDoc = $null
+ while ($null -eq $accountingDoc -and [DateTime]::UtcNow -lt $deadline) {
+diff --git a/tests/test_e1_windows_installed_accounting_contract.py b/tests/test_e1_windows_installed_accounting_contract.py
+index 7dc8a3c..218738b 100644
+--- a/tests/test_e1_windows_installed_accounting_contract.py
++++ b/tests/test_e1_windows_installed_accounting_contract.py
+@@ -14,6 +14,14 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
+     assert "Название документа для service_act.docx" in source
+     assert "workflow-amount-currency" in source
+     assert "workflow-amount-vat" in source
++    assert "$sourceOwnedValues = [ordered]@{" in source
++    assert "E1 source-owned prompt drift" in source
++    assert "$manualPromptValues = [ordered]@{" in source
++    manual_block = source[source.index("$manualPromptValues = [ordered]@{"):source.index("foreach ($fieldId in $manualPromptValues.Keys)")]
++    assert "amount.currency" in manual_block and "amount.vat" in manual_block
++    for forbidden in ("document.number", "document.date", "org.name", "counterparty.name", "contract.number", "contract.date", "contract.subject", "amount.total"):
++        assert forbidden not in manual_block
++    assert "stale blocked-draft error did not clear" in source
+     assert "faulty Accounting draft produced a physical DOCX" in source
+     assert "faulty Accounting draft produced a committed receipt" in source
+     assert "word/document.xml" in source

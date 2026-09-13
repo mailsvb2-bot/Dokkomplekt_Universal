@@ -70,7 +70,8 @@ class PilotExpansionContracts(unittest.TestCase):
             for token in tokens:
                 self.assertIn(token, source, relative)
         pipeline = self.text("crates/dokkomplekt-core/src/universal_pipeline.rs")
-        self.assertIn("nonmedical_role_fields", pipeline)
+        self.assertNotIn("nonmedical_role_fields", pipeline)
+        self.assertIn("required_fields_for_plugin_role", pipeline)
         self.assertIn("UniversalDomain::Accounting", pipeline)
 
     def test_onboarding_has_dry_run_and_organization_review_warning(self) -> None:

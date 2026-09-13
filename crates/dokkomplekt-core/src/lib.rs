@@ -89,7 +89,9 @@ pub use diary_professional_records::{
 pub use document_generation::*;
 pub use document_routing::*;
 pub use domain_plugin_layer::{
-    builtin_domain_plugins_v2, plugin_by_id, DomainPluginId, DomainPluginV2, RequiredFieldRuleV2,
+    builtin_domain_plugins_v2, plugin_by_id, required_fields_for_plugin_role,
+    resolve_plugin_role_requirements, DomainPluginId, DomainPluginV2, RequiredFieldRuleV2,
+    RoleRequirementResolution,
 };
 pub use domain_profiles::*;
 pub use domains::accounting::AccountingProfile;

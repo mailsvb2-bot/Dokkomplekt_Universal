@@ -38,11 +38,15 @@ def test_committed_generation_receipt_replay_is_idempotent_and_conflicts_fail_cl
     end = source.index("fn write_receipt", start)
     persist = source[start:end]
 
-    assert "if path.exists()" in persist
+    assert "match std::fs::symlink_metadata(&path)" in persist
+    assert "publication_metadata_is_link_or_reparse" in persist
+    assert "!metadata.is_file()" in persist
+    assert "ErrorKind::NotFound" in persist
     assert "completion_receipts_match_identity" in persist
     assert "return Ok(path);" in persist
     assert "Конфликт committed GenerationReceipt" in persist
-    assert persist.index("if path.exists()") < persist.index("crate::atomic_write_file")
+    assert persist.index("match std::fs::symlink_metadata(&path)") < persist.index("crate::atomic_write_file")
+    assert persist.index("completion_receipts_match_identity") < persist.index("crate::atomic_write_file")
 
 
 def test_ui_success_boundary_requires_committed_generation_receipt_before_journal_cleanup() -> None:

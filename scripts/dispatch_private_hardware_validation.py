@@ -215,17 +215,20 @@ def canonical_request_id(value: str) -> str:
     return normalized
 
 
-def successful_prepare_run(
+def find_successful_phase_run(
     api: GitHubApi,
     repository: str,
     workflow: str,
     ref: str,
     release_sha: str,
+    phase: str,
     *,
     required_request_id: str | None = None,
-) -> tuple[str, int]:
-    prefix = f"Dokkomplekt hardware {release_sha} prepare "
-    candidates: list[tuple[dt.datetime, str, int]] = []
+) -> tuple[str, dict[str, Any]] | None:
+    if phase not in {"prepare", "verify"}:
+        raise RuntimeError("phase must be prepare or verify")
+    prefix = f"Dokkomplekt hardware {release_sha} {phase} "
+    candidates: list[tuple[dt.datetime, str, dict[str, Any]]] = []
     for run in api.runs(repository, workflow, ref):
         if str(run.get("status", "")).strip().lower() != "completed":
             continue
@@ -237,26 +240,67 @@ def successful_prepare_run(
         raw_request_id = title[len(prefix) :].strip()
         try:
             request_id = canonical_request_id(raw_request_id)
-        except RuntimeError:
+            int(run.get("id"))
+        except (RuntimeError, TypeError, ValueError):
             continue
         if required_request_id is not None and request_id != required_request_id:
             continue
-        try:
-            run_id = int(run.get("id"))
-        except (TypeError, ValueError):
-            continue
         created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
-        candidates.append((created, request_id, run_id))
+        candidates.append((created, request_id, run))
     if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, request_id, run = candidates[0]
+    return request_id, run
+
+
+def successful_prepare_run(
+    api: GitHubApi,
+    repository: str,
+    workflow: str,
+    ref: str,
+    release_sha: str,
+    *,
+    required_request_id: str | None = None,
+) -> tuple[str, int]:
+    match = find_successful_phase_run(
+        api,
+        repository,
+        workflow,
+        ref,
+        release_sha,
+        "prepare",
+        required_request_id=required_request_id,
+    )
+    if match is None:
         suffix = "" if required_request_id is None else f" and request_id={required_request_id}"
         raise RuntimeError(
             "no successful private prepare run exists for this exact release_sha" + suffix + "; "
             "run the public Windows Hardware E2E workflow with reboot_phase=prepare, "
             "perform the real Windows reboot/logon, then retry the release workflow"
         )
-    candidates.sort(reverse=True)
-    _, request_id, run_id = candidates[0]
-    return request_id, run_id
+    request_id, run = match
+    return request_id, int(run["id"])
+
+
+def successful_verify_run(
+    api: GitHubApi,
+    repository: str,
+    workflow: str,
+    ref: str,
+    release_sha: str,
+    request_id: str,
+) -> dict[str, Any] | None:
+    match = find_successful_phase_run(
+        api,
+        repository,
+        workflow,
+        ref,
+        release_sha,
+        "verify",
+        required_request_id=request_id,
+    )
+    return None if match is None else match[1]
 
 
 def resolve_request_id(args: argparse.Namespace) -> str:
@@ -357,6 +401,25 @@ def main() -> int:
             f"request={request_id} prepare_run_id={args.prepare_run_id}",
             flush=True,
         )
+        existing_verify = successful_verify_run(
+            api,
+            args.target_repository,
+            args.workflow,
+            args.target_ref,
+            args.release_sha,
+            request_id,
+        )
+        if existing_verify is not None:
+            report_path = Path(args.json_report)
+            report = run_report(args, request_id, existing_verify, result="success")
+            report["reused_existing_success"] = True
+            write_report(report_path, report)
+            print(
+                "PRIVATE HARDWARE VALIDATION REUSED: "
+                f"{existing_verify.get('html_url') or existing_verify.get('id')}",
+                flush=True,
+            )
+            return 0
 
     started = now_utc()
     inputs = {

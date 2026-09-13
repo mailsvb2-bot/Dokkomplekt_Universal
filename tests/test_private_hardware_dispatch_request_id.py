@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
+import sys
 import uuid
 
 import pytest
@@ -159,3 +161,105 @@ def test_explicit_verify_resolves_matching_prepare_run_id() -> None:
         Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40,
         required_request_id=request_id,
     ) == (request_id, 4242)
+
+
+def test_successful_verify_lookup_is_bound_to_exact_prepare_request() -> None:
+    request_id = "01234567-89ab-4def-8123-456789abcdef"
+
+    class Api:
+        def runs(self, repository, workflow, ref):
+            return [
+                {
+                    "id": 5001,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2026-09-13T08:30:00Z",
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id,
+                    "html_url": "https://example.invalid/actions/runs/5001",
+                },
+                {
+                    "id": 5002,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2026-09-13T09:00:00Z",
+                    "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify 11111111-1111-4111-8111-111111111111",
+                },
+            ]
+
+    run = hardware_dispatch.successful_verify_run(
+        Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40, request_id
+    )
+    assert run is not None
+    assert run["id"] == 5001
+
+
+def test_main_reuses_successful_verify_without_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    request_id = "01234567-89ab-4def-8123-456789abcdef"
+    prepare = {
+        "id": 4242,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-09-13T08:00:00Z",
+        "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare " + request_id,
+        "html_url": "https://example.invalid/actions/runs/4242",
+    }
+    verify = {
+        "id": 4343,
+        "run_number": 99,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-09-13T08:45:00Z",
+        "display_title": "Dokkomplekt hardware " + "a" * 40 + " verify " + request_id,
+        "html_url": "https://example.invalid/actions/runs/4343",
+    }
+
+    class FakeApi:
+        dispatch_calls = []
+
+        def __init__(self, token: str) -> None:
+            assert token == "secret-token"
+
+        def repository(self, full_name: str):
+            return {"private": True, "archived": False}
+
+        def runs(self, repository: str, workflow: str, ref: str):
+            return [prepare, verify]
+
+        def dispatch(self, repository: str, workflow: str, ref: str, inputs):
+            self.dispatch_calls.append((repository, workflow, ref, inputs))
+
+    report = tmp_path / "reuse.json"
+    monkeypatch.setattr(hardware_dispatch, "GitHubApi", FakeApi)
+    monkeypatch.setenv("DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN", "secret-token")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(MODULE_PATH),
+            "--source-repository",
+            "mailsvb2-bot/Dokkomplekt_Universal",
+            "--target-repository",
+            "mailsvb2-bot/Dokkomplekt_Hardware_Validation",
+            "--workflow",
+            "windows-hardware-e2e.yml",
+            "--target-ref",
+            "main",
+            "--release-sha",
+            "a" * 40,
+            "--reboot-phase",
+            "verify",
+            "--reuse-latest-prepare",
+            "--json-report",
+            str(report),
+        ],
+    )
+
+    assert hardware_dispatch.main() == 0
+    assert FakeApi.dispatch_calls == []
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["result"] == "success"
+    assert payload["reused_existing_success"] is True
+    assert payload["request_id"] == request_id
+    assert payload["prepare_run_id"] == 4242
+    assert payload["run_id"] == 4343
+    assert payload["conclusion"] == "success"

@@ -106,14 +106,26 @@ pub(crate) fn commit_atomic_temp_file(temp: &Path, destination: &Path) -> Result
         .parent()
         .ok_or_else(|| "У файла назначения нет родительской папки.".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    if let Ok(metadata) = std::fs::symlink_metadata(destination) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let destination_exists = match std::fs::symlink_metadata(destination) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "Небезопасный файл назначения не заменён: {}",
+                    destination.display()
+                ));
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
             return Err(format!(
-                "Небезопасный файл назначения не заменён: {}",
+                "Не удалось безопасно проверить файл назначения {}: {error}",
                 destination.display()
             ));
         }
-    }
+    };
+    #[cfg(not(target_os = "windows"))]
+    let _ = destination_exists;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::ffi::OsStrExt as _;
@@ -130,13 +142,12 @@ pub(crate) fn commit_atomic_temp_file(temp: &Path, destination: &Path) -> Result
             .encode_wide()
             .chain(std::iter::once(0))
             .collect::<Vec<_>>();
-        let moved = unsafe {
-            MoveFileExW(
-                source.as_ptr(),
-                target.as_ptr(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
+        let move_flags = if destination_exists {
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        } else {
+            MOVEFILE_WRITE_THROUGH
         };
+        let moved = unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), move_flags) };
         if moved == 0 {
             return Err(format!(
                 "Не удалось атомарно заменить {}: {}",

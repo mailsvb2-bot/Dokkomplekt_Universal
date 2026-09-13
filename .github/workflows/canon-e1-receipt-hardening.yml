@@ -1,0 +1,198 @@
+name: Canon E1 receipt trust-boundary hardening one-shot
+
+on:
+  push:
+    branches:
+      - canon-v2/e1-accounting-pipeline
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply exact E1 receipt hardening patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src-tauri/src/generation_publication.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''fn persist_generation_completion_receipt(
+              app_data: &Path,
+              publication: &PublicationReceipt,
+          ) -> Result<PathBuf, String> {
+              let receipt = completion_receipt_from_publication(publication)?;
+              let path = app_data
+                  .join(COMPLETION_RECEIPT_DIR)
+                  .join(format!("{}.json", receipt.receipt_id));
+              if path.exists() {
+                  let existing_bytes = std::fs::read(&path).map_err(|error| {
+                      format!("Не удалось прочитать существующий committed GenerationReceipt: {error}")
+                  })?;
+                  let existing = serde_json::from_slice::<GenerationCompletionReceipt>(&existing_bytes)
+                      .map_err(|error| {
+                          format!("Существующий committed GenerationReceipt повреждён: {error}")
+                      })?;
+                  if !completion_receipts_match_identity(&existing, &receipt) {
+                      return Err("Конфликт committed GenerationReceipt: существующая квитанция с тем же identity не соответствует опубликованному результату.".into());
+                  }
+                  return Ok(path);
+              }
+              let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
+              crate::atomic_write_file(&path, &bytes).map_err(|error| {
+                  format!("Не удалось зафиксировать committed GenerationReceipt: {error}")
+              })?;
+              Ok(path)
+          }
+          '''
+          new = '''fn persist_generation_completion_receipt(
+              app_data: &Path,
+              publication: &PublicationReceipt,
+          ) -> Result<PathBuf, String> {
+              let receipt = completion_receipt_from_publication(publication)?;
+              std::fs::create_dir_all(app_data).map_err(|error| {
+                  format!("Не удалось подготовить app-data для committed GenerationReceipt: {error}")
+              })?;
+              let receipt_dir =
+                  crate::publication_service_directory(app_data, COMPLETION_RECEIPT_DIR, true)?;
+              let path = receipt_dir.join(format!("{}.json", receipt.receipt_id));
+              match std::fs::symlink_metadata(&path) {
+                  Ok(metadata) => {
+                      if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+                          return Err(format!(
+                              "Committed GenerationReceipt имеет небезопасный тип файла: {}",
+                              path.display()
+                          ));
+                      }
+                      let existing_bytes = std::fs::read(&path).map_err(|error| {
+                          format!("Не удалось прочитать существующий committed GenerationReceipt: {error}")
+                      })?;
+                      let existing = serde_json::from_slice::<GenerationCompletionReceipt>(&existing_bytes)
+                          .map_err(|error| {
+                              format!("Существующий committed GenerationReceipt повреждён: {error}")
+                          })?;
+                      if !completion_receipts_match_identity(&existing, &receipt) {
+                          return Err("Конфликт committed GenerationReceipt: существующая квитанция с тем же identity не соответствует опубликованному результату.".into());
+                      }
+                      return Ok(path);
+                  }
+                  Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                  Err(error) => {
+                      return Err(format!(
+                          "Не удалось безопасно проверить committed GenerationReceipt {}: {error}",
+                          path.display()
+                      ));
+                  }
+              }
+              let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
+              crate::atomic_write_file(&path, &bytes).map_err(|error| {
+                  format!("Не удалось зафиксировать committed GenerationReceipt: {error}")
+              })?;
+              Ok(path)
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one old receipt writer block, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          marker = '''    #[test]
+              fn only_schema_v1_may_omit_publication_phase() {
+          '''
+          tests = '''    #[cfg(unix)]
+              #[test]
+              fn committed_generation_receipt_never_follows_symlinked_service_directory() {
+                  use std::os::unix::fs::symlink;
+
+                  let root = temp_root("completion-receipt-dir-symlink");
+                  let external = temp_root("completion-receipt-dir-external");
+                  std::fs::create_dir_all(&root).unwrap();
+                  std::fs::create_dir_all(&external).unwrap();
+                  symlink(&external, root.join(COMPLETION_RECEIPT_DIR)).unwrap();
+                  let publication = receipt_fixture(RECEIPT_SCHEMA, Some(PublicationPhase::Published));
+
+                  let error = persist_generation_completion_receipt(&root, &publication)
+                      .expect_err("symlinked completion receipt directory must fail closed");
+                  assert!(error.contains("небезопасный тип"));
+                  assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
+
+                  let _ = std::fs::remove_dir_all(root);
+                  let _ = std::fs::remove_dir_all(external);
+              }
+
+              #[cfg(unix)]
+              #[test]
+              fn committed_generation_receipt_never_follows_symlinked_receipt_file() {
+                  use std::os::unix::fs::symlink;
+
+                  let root = temp_root("completion-receipt-file-symlink");
+                  let external = temp_root("completion-receipt-file-external");
+                  std::fs::create_dir_all(&root).unwrap();
+                  std::fs::create_dir_all(&external).unwrap();
+                  let receipt_dir = root.join(COMPLETION_RECEIPT_DIR);
+                  std::fs::create_dir_all(&receipt_dir).unwrap();
+                  let publication = receipt_fixture(RECEIPT_SCHEMA, Some(PublicationPhase::Published));
+                  let receipt = completion_receipt_from_publication(&publication).unwrap();
+                  let external_file = external.join("outside.json");
+                  std::fs::write(&external_file, b"outside must stay untouched").unwrap();
+                  symlink(
+                      &external_file,
+                      receipt_dir.join(format!("{}.json", receipt.receipt_id)),
+                  )
+                  .unwrap();
+
+                  let error = persist_generation_completion_receipt(&root, &publication)
+                      .expect_err("symlinked committed receipt file must fail closed");
+                  assert!(error.contains("небезопасный тип файла"));
+                  assert_eq!(
+                      std::fs::read(&external_file).unwrap(),
+                      b"outside must stay untouched"
+                  );
+
+                  let _ = std::fs::remove_dir_all(root);
+                  let _ = std::fs::remove_dir_all(external);
+              }
+
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit(f'expected exactly one test insertion marker, found {text.count(marker)}')
+          text = text.replace(marker, tests + marker, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+      - name: Install Linux Tauri test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Run committed receipt regression tests
+        shell: bash
+        run: cargo test --locked -p dokkomplekt-tauri committed_generation_receipt -- --test-threads=1
+      - name: Canonicalize source manifest and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/canon-e1-receipt-hardening.yml
+          python scripts/verify_source_manifest.py --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          python scripts/verify_source_manifest.py
+          git diff --check
+          git diff --name-only | sort > /tmp/changed-files.txt
+          printf '%s\n' '.github/workflows/canon-e1-receipt-hardening.yml' 'SOURCE_MANIFEST_SHA256.txt' 'src-tauri/src/generation_publication.rs' | sort > /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/changed-files.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A .github/workflows/canon-e1-receipt-hardening.yml SOURCE_MANIFEST_SHA256.txt src-tauri/src/generation_publication.rs
+          git commit -m 'E1: harden committed receipt trust boundary'
+          git push origin HEAD:canon-v2/e1-accounting-pipeline

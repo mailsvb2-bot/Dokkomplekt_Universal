@@ -1,38 +1,47 @@
 # Production release bootstrap
 
-A public production release is intentionally blocked until both Windows self-hosted runners are provisioned.
+A public production release is intentionally fail-closed until two independent domains are ready: the protected GitHub-hosted signing environment and the single physical Windows hardware-evidence runner. There is no production `dokkomplekt-runtime` self-hosted signing runner.
 
-## Runtime/signing runner
+## 1. Protected hosted build/signing domain
 
-Required labels: `self-hosted`, `Windows`, `X64`, `dokkomplekt-runtime`.
+`windows-production-signing` belongs to the private `mailsvb2-bot/Dokkomplekt_Hardware_Validation` workflow. Its `prepare` run is the **only Windows release producer**: it uses GitHub-hosted `windows-latest` to build/sign the canonical handoff that the physical machine tests and that the public release later publishes. The environment must provide the real production trust anchors and immutable HTTPS delivery endpoints:
 
-Configure repository secrets and variables used by `build-installers.yml`:
+- compile-time Ed25519 public keys: `DOKKOMPLEKT_GATE_PUBKEY_B64`, `DOKKOMPLEKT_LICENSE_PUBKEY_B64`, `DOKKOMPLEKT_UPDATE_PUBKEY_B64`, `DOKKOMPLEKT_THRESHOLD_PUBKEY_B64`, `DOKKOMPLEKT_REFDATA_PUBKEY_B64`;
+- application delivery endpoints: `DOKKOMPLEKT_UPDATE_MANIFEST_URL`, `DOKKOMPLEKT_REFDATA_URL`, `DOKKOMPLEKT_COMPONENTS_CATALOG_URL`, `DOKKOMPLEKT_COMPONENTS_BASE_URL`;
+- approved core-runtime verification: `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64`, `DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64`, `DOKKOMPLEKT_RUNTIME_BUNDLE_URL`, `DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL`, `DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL`, `DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL`;
+- Authenticode policy: `DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND=certificate-store`, `DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT`, `DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER`, `DOKKOMPLEKT_TIMESTAMP_SERVER`;
+- protected signing secrets used only by the steps that require them: `DOKKOMPLEKT_GATE_PRIVATE_KEY_B64`, `DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64`, `DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64`.
 
-- compile-time public trust anchors: `DOKKOMPLEKT_GATE_PUBKEY_B64`, `DOKKOMPLEKT_LICENSE_PUBKEY_B64`, `DOKKOMPLEKT_UPDATE_PUBKEY_B64`, `DOKKOMPLEKT_THRESHOLD_PUBKEY_B64`, `DOKKOMPLEKT_REFDATA_PUBKEY_B64` and `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64`;
-- real HTTPS endpoints: `DOKKOMPLEKT_UPDATE_MANIFEST_URL`, `DOKKOMPLEKT_REFDATA_URL`, `DOKKOMPLEKT_COMPONENTS_CATALOG_URL` and `DOKKOMPLEKT_COMPONENTS_BASE_URL`;
-- private signing material: the Authenticode PFX/password, runtime-signing key, update-signing key and gate-signing key;
-- timestamp server and an absolute runner-owned sidecar manifest path.
+The production Authenticode private key must remain non-exportable in an approved HSM/KSP/CSP provider. The legacy PFX backend in `scripts/sign_windows_release.ps1` is retained only for non-production compatibility and is rejected when `DOKKOMPLEKT_RELEASE_MODE=production`.
 
-The manifest must pin every offline component by SHA-256 and signature. Public trust anchors and URLs are present during compilation. Private keys are scoped only to the exact signing/preflight step that needs them; they are not exposed to checkout, dependency installation, tests or ordinary build steps. Every third-party GitHub Action is pinned by a full commit SHA.
+The repository does not manufacture or upload an Authenticode private key. A reviewed provider-specific provisioning/authentication integration must make the approved certificate available to the ephemeral runner as `Cert:\CurrentUser\My` before signing. The workflow verifies the actual certificate, provider and non-exportability with `scripts/sign_windows_release.ps1 -VerifyCertificateOnly` before it downloads the runtime or performs an expensive production build. Merely setting a thumbprint/provider variable is not sufficient.
 
-Run the public production-build preflight before any platform build:
+The hosted environment is checked in layers:
 
-```powershell
-python scripts/release_environment_preflight.py --mode production-build --json-report verification/release/production-build-preflight.json
+```text
+scripts/release_environment_preflight.py --mode production-build
+scripts/verify_windows_hosted_signing_runner.py
+scripts/sign_windows_release.ps1 -VerifyCertificateOnly
 ```
 
-Run locally on the signing runner before enabling Windows releases:
+The first validates public compile-time anchors/endpoints, the second validates the GitHub-hosted trust boundary and signing policy, and the third proves that the real certificate/private-key provider is actually usable. The retired `windows-runtime` preflight mode is intentionally fail-closed so old two-runner/PFX automation cannot silently become a second production path.
 
-```powershell
-python scripts/release_environment_preflight.py --mode windows-runtime --json-report verification/release/runtime-preflight.json
-```
+The approved offline runtime is the bounded `core` profile: Tesseract, Poppler, LibreOffice, SumatraPDF and 7-Zip. The semantic runtime/model is not embedded in the stock core installer and remains a separately governed optional component. Runtime bytes must be immutable, supply-chain locked and bound to both the runtime signature and independent offline-composition approval.
 
-## Hardware runner
+## 2. Physical Windows hardware-evidence domain
 
-Required labels: `self-hosted`, `Windows`, `X64`, `dokkomplekt-hardware`. Install licensed Microsoft Word, configure a dedicated test printer and spooler logging, and reserve an absolute persistent path for two-boot watcher evidence.
+The only required self-hosted Windows role is `dokkomplekt-hardware` in the private hardware-validation repository. It must be an interactive Windows host with licensed Microsoft Word, a real dedicated printer queue, PrintService logging and persistent storage for prepare -> real restart/logon -> verify evidence.
+
+The hardware runner must not receive production signing private keys or Authenticode provisioning material. Its configuration is limited to hardware/public-verification inputs such as `DOKKOMPLEKT_TEST_PRINTER`, `DOKKOMPLEKT_REBOOT_EVIDENCE_PATH`, `DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT` and the public runtime verification key required by the signed handoff.
+
+Its local environment contract remains:
 
 ```powershell
 python scripts/release_environment_preflight.py --mode windows-hardware --json-report verification/release/hardware-preflight.json
 ```
 
-The release workflow remains fail-closed: no EXE is attached to a GitHub release until Authenticode verification, OCR fixture execution, real Word/printing checks, watcher reboot evidence, and Linux bundle checks all pass.
+The production release remains blocked until private `prepare` produces a valid signed handoff, the physical runner prepares the reboot using that handoff, and private `verify` reuses **the exact same artifact from the prepare run** after the real restart/logon. A completed successful `verify` for the exact release SHA and request UUID is an immutable verdict: subsequent release retries reuse that run and its evidence instead of dispatching a second verify against already-consumed reboot state. The public publisher then downloads that exact handoff plus the verify evidence, re-verifies the handoff signature/file inventory, and publishes only its `release-installers`, `release-components` and `release-runtime` bytes. Hosted/mock tests never substitute for those physical acceptance facts.
+
+Protected public environment `windows-hardware-dispatch` therefore carries only the private-repository dispatch/download token plus the non-secret `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64` needed to re-verify the returned handoff. It carries no Authenticode or handoff private keys.
+
+`Build Signed Offline Installers` never builds a second Windows installer and never targets the physical runner in the public repository. Its hardware gate runs on GitHub-hosted Linux under `windows-hardware-dispatch`, resolves the newest successful private `prepare` run for the exact `release_sha`, reuses both that correlation UUID and prepare run ID, dispatches private `verify`, downloads the exact prepare handoff and verify evidence, and publishes only those validated bytes. If no successful prepare exists, the release fails immediately with instructions to run public **Windows Hardware E2E** in `prepare` mode and perform the real reboot/logon first. This prevents an unprovisioned public self-hosted label from silently queueing a release forever.

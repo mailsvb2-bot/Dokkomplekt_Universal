@@ -32,7 +32,7 @@ The runtime is accepted only if the exact signing payload verifies under **two i
 
 The offline approval private key is never stored in GitHub. `scripts/windows_runtime_bundle_approval.py` signs an exact reviewed runtime payload outside CI. The bundle itself carries the reviewed complete-portable-tree inventory and provenance/license metadata; `scripts/stage_signed_runtime_bundle.py` reconstructs the staged runtime only after both signatures, bundle digest, SBOM, inventory and exact ZIP file set verify.
 
-The hosted job then executes the existing production gates: offline runtime completeness, semantic GGUF, runtime/application parity, sidecar Authenticode, OCR fixture, Rust/RustSec gate, Tauri build, application Authenticode, offline NSIS build/signing and installer contract smoke.
+The hosted job then executes the existing production gates for the bounded `core` profile: document-runtime completeness, runtime/application parity, sidecar Authenticode, OCR fixture, Rust/RustSec gate, Tauri build, application Authenticode, offline NSIS build/signing and installer contract smoke. The semantic GGUF/runtime is governed separately and is not embedded in the stock core installer.
 
 ### Windows Authenticode key boundary
 
@@ -47,7 +47,7 @@ Production Windows signing does **not** use an exportable PFX. The signing backe
 
 The legacy `pfx` backend exists only for non-production compatibility/testing. It is fail-closed when `DOKKOMPLEKT_RELEASE_MODE=production` and imported PFX keys are never marked `-Exportable`.
 
-The private key for Authenticode therefore remains **non-exportable** in the configured hardware/HSM-backed provider. The CI workflow must provision/authenticate that provider before signing; it must not copy the private key into GitHub Actions variables or secrets.
+The private key for Authenticode therefore remains **non-exportable** in the configured hardware/HSM-backed provider. The CI workflow must provision/authenticate that provider before signing; it must not copy the private key into GitHub Actions variables or secrets. The repository currently contains no vendor-specific HSM/KSP provisioning action, so production remains intentionally blocked until a reviewed provider integration is configured. `scripts/sign_windows_release.ps1 -VerifyCertificateOnly` fails early unless the exact certificate is already present, provider-matched and non-exportable.
 
 Other private values used only in the protected hosted domain include:
 
@@ -62,7 +62,7 @@ No persistent Windows build/signing computer is required.
 A reviewed runtime tree is still a release artifact, not something CI may invent. Build it from reviewed portable component trees with the existing runtime-kit tooling, create the deterministic offline bundle, sign its `*.signing.json` with the runtime release key, then independently approve those exact payload bytes with an offline approval key:
 
 ```powershell
-python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --require-semantic-model --require-supply-chain --output-dir release-runtime --signing-key <runtime-private.pem> --trusted-public-key <runtime-public.pem> --require-signature
+python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --profile core --require-supply-chain --output-dir release-runtime --signing-key <runtime-private.pem> --trusted-public-key <runtime-public.pem> --require-signature
 python scripts/windows_runtime_bundle_approval.py sign release-runtime\Dokkomplekt-offline-runtime-windows-x86_64.zip.signing.json --private-key <offline-approval-private.pem> --reviewer <reviewer>
 ```
 
@@ -134,7 +134,9 @@ Perform a real Windows restart and log back into the dedicated hardware runner a
 
 ### `verify`
 
-Run the public workflow again for the same SHA with `reboot_phase=verify`. A fresh signed handoff is independently verified and the hardware runner proves post-reboot watcher behavior and executes the full physical contour.
+You may run the public workflow again for the same SHA with `reboot_phase=verify`; alternatively, the production `Build Signed Offline Installers` hardware gate automatically resolves the newest successful private `prepare` for that exact SHA and dispatches the matching private `verify` phase with the same request UUID **and prepare run ID**. Verify downloads the signed handoff from that prepare run instead of rebuilding it, so reboot recovery and the final hardware contour exercise the exact same Windows bytes.
+
+The production release workflow itself always runs this bridge on GitHub-hosted Linux under `windows-hardware-dispatch`; it never schedules a self-hosted runner or a second Windows signer in the public repository. After private verify succeeds, the bridge downloads the exact prepare handoff and verify evidence, re-verifies the signed inventory, and those exact files—not a rebuilt equivalent—become the published Windows release. If the required prepare/reboot has not happened yet, the release fails fast rather than remaining queued.
 
 `FULL DOKKOMPLEKT AUTOPILOT` with `scope=production-hardware` may pass only after exact-SHA hardware evidence exists.
 

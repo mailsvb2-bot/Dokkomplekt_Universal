@@ -89,7 +89,7 @@ def test_windows_installer_smoke_uses_real_filled_medical_table_value_cells() ->
 def test_packaging_build_outputs_are_isolated_and_never_restored_from_cache() -> None:
     quality = (ROOT / ".github/workflows/quality-gate.yml").read_text("utf-8")
     commercial = (ROOT / "scripts/check_commercial_rust_crates.py").read_text("utf-8")
-    production = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
+    production = (ROOT / "ops/private-hardware-validation/windows-hardware-e2e.yml").read_text("utf-8")
 
     packaging_cache = quality.split("- name: Restore packaging dependency cache", 1)[1].split("- name: Linux deps", 1)[0]
     assert "target" not in packaging_cache

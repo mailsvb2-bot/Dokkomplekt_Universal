@@ -37,14 +37,6 @@ PRODUCTION_BUILD_REQUIRED = (
     "DOKKOMPLEKT_COMPONENTS_CATALOG_URL",
     "DOKKOMPLEKT_COMPONENTS_BASE_URL",
 )
-RUNTIME_REQUIRED = PRODUCTION_BUILD_REQUIRED + (
-    "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
-    "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD",
-    "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
-    "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64",
-    "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
-    "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH",
-)
 HARDWARE_REQUIRED = (
     "DOKKOMPLEKT_TEST_PRINTER",
     "DOKKOMPLEKT_REBOOT_EVIDENCE_PATH",
@@ -55,7 +47,6 @@ BASE64_VARS = {
     "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
     "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64",
     "DOKKOMPLEKT_REFDATA_PUBKEY_B64",
-    "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64",
     "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
     "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64",
     "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
@@ -347,14 +338,32 @@ def validate_runner_manifest(path: Path) -> list[str]:
 
 
 def check(mode: str, env: dict[str, str]) -> dict[str, object]:
+    if mode == "windows-runtime":
+        # Retired production topology. Runtime/signing no longer executes on a
+        # self-hosted Windows service and production must never accept the old
+        # exportable-PFX contract. The canonical signer is the ephemeral hosted
+        # Windows job guarded by verify_windows_hosted_signing_runner.py; the
+        # only physical runner is the hardware-evidence role below. Keep this
+        # mode as an explicit fail-closed tombstone for old automation.
+        return {
+            "schema": "dokkomplekt.release-environment-preflight.v2",
+            "mode": mode,
+            "ok": False,
+            "checked": ["windows-runtime-retired"],
+            "errors": [
+                "windows-runtime: retired production path; use "
+                "verify_windows_hosted_signing_runner.py on the GitHub-hosted "
+                "windows-production-signing job; use windows-hardware only on "
+                "the physical Word/printer/reboot evidence runner"
+            ],
+        }
+
     required = {
         "production-build": PRODUCTION_BUILD_REQUIRED,
-        "windows-runtime": RUNTIME_REQUIRED,
         "windows-hardware": HARDWARE_REQUIRED,
     }[mode]
     errors: list[str] = []
     checked: list[str] = []
-    runtime_manifest: Path | None = None
     for name in required:
         value = env.get(name, "").strip()
         checked.append(name)
@@ -377,41 +386,10 @@ def check(mode: str, env: dict[str, str]) -> dict[str, object]:
                 validate_public_https_url(value, name)
             except ValueError as exc:
                 errors.append(str(exc))
-        if name == "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH":
-            path = Path(value)
-            runtime_manifest = path
-            if not path.is_absolute():
-                errors.append(f"{name}: must be an absolute runner-owned path")
-            elif not path.is_file():
-                errors.append(f"{name}: file does not exist")
-            else:
-                errors.extend(validate_runner_manifest(path))
         if name == "DOKKOMPLEKT_REBOOT_EVIDENCE_PATH":
             path = Path(value)
             if not path.is_absolute():
                 errors.append(f"{name}: must be an absolute path")
-    timestamp = env.get("DOKKOMPLEKT_TIMESTAMP_SERVER", "").strip()
-    if mode == "windows-runtime" and timestamp:
-        try:
-            validate_public_https_url(timestamp, "DOKKOMPLEKT_TIMESTAMP_SERVER")
-        except ValueError as exc:
-            errors.append(str(exc))
-    if mode == "windows-runtime" and os.name == "nt" and runtime_manifest is not None and runtime_manifest.is_file():
-        checked.extend(("windows-runtime-service-sid", "windows-runtime-session-0", "windows-runtime-bounded-root", "windows-runtime-acl-evidence"))
-        try:
-            current_sid = _current_windows_sid()
-            session_id = _current_windows_session_id()
-            errors.extend(
-                validate_windows_runtime_service_boundary(
-                    runtime_manifest,
-                    WINDOWS_RUNTIME_ROOT,
-                    WINDOWS_RUNTIME_ACL_EVIDENCE,
-                    current_sid=current_sid,
-                    session_id=session_id,
-                )
-            )
-        except Exception as exc:
-            errors.append(f"windows-runtime-service-boundary: unable to prove Windows service identity: {exc}")
     return {
         "schema": "dokkomplekt.release-environment-preflight.v2",
         "mode": mode,

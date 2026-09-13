@@ -66,11 +66,19 @@ class GitHubApi:
     def runs(self, repository: str, workflow: str, ref: str) -> list[dict[str, Any]]:
         encoded = urllib.parse.quote(workflow, safe="")
         branch = urllib.parse.quote(ref, safe="")
-        data = self.request(
-            "GET",
-            f"https://api.github.com/repos/{repository}/actions/workflows/{encoded}/runs?event=workflow_dispatch&branch={branch}&per_page=50",
-        )
-        return list((data or {}).get("workflow_runs", []))
+        results: list[dict[str, Any]] = []
+        per_page = 100
+        for page in range(1, 101):
+            data = self.request(
+                "GET",
+                f"https://api.github.com/repos/{repository}/actions/workflows/{encoded}/runs"
+                f"?event=workflow_dispatch&branch={branch}&per_page={per_page}&page={page}",
+            )
+            batch = list((data or {}).get("workflow_runs", []))
+            results.extend(batch)
+            if len(batch) < per_page:
+                return results
+        raise RuntimeError("private hardware workflow run pagination exceeded 100 pages")
 
     def cancel_run(self, repository: str, run_id: int) -> None:
         self.request("POST", f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/cancel")
@@ -85,7 +93,10 @@ def locate_run(
     repository: str,
     workflow: str,
     ref: str,
+    release_sha: str,
+    phase: str,
     request_id: str,
+    prepare_run_id: int | None,
     not_before: dt.datetime,
 ) -> dict[str, Any] | None:
     matches: list[dict[str, Any]] = []
@@ -93,8 +104,17 @@ def locate_run(
         created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
         if created < not_before - dt.timedelta(seconds=10):
             continue
-        display_title = str(run.get("display_title", ""))
-        if request_id not in display_title:
+        identity = parse_phase_run_identity(
+            str(run.get("display_title", "")).strip(),
+            release_sha,
+            phase,
+        )
+        if identity is None:
+            continue
+        run_request_id, run_prepare_id = identity
+        if run_request_id != request_id:
+            continue
+        if phase == "verify" and run_prepare_id != prepare_run_id:
             continue
         matches.append(run)
     if not matches:
@@ -153,6 +173,9 @@ def run_report(
         "workflow": args.workflow,
         "target_ref": args.target_ref,
     }
+    prepare_run_id = getattr(args, "prepare_run_id", None)
+    if prepare_run_id is not None:
+        report["prepare_run_id"] = prepare_run_id
     if run is not None:
         report.update(
             {
@@ -204,17 +227,142 @@ def canonical_request_id(value: str) -> str:
     return normalized
 
 
+def parse_phase_run_identity(
+    title: str,
+    release_sha: str,
+    phase: str,
+) -> tuple[str, int | None] | None:
+    if phase not in {"prepare", "verify"}:
+        raise RuntimeError("phase must be prepare or verify")
+    prefix = f"Dokkomplekt hardware {release_sha} {phase} "
+    if not title.startswith(prefix):
+        return None
+    remainder = title[len(prefix) :].strip()
+    if not remainder:
+        return None
+    parts = remainder.split()
+    try:
+        request_id = canonical_request_id(parts[0])
+    except RuntimeError:
+        return None
+    prepare_run_id: int | None = None
+    if len(parts) > 1:
+        if len(parts) != 2 or not parts[1].startswith("prepare-run-"):
+            return None
+        raw_prepare_run_id = parts[1][len("prepare-run-") :]
+        if raw_prepare_run_id:
+            try:
+                prepare_run_id = int(raw_prepare_run_id)
+            except ValueError:
+                return None
+            if prepare_run_id <= 0:
+                return None
+    return request_id, prepare_run_id
+
+
+def find_successful_phase_run(
+    api: GitHubApi,
+    repository: str,
+    workflow: str,
+    ref: str,
+    release_sha: str,
+    phase: str,
+    *,
+    required_request_id: str | None = None,
+    required_prepare_run_id: int | None = None,
+) -> tuple[str, dict[str, Any]] | None:
+    candidates: list[tuple[dt.datetime, str, dict[str, Any]]] = []
+    for run in api.runs(repository, workflow, ref):
+        if str(run.get("status", "")).strip().lower() != "completed":
+            continue
+        if str(run.get("conclusion", "")).strip().lower() != "success":
+            continue
+        identity = parse_phase_run_identity(str(run.get("display_title", "")).strip(), release_sha, phase)
+        if identity is None:
+            continue
+        request_id, prepare_run_id = identity
+        try:
+            int(run.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if required_request_id is not None and request_id != required_request_id:
+            continue
+        if required_prepare_run_id is not None and prepare_run_id != required_prepare_run_id:
+            continue
+        created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
+        candidates.append((created, request_id, run))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, request_id, run = candidates[0]
+    return request_id, run
+
+
+def successful_prepare_run(
+    api: GitHubApi,
+    repository: str,
+    workflow: str,
+    ref: str,
+    release_sha: str,
+    *,
+    required_request_id: str | None = None,
+) -> tuple[str, int]:
+    match = find_successful_phase_run(
+        api,
+        repository,
+        workflow,
+        ref,
+        release_sha,
+        "prepare",
+        required_request_id=required_request_id,
+    )
+    if match is None:
+        suffix = "" if required_request_id is None else f" and request_id={required_request_id}"
+        raise RuntimeError(
+            "no successful private prepare run exists for this exact release_sha" + suffix + "; "
+            "run the public Windows Hardware E2E workflow with reboot_phase=prepare, "
+            "perform the real Windows reboot/logon, then retry the release workflow"
+        )
+    request_id, run = match
+    return request_id, int(run["id"])
+
+
+def successful_verify_run(
+    api: GitHubApi,
+    repository: str,
+    workflow: str,
+    ref: str,
+    release_sha: str,
+    request_id: str,
+    prepare_run_id: int,
+) -> dict[str, Any] | None:
+    match = find_successful_phase_run(
+        api,
+        repository,
+        workflow,
+        ref,
+        release_sha,
+        "verify",
+        required_request_id=request_id,
+        required_prepare_run_id=prepare_run_id,
+    )
+    return None if match is None else match[1]
+
+
 def resolve_request_id(args: argparse.Namespace) -> str:
     provided = str(args.request_id or "").strip()
     if provided:
         return canonical_request_id(provided)
     if args.reboot_phase == "verify":
+        if args.reuse_latest_prepare:
+            return ""
         raise RuntimeError(
-            "verify phase requires --request-id from the successful prepare phase; "
-            "a reboot evidence chain must not silently start a new correlation session"
+            "verify phase requires --request-id from the successful prepare phase, "
+            "or --reuse-latest-prepare to resolve the latest successful prepare for this release_sha"
         )
-    request_id = str(uuid.uuid4())
-    return request_id
+    if args.reuse_latest_prepare:
+        raise RuntimeError("--reuse-latest-prepare is valid only with reboot_phase=verify")
+    return str(uuid.uuid4())
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -236,8 +384,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise RuntimeError("queue_timeout_seconds must be zero or positive")
     if str(args.request_id or "").strip():
         canonical_request_id(str(args.request_id))
-    elif args.reboot_phase == "verify":
-        raise RuntimeError("verify phase requires request_id from the prepare phase")
+        if args.reuse_latest_prepare:
+            raise RuntimeError("--request-id and --reuse-latest-prepare are mutually exclusive")
+    elif args.reboot_phase == "verify" and not args.reuse_latest_prepare:
+        raise RuntimeError("verify phase requires request_id or --reuse-latest-prepare")
+    elif args.reboot_phase == "prepare" and args.reuse_latest_prepare:
+        raise RuntimeError("--reuse-latest-prepare is valid only for verify")
 
 
 def main() -> int:
@@ -251,6 +403,11 @@ def main() -> int:
     parser.add_argument(
         "--request-id",
         help="Correlation UUID. Omit for prepare to generate one; verify must reuse the prepare UUID.",
+    )
+    parser.add_argument(
+        "--reuse-latest-prepare",
+        action="store_true",
+        help="For verify, resolve the newest successful private prepare request UUID for the exact release SHA.",
     )
     parser.add_argument("--token-env", default="DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN")
     parser.add_argument("--poll-seconds", type=int, default=20)
@@ -274,6 +431,42 @@ def main() -> int:
         )
     if bool(target.get("archived")):
         raise RuntimeError("hardware validation repository is archived")
+    args.prepare_run_id = None
+    if args.reboot_phase == "verify":
+        required_request_id = None if args.reuse_latest_prepare else request_id
+        request_id, args.prepare_run_id = successful_prepare_run(
+            api,
+            args.target_repository,
+            args.workflow,
+            args.target_ref,
+            args.release_sha,
+            required_request_id=required_request_id,
+        )
+        print(
+            f"Resolved successful private prepare correlation: release={args.release_sha} "
+            f"request={request_id} prepare_run_id={args.prepare_run_id}",
+            flush=True,
+        )
+        existing_verify = successful_verify_run(
+            api,
+            args.target_repository,
+            args.workflow,
+            args.target_ref,
+            args.release_sha,
+            request_id,
+            args.prepare_run_id,
+        )
+        if existing_verify is not None:
+            report_path = Path(args.json_report)
+            report = run_report(args, request_id, existing_verify, result="success")
+            report["reused_existing_success"] = True
+            write_report(report_path, report)
+            print(
+                "PRIVATE HARDWARE VALIDATION REUSED: "
+                f"{existing_verify.get('html_url') or existing_verify.get('id')}",
+                flush=True,
+            )
+            return 0
 
     started = now_utc()
     inputs = {
@@ -281,6 +474,7 @@ def main() -> int:
         "release_sha": args.release_sha,
         "reboot_phase": args.reboot_phase,
         "request_id": request_id,
+        "prepare_run_id": "" if args.prepare_run_id is None else str(args.prepare_run_id),
     }
     report_path = Path(args.json_report)
     print(
@@ -299,7 +493,10 @@ def main() -> int:
             args.target_repository,
             args.workflow,
             args.target_ref,
+            args.release_sha,
+            args.reboot_phase,
             request_id,
+            args.prepare_run_id,
             started,
         )
         if candidate is not None:
@@ -321,9 +518,9 @@ def main() -> int:
             ):
                 failure = (
                     f"private hardware workflow remained in pre-start status {status!r} "
-                    f"for {prestart_seconds}s; verify that the dokkomplekt-runtime self-hosted "
-                    "Windows runner is online and registered, the windows-production-signing "
-                    "environment is approved, and no concurrency gate is blocking the private workflow"
+                    f"for {prestart_seconds}s; verify that the private dokkomplekt-hardware Windows runner is online and registered, "
+                    "the protected private workflow environments are approved, and no concurrency gate "
+                    "is blocking the private workflow"
                 )
                 write_failure_with_cancellation(api, args, request_id, run, report_path, failure)
                 return 1

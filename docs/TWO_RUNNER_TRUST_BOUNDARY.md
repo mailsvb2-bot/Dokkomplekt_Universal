@@ -65,6 +65,6 @@ GitHub artifact transport itself is not the trust anchor. The signed manifest an
 
 ## Acceptance invariant
 
-A production hardware verdict is valid only when `hardware-evidence` has `needs: signed-runtime-build`, signing/build executes on GitHub-hosted Windows under `windows-production-signing`, hardware evidence executes on the private `dokkomplekt-hardware` runner under `windows-hardware-validation`, the hardware job has no production signing secret references, and both the signed runtime and the signed handoff verify before hardware execution.
+A production hardware verdict is valid only when private `prepare` builds/signs the canonical handoff on GitHub-hosted Windows under `windows-production-signing`, prepare hardware evidence uses that handoff, private `verify` re-downloads that exact handoff by `prepare_run_id` instead of rebuilding it, hardware execution occurs only on the private `dokkomplekt-hardware` runner under `windows-hardware-validation`, the hardware job has no production signing secret references, and the public publisher later re-verifies and publishes those exact handoff bytes.
 
 The legacy `dokkomplekt-runtime` service scripts remain only for backward compatibility and regression coverage. They are not required by current release/hardware validation.

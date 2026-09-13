@@ -42,7 +42,8 @@ def test_fixture_is_wired_to_rust_parser_and_windows_runtime_gate() -> None:
     ]:
         assert invariant in verifier
     command = "python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64"
-    assert command in build
+    assert command not in build
     assert command in private_hardware
+    assert "Dokkomplekt-Windows-Private-Validated" in build
     assert "dispatch_private_hardware_validation.py" in public_bridge
     assert "runs-on: [self-hosted" not in public_bridge

@@ -97,7 +97,7 @@ class OperationalHardeningContracts(unittest.TestCase):
         prepare = self.read("scripts/prepare_sidecars.py")
         verifier = self.read("scripts/assert_offline_runtime_ready.py")
         installer = self.read("BUILD_WINDOWS_INSTALLER.bat")
-        workflow = self.read(".github/workflows/build-installers.yml")
+        workflow = self.read("ops/private-hardware-validation/windows-hardware-e2e.yml")
         for tool in ["sumatrapdf", "llama_cpp", "semantic_model"]:
             self.assertIn(f'"{tool}"', prepare)
         for required in [
@@ -112,8 +112,10 @@ class OperationalHardeningContracts(unittest.TestCase):
             self.assertIn(required, verifier.lower())
         self.assertIn("DOKKOMPLEKT_SIDECAR_MANIFEST", installer)
         self.assertIn("--require-semantic-model", installer)
-        self.assertIn("Verify production runtime staged from immutable approved bundle", workflow)
+        self.assertIn("Prove staged production core runtime", workflow)
         self.assertIn("stage_signed_runtime_bundle.py", workflow)
+        self.assertIn("--profile core", workflow)
+        self.assertNotIn("--require-semantic-model --require-supply-chain --production", workflow)
 
     def test_completed_case_can_be_reissued_without_deleting_previous_output(self) -> None:
         main = self.read("src-tauri/src/main.rs")

@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)] [string] $ArtifactRoot,
+    [string] $ArtifactRoot = '',
     [string] $TimestampServer = $env:DOKKOMPLEKT_TIMESTAMP_SERVER,
-    [string] $SigningBackend = $env:DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND
+    [string] $SigningBackend = $env:DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND,
+    [switch] $VerifyCertificateOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +103,46 @@ function Assert-HardwareBackedCertificate {
     Write-Host "SIGNING KEY BOUNDARY VERIFIED: provider=$($info.provider); implementation=$($info.implementation); exportable=$($info.exportable)"
 }
 
+function Assert-SigningKeyOperational {
+    param([Parameter(Mandatory = $true)] $Certificate)
+
+    $privateRsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($Certificate)
+    $publicRsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($Certificate)
+    if ($null -eq $privateRsa -or $null -eq $publicRsa) {
+        if ($null -ne $privateRsa) { $privateRsa.Dispose() }
+        if ($null -ne $publicRsa) { $publicRsa.Dispose() }
+        throw 'Signing certificate RSA key pair could not be opened for an operational challenge.'
+    }
+
+    $challenge = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($challenge)
+        try {
+            $signature = $privateRsa.SignData(
+                $challenge,
+                [Security.Cryptography.HashAlgorithmName]::SHA256,
+                [Security.Cryptography.RSASignaturePadding]::Pkcs1
+            )
+        } catch {
+            throw "Signing private key is present but cannot perform an RSA/SHA-256 operation: $($_.Exception.Message)"
+        }
+        if (-not $publicRsa.VerifyData(
+            $challenge,
+            $signature,
+            [Security.Cryptography.HashAlgorithmName]::SHA256,
+            [Security.Cryptography.RSASignaturePadding]::Pkcs1
+        )) {
+            throw 'Signing private-key challenge verification failed.'
+        }
+    } finally {
+        $rng.Dispose()
+        $privateRsa.Dispose()
+        $publicRsa.Dispose()
+    }
+    Write-Host 'SIGNING KEY OPERATIONAL CHALLENGE PASSED: RSA/SHA-256 sign+verify succeeded.'
+}
+
 function Resolve-CertificateStoreCertificate {
     $thumbprint = [string] $env:DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT
     if ([string]::IsNullOrWhiteSpace($thumbprint)) {
@@ -149,8 +190,9 @@ function Import-LegacyPfxCertificate {
     }
 }
 
-$targets = @(Get-SigningTargets -Root $ArtifactRoot)
-if ($targets.Count -eq 0) { throw "No Windows installer/binary was found under $ArtifactRoot" }
+if (-not $VerifyCertificateOnly -and [string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+    throw 'ArtifactRoot is required unless -VerifyCertificateOnly is used.'
+}
 
 $backend = ([string] $SigningBackend).Trim().ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($backend)) {
@@ -169,6 +211,16 @@ try {
         $cert = Import-LegacyPfxCertificate
         $removeImportedCertificate = $true
     }
+
+    if ($VerifyCertificateOnly) {
+        Assert-SigningKeyOperational -Certificate $cert
+        $thumbprint = ($cert.Thumbprint -replace '\s', '').ToUpperInvariant()
+        Write-Host "SIGNING CERTIFICATE PREFLIGHT PASSED: backend=$backend; thumbprint=$thumbprint"
+        return
+    }
+
+    $targets = @(Get-SigningTargets -Root $ArtifactRoot)
+    if ($targets.Count -eq 0) { throw "No Windows installer/binary was found under $ArtifactRoot" }
 
     foreach ($target in $targets) {
         $arguments = @{

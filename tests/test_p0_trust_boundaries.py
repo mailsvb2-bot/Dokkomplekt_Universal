@@ -130,6 +130,7 @@ def test_release_workflows_pin_actions_and_scope_private_keys_to_steps() -> None
         assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in refs), (workflow_path, refs)
 
     release = text(".github/workflows/build-installers.yml")
+    private = text("ops/private-hardware-validation/windows-hardware-e2e.yml")
     for required in (
         "DOKKOMPLEKT_LICENSE_PUBKEY_B64",
         "DOKKOMPLEKT_UPDATE_MANIFEST_URL",
@@ -137,6 +138,9 @@ def test_release_workflows_pin_actions_and_scope_private_keys_to_steps() -> None
         "DOKKOMPLEKT_THRESHOLD_PUBKEY_B64",
         "DOKKOMPLEKT_REFDATA_PUBKEY_B64",
         "--mode production-build",
+    ):
+        assert required in release
+    for required in (
         "verify_windows_hosted_signing_runner.py",
         "fetch_hosted_runtime_bundle.py",
         "stage_signed_runtime_bundle.py",
@@ -145,23 +149,22 @@ def test_release_workflows_pin_actions_and_scope_private_keys_to_steps() -> None
         "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND",
         "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT",
         "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER",
+        "--profile core",
     ):
-        assert required in release
+        assert required in private
     assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-runtime]" not in release
-    assert "runs-on: windows-latest" in release
-    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in release
+    assert "  windows-signed-offline:" not in release
+    assert "runs-on: windows-latest" in private
+    assert "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH" not in private
 
-    # Production Authenticode is hardware-backed; exportable PFX material must not
-    # be wired into the release workflow at any scope.
-    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" not in release
-    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD" not in release
+    for text_value in (release, private):
+        assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" not in text_value
+        assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD" not in text_value
 
-    # Remaining private values must never live in a job-level env block. They are
-    # scoped to the concrete steps that consume them after pinned setup actions.
     for secret in (
         "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64",
         "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
         "DOKKOMPLEKT_GATE_PRIVATE_KEY_B64",
     ):
-        assert not re.search(rf"^      {re.escape(secret)}:", release, re.MULTILINE)
-        assert re.search(rf"^          {re.escape(secret)}:", release, re.MULTILINE)
+        assert not re.search(rf"^      {re.escape(secret)}:", private, re.MULTILINE)
+        assert re.search(rf"^          {re.escape(secret)}:", private, re.MULTILINE)

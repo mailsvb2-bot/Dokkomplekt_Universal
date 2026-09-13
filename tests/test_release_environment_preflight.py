@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from scripts.release_environment_preflight import check
+from scripts.release_environment_preflight import check, validate_runner_manifest
 
 
 def b64(value: bytes) -> str:
@@ -117,77 +117,44 @@ def test_production_build_rejects_documentation_credentials_and_private_hosts() 
         assert report["ok"] is False, value
 
 
-def test_runtime_preflight_rejects_missing_or_fake_delivery_configuration(tmp_path: Path) -> None:
-    report = check(
-        "windows-runtime",
-        {
-            "DOKKOMPLEKT_COMPONENTS_CATALOG_URL": "https://catalog.invalid",
-            "DOKKOMPLEKT_COMPONENTS_BASE_URL": "http://example.test/files",
-            "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH": "relative.json",
-        },
-    )
-    assert report["ok"] is False
-    errors = "\n".join(report["errors"])
-    assert "missing" in errors
-    assert "public HTTPS URL" in errors or "placeholder or local host" in errors
-    assert "absolute runner-owned path" in errors
-
-
-def test_runtime_preflight_rejects_unlocked_or_placeholder_manifest(tmp_path: Path) -> None:
-    manifest = tmp_path / "sidecars.json"
-    manifest.write_text("{}", encoding="utf-8")
+def test_retired_windows_runtime_preflight_fails_closed_even_with_legacy_pfx() -> None:
     env = {
         **public_build_env(),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"pfx"),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD": "secret",
-        "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64": b64(b"private"),
-        "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64": b64(b"public"),
-        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": b64(b"p" * 32),
-        "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH": str(manifest.resolve()),
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"legacy-pfx"),
+        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD": "legacy-password",
     }
     report = check("windows-runtime", env)
     assert report["ok"] is False
+    assert report["checked"] == ["windows-runtime-retired"]
     errors = "\n".join(report["errors"])
+    assert "retired production path" in errors
+    assert "verify_windows_hosted_signing_runner.py" in errors
+    assert "windows-hardware" in errors
+
+
+def test_runner_manifest_validator_rejects_unlocked_or_placeholder_manifest(tmp_path: Path) -> None:
+    manifest = tmp_path / "sidecars.json"
+    manifest.write_text("{}", encoding="utf-8")
+    errors = "\n".join(validate_runner_manifest(manifest))
     assert "manifest schema must be 1" in errors
     assert "supply_chain_locked must be true" in errors
 
 
-def test_runtime_preflight_rejects_tampered_source_and_windows_absolute_target(tmp_path: Path) -> None:
+def test_runner_manifest_validator_rejects_tampered_source_and_windows_absolute_target(tmp_path: Path) -> None:
     manifest = write_runtime_manifest(tmp_path)
     data = json.loads(manifest.read_text("utf-8"))
     data["files"][0]["source"] = str(tmp_path / "tampered.bin")
     (tmp_path / "tampered.bin").write_bytes(b"tampered")
     data["files"][1]["target"] = "C:/runtime/pdftotext.exe"
     manifest.write_text(json.dumps(data), encoding="utf-8")
-    env = {
-        **public_build_env(),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"pfx"),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD": "secret",
-        "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64": b64(b"private"),
-        "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64": b64(b"public"),
-        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": b64(b"p" * 32),
-        "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH": str(manifest.resolve()),
-    }
-    report = check("windows-runtime", env)
-    assert report["ok"] is False
-    errors = "\n".join(report["errors"])
+    errors = "\n".join(validate_runner_manifest(manifest))
     assert "files[0].sha256 mismatch" in errors
     assert "files[1].target is unsafe" in errors
 
 
-def test_runtime_preflight_accepts_complete_runner_owned_configuration(tmp_path: Path) -> None:
+def test_runner_manifest_validator_accepts_complete_reviewed_configuration(tmp_path: Path) -> None:
     manifest = write_runtime_manifest(tmp_path)
-    env = {
-        **public_build_env(),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64": b64(b"pfx"),
-        "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD": "secret",
-        "DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64": b64(b"private"),
-        "DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64": b64(b"public"),
-        "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64": b64(b"p" * 32),
-        "DOKKOMPLEKT_SIDECAR_MANIFEST_PATH": str(manifest.resolve()),
-        "DOKKOMPLEKT_TIMESTAMP_SERVER": "https://timestamp.dokkomplekt.ru",
-    }
-    assert check("windows-runtime", env)["ok"] is True
+    assert validate_runner_manifest(manifest) == []
 
 
 def test_hardware_preflight_requires_printer_and_absolute_reboot_evidence(tmp_path: Path) -> None:
@@ -243,5 +210,12 @@ def test_release_and_queue_docs_use_current_variable_names_and_explicit_placehol
     queue = (root / "docs" / "QUEUE_SERVICE_DEPLOYMENT.md").read_text(encoding="utf-8")
     assert "DOKKOMPLEKT_REFDATA_MANIFEST_URL" not in release
     assert "DOKKOMPLEKT_REFDATA_URL" in release
+    assert "windows-production-signing" in release
+    assert "certificate-store" in release
+    assert "verify_windows_hosted_signing_runner.py" in release
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" not in release
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD" not in release
+    assert "Required labels: `self-hosted`, `Windows`, `X64`, `dokkomplekt-runtime`" not in release
+    assert "--mode windows-runtime" not in release
     assert "queue.example.internal" not in queue
     assert "https://queue.<YOUR_REAL_DOMAIN>:9443" in queue

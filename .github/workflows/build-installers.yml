@@ -164,6 +164,9 @@ jobs:
           DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
           DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
         run: python scripts/verify_windows_hosted_signing_runner.py --json-report verification/release/HOSTED_SIGNING_PREFLIGHT.json
+      - name: Prove production signing certificate is provisioned and hardware-backed
+        shell: pwsh
+        run: scripts/sign_windows_release.ps1 -VerifyCertificateOnly
       - name: Fetch immutable independently approved runtime
         shell: pwsh
         run: |

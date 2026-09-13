@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)] [string] $ArtifactRoot,
+    [string] $ArtifactRoot = '',
     [string] $TimestampServer = $env:DOKKOMPLEKT_TIMESTAMP_SERVER,
-    [string] $SigningBackend = $env:DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND
+    [string] $SigningBackend = $env:DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND,
+    [switch] $VerifyCertificateOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -149,8 +150,9 @@ function Import-LegacyPfxCertificate {
     }
 }
 
-$targets = @(Get-SigningTargets -Root $ArtifactRoot)
-if ($targets.Count -eq 0) { throw "No Windows installer/binary was found under $ArtifactRoot" }
+if (-not $VerifyCertificateOnly -and [string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+    throw 'ArtifactRoot is required unless -VerifyCertificateOnly is used.'
+}
 
 $backend = ([string] $SigningBackend).Trim().ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($backend)) {
@@ -169,6 +171,15 @@ try {
         $cert = Import-LegacyPfxCertificate
         $removeImportedCertificate = $true
     }
+
+    if ($VerifyCertificateOnly) {
+        $thumbprint = ($cert.Thumbprint -replace '\s', '').ToUpperInvariant()
+        Write-Host "SIGNING CERTIFICATE PREFLIGHT PASSED: backend=$backend; thumbprint=$thumbprint"
+        return
+    }
+
+    $targets = @(Get-SigningTargets -Root $ArtifactRoot)
+    if ($targets.Count -eq 0) { throw "No Windows installer/binary was found under $ArtifactRoot" }
 
     foreach ($target in $targets) {
         $arguments = @{

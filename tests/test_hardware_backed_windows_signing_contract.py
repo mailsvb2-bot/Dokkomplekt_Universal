@@ -64,6 +64,8 @@ def test_signing_script_forbids_exportable_production_pfx() -> None:
     assert "legacy pfx backend is forbidden in production" in text
     assert "-Exportable" not in text
     assert "SignerCertificate.Thumbprint" in text
+    assert "[switch] $VerifyCertificateOnly" in text
+    assert "SIGNING CERTIFICATE PREFLIGHT PASSED" in text
 
 
 def test_production_workflows_do_not_receive_pfx_secrets() -> None:
@@ -90,6 +92,11 @@ def test_production_workflows_do_not_receive_pfx_secrets() -> None:
         ) in text
         assert "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" not in text
         assert "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD" not in text
+
+    hosted = build[build.index("  windows-signed-offline:") : build.index("  windows-hardware-e2e:")]
+    assert "Prove production signing certificate is provisioned and hardware-backed" in hosted
+    assert "scripts/sign_windows_release.ps1 -VerifyCertificateOnly" in hosted
+    assert hosted.index("-VerifyCertificateOnly") < hosted.index("Fetch immutable independently approved runtime")
 
     hardware = private[private.index("  hardware-evidence:") :]
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT" not in hardware

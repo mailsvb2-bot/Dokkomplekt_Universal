@@ -1,7 +1,5 @@
 use crate::data_schema_engine::{is_safe_field_id, UnifiedDataSchema};
-use crate::domain_plugin_layer::{
-    plugin_by_id, resolve_plugin_role_requirements, DomainPluginV2,
-};
+use crate::domain_plugin_layer::{plugin_by_id, resolve_plugin_role_requirements, DomainPluginV2};
 use crate::template_intelligence_engine::TemplateStructureAnalysisV2;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

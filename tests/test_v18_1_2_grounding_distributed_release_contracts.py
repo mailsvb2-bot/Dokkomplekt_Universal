@@ -129,9 +129,12 @@ class V1812GroundingDistributedReleaseContracts(unittest.TestCase):
         self.assertIn("DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64", workflow)
 
     def test_windows_pipeline_signs_app_before_nsis_and_has_hardware_gate(self) -> None:
-        workflow = read(".github/workflows/build-installers.yml")
+        workflow = read("ops/private-hardware-validation/windows-hardware-e2e.yml")
+        public_release = read(".github/workflows/build-installers.yml")
         self.assertLess(workflow.index("npx tauri build --no-bundle"), workflow.index("npx tauri bundle --bundles nsis"))
         self.assertIn("target/release/dokkomplekt-tauri.exe", workflow)
+        self.assertIn("Dokkomplekt-Windows-Private-Validated", public_release)
+        self.assertNotIn("  windows-signed-offline:", public_release)
         hardware = read("tests/windows/windows_hardware_e2e.ps1")
         self.assertIn("Get-AuthenticodeSignature -FilePath $app", hardware)
         self.assertIn("windows_word_print_hardware_e2e", hardware)

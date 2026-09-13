@@ -66,11 +66,19 @@ class GitHubApi:
     def runs(self, repository: str, workflow: str, ref: str) -> list[dict[str, Any]]:
         encoded = urllib.parse.quote(workflow, safe="")
         branch = urllib.parse.quote(ref, safe="")
-        data = self.request(
-            "GET",
-            f"https://api.github.com/repos/{repository}/actions/workflows/{encoded}/runs?event=workflow_dispatch&branch={branch}&per_page=50",
-        )
-        return list((data or {}).get("workflow_runs", []))
+        results: list[dict[str, Any]] = []
+        per_page = 100
+        for page in range(1, 101):
+            data = self.request(
+                "GET",
+                f"https://api.github.com/repos/{repository}/actions/workflows/{encoded}/runs"
+                f"?event=workflow_dispatch&branch={branch}&per_page={per_page}&page={page}",
+            )
+            batch = list((data or {}).get("workflow_runs", []))
+            results.extend(batch)
+            if len(batch) < per_page:
+                return results
+        raise RuntimeError("private hardware workflow run pagination exceeded 100 pages")
 
     def cancel_run(self, repository: str, run_id: int) -> None:
         self.request("POST", f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/cancel")
@@ -153,6 +161,9 @@ def run_report(
         "workflow": args.workflow,
         "target_ref": args.target_ref,
     }
+    prepare_run_id = getattr(args, "prepare_run_id", None)
+    if prepare_run_id is not None:
+        report["prepare_run_id"] = prepare_run_id
     if run is not None:
         report.update(
             {
@@ -204,15 +215,17 @@ def canonical_request_id(value: str) -> str:
     return normalized
 
 
-def successful_prepare_request_id(
+def successful_prepare_run(
     api: GitHubApi,
     repository: str,
     workflow: str,
     ref: str,
     release_sha: str,
-) -> str:
+    *,
+    required_request_id: str | None = None,
+) -> tuple[str, int]:
     prefix = f"Dokkomplekt hardware {release_sha} prepare "
-    candidates: list[tuple[dt.datetime, str]] = []
+    candidates: list[tuple[dt.datetime, str, int]] = []
     for run in api.runs(repository, workflow, ref):
         if str(run.get("status", "")).strip().lower() != "completed":
             continue
@@ -226,16 +239,24 @@ def successful_prepare_request_id(
             request_id = canonical_request_id(raw_request_id)
         except RuntimeError:
             continue
+        if required_request_id is not None and request_id != required_request_id:
+            continue
+        try:
+            run_id = int(run.get("id"))
+        except (TypeError, ValueError):
+            continue
         created = parse_time(str(run.get("created_at", "1970-01-01T00:00:00Z")))
-        candidates.append((created, request_id))
+        candidates.append((created, request_id, run_id))
     if not candidates:
+        suffix = "" if required_request_id is None else f" and request_id={required_request_id}"
         raise RuntimeError(
-            "no successful private prepare run exists for this exact release_sha; "
+            "no successful private prepare run exists for this exact release_sha" + suffix + "; "
             "run the public Windows Hardware E2E workflow with reboot_phase=prepare, "
             "perform the real Windows reboot/logon, then retry the release workflow"
         )
     candidates.sort(reverse=True)
-    return candidates[0][1]
+    _, request_id, run_id = candidates[0]
+    return request_id, run_id
 
 
 def resolve_request_id(args: argparse.Namespace) -> str:
@@ -320,16 +341,20 @@ def main() -> int:
         )
     if bool(target.get("archived")):
         raise RuntimeError("hardware validation repository is archived")
-    if args.reboot_phase == "verify" and args.reuse_latest_prepare:
-        request_id = successful_prepare_request_id(
+    args.prepare_run_id = None
+    if args.reboot_phase == "verify":
+        required_request_id = None if args.reuse_latest_prepare else request_id
+        request_id, args.prepare_run_id = successful_prepare_run(
             api,
             args.target_repository,
             args.workflow,
             args.target_ref,
             args.release_sha,
+            required_request_id=required_request_id,
         )
         print(
-            f"Resolved successful private prepare correlation: release={args.release_sha} request={request_id}",
+            f"Resolved successful private prepare correlation: release={args.release_sha} "
+            f"request={request_id} prepare_run_id={args.prepare_run_id}",
             flush=True,
         )
 
@@ -339,6 +364,7 @@ def main() -> int:
         "release_sha": args.release_sha,
         "reboot_phase": args.reboot_phase,
         "request_id": request_id,
+        "prepare_run_id": "" if args.prepare_run_id is None else str(args.prepare_run_id),
     }
     report_path = Path(args.json_report)
     print(

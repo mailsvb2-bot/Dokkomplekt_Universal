@@ -81,13 +81,13 @@ class ComponentDeliveryContracts(unittest.TestCase):
             self.assertIn(invariant, center)
 
     def test_release_pipeline_builds_thin_offline_and_component_artifacts(self) -> None:
-        workflow = self.text(".github/workflows/build-installers.yml")
+        workflow = self.text("ops/private-hardware-validation/windows-hardware-e2e.yml")
         for invariant in [
             "build_component_packs.py",
             "tauri.thin.conf.json",
             "release-installers/thin",
             "release-installers/offline",
-            "release-components/**",
+            "release-components",
             "DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64",
             "DOKKOMPLEKT_UPDATE_PUBKEY_B64",
         ]:

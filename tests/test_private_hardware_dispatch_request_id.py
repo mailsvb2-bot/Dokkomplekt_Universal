@@ -81,18 +81,21 @@ def test_latest_successful_prepare_request_is_reused_for_verify() -> None:
         def runs(self, repository, workflow, ref):
             return [
                 {
+                    "id": 101,
                     "status": "completed",
                     "conclusion": "success",
                     "created_at": "2026-09-13T07:00:00Z",
                     "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare 11111111-1111-4111-8111-111111111111",
                 },
                 {
+                    "id": 202,
                     "status": "completed",
                     "conclusion": "success",
                     "created_at": "2026-09-13T08:00:00Z",
                     "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare 22222222-2222-4222-8222-222222222222",
                 },
                 {
+                    "id": 303,
                     "status": "completed",
                     "conclusion": "failure",
                     "created_at": "2026-09-13T09:00:00Z",
@@ -100,9 +103,9 @@ def test_latest_successful_prepare_request_is_reused_for_verify() -> None:
                 },
             ]
 
-    assert hardware_dispatch.successful_prepare_request_id(
+    assert hardware_dispatch.successful_prepare_run(
         Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40
-    ) == "22222222-2222-4222-8222-222222222222"
+    ) == ("22222222-2222-4222-8222-222222222222", 202)
 
 
 def test_latest_prepare_lookup_fails_closed_when_none_succeeded() -> None:
@@ -113,6 +116,46 @@ def test_latest_prepare_lookup_fails_closed_when_none_succeeded() -> None:
     import pytest
 
     with pytest.raises(RuntimeError, match="no successful private prepare run"):
-        hardware_dispatch.successful_prepare_request_id(
+        hardware_dispatch.successful_prepare_run(
             Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40
         )
+
+
+def test_run_listing_paginates_beyond_first_page() -> None:
+    api = hardware_dispatch.GitHubApi("test-token")
+    calls: list[str] = []
+
+    def request(method: str, url: str, payload=None):
+        from urllib.parse import parse_qs, urlparse
+
+        calls.append(url)
+        page = int(parse_qs(urlparse(url).query)["page"][0])
+        if page == 1:
+            return {"workflow_runs": [{"id": index} for index in range(100)]}
+        if page == 2:
+            return {"workflow_runs": [{"id": 1000}]}
+        raise AssertionError(url)
+
+    api.request = request  # type: ignore[method-assign]
+    runs = api.runs("owner/private", "windows-hardware-e2e.yml", "main")
+    assert len(runs) == 101
+    assert any("page=2" in url for url in calls)
+
+
+def test_explicit_verify_resolves_matching_prepare_run_id() -> None:
+    request_id = "01234567-89ab-4def-8123-456789abcdef"
+
+    class Api:
+        def runs(self, repository, workflow, ref):
+            return [{
+                "id": 4242,
+                "status": "completed",
+                "conclusion": "success",
+                "created_at": "2026-09-13T08:00:00Z",
+                "display_title": "Dokkomplekt hardware " + "a" * 40 + " prepare " + request_id,
+            }]
+
+    assert hardware_dispatch.successful_prepare_run(
+        Api(), "owner/private", "windows-hardware-e2e.yml", "main", "a" * 40,
+        required_request_id=request_id,
+    ) == (request_id, 4242)

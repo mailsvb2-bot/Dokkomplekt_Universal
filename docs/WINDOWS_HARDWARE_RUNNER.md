@@ -62,7 +62,7 @@ No persistent Windows build/signing computer is required.
 A reviewed runtime tree is still a release artifact, not something CI may invent. Build it from reviewed portable component trees with the existing runtime-kit tooling, create the deterministic offline bundle, sign its `*.signing.json` with the runtime release key, then independently approve those exact payload bytes with an offline approval key:
 
 ```powershell
-python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --require-semantic-model --require-supply-chain --output-dir release-runtime --signing-key <runtime-private.pem> --trusted-public-key <runtime-public.pem> --require-signature
+python scripts/create_offline_runtime_bundle.py --target windows-x86_64 --profile core --require-supply-chain --output-dir release-runtime --signing-key <runtime-private.pem> --trusted-public-key <runtime-public.pem> --require-signature
 python scripts/windows_runtime_bundle_approval.py sign release-runtime\Dokkomplekt-offline-runtime-windows-x86_64.zip.signing.json --private-key <offline-approval-private.pem> --reviewer <reviewer>
 ```
 
@@ -134,9 +134,9 @@ Perform a real Windows restart and log back into the dedicated hardware runner a
 
 ### `verify`
 
-You may run the public workflow again for the same SHA with `reboot_phase=verify`; alternatively, the production `Build Signed Offline Installers` hardware gate automatically resolves the newest successful private `prepare` for that exact SHA and dispatches the matching private `verify` phase with the same request UUID. A fresh signed handoff is independently verified and the hardware runner proves post-reboot watcher behavior and executes the full physical contour.
+You may run the public workflow again for the same SHA with `reboot_phase=verify`; alternatively, the production `Build Signed Offline Installers` hardware gate automatically resolves the newest successful private `prepare` for that exact SHA and dispatches the matching private `verify` phase with the same request UUID **and prepare run ID**. Verify downloads the signed handoff from that prepare run instead of rebuilding it, so reboot recovery and the final hardware contour exercise the exact same Windows bytes.
 
-The production release workflow itself always runs this bridge on GitHub-hosted Linux under `windows-hardware-dispatch`; it never schedules a self-hosted runner in the public repository. If the required prepare/reboot has not happened yet, the release fails fast rather than remaining queued.
+The production release workflow itself always runs this bridge on GitHub-hosted Linux under `windows-hardware-dispatch`; it never schedules a self-hosted runner or a second Windows signer in the public repository. After private verify succeeds, the bridge downloads the exact prepare handoff and verify evidence, re-verifies the signed inventory, and those exact files—not a rebuilt equivalent—become the published Windows release. If the required prepare/reboot has not happened yet, the release fails fast rather than remaining queued.
 
 `FULL DOKKOMPLEKT AUTOPILOT` with `scope=production-hardware` may pass only after exact-SHA hardware evidence exists.
 

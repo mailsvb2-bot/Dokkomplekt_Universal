@@ -120,15 +120,19 @@ def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> No
     assert "protected_pinned_public_key" in release_evidence
     assert "--public-key $runtimePublicKey" not in release_evidence
 
-    assert "environment: windows-production-signing" in release_workflow
-    assert "runs-on: windows-latest" in release_workflow
-    assert "self-hosted, Windows, X64, dokkomplekt-runtime" not in release_workflow
-    assert "stage_signed_runtime_bundle.py" in release_workflow
-    assert "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL" in release_workflow
-    assert "verify_sidecar_authenticode.ps1" in release_workflow
-    assert "SIDECAR_AUTHENTICODE.json" in release_workflow
-    assert "--output-json verification/release/scanned-pdf-ocr.json" in release_workflow
-    assert "verification/release/**" in release_workflow
+    assert "environment: windows-production-signing" in workflow
+    assert "runs-on: windows-latest" in workflow
+    assert "self-hosted, Windows, X64, dokkomplekt-runtime" not in workflow
+    assert "stage_signed_runtime_bundle.py" in workflow
+    assert "--profile core" in workflow
+    assert "DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL" in workflow
+    assert "verify_sidecar_authenticode.ps1" in workflow
+    assert "SIDECAR_AUTHENTICODE.json" in workflow
+    assert "--output-json verification/release/scanned-pdf-ocr.json" in workflow
+    assert "  windows-signed-offline:" not in release_workflow
+    assert "Dokkomplekt-Windows-Private-Validated" in release_workflow
+    assert "gh run download" in release_workflow
+    assert "PUBLICATION_HANDOFF_VERIFICATION.json" in release_workflow
     assert "PRIVATE_HARDWARE_RELEASE_VERDICT.json" in release_workflow
     assert "--reuse-latest-prepare" in release_workflow
     assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" not in release_workflow

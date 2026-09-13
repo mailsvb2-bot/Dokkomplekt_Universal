@@ -73,34 +73,27 @@ def test_signing_script_forbids_exportable_production_pfx() -> None:
 
 
 def test_production_workflows_do_not_receive_pfx_secrets() -> None:
-    private = (
-        ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
-    ).read_text(encoding="utf-8")
-    build = (ROOT / ".github" / "workflows" / "build-installers.yml").read_text(
-        encoding="utf-8"
-    )
+    private = (ROOT / "ops/private-hardware-validation/windows-hardware-e2e.yml").read_text("utf-8")
+    build = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
 
+    assert "DOKKOMPLEKT_RELEASE_MODE: production" in private
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND }}" in private
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT }}" in private
+    assert "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER }}" in private
     for text in (private, build):
-        assert "DOKKOMPLEKT_RELEASE_MODE: production" in text
-        assert (
-            "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND: "
-            "${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND }}"
-        ) in text
-        assert (
-            "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT: "
-            "${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT }}"
-        ) in text
-        assert (
-            "DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER: "
-            "${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER }}"
-        ) in text
         assert "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_B64" not in text
         assert "secrets.DOKKOMPLEKT_WINDOWS_SIGNING_PFX_PASSWORD" not in text
 
-    hosted = build[build.index("  windows-signed-offline:") : build.index("  windows-hardware-e2e:")]
-    assert "Prove production signing certificate is provisioned and hardware-backed" in hosted
+    hosted = private[private.index("  signed-runtime-build:") : private.index("  hardware-evidence:")]
     assert "scripts/sign_windows_release.ps1 -VerifyCertificateOnly" in hosted
-    assert hosted.index("-VerifyCertificateOnly") < hosted.index("Fetch immutable independently approved runtime")
+    assert hosted.index("-VerifyCertificateOnly") < hosted.index("Fetch immutable pre-approved runtime bundle")
+    assert "inputs.reboot_phase == 'prepare'" in hosted
+    assert "--profile core" in hosted
+
+    # The public release is a dispatcher/publisher only; it must never create a second Windows binary.
+    assert "  windows-signed-offline:" not in build
+    assert "runs-on: windows-latest" not in build
+    assert "scripts/sign_windows_release.ps1 -ArtifactRoot" not in build
 
     hardware = private[private.index("  hardware-evidence:") :]
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT" not in hardware
@@ -118,4 +111,30 @@ def test_release_hardware_gate_routes_only_through_private_dispatcher() -> None:
     assert "--reboot-phase verify" in hardware
     assert "--reuse-latest-prepare" in hardware
     assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in hardware
-    assert "Dokkomplekt-Windows-Hardware-E2E-Evidence" in hardware
+    assert "Dokkomplekt-Windows-Private-Validated" in hardware
+    assert "gh run download" in hardware
+    assert "windows_signed_handoff.py verify" in hardware
+    assert "release-installers" in hardware
+
+
+def test_prepare_verify_and_publication_share_one_canonical_windows_handoff() -> None:
+    private = (ROOT / "ops/private-hardware-validation/windows-hardware-e2e.yml").read_text("utf-8")
+    public = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
+
+    hosted = private[private.index("  signed-runtime-build:") : private.index("  hardware-evidence:")]
+    hardware = private[private.index("  hardware-evidence:") :]
+    assert "inputs.reboot_phase == 'prepare'" in hosted
+    assert "release-installers/thin" in hosted
+    assert "release-installers/offline" in hosted
+    assert "--profile core" in hosted
+    assert "run-id: ${{ inputs.prepare_run_id }}" in hardware
+    assert "inputs.reboot_phase == 'verify'" in hardware
+    assert "signed-handoff/release-installers/offline" in hardware
+    assert "signed-handoff/release-runtime" in hardware
+
+    assert "  windows-signed-offline:" not in public
+    assert "gh run download \"$prepare_run_id\"" in public
+    assert "gh run download \"$verify_run_id\"" in public
+    assert "windows_signed_handoff.py verify private-release/handoff" in public
+    assert "Dokkomplekt-Windows-Private-Validated" in public
+    assert "private-windows/private-release/handoff/release-installers" in public

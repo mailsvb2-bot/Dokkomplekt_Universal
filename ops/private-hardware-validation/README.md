@@ -18,7 +18,7 @@ Only the `hardware-evidence` job is self-hosted. Register one interactive Window
 
 It needs licensed Microsoft Word and the dedicated real printer used by the hardware acceptance test. It must not contain production signing keys.
 
-The `signed-runtime-build` job runs on ephemeral GitHub-hosted `windows-latest` in protected environment `windows-production-signing`; no user-owned signing/runtime computer is required.
+The `signed-runtime-build` job runs only for `prepare`, on ephemeral GitHub-hosted `windows-latest` in protected environment `windows-production-signing`; no user-owned signing/runtime computer is required. `verify` receives the successful `prepare_run_id` and downloads that exact signed handoff instead of rebuilding it.
 
 ## Private repository settings
 
@@ -49,4 +49,4 @@ The public source repository pins the private target in `.github/workflows/windo
 - repository `mailsvb2-bot/Dokkomplekt_Hardware_Validation`;
 - workflow `windows-hardware-e2e.yml`.
 
-Environment `windows-hardware-dispatch` therefore needs only secret `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN`, with the minimum private-repository metadata/Actions access needed to dispatch and read workflow runs. The public dispatcher verifies that the target remains a separate private repository.
+Environment `windows-hardware-dispatch` needs secret `DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN`, with the minimum private-repository metadata/Actions access needed to dispatch/read/download workflow artifacts, plus non-secret `DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64` so the public publisher can independently re-verify the returned signed handoff before release publication. The public dispatcher verifies that the target remains a separate private repository.

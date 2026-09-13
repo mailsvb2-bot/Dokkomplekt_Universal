@@ -115,172 +115,9 @@ jobs:
         run: bash scripts/prepackage_rust_gate.sh
       - run: python scripts/assert_release_ready.py
 
-  windows-signed-offline:
-    name: Hosted signed Windows NSIS + approved offline runtime
-    needs: release-gate
-    runs-on: windows-latest
-    environment: windows-production-signing
-    timeout-minutes: 120
-    env:
-      DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
-      DOKKOMPLEKT_LICENSE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}
-      DOKKOMPLEKT_UPDATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_UPDATE_PUBKEY_B64 }}
-      DOKKOMPLEKT_THRESHOLD_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_THRESHOLD_PUBKEY_B64 }}
-      DOKKOMPLEKT_REFDATA_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_REFDATA_PUBKEY_B64 }}
-      DOKKOMPLEKT_UPDATE_MANIFEST_URL: ${{ vars.DOKKOMPLEKT_UPDATE_MANIFEST_URL }}
-      DOKKOMPLEKT_REFDATA_URL: ${{ vars.DOKKOMPLEKT_REFDATA_URL }}
-      DOKKOMPLEKT_COMPONENTS_CATALOG_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_CATALOG_URL }}
-      DOKKOMPLEKT_COMPONENTS_BASE_URL: ${{ vars.DOKKOMPLEKT_COMPONENTS_BASE_URL }}
-      DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
-      DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64 }}
-      DOKKOMPLEKT_RUNTIME_BUNDLE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_URL }}
-      DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL }}
-      DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL }}
-      DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL }}
-      DOKKOMPLEKT_TIMESTAMP_SERVER: ${{ vars.DOKKOMPLEKT_TIMESTAMP_SERVER }}
-      DOKKOMPLEKT_RELEASE_MODE: production
-      DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND }}
-      DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT }}
-      DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER: ${{ vars.DOKKOMPLEKT_WINDOWS_SIGNING_ALLOWED_PROVIDER }}
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: 1.97.1
-          components: rustfmt, clippy
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22
-          cache: npm
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: '3.12'
-      - run: python -m pip install -r requirements-dev.txt
-      - name: Validate ephemeral hosted signing boundary
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64: ${{ secrets.DOKKOMPLEKT_RUNTIME_SIGNING_KEY_PEM_B64 }}
-          DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
-        run: python scripts/verify_windows_hosted_signing_runner.py --json-report verification/release/HOSTED_SIGNING_PREFLIGHT.json
-      - name: Prove production signing certificate is provisioned and hardware-backed
-        shell: pwsh
-        run: scripts/sign_windows_release.ps1 -VerifyCertificateOnly
-      - name: Fetch immutable independently approved runtime
-        shell: pwsh
-        run: |
-          python scripts/fetch_hosted_runtime_bundle.py `
-            --bundle-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_URL `
-            --payload-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_PAYLOAD_URL `
-            --signature-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_SIGNATURE_URL `
-            --approval-signature-url $env:DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL `
-            --out release-runtime `
-            --json-report verification/release/HOSTED_RUNTIME_FETCH.json
-      - name: Verify both runtime signatures and stage exact reviewed tree
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $runtimeKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-public-{0}.pem" -f [guid]::NewGuid())
-          $approvalKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-approval-public-{0}.pem" -f [guid]::NewGuid())
-          try {
-            [IO.File]::WriteAllBytes($runtimeKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
-            [IO.File]::WriteAllBytes($approvalKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64))
-            $bundle = (Resolve-Path release-runtime/Dokkomplekt-offline-runtime-windows-x86_64.zip).Path
-            $payload = "$bundle.signing.json"
-            python scripts/stage_signed_runtime_bundle.py $bundle --payload $payload --signature "$payload.sig" --trusted-runtime-public-key $runtimeKey --approval-signature "$payload.approval.sig" --trusted-approval-public-key $approvalKey --profile core --clean --json-report verification/release/HOSTED_RUNTIME_STAGE.json
-            if ($LASTEXITCODE -ne 0) { throw 'hosted runtime staging failed' }
-          } finally {
-            Remove-Item -LiteralPath $runtimeKey -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $approvalKey -Force -ErrorAction SilentlyContinue
-          }
-      - name: Verify production runtime staged from immutable approved bundle
-        shell: pwsh
-        run: |
-          python scripts/assert_offline_runtime_ready.py --target windows-x86_64 --profile core --require-supply-chain --production
-          python scripts/verify_windows_runtime_app_parity.py --target windows-x86_64 --profile core
-          tests/windows/verify_sidecar_authenticode.ps1 -RuntimeRoot src-tauri/resources/tools/windows-x86_64 -OutputPath verification/release/SIDECAR_AUTHENTICODE.json
-          python scripts/probe_offline_runtime.py --target windows-x86_64 --profile core
-          python scripts/verify_scanned_pdf_fixture.py --runtime-root src-tauri/resources/tools/windows-x86_64 --output-json verification/release/scanned-pdf-ocr.json
-      - name: Install current CVSS-4-compatible cargo-audit on packaging runner
-        run: cargo install cargo-audit --locked --version 0.22.2
-      - name: Repeat mandatory Rust gate on packaging runner
-        shell: cmd
-        env:
-          DOKKOMPLEKT_GATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_GATE_PRIVATE_KEY_B64 }}
-        run: scripts\prepackage_rust_gate.bat
-      - run: python scripts/assert_release_ready.py
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test
-      - run: npm run build
-      - name: Build deterministic signed core component overlay
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64: ${{ secrets.DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64 }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_UPDATE_PRIVATE_KEY_B64)) { throw 'Update signing key is required for components catalog.' }
-          python scripts/build_component_packs.py --target windows-x86_64 --components ocr,office,archive --app-min-version 18.3.0 --base-url $env:DOKKOMPLEKT_COMPONENTS_BASE_URL --out release-components --require-trusted-public-key
-          $catalog = Get-Content release-components/components-catalog.json -Raw | ConvertFrom-Json
-          if ($catalog.payload.catalog_scope -ne 'partial') { throw 'Core component catalog must be a partial overlay so omitted semantic availability is not revoked.' }
-          if ($catalog.payload.components.id -contains 'semantic') { throw 'Core installer workflow must not rebuild or embed the semantic component.' }
-      - name: Require clean production release artifact boundary
-        shell: pwsh
-        run: |
-          if (Test-Path 'target/release/dokkomplekt-tauri.exe') {
-            throw 'Production packaging boundary contaminated: release application binary existed before the canonical Tauri build.'
-          }
-      - name: Build unsigned application binary without bundling
-        run: npx tauri build --no-bundle
-      - name: Sign and verify application binary before it is embedded
-        shell: pwsh
-        run: scripts/sign_windows_release.ps1 -ArtifactRoot target/release/dokkomplekt-tauri.exe
-      - name: Bundle thin signed application into NSIS
-        run: npx tauri bundle --bundles nsis --config src-tauri/tauri.thin.conf.json
-      - name: Sign and preserve thin NSIS installer
-        shell: pwsh
-        run: |
-          scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
-          New-Item -ItemType Directory -Force release-installers/thin | Out-Null
-          Copy-Item target/release/bundle/nsis/* release-installers/thin/ -Recurse -Force
-      - name: Bundle all-in-one offline NSIS from the same verified staged files
-        run: npx tauri bundle --bundles nsis --config src-tauri/tauri.offline.conf.json
-      - name: Sign and preserve offline NSIS installer
-        shell: pwsh
-        run: |
-          scripts/sign_windows_release.ps1 -ArtifactRoot target/release/bundle/nsis
-          New-Item -ItemType Directory -Force release-installers/offline | Out-Null
-          Copy-Item target/release/bundle/nsis/* release-installers/offline/ -Recurse -Force
-      - name: Windows installer/offline contract smoke
-        shell: pwsh
-        env:
-          DOKKOMPLEKT_REQUIRE_AUTHENTICODE: "1"
-        run: tests/installer/windows_installer_contract.ps1
-      - name: Write independently verifiable signed-build evidence
-        shell: pwsh
-        run: |
-          $trustedKey = Join-Path $env:RUNNER_TEMP ("dokkomplekt-runtime-evidence-{0}.pem" -f [guid]::NewGuid())
-          try {
-            [IO.File]::WriteAllBytes($trustedKey, [Convert]::FromBase64String($env:DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64))
-            scripts/write_windows_release_evidence.ps1 -InstallerRoot release-installers -RuntimeRoot release-runtime -ApplicationPath target/release/dokkomplekt-tauri.exe -RuntimeTrustedPublicKey $trustedKey
-          } finally {
-            Remove-Item -LiteralPath $trustedKey -Force -ErrorAction SilentlyContinue
-          }
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
-        with:
-          name: Dokkomplekt-Windows-NSIS-Signed-Offline
-          path: |
-            release-installers/**
-            release-components/**
-            release-runtime/**
-            verification/release/**
-            .cargo-gate/**
-            .release-gate/**
-          if-no-files-found: error
-
   windows-hardware-e2e:
-    name: REQUIRED private Windows Word / printer / watcher / reboot verdict
-    needs: [release-plan, windows-signed-offline]
+    name: REQUIRED exact private Windows release / hardware verdict
+    needs: [release-plan, release-gate]
     if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
     environment: windows-hardware-dispatch
@@ -289,6 +126,7 @@ jobs:
       DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY: mailsvb2-bot/Dokkomplekt_Hardware_Validation
       DOKKOMPLEKT_HARDWARE_VALIDATION_WORKFLOW: windows-hardware-e2e.yml
       DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN: ${{ secrets.DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN }}
+      DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
@@ -297,11 +135,13 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Prove private hardware dispatch boundary
         shell: bash
         run: |
           set -euo pipefail
           test -n "$DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN"
+          test -n "$DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64"
           test "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" != "$GITHUB_REPOSITORY"
           test "$(git rev-parse HEAD)" = '${{ needs.release-plan.outputs.release_sha }}'
       - name: Reuse successful prepare and require private verify verdict
@@ -316,11 +156,55 @@ jobs:
           --reboot-phase verify
           --reuse-latest-prepare
           --json-report verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json
-      - name: Upload immutable private hardware verdict reference
+      - name: Download the exact private handoff and hardware evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          report=verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json
+          request_id="$(jq -r '.request_id' "$report")"
+          prepare_run_id="$(jq -r '.prepare_run_id' "$report")"
+          verify_run_id="$(jq -r '.run_id' "$report")"
+          test "$request_id" != null && test -n "$request_id"
+          [[ "$prepare_run_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$verify_run_id" =~ ^[1-9][0-9]*$ ]]
+          mkdir -p private-release/handoff private-release/evidence
+          gh run download "$prepare_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Signed-Handoff-${{ needs.release-plan.outputs.release_sha }}-$request_id"             --dir private-release/handoff
+          gh run download "$verify_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Hardware-E2E-verify-$request_id"             --dir private-release/evidence
+          echo "DOKKOMPLEKT_RELEASE_REQUEST_ID=$request_id" >> "$GITHUB_ENV"
+      - name: Cryptographically bind publication to the hardware-tested handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          trusted_key="$RUNNER_TEMP/dokkomplekt-handoff-public.pem"
+          python - <<'PYKEY'
+          import base64, os
+          from pathlib import Path
+          Path(os.environ['RUNNER_TEMP'], 'dokkomplekt-handoff-public.pem').write_bytes(
+              base64.b64decode(os.environ['DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64'], validate=True)
+          )
+          PYKEY
+          consumer_host_id="$(printf '%s' "public-release-publisher:$GITHUB_RUN_ID:$GITHUB_JOB" | sha256sum | awk '{print $1}')"
+          python scripts/windows_signed_handoff.py verify private-release/handoff             --release-sha "${{ needs.release-plan.outputs.release_sha }}"             --request-id "$DOKKOMPLEKT_RELEASE_REQUEST_ID"             --trusted-public-key "$trusted_key"             --consumer-host-id "$consumer_host_id"             --json-report verification/release/PUBLICATION_HANDOFF_VERIFICATION.json
+          mapfile -t evidence_manifests < <(find private-release/evidence -type f -name SIGNED_HANDOFF.json -print)
+          mapfile -t evidence_signatures < <(find private-release/evidence -type f -name SIGNED_HANDOFF.json.sig -print)
+          test "${#evidence_manifests[@]}" -eq 1
+          test "${#evidence_signatures[@]}" -eq 1
+          cmp private-release/handoff/SIGNED_HANDOFF.json "${evidence_manifests[0]}"
+          cmp private-release/handoff/SIGNED_HANDOFF.json.sig "${evidence_signatures[0]}"
+          test "$(find private-release/handoff/release-installers/thin -type f -name '*.exe' | wc -l)" -eq 1
+          test "$(find private-release/handoff/release-installers/offline -type f -name '*.exe' | wc -l)" -eq 1
+          test -d private-release/handoff/release-components
+          test -d private-release/handoff/release-runtime
+      - name: Upload exact privately validated Windows release
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
-          name: Dokkomplekt-Windows-Hardware-E2E-Evidence
-          path: verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json
+          name: Dokkomplekt-Windows-Private-Validated
+          path: |
+            private-release/**
+            verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json
+            verification/release/PUBLICATION_HANDOFF_VERIFICATION.json
           if-no-files-found: error
 
   linux-bundles:
@@ -396,12 +280,22 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: Dokkomplekt-Windows-NSIS-Signed-Offline
-          path: release/windows
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: Dokkomplekt-Windows-Hardware-E2E-Evidence
-          path: release/evidence
+          name: Dokkomplekt-Windows-Private-Validated
+          path: private-windows
+      - name: Materialize only the exact hardware-validated Windows payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/windows release/components release/runtime release/evidence/build release/evidence/hardware release/evidence/handoff
+          cp -a private-windows/private-release/handoff/release-installers/. release/windows/
+          cp -a private-windows/private-release/handoff/release-components/. release/components/
+          cp -a private-windows/private-release/handoff/release-runtime/. release/runtime/
+          cp -a private-windows/private-release/handoff/build-evidence/. release/evidence/build/
+          cp -a private-windows/private-release/evidence/. release/evidence/hardware/
+          cp private-windows/private-release/handoff/SIGNED_HANDOFF.json release/evidence/handoff/
+          cp private-windows/private-release/handoff/SIGNED_HANDOFF.json.sig release/evidence/handoff/
+          cp private-windows/verification/release/PRIVATE_HARDWARE_RELEASE_VERDICT.json release/evidence/
+          cp private-windows/verification/release/PUBLICATION_HANDOFF_VERIFICATION.json release/evidence/
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: Dokkomplekt-Linux-AppImage-deb-rpm

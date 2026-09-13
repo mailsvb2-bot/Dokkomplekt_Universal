@@ -466,21 +466,38 @@ fn persist_generation_completion_receipt(
     publication: &PublicationReceipt,
 ) -> Result<PathBuf, String> {
     let receipt = completion_receipt_from_publication(publication)?;
-    let path = app_data
-        .join(COMPLETION_RECEIPT_DIR)
-        .join(format!("{}.json", receipt.receipt_id));
-    if path.exists() {
-        let existing_bytes = std::fs::read(&path).map_err(|error| {
-            format!("Не удалось прочитать существующий committed GenerationReceipt: {error}")
-        })?;
-        let existing = serde_json::from_slice::<GenerationCompletionReceipt>(&existing_bytes)
-            .map_err(|error| {
+    std::fs::create_dir_all(app_data).map_err(|error| {
+        format!("Не удалось подготовить app-data для committed GenerationReceipt: {error}")
+    })?;
+    let receipt_dir = crate::publication_service_directory(app_data, COMPLETION_RECEIPT_DIR, true)?;
+    let path = receipt_dir.join(format!("{}.json", receipt.receipt_id));
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+                return Err(format!(
+                    "Committed GenerationReceipt имеет небезопасный тип файла: {}",
+                    path.display()
+                ));
+            }
+            let existing_bytes = std::fs::read(&path).map_err(|error| {
+                format!("Не удалось прочитать существующий committed GenerationReceipt: {error}")
+            })?;
+            let existing = serde_json::from_slice::<GenerationCompletionReceipt>(&existing_bytes)
+                .map_err(|error| {
                 format!("Существующий committed GenerationReceipt повреждён: {error}")
             })?;
-        if !completion_receipts_match_identity(&existing, &receipt) {
-            return Err("Конфликт committed GenerationReceipt: существующая квитанция с тем же identity не соответствует опубликованному результату.".into());
+            if !completion_receipts_match_identity(&existing, &receipt) {
+                return Err("Конфликт committed GenerationReceipt: существующая квитанция с тем же identity не соответствует опубликованному результату.".into());
+            }
+            return Ok(path);
         }
-        return Ok(path);
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Не удалось безопасно проверить committed GenerationReceipt {}: {error}",
+                path.display()
+            ));
+        }
     }
     let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
     crate::atomic_write_file(&path, &bytes).map_err(|error| {
@@ -1133,6 +1150,60 @@ mod tests {
             .expect_err("conflicting committed receipt must fail closed");
         assert!(error.contains("Конфликт committed GenerationReceipt"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_generation_receipt_never_follows_symlinked_service_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("completion-receipt-dir-symlink");
+        let external = temp_root("completion-receipt-dir-external");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        symlink(&external, root.join(COMPLETION_RECEIPT_DIR)).unwrap();
+        let publication = receipt_fixture(RECEIPT_SCHEMA, Some(PublicationPhase::Published));
+
+        let error = persist_generation_completion_receipt(&root, &publication)
+            .expect_err("symlinked completion receipt directory must fail closed");
+        assert!(error.contains("небезопасный тип"));
+        assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_generation_receipt_never_follows_symlinked_receipt_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("completion-receipt-file-symlink");
+        let external = temp_root("completion-receipt-file-external");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let receipt_dir = root.join(COMPLETION_RECEIPT_DIR);
+        std::fs::create_dir_all(&receipt_dir).unwrap();
+        let publication = receipt_fixture(RECEIPT_SCHEMA, Some(PublicationPhase::Published));
+        let receipt = completion_receipt_from_publication(&publication).unwrap();
+        let external_file = external.join("outside.json");
+        std::fs::write(&external_file, b"outside must stay untouched").unwrap();
+        symlink(
+            &external_file,
+            receipt_dir.join(format!("{}.json", receipt.receipt_id)),
+        )
+        .unwrap();
+
+        let error = persist_generation_completion_receipt(&root, &publication)
+            .expect_err("symlinked committed receipt file must fail closed");
+        assert!(error.contains("небезопасный тип файла"));
+        assert_eq!(
+            std::fs::read(&external_file).unwrap(),
+            b"outside must stay untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
     }
 
     #[test]

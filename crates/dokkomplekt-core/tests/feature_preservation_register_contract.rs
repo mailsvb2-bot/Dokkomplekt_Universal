@@ -35,7 +35,11 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
     let baseline_commit = register["baseline"]["commit"]
         .as_str()
         .expect("baseline.commit must be a string");
-    assert_eq!(baseline_commit.len(), 40, "baseline.commit must be a full SHA-1");
+    assert_eq!(
+        baseline_commit.len(),
+        40,
+        "baseline.commit must be a full SHA-1"
+    );
     assert!(
         baseline_commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "baseline.commit must contain only hexadecimal characters"
@@ -85,7 +89,11 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
     let features = register["features"]
         .as_array()
         .expect("features must be an array");
-    assert_eq!(features.len(), expected.len(), "Canon §3 feature groups changed");
+    assert_eq!(
+        features.len(),
+        expected.len(),
+        "Canon §3 feature groups changed"
+    );
 
     let mut seen_ids = BTreeSet::new();
     let mut seen_groups = BTreeSet::new();
@@ -101,14 +109,27 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
             .expect("feature.status must be a string");
 
         assert!(seen_ids.insert(id), "duplicate feature id: {id}");
-        assert!(seen_groups.insert(group), "duplicate feature group: {group}");
-        assert_eq!(expected.get(id).copied(), Some(group), "unexpected Canon feature");
-        assert!(allowed_statuses.contains(status), "unsupported status for {id}: {status}");
+        assert!(
+            seen_groups.insert(group),
+            "duplicate feature group: {group}"
+        );
+        assert_eq!(
+            expected.get(id).copied(),
+            Some(group),
+            "unexpected Canon feature"
+        );
+        assert!(
+            allowed_statuses.contains(status),
+            "unsupported status for {id}: {status}"
+        );
 
         let actual_state = feature["actual_state"]
             .as_str()
             .expect("actual_state must be a string");
-        assert!(!actual_state.trim().is_empty(), "actual_state is empty for {id}");
+        assert!(
+            !actual_state.trim().is_empty(),
+            "actual_state is empty for {id}"
+        );
 
         non_empty_array(feature, "entry");
         non_empty_array(feature, "backend");
@@ -130,7 +151,10 @@ fn canon_v2_feature_preservation_register_is_complete_and_honest() {
                 .as_str()
                 .unwrap_or_else(|| panic!("evidence path must be a string for {id}"));
             let path = root.join(relative);
-            assert!(path.exists(), "evidence path for {id} does not exist: {relative}");
+            assert!(
+                path.exists(),
+                "evidence path for {id} does not exist: {relative}"
+            );
         }
 
         let runtime_evidence = feature["runtime_evidence"]

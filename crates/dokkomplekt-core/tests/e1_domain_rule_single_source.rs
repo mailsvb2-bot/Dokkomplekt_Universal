@@ -77,7 +77,10 @@ fn canonical_nonmedical_role_rules_preserve_pre_e1_requirements() {
         let actual = required_fields_for_plugin_role(&domain, role, &empty_flags, &empty_present)
             .into_iter()
             .collect::<BTreeSet<_>>();
-        assert_eq!(actual, expected, "role requirement drift for {domain:?}/{role}");
+        assert_eq!(
+            actual, expected,
+            "role requirement drift for {domain:?}/{role}"
+        );
     }
 }
 
@@ -118,7 +121,11 @@ fn accounting_service_act_pipeline_and_scenario_share_one_rule_resolver() {
         &WorkflowFlagSetV2::default(),
     );
 
-    let pipeline_required = pipeline.workflow.requires.into_iter().collect::<BTreeSet<_>>();
+    let pipeline_required = pipeline
+        .workflow
+        .requires
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let scenario_required = scenario
         .requires
         .into_iter()
@@ -140,5 +147,7 @@ fn accounting_service_act_pipeline_and_scenario_share_one_rule_resolver() {
             "amount.vat",
         ])
     );
-    assert!(pipeline_required.iter().all(|field| !field.starts_with("medical.")));
+    assert!(pipeline_required
+        .iter()
+        .all(|field| !field.starts_with("medical.")));
 }

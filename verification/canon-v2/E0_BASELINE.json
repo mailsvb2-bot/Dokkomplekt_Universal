@@ -1,0 +1,89 @@
+{
+  "schema": "dokkomplekt.canon-v2.e0-baseline.v1",
+  "canon_revision": "2.0",
+  "captured_at": "2026-09-13",
+  "source_baseline": {
+    "branch": "main",
+    "commit": "25a928844a1c98fe9f60000db6ba73eb626b9328",
+    "tree": "9eddbb5b761ff62c07cd5f26fba61556fd6d1fa6",
+    "version": "18.4.7",
+    "tracked_file_count": 674,
+    "generation_mechanics_changed_by_e0": false
+  },
+  "build_baseline": {
+    "unsigned_windows_preview": {
+      "run_id": 34757730150,
+      "conclusion": "success",
+      "head_sha": "25a928844a1c98fe9f60000db6ba73eb626b9328"
+    },
+    "signed_production_installer": {
+      "run_id": 34758816125,
+      "conclusion": "failure",
+      "classification": "known-unproven-production-boundary",
+      "details": "A signed production release is not claimed by E0; see verification/KNOWN_LIMITATIONS.md."
+    }
+  },
+  "fixture_baseline": {
+    "docx_manifest": "tests/fixtures/docx/corpus-manifest.json",
+    "docx_fixture_count": 7,
+    "docx_fixture_bytes": 231422,
+    "fixture_roots": [
+      "tests/fixtures/docx",
+      "tests/fixtures/ocr",
+      "tests/fixtures/outlook-msg",
+      "tests/fixtures/ui"
+    ],
+    "policy": "Only synthetic or verified-anonymized fixtures may enter the public CI corpus."
+  },
+  "known_baseline_gaps": [
+    {
+      "id": "E0-GAP-01",
+      "scope": "signed-production-release",
+      "status": "known-unproven",
+      "evidence": "verification/KNOWN_LIMITATIONS.md"
+    },
+    {
+      "id": "E0-GAP-02",
+      "scope": "installed-windows-hardware-path",
+      "status": "needs-runtime-proof",
+      "evidence": "verification/KNOWN_LIMITATIONS.md"
+    },
+    {
+      "id": "E0-GAP-03",
+      "scope": "all-23-feature-runtime-closure",
+      "status": "needs-runtime-proof",
+      "evidence": "docs/CANON_FEATURE_PRESERVATION_REGISTER.json"
+    }
+  ],
+  "resource_baseline": {
+    "static_footprint": {
+      "tracked_file_count": 674,
+      "docx_fixture_count": 7,
+      "docx_fixture_bytes": 231422
+    },
+    "runtime_measurements": {
+      "status": "deferred-to-E6",
+      "reason": "E0 records reproducible scope and does not invent host-specific CPU/RSS/startup values. The Canon performance protocol measures installed runtime classes in E6.",
+      "required_metrics": [
+        "cpu",
+        "peak_rss",
+        "disk_writes",
+        "staging_size",
+        "cold_startup",
+        "ui_responsiveness"
+      ]
+    }
+  },
+  "u00": {
+    "contract": "tests/test_canon_u00_positioning_contract.py",
+    "expected": "generic product surfaces remain profession-neutral; Medical remains an optional profile"
+  },
+  "e0_exit": {
+    "feature_groups_inventoried": 23,
+    "known_gaps_are_explicit": true,
+    "fixture_baseline_recorded": true,
+    "resource_scope_recorded": true,
+    "generation_mechanics_changed": false,
+    "complete": true
+  }
+}

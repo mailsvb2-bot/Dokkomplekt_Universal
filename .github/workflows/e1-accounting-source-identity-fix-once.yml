@@ -22,11 +22,14 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
       - name: Apply exact profile fix, prove it, sync manifest, and self-delete
         shell: bash
         run: |
           set -euo pipefail
-          expected_parent='e07d62e47f9a406e40de745a1ab2efbc808de3b0'
+          expected_parent='dff2605831888523cd8436feda2f4c731137b06c'
           workflow='.github/workflows/e1-accounting-source-identity-fix-once.yml'
           popup='crates/dokkomplekt-core/src/popup_profiles.rs'
           engine='crates/dokkomplekt-core/src/workflow_engine.rs'

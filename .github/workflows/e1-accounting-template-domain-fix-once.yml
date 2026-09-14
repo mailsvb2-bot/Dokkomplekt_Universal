@@ -1,0 +1,87 @@
+name: E1 Accounting Template Domain Fix Once
+
+on:
+  push:
+    branches: [canon-v2/e1-accounting-pipeline]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: e1-accounting-template-domain-fix-once
+  cancel-in-progress: false
+
+jobs:
+  fix-and-prove:
+    if: github.repository == 'mailsvb2-bot/Dokkomplekt_Universal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply canonical plugin evidence fix, prove it, sync manifest, and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent='184fb2c660ecec4ed9102daa74ca7db3af60802d'
+          workflow='.github/workflows/e1-accounting-template-domain-fix-once.yml'
+          target='crates/dokkomplekt-core/src/template_intelligence.rs'
+
+          test "$(git rev-parse HEAD^)" = "$expected_parent"
+          test "$(git diff --name-only HEAD^ HEAD)" = "$workflow"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/dokkomplekt-core/src/template_intelligence.rs')
+          text = path.read_text()
+
+          old_tail = '''    scores.insert("medical".to_string(), medical);\n    scores.insert("legal".to_string(), legal);\n    scores.insert("hr".to_string(), hr);\n    scores.insert("accounting".to_string(), accounting);\n    scores.insert("education".to_string(), education);\n    scores\n}\n\nfn detect_role(text: &str, title: &str) -> String {\n'''
+          new_tail = '''    scores.insert("medical".to_string(), medical);\n    scores.insert("legal".to_string(), legal);\n    scores.insert("hr".to_string(), hr);\n    scores.insert("accounting".to_string(), accounting);\n    scores.insert("education".to_string(), education);\n    add_domain_plugin_evidence(&lower, placeholders, &mut scores);\n    scores\n}\n\n/// Strengthen template-domain discovery with the same canonical plugin metadata\n/// that owns domain roles and fields at runtime. This is evidence, not an override:\n/// shared fields such as contract.number may support Legal while accounting fields\n/// support Accounting, and exact role signals provide the extra distinction.\nfn add_domain_plugin_evidence(\n    normalized_text: &str,\n    placeholders: &[String],\n    scores: &mut BTreeMap<String, usize>,\n) {\n    for plugin in crate::builtin_domain_plugins_v2() {\n        let domain_key = match &plugin.id {\n            crate::DomainPluginId::Medical => "medical",\n            crate::DomainPluginId::Legal => "legal",\n            crate::DomainPluginId::Hr => "hr",\n            crate::DomainPluginId::Education => "education",\n            crate::DomainPluginId::Accounting => "accounting",\n            crate::DomainPluginId::Core | crate::DomainPluginId::Custom => continue,\n        };\n\n        let role_signal_hits = plugin\n            .role_signals\n            .values()\n            .flatten()\n            .filter(|signal| {\n                let signal = normalize_domain_evidence(signal);\n                !signal.is_empty() && normalized_text.contains(&signal)\n            })\n            .count();\n        let field_hits = plugin\n            .field_definitions\n            .iter()\n            .filter(|field| {\n                placeholders.iter().any(|placeholder| {\n                    let placeholder = normalize_domain_evidence(placeholder);\n                    placeholder == normalize_domain_evidence(&field.id)\n                        || field\n                            .aliases\n                            .iter()\n                            .any(|alias| placeholder == normalize_domain_evidence(alias))\n                })\n            })\n            .count();\n\n        if role_signal_hits == 0 && field_hits == 0 {\n            continue;\n        }\n        // Existing Template Intelligence gives canonical prefixed placeholders a\n        // weight of 3. Keep the same weight for plugin-owned fields; exact role\n        // phrases are stronger evidence and use the role weight already used by\n        // document routing for service acts.\n        *scores.entry(domain_key.to_string()).or_default() +=\n            role_signal_hits * 5 + field_hits * 3;\n    }\n}\n\nfn normalize_domain_evidence(value: &str) -> String {\n    value.trim().to_lowercase().replace('ё', "е")\n}\n\nfn detect_role(text: &str, title: &str) -> String {\n'''
+          assert text.count(old_tail) == 1, 'score_domains tail anchor changed'
+          text = text.replace(old_tail, new_tail, 1)
+
+          test_anchor = '''    #[test]\n    fn button_label_truncation_preserves_utf8_boundaries() {\n'''
+          test = '''    #[test]\n    fn accounting_service_act_uses_plugin_evidence_over_shared_legal_vocabulary() {\n        let analysis = analyze_template_text(\n            "АКТ ОКАЗАННЫХ УСЛУГ\\n№ {{document.number}} от {{document.date}}\\nИсполнитель: {{org.name}}\\nЗаказчик: {{counterparty.name}}\\nДоговор № {{contract.number}} от {{contract.date}}\\nПредмет договора: {{contract.subject}}\\nСумма: {{amount.total}} {{amount.currency}}\\nНДС: {{amount.vat}}",\n        );\n\n        assert_eq!(best_domain(&analysis), DomainKind::Accounting);\n        assert_eq!(analysis.role_id, "service_act");\n\n        let document = create_document_spec(\n            "accounting.service_act",\n            "service_act.docx",\n            &analysis,\n            Some("Акт оказанных услуг"),\n        );\n        assert_eq!(document.category, DomainKind::Accounting);\n        for field_id in ["document.number", "document.date"] {\n            let prompt = document\n                .popup_fields\n                .iter()\n                .find(|field| field.field_id == field_id)\n                .unwrap_or_else(|| panic!("missing popup field {field_id}"));\n            assert_eq!(prompt.ask_mode, crate::PromptAskMode::Confirm);\n        }\n    }\n\n'''
+          assert text.count(test_anchor) == 1, 'test anchor changed'
+          path.write_text(text.replace(test_anchor, test + test_anchor, 1))
+          PY
+
+          cargo fmt --all
+          git diff --check
+          cargo test -p dokkomplekt-core accounting_service_act_uses_plugin_evidence_over_shared_legal_vocabulary
+          cargo test -p dokkomplekt-core accounting_service_act_source_identity_is_confirmed_not_cleared
+          cargo test -p dokkomplekt-core accounting_service_act_prefills_scanned_identity_for_confirmation
+          cargo test -p dokkomplekt-core
+
+          git rm "$workflow"
+          changed_before_manifest="$(git diff HEAD --name-only | sort)"
+          expected_before_manifest="$(printf '%s\n' "$target" "$workflow" | sort)"
+          test "$changed_before_manifest" = "$expected_before_manifest"
+
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report /tmp/source-manifest-report.json || true
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          git add "$target" SOURCE_MANIFEST_SHA256.txt
+          git diff --cached --check
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.recheck.txt \
+            --json-report /tmp/source-manifest-recheck.json
+          cmp -s SOURCE_MANIFEST_SHA256.txt /tmp/SOURCE_MANIFEST_SHA256.recheck.txt
+
+          final_changed="$(git diff HEAD --name-only | sort)"
+          expected_final="$(printf '%s\n' SOURCE_MANIFEST_SHA256.txt "$target" "$workflow" | sort)"
+          test "$final_changed" = "$expected_final"
+
+          git config user.name 'Dokkomplekt CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: classify service acts from canonical plugin evidence'
+          git push origin HEAD:refs/heads/canon-v2/e1-accounting-pipeline

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$BundleDir = "target\release\bundle",
   [string]$TauriConfig = "src-tauri\tauri.conf.json",
   [ValidateSet("", "downloadBootstrapper", "offlineInstaller")]

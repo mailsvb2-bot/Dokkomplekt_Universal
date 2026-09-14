@@ -6,6 +6,9 @@ WORKFLOW = ROOT / ".github" / "workflows" / "quality-gate.yml"
 
 
 def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
+    assert SCRIPT.read_bytes().startswith(b"\xef\xbb\xbf"), (
+        "Windows PowerShell 5.1 requires UTF-8 BOM for Cyrillic literals in the E1 installed contract"
+    )
     source = SCRIPT.read_text(encoding="utf-8-sig")
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

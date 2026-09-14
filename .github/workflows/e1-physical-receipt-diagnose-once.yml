@@ -1,0 +1,75 @@
+name: E1 Physical Receipt Diagnose Once
+
+on:
+  push:
+    branches: [canon-v2/e1-accounting-pipeline]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e1-physical-receipt-diagnose-once
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.repository == 'mailsvb2-bot/Dokkomplekt_Universal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Guard exact diagnostic parent and patch bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 'e23928da297e749d4fd4874b858ea139d8a310c7'
+          test "$(git diff --name-only HEAD^ HEAD)" = '.github/workflows/e1-physical-receipt-diagnose-once.yml'
+          test "$(git hash-object .github/e1-physical-completion-receipt.patch)" = '0b07822dcf307052487dbbe385d0c6c283523363'
+          test "$(sha256sum .github/e1-physical-completion-receipt.patch | awk '{print $1}')" = '7d1f81e5dba4a209ca5ccbf40a91bc4845f79282635eb2253ca07ade8941fd2b'
+          test "$(git hash-object src-tauri/src/generation_publication.rs)" = '6bd3ff2cc2bcf4bb913771248c7fb1c598fc64f6'
+          test "$(git hash-object src-tauri/src/subsystems/document_commands.rs)" = '5b4776a589391cb7124293617f579d88889ebbd7'
+      - name: Apply exact verified product diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .github/e1-physical-completion-receipt.patch
+          git apply .github/e1-physical-completion-receipt.patch
+          git diff --check
+      - name: Rustfmt must be clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+      - name: Install Linux Tauri compile dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Cargo check Tauri crate
+        shell: bash
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Rust test raw physical SHA differs from publication digest
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml physical_completion_proof_uses_raw_sha256_not_bundle_digest -- --nocapture
+      - name: Rust test committed receipt is non-PII and physical-output bound
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml committed_generation_receipt_is_non_pii_and_bound_to_physical_output -- --nocapture
+      - name: Rust test committed receipt replay is idempotent and conflict safe
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml committed_generation_receipt_is_idempotent_and_conflict_safe -- --nocapture
+      - name: Install Python contract dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: E1 receipt and installed static contracts
+        run: python -m pytest -q tests/test_e1_generation_completion_receipt_contract.py tests/test_e1_windows_installed_accounting_contract.py
+      - name: Static source quality gate
+        run: python scripts/static_quality_gate.py --source-only

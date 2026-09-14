@@ -461,6 +461,7 @@ if ($null -eq $matchingReceipt) { throw 'E1 physical DOCX has no matching commit
 if ($matchingReceipt.Data.schema -ne 1 -or $matchingReceipt.Data.status -ne 'committed') { throw 'E1 receipt schema/status mismatch.' }
 if ($matchingReceipt.Data.receipt_id -notmatch '^[0-9a-f]{64}$' -or $matchingReceipt.Data.output_id -notmatch '^[0-9a-f]{64}$') { throw 'E1 receipt identities are not opaque SHA-256 values.' }
 if ($matchingReceipt.Data.proof_contract -ne 'publication-digest-v1' -or $matchingReceipt.Data.verifier_contract -ne 'published-readback-v1') { throw 'E1 receipt proof/verifier contract mismatch.' }
+if ([string]$matchingReceipt.Data.plan_binding_sha256 -notmatch '^[0-9a-f]{64}$') { throw 'E1 committed receipt is not bound to the frozen source/case/plan/template identity.' }
 foreach ($forbidden in @($defaultOutputRoot, $sourceFileName, 'ООО «Альфа»', 'ООО «Бета»', 'D-77')) {
   if ($matchingReceipt.Raw.Contains($forbidden)) { throw "E1 receipt leaked path/user data: $forbidden" }
 }

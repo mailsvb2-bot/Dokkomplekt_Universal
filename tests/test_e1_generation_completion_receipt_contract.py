@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PUBLICATION = ROOT / "src-tauri" / "src" / "generation_publication.rs"
 DOCUMENT_COMMANDS = ROOT / "src-tauri" / "src" / "subsystems" / "document_commands.rs"
+MANUAL_IDENTITY = ROOT / "src-tauri" / "src" / "subsystems" / "manual_publication_identity.rs"
 
 
 def test_committed_generation_receipt_is_distinct_from_recovery_journal_and_non_pii() -> None:
@@ -84,3 +85,24 @@ def test_crash_reconciliation_rebuilds_committed_receipt_before_removing_guard()
         "std::fs::remove_file(path)"
     )
     assert "publication guard сохранён" in recovery
+
+
+def test_manual_ui_publication_is_bound_to_frozen_source_case_plan_and_templates() -> None:
+    commands = DOCUMENT_COMMANDS.read_text(encoding="utf-8")
+    helper = MANUAL_IDENTITY.read_text(encoding="utf-8")
+    single = commands[commands.index("fn render_docx("):commands.index("fn render_docx_batch(")]
+    batch = commands[commands.index("fn render_docx_batch("):commands.index("struct ScannerRequest")]
+
+    assert "manual_publication_plan_binding" in single
+    assert "Some(&publication_binding)" in single
+    assert "manual_publication_plan_binding" in batch
+    assert "Some(&publication_binding)" in batch
+    assert "template_sha256" in single
+    assert "template_sha256" in batch
+    assert "render_inputs" in batch
+    assert "publication_plan" in batch
+    assert "dokkomplekt-manual-source-set-v1" in helper
+    assert "dokkomplekt-manual-resolved-case-v1" in helper
+    assert "dokkomplekt-manual-processing-fingerprint-v1" in helper
+    assert "dokkomplekt-manual-processing-job-v1" in helper
+    assert "source_provenance" in helper

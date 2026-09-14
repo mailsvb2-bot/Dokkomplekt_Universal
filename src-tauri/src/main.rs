@@ -2066,6 +2066,7 @@ include!("subsystems/publication_collision.rs");
 include!("subsystems/source_identity_runtime.rs");
 include!("subsystems/source_intake_commands.rs");
 include!("subsystems/startup_state.rs");
+include!("subsystems/manual_publication_identity.rs");
 include!("subsystems/document_commands.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");

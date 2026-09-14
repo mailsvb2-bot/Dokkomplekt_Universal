@@ -1,9 +1,9 @@
 {
   "schema": "dokkomplekt.rustsec-advisory-db-pin.v1",
   "repository": "https://github.com/RustSec/advisory-db.git",
-  "commit": "faedffd5118c1835e13cca3babb6059afb1eb8d0",
-  "committed_at_utc": "2026-09-07T12:50:40Z",
+  "commit": "37beaafdc00b4cdc882f1d3526af07f27ceaaf19",
+  "committed_at_utc": "2026-09-14T09:48:33Z",
   "max_age_hours": 168,
   "blocked_upstream_commit": "e11d6b330dd033a9ed7476de71029cfb8f2d1095",
-  "reason": "The previous short-lived validated pin expired while RustSec advisory-db main advanced. Revision faedffd5118c1835e13cca3babb6059afb1eb8d0 was independently checked against the locked Dokkomplekt dependency graph with cargo-audit 0.22.2 --db <exact-pinned-checkout> --no-fetch --deny warnings: 511 crate dependencies scanned, zero vulnerabilities and zero warnings; the known-bad inconsistent upstream revision remains blocked."
+  "reason": "The previous independently validated short-lived pin expired after seven days. Advance to current upstream revision 37beaafdc00b4cdc882f1d3526af07f27ceaaf19 without weakening any policy: exact-head CI must fetch this exact checkout and pass cargo-audit 0.22.2 with --db <exact-pinned-checkout> --no-fetch --deny warnings before E1 may advance; the known-bad inconsistent upstream revision remains blocked."
 }

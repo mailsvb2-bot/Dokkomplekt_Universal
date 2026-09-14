@@ -1,0 +1,66 @@
+name: Canon E1 Encoding Fix
+
+on:
+  push:
+    branches:
+      - canon-v2/e1-accounting-pipeline
+    paths:
+      - .github/workflows/canon-e1-encoding-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply PowerShell 5.1 encoding contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          script = Path('tests/installer/windows_e1_accounting_contract.ps1')
+          raw = script.read_bytes()
+          bom = b'\xef\xbb\xbf'
+          if not raw.startswith(bom):
+              script.write_bytes(bom + raw)
+
+          test = Path('tests/test_e1_windows_installed_accounting_contract.py')
+          text = test.read_text(encoding='utf-8')
+          needle = "def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:\n    source = SCRIPT.read_text(encoding=\"utf-8-sig\")\n"
+          replacement = "def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:\n    assert SCRIPT.read_bytes().startswith(b\"\\xef\\xbb\\xbf\"), (\n        \"Windows PowerShell 5.1 requires UTF-8 BOM for Cyrillic literals in the E1 installed contract\"\n    )\n    source = SCRIPT.read_text(encoding=\"utf-8-sig\")\n"
+          if needle not in text:
+              raise SystemExit('static contract insertion point not found')
+          test.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/canon-e1-encoding-fix.yml
+          python scripts/verify_source_manifest.py --candidate /tmp/source-manifest.txt || true
+          cp /tmp/source-manifest.txt SOURCE_MANIFEST_SHA256.txt
+
+          python -m pytest -q tests/test_e1_windows_installed_accounting_contract.py tests/test_source_manifest_integrity.py
+          python - <<'PY'
+          from pathlib import Path
+          raw = Path('tests/installer/windows_e1_accounting_contract.ps1').read_bytes()
+          assert raw.startswith(b'\xef\xbb\xbf')
+          print('E1 PowerShell UTF-8 BOM: PASS')
+          PY
+          git diff --check
+
+      - name: Commit verified encoding fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && { echo 'No changes to commit'; exit 1; }
+          git commit -m 'test: make E1 Windows contract PowerShell 5.1 safe'
+          git push origin HEAD:canon-v2/e1-accounting-pipeline

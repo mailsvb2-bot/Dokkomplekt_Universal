@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_parent='b12233a9ee65326bea9f91c7bcbd2d3774d19dc4'
+          expected_parent='035ce700abc20fe0592fa1050b39852e61374bdb'
           workflow='.github/workflows/e1-accounting-source-identity-fix-once.yml'
           popup='crates/dokkomplekt-core/src/popup_profiles.rs'
           engine='crates/dokkomplekt-core/src/workflow_engine.rs'
@@ -72,7 +72,7 @@ jobs:
           cargo test -p dokkomplekt-core
 
           git rm "$workflow"
-          actual_changed="$(git diff --name-only | sort)"
+          actual_changed="$(git diff HEAD --name-only | sort)"
           expected_changed="$(printf '%s\n' "$popup" "$engine" "$workflow" | sort)"
           test "$actual_changed" = "$expected_changed"
 

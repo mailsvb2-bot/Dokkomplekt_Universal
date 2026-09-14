@@ -45,6 +45,7 @@ jobs:
           python scripts/verify_source_manifest.py --candidate /tmp/source-manifest.txt || true
           cp /tmp/source-manifest.txt SOURCE_MANIFEST_SHA256.txt
 
+          python -m pip install --disable-pip-version-check -q pytest
           python -m pytest -q tests/test_e1_windows_installed_accounting_contract.py tests/test_source_manifest_integrity.py
           python - <<'PY'
           from pathlib import Path

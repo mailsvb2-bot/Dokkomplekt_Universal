@@ -42,3 +42,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "NativeWindowHandle" in source
     assert "0x000C" in source
     assert "UI value control exposes neither ValuePattern nor a native HWND." in source
+    assert "IsLegacyIAccessiblePatternAvailableProperty" in source
+    assert "LegacyIAccessiblePattern" in source
+    assert "GetWindowTextLength" in source
+    assert "GetWindowText(IntPtr hWnd" in source
+    assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source

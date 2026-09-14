@@ -62,6 +62,10 @@ public static class DokkomplektE1NativeMouse {
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetWindowTextLength(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
 }
 "@
 
@@ -187,8 +191,45 @@ function Set-UiValue {
 
 function Get-UiValue {
   param([Parameter(Mandatory = $true)]$Element)
-  if (-not $Element.Current.IsValuePatternAvailable) { throw 'UI control does not expose ValuePattern.' }
-  return [string]$Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -ne $valueElement) {
+    return [string]$valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  }
+
+  # WebView2 can expose an input wrapper without ValuePattern while its live
+  # accessibility descendant still carries the user-visible value. Read that
+  # accessibility value before falling back to a native HWND.
+  $supportsLegacyValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsLegacyIAccessiblePatternAvailableProperty,
+    $true
+  )
+  $legacyElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsLegacyValue
+  )
+  if ($null -ne $legacyElement) {
+    $legacy = $legacyElement.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+    return [string]$legacy.Current.Value
+  }
+
+  # Native edit controls such as the Windows common file dialog can omit both
+  # UIA value patterns. Read their visible text directly without forcing focus.
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -ne [IntPtr]::Zero) {
+    $length = [DokkomplektE1NativeMouse]::GetWindowTextLength($nativeHandle)
+    $builder = [System.Text.StringBuilder]::new([Math]::Max(1, $length + 1))
+    $null = [DokkomplektE1NativeMouse]::GetWindowText($nativeHandle, $builder, $builder.Capacity)
+    return $builder.ToString()
+  }
+
+  throw 'UI value control exposes neither ValuePattern, LegacyIAccessible value, nor a native HWND.'
 }
 
 function Normalize-UiValue {

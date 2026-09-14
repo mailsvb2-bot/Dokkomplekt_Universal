@@ -174,12 +174,12 @@ function Set-UiValue {
     return
   }
 
-  # Hosted Windows runners can expose the common OpenFileDialog file-name
-  # control without UIA ValuePattern and reject SetFocus(). WM_SETTEXT against
-  # its native HWND is the same proven fallback used by the baseline smoke.
+  # Hosted Windows runners can expose the common OpenFileDialog filename control
+  # without UIA ValuePattern or focusability. Use the same native WM_SETTEXT path
+  # already proven by the baseline installed-app smoke instead of SendKeys.
   $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
   if ($nativeHandle -eq [IntPtr]::Zero) {
-    throw 'UI control exposes neither ValuePattern nor a native HWND.'
+    throw 'UI value control exposes neither ValuePattern nor a native HWND.'
   }
   $null = [DokkomplektE1NativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
   Start-Sleep -Milliseconds 200

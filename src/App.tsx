@@ -34,7 +34,7 @@ import {
   arrayBufferToBase64, bundleSelectionFromDecision, createdPrintItems, currentDefaultYear, jobsForItems, cursorMarkedTemplatePath, detectTitle, ensureSuggestedPopupField, generationDocumentRevisionTokens, generationDocumentRevisionsMatch,
   errorMessage, fileLabel, inferGuidedMarkupAction, loadAutoPrintPreference,
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
-  replaceAllLiteral, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
+  replaceAllLiteral, semanticPreviewFromParsedSource, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
 export function App() {
   return <AppDialogProvider><AppContent /></AppDialogProvider>;
@@ -340,8 +340,7 @@ function AppContent() {
     setSourceFilePath(null);
     setWebSourceUrl('');
     clearSourceScopedUiState();
-    const semanticResult = await run('semantic_extract', () => semanticExtract(sourceText, currentDefaultYear()));
-    setSemantic(semanticResult ?? null);
+    setSemantic(semanticPreviewFromParsedSource(res));
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
       title: res.report?.recognized_title ?? 'Документ распознан',
@@ -361,8 +360,7 @@ function AppContent() {
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
     setWebSourceUrl('');
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, currentDefaultYear()));
-    setSemantic(semanticResult ?? null);
+    setSemantic(semanticPreviewFromParsedSource(res));
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     const layoutItems = res.layout_items ?? [];
     setParsed({
@@ -407,8 +405,7 @@ function AppContent() {
     setSourceFileName(res.final_url);
     setSourceFilePath(null);
     setSourceText(res.source_text);
-    const semanticResult = await run('semantic_extract', () => semanticExtract(res.source_text, currentDefaultYear()));
-    setSemantic(semanticResult ?? null);
+    setSemantic(semanticPreviewFromParsedSource(res));
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     setParsed({
       title: res.report?.recognized_title ?? res.final_url,

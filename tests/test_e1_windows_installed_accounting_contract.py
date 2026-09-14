@@ -11,6 +11,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     )
     source = SCRIPT.read_text(encoding="utf-8-sig")
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    app_source = (ROOT / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
+    assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
 
     assert "preceding installed baseline smoke" in source
     assert "content-packs\\tier1-accounting-ru\\templates\\service_act.docx" in source

@@ -1,10 +1,34 @@
-import type { BundleDecision, CreatedDocumentOutput, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, PrintJobDto, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind } from './types';
+import type { BundleDecision, CreatedDocumentOutput, DocumentRoutingRecommendation, DocumentTemplateSpec, FolderNamePartDto, GeneratedPrintItem, PrintJobDto, GuidedScannerMarkupAction, PopupFieldConfig, PromptSpec, WordScannerCapture, WordScannerSession, DomainKind, ParseSourceResponse, SemanticExtractResult } from './types';
 import { newPopupField } from '../components/PopupFieldEditor';
 import type { ScannerFieldSuggestion } from './scannerSuggestions';
 import { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
 export { normalizeLegacyTextFileBytes } from './legacyTextEncoding';
 
 export function currentDefaultYear(): number { return new Date().getFullYear(); }
+
+/**
+ * Source intake already parsed and durably installed the canonical SemanticCase.
+ * Build the UI preview from that exact case instead of invoking semantic_extract
+ * a second time and giving another command a chance to replace source-owned facts.
+ */
+export function semanticPreviewFromParsedSource(parsed: ParseSourceResponse): SemanticExtractResult {
+  const fields = Object.values(parsed.semantic_case?.values ?? {})
+    .map((value) => ({
+      field_id: value.field_id,
+      value: value.value,
+      confidence: value.confidence,
+      method: value.source,
+      source: value.source,
+      evidence: (value.evidence ?? []).map((item) => item.excerpt).filter(Boolean),
+    }))
+    .sort((left, right) => left.field_id.localeCompare(right.field_id));
+  return {
+    fields,
+    warnings: [...(parsed.report?.warnings ?? [])],
+    model_applied: false,
+    prompt: '',
+  };
+}
 export const STATE_DB = 'dokkomplekt-user-state.sqlite';
 export const OUTPUT_PREFS_KEY = 'dokkomplekt.output-folder-parts.v1';
 export const OUTPUT_ROOT_KEY = 'dokkomplekt.output-root.v1';

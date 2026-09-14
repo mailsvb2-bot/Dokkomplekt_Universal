@@ -31,24 +31,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 'e23928da297e749d4fd4874b858ea139d8a310c7'
+          test "$(git rev-parse HEAD^)" = 'e6ceb5448087ad253820612fe5fe8bff20b79e57'
           test "$(git diff --name-only HEAD^ HEAD)" = '.github/workflows/e1-physical-receipt-diagnose-once.yml'
           test "$(git hash-object .github/e1-physical-completion-receipt.patch)" = '0b07822dcf307052487dbbe385d0c6c283523363'
           test "$(sha256sum .github/e1-physical-completion-receipt.patch | awk '{print $1}')" = '7d1f81e5dba4a209ca5ccbf40a91bc4845f79282635eb2253ca07ade8941fd2b'
+          test "$(git hash-object .github/e1-physical-completion-receipt-rustfmt.patch)" = '1092b0a582e74b5f5e8319169e39c56b40ac65ed'
+          test "$(sha256sum .github/e1-physical-completion-receipt-rustfmt.patch | awk '{print $1}')" = '99ea19e973922766360ccb6addb04239472561b82ba2c09b5881afe812ab86c9'
           test "$(git hash-object src-tauri/src/generation_publication.rs)" = '6bd3ff2cc2bcf4bb913771248c7fb1c598fc64f6'
           test "$(git hash-object src-tauri/src/subsystems/document_commands.rs)" = '5b4776a589391cb7124293617f579d88889ebbd7'
-      - name: Apply exact verified product diff
+      - name: Apply exact verified product and rustfmt diffs
         shell: bash
         run: |
           set -euo pipefail
           git apply --check .github/e1-physical-completion-receipt.patch
           git apply .github/e1-physical-completion-receipt.patch
+          git apply --check .github/e1-physical-completion-receipt-rustfmt.patch
+          git apply .github/e1-physical-completion-receipt-rustfmt.patch
           git diff --check
       - name: Rustfmt must be clean
         shell: bash
-        run: |
-          set -euo pipefail
-          cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
       - name: Install Linux Tauri compile dependencies
         shell: bash
         run: |
@@ -56,16 +58,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Cargo check Tauri crate
-        shell: bash
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Rust test raw physical SHA differs from publication digest
-        shell: bash
         run: cargo test --manifest-path src-tauri/Cargo.toml physical_completion_proof_uses_raw_sha256_not_bundle_digest -- --nocapture
       - name: Rust test committed receipt is non-PII and physical-output bound
-        shell: bash
         run: cargo test --manifest-path src-tauri/Cargo.toml committed_generation_receipt_is_non_pii_and_bound_to_physical_output -- --nocapture
       - name: Rust test committed receipt replay is idempotent and conflict safe
-        shell: bash
         run: cargo test --manifest-path src-tauri/Cargo.toml committed_generation_receipt_is_idempotent_and_conflict_safe -- --nocapture
       - name: Install Python contract dependencies
         run: python -m pip install -r requirements-dev.txt

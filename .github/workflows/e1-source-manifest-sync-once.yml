@@ -1,0 +1,58 @@
+name: E1 Source Manifest Sync Once
+
+on:
+  push:
+    branches: [canon-v2/e1-accounting-pipeline]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: e1-source-manifest-sync-once
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'mailsvb2-bot/Dokkomplekt_Universal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Generate, verify and commit exact source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent='b3c2a18962f4f04c6741cafa4d638ef12c98badb'
+          expected_sha256='14fe94913c86cca7e9c57a5b787c67853bda5a99c3d2cb35eee74e4eb485be4c'
+          expected_blob='65f33f1400304799072cf9a2ed9639757ed53858'
+          workflow='.github/workflows/e1-source-manifest-sync-once.yml'
+
+          test "$(git rev-parse HEAD^)" = "$expected_parent"
+          test "$(git diff --name-only HEAD^ HEAD)" = "$workflow"
+
+          git rm "$workflow"
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.generated.txt \
+            --json-report /tmp/source-manifest-report.json || true
+
+          actual_sha256="$(sha256sum /tmp/SOURCE_MANIFEST_SHA256.generated.txt | awk '{print $1}')"
+          actual_blob="$(git hash-object /tmp/SOURCE_MANIFEST_SHA256.generated.txt)"
+          test "$actual_sha256" = "$expected_sha256"
+          test "$actual_blob" = "$expected_blob"
+
+          cp /tmp/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
+          git add SOURCE_MANIFEST_SHA256.txt
+          git diff --cached --check
+
+          python scripts/verify_source_manifest.py \
+            --candidate /tmp/SOURCE_MANIFEST_SHA256.recheck.txt \
+            --json-report /tmp/source-manifest-recheck.json
+          cmp -s SOURCE_MANIFEST_SHA256.txt /tmp/SOURCE_MANIFEST_SHA256.recheck.txt
+
+          git config user.name 'Dokkomplekt CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'chore: sync source manifest for E1 preflight read hardening'
+          git push origin HEAD:refs/heads/canon-v2/e1-accounting-pipeline

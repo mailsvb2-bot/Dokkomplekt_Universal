@@ -1,0 +1,52 @@
+name: Canon E1 Windows Parser Diagnostic
+
+on:
+  push:
+    branches:
+      - canon-v2/e1-accounting-pipeline
+    paths:
+      - tests/installer/windows_e1_accounting_contract.ps1
+      - .github/workflows/canon-e1-windows-parser-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parse-e1-powershell:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse E1 installed contract with Windows PowerShell AST
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tests\installer\windows_e1_accounting_contract.ps1'
+          $log = Join-Path $env:GITHUB_WORKSPACE 'e1-powershell-parser.log'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors) | Out-Null
+          "script=$script" | Set-Content -LiteralPath $log -Encoding UTF8
+          "powershell=$($PSVersionTable.PSVersion)" | Add-Content -LiteralPath $log -Encoding UTF8
+          "parser_errors=$($errors.Count)" | Add-Content -LiteralPath $log -Encoding UTF8
+          foreach ($error in $errors) {
+            $line = $error.Extent.StartLineNumber
+            $column = $error.Extent.StartColumnNumber
+            $message = $error.Message
+            "line=$line column=$column message=$message" | Add-Content -LiteralPath $log -Encoding UTF8
+            Write-Error "E1 parser error at ${line}:${column}: $message" -ErrorAction Continue
+          }
+          Get-Content -LiteralPath $log
+          if ($errors.Count -ne 0) {
+            throw "E1 installed contract has $($errors.Count) PowerShell parser error(s)."
+          }
+
+      - name: Upload parser diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canon-e1-windows-parser-diagnostic
+          path: e1-powershell-parser.log
+          if-no-files-found: error

@@ -60,6 +60,8 @@ using System.Runtime.InteropServices;
 public static class DokkomplektE1NativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
 }
 "@
 
@@ -159,13 +161,28 @@ function Find-FileDialog {
 
 function Set-UiValue {
   param([Parameter(Mandatory = $true)]$Element, [Parameter(Mandatory = $true)][string]$Value)
-  if ($Element.Current.IsValuePatternAvailable) {
-    $Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -ne $valueElement) {
+    $valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
     return
   }
-  $Element.SetFocus()
-  [System.Windows.Forms.SendKeys]::SendWait('^a')
-  [System.Windows.Forms.SendKeys]::SendWait($Value)
+
+  # Hosted Windows runners can expose the common OpenFileDialog file-name
+  # control without UIA ValuePattern and reject SetFocus(). WM_SETTEXT against
+  # its native HWND is the same proven fallback used by the baseline smoke.
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -eq [IntPtr]::Zero) {
+    throw 'UI control exposes neither ValuePattern nor a native HWND.'
+  }
+  $null = [DokkomplektE1NativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
+  Start-Sleep -Milliseconds 200
 }
 
 function Get-UiValue {

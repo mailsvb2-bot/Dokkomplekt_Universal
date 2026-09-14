@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_parent='035ce700abc20fe0592fa1050b39852e61374bdb'
+          expected_parent='eb74562d53acee768780ef184ccb7576278a28ba'
           workflow='.github/workflows/e1-accounting-source-identity-fix-once.yml'
           popup='crates/dokkomplekt-core/src/popup_profiles.rs'
           engine='crates/dokkomplekt-core/src/workflow_engine.rs'
@@ -93,6 +93,5 @@ jobs:
 
           git config user.name 'Dokkomplekt CI'
           git config user.email 'actions@users.noreply.github.com'
-          git add -u "$workflow"
           git commit -m 'fix: confirm Accounting service-act source identity'
           git push origin HEAD:refs/heads/canon-v2/e1-accounting-pipeline

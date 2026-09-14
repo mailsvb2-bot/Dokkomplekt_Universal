@@ -1,0 +1,281 @@
+name: Canon E1 Manual Publication Identity Fix
+
+on:
+  push:
+    branches:
+      - canon-v2/e1-accounting-pipeline
+    paths:
+      - .github/workflows/canon-e1-manual-plan-binding-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Apply canonical manual publication binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > src-tauri/src/subsystems/manual_publication_identity.rs <<'EOF'
+          /// Build the publication identity for an explicit UI generation without
+          /// persisting user/source values. The automatic watcher already has a
+          /// content-addressed processing job; manual generation needs the same
+          /// fail-closed binding at the PublicationGate boundary.
+          fn manual_identity_sha256<T: Serialize>(namespace: &str, value: &T) -> Result<String, String> {
+              let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+              let mut hasher = Sha256::new();
+              hasher.update(namespace.as_bytes());
+              hasher.update([0]);
+              hasher.update(bytes);
+              Ok(hex::encode(hasher.finalize()))
+          }
+
+          fn manual_publication_plan_binding<T: Serialize>(
+              state: &AppState,
+              resolved_case: &SemanticCase,
+              processing_payload: &T,
+          ) -> Result<generation_publication::PublicationPlanBinding, String> {
+              let provenance = state
+                  .source_provenance
+                  .lock()
+                  .map_err(|_| "source provenance state lock failed")?
+                  .clone();
+              let source_sha256 = match provenance {
+                  Some(value) if is_sha256_hex(&value.source_sha256) => {
+                      value.source_sha256.to_ascii_lowercase()
+                  }
+                  Some(_) => {
+                      return Err(
+                          "Источник manual generation не содержит проверяемый SHA-256; публикация заблокирована."
+                              .into(),
+                      )
+                  }
+                  None => manual_identity_sha256(
+                      "dokkomplekt-manual-source-set-v1",
+                      resolved_case,
+                  )?,
+              };
+              let resolved_case_sha256 = manual_identity_sha256(
+                  "dokkomplekt-manual-resolved-case-v1",
+                  resolved_case,
+              )?;
+              let processing_fingerprint = manual_identity_sha256(
+                  "dokkomplekt-manual-processing-fingerprint-v1",
+                  processing_payload,
+              )?;
+              let processing_job_sha256 = manual_identity_sha256(
+                  "dokkomplekt-manual-processing-job-v1",
+                  &serde_json::json!({
+                      "source_sha256": &source_sha256,
+                      "resolved_case_sha256": &resolved_case_sha256,
+                      "processing_fingerprint": &processing_fingerprint,
+                  }),
+              )?;
+              Ok(generation_publication::PublicationPlanBinding {
+                  processing_job_sha256,
+                  source_sha256,
+                  processing_fingerprint,
+              })
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, *, encoding: str = "utf-8") -> None:
+              text = path.read_text(encoding=encoding)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding=encoding)
+
+          main = Path("src-tauri/src/main.rs")
+          replace_once(
+              main,
+              'include!("subsystems/source_intake_commands.rs");\ninclude!("subsystems/startup_state.rs");\ninclude!("subsystems/document_commands.rs");',
+              'include!("subsystems/source_intake_commands.rs");\ninclude!("subsystems/startup_state.rs");\ninclude!("subsystems/manual_publication_identity.rs");\ninclude!("subsystems/document_commands.rs");',
+          )
+
+          commands = Path("src-tauri/src/subsystems/document_commands.rs")
+          single_anchor = '''    let render_case = dokkomplekt_core::domains::case_for_document_render(
+              &hydrated.case,
+              &effective_document.category,
+              &effective_document.role_id,
+          );
+          let render_result = render_docx_with_assets(
+          '''
+          single_replacement = '''    let render_case = dokkomplekt_core::domains::case_for_document_render(
+              &hydrated.case,
+              &effective_document.category,
+              &effective_document.role_id,
+          );
+          let publication_binding = match manual_publication_plan_binding(
+              &state,
+              &render_case,
+              &serde_json::json!({
+                  "schema": 1,
+                  "mode": "manual_single_v1",
+                  "engine_version": env!("CARGO_PKG_VERSION"),
+                  "document_id": &effective_document.id,
+                  "role_id": &effective_document.role_id,
+                  "category": &effective_document.category,
+                  "template_sha256": template_snapshot.sha256(),
+                  "strict": req.strict,
+                  "watermark": permit.watermark.as_deref(),
+              }),
+          ) {
+              Ok(binding) => binding,
+              Err(error) => {
+                  rollback_counter_reservations(&app, &hydrated.counter_reservations);
+                  rollback_generation_access(&app, &state, &permit);
+                  return Err(error);
+              }
+          };
+          let render_result = render_docx_with_assets(
+          '''
+          replace_once(commands, single_anchor, single_replacement)
+          replace_once(
+              commands,
+              'generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, None)',
+              'generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, Some(&publication_binding))',
+          )
+          replace_once(
+              commands,
+              '    let mut ancillary_warnings = Vec::new();\n    let mut staged_source_copy: Option<PathBuf> = None;\n    let rendered = (|| -> Result<Vec<PathBuf>, String> {',
+              '    let mut ancillary_warnings = Vec::new();\n    let mut staged_source_copy: Option<PathBuf> = None;\n    let mut frozen_render_inputs = Vec::new();\n    let rendered = (|| -> Result<Vec<PathBuf>, String> {',
+          )
+          batch_render_anchor = '''            let render_case = dokkomplekt_core::domains::case_for_document_render(
+                  &hydrated.case,
+                  &effective_document.category,
+                  &effective_document.role_id,
+              );
+              let proof = render_docx_with_assets(
+          '''
+          batch_render_replacement = '''            let render_case = dokkomplekt_core::domains::case_for_document_render(
+                  &hydrated.case,
+                  &effective_document.category,
+                  &effective_document.role_id,
+              );
+              frozen_render_inputs.push(serde_json::json!({
+                  "document_id": &effective_document.id,
+                  "role_id": &effective_document.role_id,
+                  "category": &effective_document.category,
+                  "template_sha256": template_snapshot.sha256(),
+                  "resolved_case": &render_case,
+              }));
+              let proof = render_docx_with_assets(
+          '''
+          replace_once(commands, batch_render_anchor, batch_render_replacement)
+          batch_binding_anchor = '''    if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
+              let _ = std::fs::remove_dir_all(&stage);
+              rollback_counter_reservations(&app, &counter_reservations);
+              rollback_generation_access(&app, &state, &permit);
+              return Err(error);
+          }
+          if let Err(error) =
+              generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, None)
+          '''
+          batch_binding_replacement = '''    if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
+              let _ = std::fs::remove_dir_all(&stage);
+              rollback_counter_reservations(&app, &counter_reservations);
+              rollback_generation_access(&app, &state, &permit);
+              return Err(error);
+          }
+          let publication_binding = match manual_publication_plan_binding(
+              &state,
+              &base_case,
+              &serde_json::json!({
+                  "schema": 1,
+                  "mode": "manual_batch_v1",
+                  "engine_version": env!("CARGO_PKG_VERSION"),
+                  "publication_plan": &publication_plan,
+                  "folder_parts": &req.folder_parts,
+                  "sick_leave_enabled": req.sick_leave_enabled,
+                  "existing_output_policy": format!("{:?}", req.existing_output_policy),
+                  "strict": req.strict,
+                  "watermark": permit.watermark.as_deref(),
+                  "write_trust_report": privacy.write_trust_report,
+                  "include_values_in_trust_report": privacy.include_values_in_trust_report,
+                  "source_copy_present": staged_source_copy.is_some(),
+                  "render_inputs": &frozen_render_inputs,
+              }),
+          ) {
+              Ok(binding) => binding,
+              Err(error) => {
+                  let _ = std::fs::remove_dir_all(&stage);
+                  rollback_counter_reservations(&app, &counter_reservations);
+                  rollback_generation_access(&app, &state, &permit);
+                  return Err(error);
+              }
+          };
+          if let Err(error) = generation_publication::prepare_publication(
+              &app,
+              &permit,
+              &stage,
+              &counter_reservations,
+              Some(&publication_binding),
+          )
+          '''
+          replace_once(commands, batch_binding_anchor, batch_binding_replacement)
+
+          contract = Path("tests/test_e1_generation_completion_receipt_contract.py")
+          text = contract.read_text(encoding="utf-8")
+          if "MANUAL_IDENTITY =" not in text:
+              text = text.replace(
+                  'DOCUMENT_COMMANDS = ROOT / "src-tauri" / "src" / "subsystems" / "document_commands.rs"\n',
+                  'DOCUMENT_COMMANDS = ROOT / "src-tauri" / "src" / "subsystems" / "document_commands.rs"\nMANUAL_IDENTITY = ROOT / "src-tauri" / "src" / "subsystems" / "manual_publication_identity.rs"\n',
+                  1,
+              )
+          addition = '''\n\ndef test_manual_ui_publication_is_bound_to_frozen_source_case_plan_and_templates() -> None:\n    commands = DOCUMENT_COMMANDS.read_text(encoding="utf-8")\n    helper = MANUAL_IDENTITY.read_text(encoding="utf-8")\n    single = commands[commands.index("fn render_docx("):commands.index("fn render_docx_batch(")]\n    batch = commands[commands.index("fn render_docx_batch("):commands.index("struct ScannerRequest")]\n\n    assert "manual_publication_plan_binding" in single\n    assert "Some(&publication_binding)" in single\n    assert "manual_publication_plan_binding" in batch\n    assert "Some(&publication_binding)" in batch\n    assert "template_sha256" in single\n    assert "template_sha256" in batch\n    assert "render_inputs" in batch\n    assert "publication_plan" in batch\n    assert "dokkomplekt-manual-source-set-v1" in helper\n    assert "dokkomplekt-manual-resolved-case-v1" in helper\n    assert "dokkomplekt-manual-processing-fingerprint-v1" in helper\n    assert "dokkomplekt-manual-processing-job-v1" in helper\n    assert "source_provenance" in helper\n'''
+          if "test_manual_ui_publication_is_bound_to_frozen_source_case_plan_and_templates" not in text:
+              text += addition
+          contract.write_text(text, encoding="utf-8")
+
+          ps1 = Path("tests/installer/windows_e1_accounting_contract.ps1")
+          ps_text = ps1.read_text(encoding="utf-8-sig")
+          proof_line = "if ($matchingReceipt.Data.proof_contract -ne 'publication-digest-v1' -or $matchingReceipt.Data.verifier_contract -ne 'published-readback-v1') { throw 'E1 receipt proof/verifier contract mismatch.' }"
+          binding_line = "if ([string]$matchingReceipt.Data.plan_binding_sha256 -notmatch '^[0-9a-f]{64}$') { throw 'E1 committed receipt is not bound to the frozen source/case/plan/template identity.' }"
+          if binding_line not in ps_text:
+              if proof_line not in ps_text:
+                  raise SystemExit("Windows E1 receipt proof assertion anchor not found")
+              ps_text = ps_text.replace(proof_line, proof_line + "\n" + binding_line, 1)
+          ps1.write_text(ps_text, encoding="utf-8-sig")
+          PY
+
+          cargo fmt --all
+          rm -f .github/workflows/canon-e1-manual-plan-binding-fix.yml
+          python3 scripts/verify_source_manifest.py --candidate /tmp/source-manifest.txt || true
+          cp /tmp/source-manifest.txt SOURCE_MANIFEST_SHA256.txt
+
+          python3 -m pip install --disable-pip-version-check -q pytest
+          python3 -m pytest -q \
+            tests/test_e1_generation_completion_receipt_contract.py \
+            tests/test_e1_windows_installed_accounting_contract.py \
+            tests/test_source_manifest_integrity.py \
+            tests/test_p0_trust_boundaries.py
+          cargo check --workspace --locked
+          git diff --check
+
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && { echo 'No E1 binding changes to commit'; exit 1; }
+          git commit -m 'fix: bind manual publication receipts to frozen inputs'
+          git push origin HEAD:canon-v2/e1-accounting-pipeline

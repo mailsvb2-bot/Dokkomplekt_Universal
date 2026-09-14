@@ -337,13 +337,13 @@ jobs:
         env:
           DOKKOMPLEKT_ADVERSARIAL: '1'
         run: |
-          tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper 2>&1 | Tee-Object -FilePath "installer-smoke-${{ runner.os }}.log"
+          pwsh -NoProfile -File tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper 2>&1 | Tee-Object -FilePath "installer-smoke-${{ runner.os }}.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Windows E1 Accounting installed path
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          tests/installer/windows_e1_accounting_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper 2>&1 | Tee-Object -FilePath "installer-e1-accounting-${{ runner.os }}.log"
+          pwsh -NoProfile -File tests/installer/windows_e1_accounting_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper 2>&1 | Tee-Object -FilePath "installer-e1-accounting-${{ runner.os }}.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Linux installer smoke
         if: runner.os == 'Linux'

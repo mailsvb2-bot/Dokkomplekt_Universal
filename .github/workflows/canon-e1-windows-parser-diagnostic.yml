@@ -26,21 +26,21 @@ jobs:
           $script = Join-Path $env:GITHUB_WORKSPACE 'tests\installer\windows_e1_accounting_contract.ps1'
           $log = Join-Path $env:GITHUB_WORKSPACE 'e1-powershell-parser.log'
           $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors) | Out-Null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrors) | Out-Null
           "script=$script" | Set-Content -LiteralPath $log -Encoding UTF8
           "powershell=$($PSVersionTable.PSVersion)" | Add-Content -LiteralPath $log -Encoding UTF8
-          "parser_errors=$($errors.Count)" | Add-Content -LiteralPath $log -Encoding UTF8
-          foreach ($error in $errors) {
-            $line = $error.Extent.StartLineNumber
-            $column = $error.Extent.StartColumnNumber
-            $message = $error.Message
+          "parser_errors=$($parseErrors.Count)" | Add-Content -LiteralPath $log -Encoding UTF8
+          foreach ($parseIssue in $parseErrors) {
+            $line = $parseIssue.Extent.StartLineNumber
+            $column = $parseIssue.Extent.StartColumnNumber
+            $message = $parseIssue.Message
             "line=$line column=$column message=$message" | Add-Content -LiteralPath $log -Encoding UTF8
-            Write-Error "E1 parser error at ${line}:${column}: $message" -ErrorAction Continue
+            Write-Host "E1 parser error at ${line}:${column}: $message"
           }
           Get-Content -LiteralPath $log
-          if ($errors.Count -ne 0) {
-            throw "E1 installed contract has $($errors.Count) PowerShell parser error(s)."
+          if ($parseErrors.Count -ne 0) {
+            throw "E1 installed contract has $($parseErrors.Count) PowerShell parser error(s)."
           }
 
       - name: Upload parser diagnostics

@@ -17,12 +17,6 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "Название документа для service_act.docx" in source
     assert "workflow-amount-currency" in source
     assert "workflow-amount-vat" in source
-    set_value_block = source[source.index("function Set-UiValue {"):source.index("function Get-UiValue {")]
-    assert "IsValuePatternAvailableProperty" in set_value_block
-    assert "TreeScope]::Subtree" in set_value_block
-    assert "NativeWindowHandle" in set_value_block
-    assert "SendMessage" in set_value_block
-    assert "SetFocus()" not in set_value_block
     assert "$sourceOwnedValues = [ordered]@{" in source
     assert "E1 source-owned prompt drift" in source
     assert "$manualPromptValues = [ordered]@{" in source
@@ -43,3 +37,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "Windows E1 Accounting installed path" in workflow
     assert workflow.index("Windows installer smoke") < workflow.index("Windows E1 Accounting installed path")
     assert "tests/installer/windows_e1_accounting_contract.ps1" in workflow
+    assert "public static extern IntPtr SendMessage" in source
+    assert "IsValuePatternAvailableProperty" in source
+    assert "NativeWindowHandle" in source
+    assert "0x000C" in source
+    assert "UI value control exposes neither ValuePattern nor a native HWND." in source

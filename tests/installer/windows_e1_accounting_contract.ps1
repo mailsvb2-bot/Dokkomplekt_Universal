@@ -124,6 +124,91 @@ function Find-ReadyButtonByNames {
   return $null
 }
 
+function Invoke-UiElement {
+  param([Parameter(Mandatory = $true)]$Element, [string]$Description = 'UI element')
+  try {
+    if (-not $Element.Current.IsEnabled) { throw "$Description is disabled" }
+    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+      $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+      Start-Sleep -Milliseconds 100
+    }
+    if ($Element.Current.IsInvokePatternAvailable) {
+      $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      return
+    }
+    if ($Element.Current.IsLegacyIAccessiblePatternAvailable) {
+      $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
+      return
+    }
+    Invoke-UiElementPhysically -Element $Element -Description $Description
+  } catch {
+    throw "Live E1 UI action failed for '$Description': $($_.Exception.Message)"
+  }
+}
+
+function Invoke-UiActionFromProbe {
+  param([Parameter(Mandatory = $true)][scriptblock]$ActionProbe, [Parameter(Mandatory = $true)][string]$Description)
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    try { $action = & $ActionProbe } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $action = $null
+    }
+    if ($null -eq $action) { Start-Sleep -Milliseconds 100; continue }
+    try {
+      Invoke-UiElement -Element $action -Description $Description
+      return
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) {
+        throw "E1 UI timeout invoking live action: $Description. Last error: $($_.Exception.Message)"
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "E1 UI timeout invoking live action: $Description"
+}
+
+function Invoke-UiActionWithObservedTransition {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$ActionProbe,
+    [Parameter(Mandatory = $true)][scriptblock]$TransitionProbe,
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)][string]$TransitionDescription,
+    [int]$TransitionSeconds = 5
+  )
+  Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description
+
+  $deadline = [DateTime]::UtcNow.AddSeconds($TransitionSeconds)
+  do {
+    try { $transition = & $TransitionProbe } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $transition = $null
+    }
+    if ($null -ne $transition) { return $transition }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  $retryAction = $null
+  $actionStateDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  do {
+    try { $retryAction = & $ActionProbe } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $retryAction = $null
+    }
+    if ($null -ne $retryAction) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $actionStateDeadline)
+
+  if ($null -eq $retryAction) {
+    Write-Host "E1 UI action '$Description' is already in-flight; waiting for '$TransitionDescription' without a duplicate click."
+    return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+  }
+
+  Write-Host "E1 UI action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
+  Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe -Description "$Description physical retry"
+  return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+}
+
 function Invoke-UiElementPhysically {
   param([Parameter(Mandatory = $true)]$Element, [string]$Description = 'UI element')
   if (-not $Element.Current.IsEnabled) { throw "$Description is disabled" }
@@ -293,12 +378,15 @@ $accountingLabel = 'Акт оказанных услуг'
 $accountingOutputName = "$accountingLabel.docx"
 $completionReceiptRoot = Join-Path $appDataRoot 'generation-completion-receipts'
 
-Invoke-UiActionPhysicallyFromProbe -Description 'Добавить шаблоны for E1 Accounting' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Добавить шаблоны')
-}
-$templateDialog = Wait-UiElement -Description 'native template picker for E1 Accounting' -Probe { Find-FileDialog }
+$templateDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'Добавить шаблоны for E1 Accounting' `
+  -TransitionDescription 'native template picker for E1 Accounting' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Добавить шаблоны')
+  } `
+  -TransitionProbe { Find-FileDialog }
 $templateEdit = $templateDialog.FindFirst(
   [System.Windows.Automation.TreeScope]::Descendants,
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
@@ -326,12 +414,15 @@ $null = Wait-UiElement -Description 'Accounting document button' -TimeoutSeconds
   Find-ButtonByNames -Root $window -Names @($accountingLabel)
 }
 
-Invoke-UiActionPhysicallyFromProbe -Description 'Replace source with E1 Accounting source' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Заменить исходный файл', 'Выбрать исходный файл')
-}
-$sourceDialog = Wait-UiElement -Description 'native source picker for E1 Accounting' -Probe { Find-FileDialog }
+$sourceDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'Replace source with E1 Accounting source' `
+  -TransitionDescription 'native source picker for E1 Accounting' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Заменить исходный файл', 'Выбрать исходный файл')
+  } `
+  -TransitionProbe { Find-FileDialog }
 $sourceEdit = $sourceDialog.FindFirst(
   [System.Windows.Automation.TreeScope]::Descendants,
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')

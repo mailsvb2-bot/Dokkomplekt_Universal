@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_parent='dff2605831888523cd8436feda2f4c731137b06c'
+          expected_parent='b12233a9ee65326bea9f91c7bcbd2d3774d19dc4'
           workflow='.github/workflows/e1-accounting-source-identity-fix-once.yml'
           popup='crates/dokkomplekt-core/src/popup_profiles.rs'
           engine='crates/dokkomplekt-core/src/workflow_engine.rs'
@@ -51,7 +51,7 @@ jobs:
           assert text.count(anchor) == 1
           text = text.replace(anchor, helper + anchor, 1)
           test_anchor = '''    #[test]\n    fn referenced_contract_identity_is_confirmed_not_cleared_for_an_act() {\n'''
-          test = '''    #[test]\n    fn accounting_service_act_source_identity_is_confirmed_not_cleared() {\n        for field_id in ["document.number", "document.date"] {\n            let field = popup_config_for_field(\n                field_id,\n                true,\n                &DomainKind::Accounting,\n                "service_act",\n            );\n            assert_eq!(field.ask_mode, PromptAskMode::Confirm);\n        }\n\n        let unrelated = popup_config_for_field(\n            "document.number",\n            true,\n            &DomainKind::Accounting,\n            "reconciliation",\n        );\n        assert_eq!(unrelated.ask_mode, PromptAskMode::Always);\n    }\n\n'''
+          test = '''    #[test]\n    fn accounting_service_act_source_identity_is_confirmed_not_cleared() {\n        for field_id in ["document.number", "document.date"] {\n            let field =\n                popup_config_for_field(field_id, true, &DomainKind::Accounting, "service_act");\n            assert_eq!(field.ask_mode, PromptAskMode::Confirm);\n        }\n\n        let unrelated = popup_config_for_field(\n            "document.number",\n            true,\n            &DomainKind::Accounting,\n            "reconciliation",\n        );\n        assert_eq!(unrelated.ask_mode, PromptAskMode::Always);\n    }\n\n'''
           assert text.count(test_anchor) == 1
           popup.write_text(text.replace(test_anchor, test + test_anchor, 1))
 
@@ -64,7 +64,7 @@ jobs:
           PY
 
           git diff --check
-          test "$(git hash-object "$popup")" = '2881fa17466bfd476e83b5394a215093807a349c'
+          test "$(git hash-object "$popup")" = '786ff7c205abb702fd656812ba724908e0d19a46'
           test "$(git hash-object "$engine")" = 'f126352cd82f8c6dc2826eed36d093f40224a2e1'
           cargo fmt --all -- --check
           cargo test -p dokkomplekt-core accounting_service_act_source_identity_is_confirmed_not_cleared

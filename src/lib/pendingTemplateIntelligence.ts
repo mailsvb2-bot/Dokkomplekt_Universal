@@ -30,6 +30,15 @@ interface PendingTemplateIntelligenceContext {
   confirm(options: AppConfirmOptions): Promise<boolean>;
 }
 
+export interface TemplateLearningPair {
+  source: File;
+  completed: File;
+}
+
+export function sourceEvidencedLearningFields<T extends { source_matches: string[] }>(fields: T[]): T[] {
+  return fields.filter((field) => field.source_matches.some((value) => value.trim().length > 0));
+}
+
 export function createPendingTemplateIntelligenceHandlers(context: PendingTemplateIntelligenceContext) {
   async function markupPendingTemplate(
     documentId: string,
@@ -71,44 +80,54 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     context.setStatus(`Шаблон размечен. Обновлено мест: ${report.replaced_occurrences}. Исходный файл сохранён.`);
   }
 
-  async function learnPendingTemplateFromExamples(documentId: string, files: File[]) {
+  async function learnPendingTemplateFromExamples(documentId: string, pairs: TemplateLearningPair[]) {
     const current = context.pendingTemplates.find((item) => item.document_id === documentId);
     if (!current) return;
-    if (files.length < 3 || files.length > 10) {
-      context.setStatus('Для обучения выберите от 3 до 10 заполненных примеров одного и того же шаблона.');
+    if (pairs.length < 3 || pairs.length > 10) {
+      context.setStatus('Для обучения подготовьте от 3 до 10 пар: исходник → правильный готовый документ.');
       return;
     }
 
+    const sourceExamplePaths: string[] = [];
     const completedExamplePaths: string[] = [];
-    for (const file of files) {
-      const buffer = await readFileBytes(file);
-      const imported = await context.run('import_learning_example_file', () =>
-        importLearningExampleFile(file.name, arrayBufferToBase64(buffer)));
-      if (!imported) return;
-      completedExamplePaths.push(imported.source_path);
+    for (const pair of pairs) {
+      const sourceBuffer = await readFileBytes(pair.source);
+      const importedSource = await context.run('import_learning_example_file', () =>
+        importLearningExampleFile(pair.source.name, arrayBufferToBase64(sourceBuffer)));
+      if (!importedSource) return;
+      sourceExamplePaths.push(importedSource.source_path);
+
+      const completedBuffer = await readFileBytes(pair.completed);
+      const importedCompleted = await context.run('import_learning_example_file', () =>
+        importLearningExampleFile(pair.completed.name, arrayBufferToBase64(completedBuffer)));
+      if (!importedCompleted) return;
+      completedExamplePaths.push(importedCompleted.source_path);
     }
+
     const learned = await context.run('learn_template_from_examples_command', () => learnTemplateFromExamples({
       blankTemplatePath: current.template_path,
       completedExamplePaths,
+      sourceExamplePaths,
       defaultYear: currentDefaultYear(),
     }));
     if (!learned) return;
-    const confidentFields = learned.fields.filter((field) => field.confidence >= 0.9);
-    if (!confidentFields.length) {
-      context.setStatus('Примеры изучены, но однозначных полей не найдено. Шаблон не изменён — используйте ручную разметку или покажите место в Word.');
+
+    const evidencedFields = sourceEvidencedLearningFields(learned.fields);
+    if (!evidencedFields.length) {
+      context.setStatus('Пары изучены, но ни одно поле не подтверждено исходниками. Шаблон не изменён — добавьте более показательные пары или используйте ручную разметку.');
       return;
     }
-    const previewFields = confidentFields
+    const previewFields = evidencedFields
       .slice(0, 8)
-      .map((field) => `${field.field_id} (${Math.round(field.confidence * 100)}%)`)
+      .map((field) => `${field.field_id} (${field.source_matches.length} совпад.; оценка ${Math.round(field.confidence * 100)}%)`)
       .join(', ');
     const accepted = await context.confirm({
-      title: 'Применить найденную карту шаблона?',
-      message: `Найдено надёжных полей: ${confidentFields.length}. ${previewFields}${confidentFields.length > 8 ? '…' : ''}. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
-      confirmLabel: 'Применить карту',
+      title: 'Применить карту, подтверждённую примерами?',
+      message: `Парами источник → правильный результат подтверждено полей: ${evidencedFields.length}. ${previewFields}${evidencedFields.length > 8 ? '…' : ''}. Процент — только оценка приоритета, не доказательство. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
+      confirmLabel: 'Применить подтверждённую карту',
     });
     if (!accepted) {
-      context.setStatus('Обучение отменено на этапе подтверждения. Исходный шаблон не изменён.');
+      context.setStatus('Обучение отменено на этапе явного подтверждения. Исходный шаблон не изменён.');
       return;
     }
 
@@ -116,7 +135,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     const applied = await context.run('apply_template_learning_map', () => applyTemplateLearningMap(
       current.template_path,
       outputPath,
-      confidentFields.map((field) => ({
+      evidencedFields.map((field) => ({
         field_id: field.field_id,
         line_index: field.line_index,
         blank_line: field.blank_line,
@@ -126,7 +145,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     ));
     if (!applied) return;
     if (!applied.applied_field_ids.length) {
-      context.setStatus('Карта не смогла однозначно примениться к шаблону. Исходный файл не изменён.');
+      context.setStatus('Подтверждённая карта не смогла однозначно примениться к шаблону. Исходный файл не изменён.');
       return;
     }
     const analyzed = await context.run('analyze_template_file', () =>
@@ -142,7 +161,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
       : item));
     if (context.importedTemplatePath === current.template_path) context.setImportedTemplatePath(applied.output_path);
     if (context.templateText === current.extracted_text) context.setTemplateText(analyzed.extracted_text);
-    context.setStatus(`Шаблон обучен: подтверждено и размечено полей — ${applied.applied_field_ids.length}. Исходный Word сохранён без изменений.`);
+    context.setStatus(`Шаблон обучен на ${pairs.length} парах: явно подтверждено и размечено полей — ${applied.applied_field_ids.length}. Исходный Word сохранён без изменений.`);
   }
 
   return { markupPendingTemplate, learnPendingTemplateFromExamples };

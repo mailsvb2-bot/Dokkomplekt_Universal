@@ -56,15 +56,16 @@ def test_ui_success_boundary_requires_committed_generation_receipt_before_journa
     confirm_end = source.index("pub(crate) fn abort_prepared_publication", confirm_start)
     confirm = source[confirm_start:confirm_end]
     assert 'write_receipt(&path, &receipt)' in confirm
-    assert 'persist_generation_completion_receipt(&app_data, &receipt)?' in confirm
+    assert "completion_output_proofs(completion_output_paths)?" in confirm
+    assert "persist_generation_completion_receipts(" in confirm
     assert confirm.index('write_receipt(&path, &receipt)') < confirm.index(
-        'persist_generation_completion_receipt(&app_data, &receipt)?'
+        'persist_generation_completion_receipts('
     )
 
     finalize_start = source.index("pub(crate) fn finalize_published_generation")
     finalize_end = source.index("pub(crate) fn plan_bound_publication_guard_exists", finalize_start)
     finalize = source[finalize_start:finalize_end]
-    assert finalize.index("persist_generation_completion_receipt") < finalize.index(
+    assert finalize.index("replay_generation_completion_receipts") < finalize.index(
         "remove_publication_receipt"
     )
 
@@ -80,8 +81,9 @@ def test_crash_reconciliation_rebuilds_committed_receipt_before_removing_guard()
     end = source.index("fn recover_stale_prepublication_reservations", start)
     recovery = source[start:end]
 
-    assert "persist_generation_completion_receipt(app_data, &receipt)" in recovery
-    assert recovery.index("persist_generation_completion_receipt(app_data, &receipt)") < recovery.index(
+    assert "completion_output_proofs_from_recovery(repo, &receipt)" in recovery
+    assert "persist_generation_completion_receipts(app_data, &receipt, &outputs)" in recovery
+    assert recovery.index("persist_generation_completion_receipts(app_data, &receipt, &outputs)") < recovery.index(
         "std::fs::remove_file(path)"
     )
     assert "publication guard сохранён" in recovery
@@ -106,3 +108,11 @@ def test_manual_ui_publication_is_bound_to_frozen_source_case_plan_and_templates
     assert "dokkomplekt-manual-processing-fingerprint-v1" in helper
     assert "dokkomplekt-manual-processing-job-v1" in helper
     assert "source_provenance" in helper
+
+def test_publication_bundle_digest_is_separate_from_physical_completion_sha256() -> None:
+    source = PUBLICATION.read_text(encoding="utf-8")
+    assert 'hasher.update(b"file\\0")' in source
+    assert 'fn raw_file_sha256(path: &Path)' in source
+    assert 'output_sha256: output.output_sha256.clone()' in source
+    assert 'physical-output-sha256-v1' in source
+    assert 'recovery_context.completion_outputs = completion_outputs' in source

@@ -33,7 +33,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "word/document.xml" in source
     assert "Get-FileHash" in source
     assert "generation-completion-receipts" in source
-    assert "publication-digest-v1" in source
+    assert "physical-output-sha256-v1" in source
     assert "published-readback-v1" in source
     assert "E1 INSTALLED PASS: Accounting source -> UI -> physical DOCX -> committed receipt" in source
     assert "Windows installer smoke" in workflow

@@ -1159,6 +1159,7 @@ fn render_docx(
         &app,
         &permit,
         &output_path,
+        std::slice::from_ref(&output_path),
     ) {
         Ok(warnings) => warnings,
         Err(error) => {
@@ -1628,7 +1629,13 @@ fn render_docx_batch(
             backup.display()
         ));
     }
-    match generation_publication::confirm_publication(&app, &permit, &output_folder) {
+    let completion_output_paths = created_files.iter().map(PathBuf::from).collect::<Vec<_>>();
+    match generation_publication::confirm_publication(
+        &app,
+        &permit,
+        &output_folder,
+        &completion_output_paths,
+    ) {
         Ok(confirmation_warnings) => warnings.extend(confirmation_warnings),
         Err(error) => {
             return Err(recover_unverified_batch_publication(

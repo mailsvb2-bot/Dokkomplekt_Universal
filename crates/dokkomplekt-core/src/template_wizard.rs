@@ -407,29 +407,55 @@ fn score_field_candidates(
     completed_maps: &[BTreeMap<String, String>],
     source_maps: &[BTreeMap<String, String>],
 ) -> Vec<(String, f32, Vec<String>)> {
-    let mut candidates = BTreeMap::<String, (usize, Vec<String>)>::new();
+    #[derive(Default)]
+    struct CandidateEvidence {
+        completed_matches: usize,
+        source_matches: usize,
+        source_values: Vec<String>,
+    }
+
+    let mut candidates = BTreeMap::<String, CandidateEvidence>::new();
     for (index, value) in values.iter().enumerate() {
         let normalized = normalize_value(value);
-        for map in completed_maps
-            .get(index)
-            .into_iter()
-            .chain(source_maps.get(index))
-        {
+        if let Some(map) = completed_maps.get(index) {
             for (field_id, candidate_value) in map {
                 if values_equivalent(&normalized, candidate_value) {
-                    let entry = candidates.entry(field_id.clone()).or_default();
-                    entry.0 += 1;
-                    if !entry.1.contains(candidate_value) {
-                        entry.1.push(candidate_value.clone());
+                    candidates
+                        .entry(field_id.clone())
+                        .or_default()
+                        .completed_matches += 1;
+                }
+            }
+        }
+        if let Some(map) = source_maps.get(index) {
+            for (field_id, candidate_value) in map {
+                if values_equivalent(&normalized, candidate_value) {
+                    let evidence = candidates.entry(field_id.clone()).or_default();
+                    evidence.source_matches += 1;
+                    if !evidence.source_values.contains(candidate_value) {
+                        evidence.source_values.push(candidate_value.clone());
                     }
                 }
             }
         }
     }
+
     let denominator = values.len().max(1) as f32;
+    let require_source_evidence = !source_maps.is_empty();
     let mut ranked = candidates
         .into_iter()
-        .map(|(field_id, (matches, sources))| (field_id, matches as f32 / denominator, sources))
+        .map(|(field_id, evidence)| {
+            let matches = if require_source_evidence {
+                evidence.source_matches
+            } else {
+                evidence.completed_matches
+            };
+            (
+                field_id,
+                matches as f32 / denominator,
+                evidence.source_values,
+            )
+        })
         .filter(|(_, score, _)| *score >= 0.50)
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| {
@@ -691,5 +717,53 @@ mod tests {
             .fields
             .iter()
             .all(|field| !field.required || field.line_index != 1));
+    }
+
+    #[test]
+    fn completed_only_learning_does_not_claim_source_evidence() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Приказ\nСотрудник: __________".into(),
+            completed_examples: vec![
+                "Приказ\nСотрудник: Иванов Иван Иванович".into(),
+                "Приказ\nСотрудник: Петров Пётр Петрович".into(),
+                "Приказ\nСотрудник: Сидоров Сергей Сергеевич".into(),
+            ],
+            source_examples: Vec::new(),
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert!(!report.fields.is_empty());
+        assert!(report
+            .fields
+            .iter()
+            .all(|field| field.source_matches.is_empty()));
+    }
+
+    #[test]
+    fn matched_source_examples_own_source_evidence() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Карточка\nИНН: __________".into(),
+            completed_examples: vec![
+                "Карточка\nИНН: 7736050003".into(),
+                "Карточка\nИНН: 7707083893".into(),
+                "Карточка\nИНН: 7812014560".into(),
+            ],
+            source_examples: vec![
+                "Организация\nИНН: 7736050003".into(),
+                "Организация\nИНН: 7707083893".into(),
+                "Организация\nИНН: 7812014560".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        let field = report
+            .fields
+            .iter()
+            .find(|field| !field.source_matches.is_empty())
+            .expect("matched Source → Correct Output pairs must produce source-owned evidence");
+        assert!(field
+            .source_matches
+            .iter()
+            .all(|value| value.chars().any(|ch| ch.is_ascii_digit())));
     }
 }

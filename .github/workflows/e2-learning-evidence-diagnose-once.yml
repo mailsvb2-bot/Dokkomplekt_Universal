@@ -69,59 +69,63 @@ jobs:
               "  }, [activePendingId, props.pendingTemplates]);\n\n  useEffect(() => {\n    for (const item of props.pendingTemplates) {",
               "  }, [activePendingId, props.pendingTemplates]);\n\n  useEffect(() => {\n    setLearningSourceFiles([]);\n    setLearningOutputFiles([]);\n  }, [activePendingId]);\n\n  useEffect(() => {\n    for (const item of props.pendingTemplates) {",
           )
-          old_learning = '''                    <label className="softBtn fileBtn">
-                      <i className="ti ti-school" aria-hidden="true" /> Обучить по 3–10 примерам
-                      <input
-                        type="file"
-                        multiple
-                        accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                        onChange={(event) => {
-                          const files = Array.from(event.currentTarget.files ?? []);
-                          event.currentTarget.value = '';
-                          if (files.length) void props.onLearnPendingTemplate(activePending.document_id, files);
-                        }}
-                        style={{ display: 'none' }}
-                      />
-                    </label>'''
-          new_learning = '''                    <label className="softBtn fileBtn">
-                      <i className="ti ti-file-import" aria-hidden="true" /> 1. Источники ({learningSourceFiles.length})
-                      <input
-                        type="file"
-                        multiple
-                        accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                        onChange={(event) => {
-                          const files = Array.from(event.currentTarget.files ?? []);
-                          event.currentTarget.value = '';
-                          setLearningSourceFiles(files);
-                        }}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-                    <label className="softBtn fileBtn">
-                      <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные DOCX/DOCM ({learningOutputFiles.length})
-                      <input
-                        type="file"
-                        multiple
-                        accept=".docx,.docm"
-                        onChange={(event) => {
-                          const files = Array.from(event.currentTarget.files ?? []);
-                          event.currentTarget.value = '';
-                          setLearningOutputFiles(files);
-                        }}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
-                    <button
-                      className="softBtn"
-                      type="button"
-                      disabled={learningSourceFiles.length < 4 || learningSourceFiles.length > 10 || learningSourceFiles.length !== learningOutputFiles.length}
-                      onClick={() => void props.onLearnPendingTemplate(activePending.document_id, learningOutputFiles, learningSourceFiles)}
-                    >
-                      <i className="ti ti-school" aria-hidden="true" /> Проверить пары и обучить
-                    </button>
-                    <small>
-                      Выберите 4–10 пар в одинаковом порядке: источник №1 соответствует правильному документу №1. Последняя пара проверяется отдельно и не участвует в обучении доказательной карты.
-                    </small>'''
+          old_learning = "\n".join([
+              "                    <label className=\"softBtn fileBtn\">",
+              "                      <i className=\"ti ti-school\" aria-hidden=\"true\" /> Обучить по 3–10 примерам",
+              "                      <input",
+              "                        type=\"file\"",
+              "                        multiple",
+              "                        accept=\".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp\"",
+              "                        onChange={(event) => {",
+              "                          const files = Array.from(event.currentTarget.files ?? []);",
+              "                          event.currentTarget.value = '';",
+              "                          if (files.length) void props.onLearnPendingTemplate(activePending.document_id, files);",
+              "                        }}",
+              "                        style={{ display: 'none' }}",
+              "                      />",
+              "                    </label>",
+          ])
+          new_learning = "\n".join([
+              "                    <label className=\"softBtn fileBtn\">",
+              "                      <i className=\"ti ti-file-import\" aria-hidden=\"true\" /> 1. Источники ({learningSourceFiles.length})",
+              "                      <input",
+              "                        type=\"file\"",
+              "                        multiple",
+              "                        accept=\".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp\"",
+              "                        onChange={(event) => {",
+              "                          const files = Array.from(event.currentTarget.files ?? []);",
+              "                          event.currentTarget.value = '';",
+              "                          setLearningSourceFiles(files);",
+              "                        }}",
+              "                        style={{ display: 'none' }}",
+              "                      />",
+              "                    </label>",
+              "                    <label className=\"softBtn fileBtn\">",
+              "                      <i className=\"ti ti-file-check\" aria-hidden=\"true\" /> 2. Правильные DOCX/DOCM ({learningOutputFiles.length})",
+              "                      <input",
+              "                        type=\"file\"",
+              "                        multiple",
+              "                        accept=\".docx,.docm\"",
+              "                        onChange={(event) => {",
+              "                          const files = Array.from(event.currentTarget.files ?? []);",
+              "                          event.currentTarget.value = '';",
+              "                          setLearningOutputFiles(files);",
+              "                        }}",
+              "                        style={{ display: 'none' }}",
+              "                      />",
+              "                    </label>",
+              "                    <button",
+              "                      className=\"softBtn\"",
+              "                      type=\"button\"",
+              "                      disabled={learningSourceFiles.length < 4 || learningSourceFiles.length > 10 || learningSourceFiles.length !== learningOutputFiles.length}",
+              "                      onClick={() => void props.onLearnPendingTemplate(activePending.document_id, learningOutputFiles, learningSourceFiles)}",
+              "                    >",
+              "                      <i className=\"ti ti-school\" aria-hidden=\"true\" /> Проверить пары и обучить",
+              "                    </button>",
+              "                    <small>",
+              "                      Выберите 4–10 пар в одинаковом порядке: источник №1 соответствует правильному документу №1. Последняя пара проверяется отдельно и не участвует в обучении доказательной карты.",
+              "                    </small>",
+          ])
           replace_once(old_learning, new_learning)
           path.write_text(text, encoding='utf-8')
           PY

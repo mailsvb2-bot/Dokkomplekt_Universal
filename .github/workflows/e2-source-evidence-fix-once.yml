@@ -1,0 +1,169 @@
+name: E2 Source Evidence Fix Once
+
+on:
+  push:
+    branches: [canon-v2/e2-template-learning-proof]
+    paths: [.github/workflows/e2-source-evidence-fix-once.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.97.1
+      - name: Make source evidence source-owned
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path('crates/dokkomplekt-core/src/template_wizard.rs')
+          text = path.read_text(encoding='utf-8')
+          replacement = r'''fn score_field_candidates(
+    values: &[String],
+    completed_maps: &[BTreeMap<String, String>],
+    source_maps: &[BTreeMap<String, String>],
+) -> Vec<(String, f32, Vec<String>)> {
+    #[derive(Default)]
+    struct CandidateEvidence {
+        completed_matches: usize,
+        source_matches: usize,
+        source_values: Vec<String>,
+    }
+
+    let mut candidates = BTreeMap::<String, CandidateEvidence>::new();
+    for (index, value) in values.iter().enumerate() {
+        let normalized = normalize_value(value);
+        if let Some(map) = completed_maps.get(index) {
+            for (field_id, candidate_value) in map {
+                if values_equivalent(&normalized, candidate_value) {
+                    candidates.entry(field_id.clone()).or_default().completed_matches += 1;
+                }
+            }
+        }
+        if let Some(map) = source_maps.get(index) {
+            for (field_id, candidate_value) in map {
+                if values_equivalent(&normalized, candidate_value) {
+                    let evidence = candidates.entry(field_id.clone()).or_default();
+                    evidence.source_matches += 1;
+                    if !evidence.source_values.contains(candidate_value) {
+                        evidence.source_values.push(candidate_value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let denominator = values.len().max(1) as f32;
+    let require_source_evidence = !source_maps.is_empty();
+    let mut ranked = candidates
+        .into_iter()
+        .map(|(field_id, evidence)| {
+            let matches = if require_source_evidence {
+                evidence.source_matches
+            } else {
+                evidence.completed_matches
+            };
+            (
+                field_id,
+                matches as f32 / denominator,
+                evidence.source_values,
+            )
+        })
+        .filter(|(_, score, _)| *score >= 0.50)
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked
+}'''
+          pattern = re.compile(r"fn score_field_candidates\(.*?\n\}\n\nfn values_equivalent", re.S)
+          match = pattern.search(text)
+          if not match:
+              raise SystemExit('score_field_candidates block not found')
+          text = text[:match.start()] + replacement + '\n\nfn values_equivalent' + text[match.end():]
+
+          insert = r'''
+
+    #[test]
+    fn completed_only_learning_does_not_claim_source_evidence() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Приказ\nСотрудник: __________".into(),
+            completed_examples: vec![
+                "Приказ\nСотрудник: Иванов Иван Иванович".into(),
+                "Приказ\nСотрудник: Петров Пётр Петрович".into(),
+                "Приказ\nСотрудник: Сидоров Сергей Сергеевич".into(),
+            ],
+            source_examples: Vec::new(),
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert!(!report.fields.is_empty());
+        assert!(report
+            .fields
+            .iter()
+            .all(|field| field.source_matches.is_empty()));
+    }
+
+    #[test]
+    fn matched_source_examples_own_source_evidence() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Карточка\nИНН: __________".into(),
+            completed_examples: vec![
+                "Карточка\nИНН: 7736050003".into(),
+                "Карточка\nИНН: 7707083893".into(),
+                "Карточка\nИНН: 7812014560".into(),
+            ],
+            source_examples: vec![
+                "Организация\nИНН: 7736050003".into(),
+                "Организация\nИНН: 7707083893".into(),
+                "Организация\nИНН: 7812014560".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        let field = report
+            .fields
+            .iter()
+            .find(|field| !field.source_matches.is_empty())
+            .expect("matched Source → Correct Output pairs must produce source-owned evidence");
+        assert!(field.source_matches.iter().all(|value| value.chars().any(|ch| ch.is_ascii_digit())));
+    }
+'''
+          closing = '\n}\n'
+          index = text.rfind(closing)
+          if index < 0:
+              raise SystemExit('test module closing brace not found')
+          text = text[:index] + insert + text[index:]
+          path.write_text(text, encoding='utf-8')
+      - name: Format
+        run: cargo fmt --all
+      - name: Compile core
+        run: cargo check -p dokkomplekt-core --locked
+      - name: Prove source-evidence regressions
+        run: |
+          cargo test -p dokkomplekt-core --locked completed_only_learning_does_not_claim_source_evidence
+          cargo test -p dokkomplekt-core --locked matched_source_examples_own_source_evidence
+          cargo test -p dokkomplekt-core --locked learns_variable_field_from_multiple_completed_examples
+      - name: Self-clean and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/e2-source-evidence-fix-once.yml
+          git diff --check
+          git config user.name "Dokkomplekt CI"
+          git config user.email "dokkomplekt-ci@users.noreply.github.com"
+          git add crates/dokkomplekt-core/src/template_wizard.rs .github/workflows/e2-source-evidence-fix-once.yml
+          git commit -m "fix: make template learning evidence source-owned"
+          git push origin HEAD:canon-v2/e2-template-learning-proof

@@ -305,6 +305,14 @@ pub fn popup_config_for_field(
     } else if should_confirm_each_run(&canonical, role_id) {
         config.ask_mode = PromptAskMode::Confirm;
     }
+    // A service act selected from an Accounting source is the same logical
+    // document identity, not a newly-issued unrelated document. Keep the
+    // source number/date visible for explicit confirmation instead of clearing
+    // them through the generic Always policy. Other document roles retain the
+    // fail-safe fresh-identity behaviour.
+    if should_confirm_source_document_identity(category, role_id, &canonical) {
+        config.ask_mode = PromptAskMode::Confirm;
+    }
     if is_document_date(&canonical) {
         config.default_value = Some("@today".into());
     }
@@ -696,6 +704,20 @@ fn is_document_date(field_id: &str) -> bool {
     )
 }
 
+fn should_confirm_source_document_identity(
+    category: &DomainKind,
+    role_id: &str,
+    field_id: &str,
+) -> bool {
+    if !matches!(category, DomainKind::Accounting)
+        || !matches!(field_id, "document.number" | "document.date")
+    {
+        return false;
+    }
+    let role = role_id.trim().to_lowercase();
+    role == "service_act" || role.ends_with(".service_act")
+}
+
 fn should_ask_fresh_each_run(field_id: &str, role_id: &str) -> bool {
     let role = role_id.trim().to_lowercase();
     match field_id {
@@ -853,6 +875,23 @@ mod tests {
         assert_eq!(number.ask_mode, PromptAskMode::Always);
         assert_eq!(date.ask_mode, PromptAskMode::Always);
         assert_eq!(date.default_value.as_deref(), Some("@today"));
+    }
+
+    #[test]
+    fn accounting_service_act_source_identity_is_confirmed_not_cleared() {
+        for field_id in ["document.number", "document.date"] {
+            let field =
+                popup_config_for_field(field_id, true, &DomainKind::Accounting, "service_act");
+            assert_eq!(field.ask_mode, PromptAskMode::Confirm);
+        }
+
+        let unrelated = popup_config_for_field(
+            "document.number",
+            true,
+            &DomainKind::Accounting,
+            "reconciliation",
+        );
+        assert_eq!(unrelated.ask_mode, PromptAskMode::Always);
     }
 
     #[test]

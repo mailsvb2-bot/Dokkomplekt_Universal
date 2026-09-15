@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind } from './types';
-import { bundleSelectionFromDecision, currentDefaultYear, defaultSelectedDocumentIds, loadOutputFolderParts, loadOutputRoot, OUTPUT_NAMING_CONFIRMED_KEY, OUTPUT_PREFS_KEY, OUTPUT_ROOT_KEY, preserveSelectedDocumentIds, saveOutputFolderParts, saveOutputRoot, shouldSelectDocumentByDefault } from './appSupport';
+import type { BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, ParseSourceResponse } from './types';
+import { bundleSelectionFromDecision, currentDefaultYear, defaultSelectedDocumentIds, loadOutputFolderParts, loadOutputRoot, OUTPUT_NAMING_CONFIRMED_KEY, OUTPUT_PREFS_KEY, OUTPUT_ROOT_KEY, preserveSelectedDocumentIds, saveOutputFolderParts, saveOutputRoot, semanticPreviewFromParsedSource, shouldSelectDocumentByDefault } from './appSupport';
 
 function document(roleId: string, category: DomainKind, label = 'Переименовано пользователем'): DocumentTemplateSpec {
   return {
@@ -113,5 +113,31 @@ describe('bundle decision presentation', () => {
       documentIds: ['doc-contract'],
       summary: ' Предложен комплект: Договор. Подтвердите состав перед созданием.',
     });
+  });
+});
+
+describe('parsed source semantic preview', () => {
+  it('keeps the canonical source-owned accounting facts without a second extraction pass', () => {
+    const parsed: ParseSourceResponse = {
+      semantic_case: {
+        values: {
+          'org.name': { field_id: 'org.name', value: 'ООО «Альфа»', source: 'Scanner', confidence: 0.99, evidence: [{ source_kind: 'source', excerpt: 'Исполнитель: ООО «Альфа»', extractor: 'label', confidence: 0.99 }] },
+          'counterparty.name': { field_id: 'counterparty.name', value: 'ООО «Бета»', source: 'Scanner', confidence: 0.99 },
+          'amount.total': { field_id: 'amount.total', value: '125 000,00', source: 'Scanner', confidence: 0.99 },
+        },
+      },
+      report: { warnings: ['fixture warning'] },
+      routing: { domain: 'Accounting', domain_confidence: 1, predicted_role: 'service_act', cluster_id: 'accounting.service_act', cluster_confidence: 1, recommended_document_ids: [], matches: [], auto_select: false, review_required: false, reasons: [] },
+      bundle_decision: { document_ids: [], source: 'deterministic_route', confidence: 1, auto_apply: false, review_required: false, reasons: [] },
+    };
+    const preview = semanticPreviewFromParsedSource(parsed);
+    expect(Object.fromEntries(preview.fields.map((field) => [field.field_id, field.value]))).toEqual({
+      'amount.total': '125 000,00',
+      'counterparty.name': 'ООО «Бета»',
+      'org.name': 'ООО «Альфа»',
+    });
+    expect(preview.fields.find((field) => field.field_id === 'org.name')?.evidence).toEqual(['Исполнитель: ООО «Альфа»']);
+    expect(preview.warnings).toEqual(['fixture warning']);
+    expect(preview.model_applied).toBe(false);
   });
 });

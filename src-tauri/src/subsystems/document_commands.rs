@@ -1076,6 +1076,28 @@ fn render_docx(
         &effective_document.category,
         &effective_document.role_id,
     );
+    let publication_binding = match manual_publication_plan_binding(
+    &state,
+    &render_case,
+    &serde_json::json!({
+        "schema": 1,
+        "mode": "manual_single_v1",
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "document_id": &effective_document.id,
+        "role_id": &effective_document.role_id,
+        "category": &effective_document.category,
+        "template_sha256": template_snapshot.sha256(),
+        "strict": req.strict,
+        "watermark": permit.watermark.as_deref(),
+    }),
+) {
+    Ok(binding) => binding,
+    Err(error) => {
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
+};
     let render_result = render_docx_with_assets(
         &app,
         &prepared_template.path,
@@ -1111,7 +1133,7 @@ fn render_docx(
         return Err(error);
     }
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, None)
+        generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, Some(&publication_binding))
     {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
@@ -1137,6 +1159,7 @@ fn render_docx(
         &app,
         &permit,
         &output_path,
+        std::slice::from_ref(&output_path),
     ) {
         Ok(warnings) => warnings,
         Err(error) => {
@@ -1324,6 +1347,7 @@ fn render_docx_batch(
     let mut counter_reservations = Vec::new();
     let mut ancillary_warnings = Vec::new();
     let mut staged_source_copy: Option<PathBuf> = None;
+    let mut frozen_render_inputs = Vec::new();
     let rendered = (|| -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
         let mut trust_document_evidence = Vec::new();
@@ -1359,6 +1383,13 @@ fn render_docx_batch(
                 &effective_document.category,
                 &effective_document.role_id,
             );
+            frozen_render_inputs.push(serde_json::json!({
+        "document_id": &effective_document.id,
+        "role_id": &effective_document.role_id,
+        "category": &effective_document.category,
+        "template_sha256": template_snapshot.sha256(),
+        "resolved_case": &render_case,
+    }));
             let proof = render_docx_with_assets(
                 &app,
                 &prepared_template.path,
@@ -1454,8 +1485,35 @@ fn render_docx_batch(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    let publication_binding = match manual_publication_plan_binding(
+    &state,
+    &base_case,
+    &serde_json::json!({
+        "schema": 1,
+        "mode": "manual_batch_v1",
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "publication_plan": &publication_plan,
+        "folder_parts": &req.folder_parts,
+        "sick_leave_enabled": req.sick_leave_enabled,
+        "existing_output_policy": format!("{:?}", req.existing_output_policy),
+        "strict": req.strict,
+        "watermark": permit.watermark.as_deref(),
+        "write_trust_report": privacy.write_trust_report,
+        "include_values_in_trust_report": privacy.include_values_in_trust_report,
+        "source_copy_present": staged_source_copy.is_some(),
+        "render_inputs": &frozen_render_inputs,
+    }),
+) {
+    Ok(binding) => binding,
+    Err(error) => {
+        let _ = std::fs::remove_dir_all(&stage);
+        rollback_counter_reservations(&app, &counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
+};
     if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, None)
+        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, Some(&publication_binding))
     {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
@@ -1571,7 +1629,13 @@ fn render_docx_batch(
             backup.display()
         ));
     }
-    match generation_publication::confirm_publication(&app, &permit, &output_folder) {
+    let completion_output_paths = created_files.iter().map(PathBuf::from).collect::<Vec<_>>();
+    match generation_publication::confirm_publication(
+        &app,
+        &permit,
+        &output_folder,
+        &completion_output_paths,
+    ) {
         Ok(confirmation_warnings) => warnings.extend(confirmation_warnings),
         Err(error) => {
             return Err(recover_unverified_batch_publication(

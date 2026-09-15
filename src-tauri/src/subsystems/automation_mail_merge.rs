@@ -225,10 +225,37 @@ fn render_mail_merge(
             ));
         }
     };
+    let completion_output_paths = match files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&stage)
+                .map(|relative| published.join(relative))
+                .map_err(|_| {
+                    format!(
+                        "Не удалось сопоставить физический mail-merge результат с опубликованной папкой: {}",
+                        path.display()
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, String>>()
+    {
+        Ok(paths) => paths,
+        Err(error) => {
+            return Err(recover_unverified_batch_publication(
+                &app,
+                &permit,
+                &published,
+                None,
+                error,
+                false,
+            ));
+        }
+    };
     let mut warnings = match generation_publication::confirm_publication(
         &app,
         &permit,
         &published,
+        &completion_output_paths,
     ) {
         Ok(warnings) => warnings,
         Err(error) => {

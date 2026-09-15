@@ -1,5 +1,5 @@
 use crate::data_schema_engine::{is_safe_field_id, UnifiedDataSchema};
-use crate::domain_plugin_layer::{plugin_by_id, DomainPluginV2};
+use crate::domain_plugin_layer::{plugin_by_id, resolve_plugin_role_requirements, DomainPluginV2};
 use crate::template_intelligence_engine::TemplateStructureAnalysisV2;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,42 +61,39 @@ pub fn build_button_scenario_v2(
         }
     }
 
-    for rule in &plugin.required_rules {
-        if rule.role != "*" && rule.role != template.document_type {
-            continue;
-        }
-        if let Some(flag) = &rule.when_flag {
-            if !flags.flags.get(flag).copied().unwrap_or(false) {
-                optional.insert(
-                    rule.field_id.clone(),
-                    requirement(
-                        &rule.field_id,
-                        &title_for(&plugin, &rule.field_id),
-                        &format!("optional until flag {flag}"),
-                        data,
-                        false,
-                    ),
-                );
-                continue;
-            }
-        }
-        if let Some(unless) = &rule.unless_present {
-            if data
-                .values
-                .get(unless)
-                .is_some_and(|v| !v.value.trim().is_empty())
-            {
-                continue;
-            }
-        }
+    let present_fields = data
+        .values
+        .iter()
+        .filter(|(_, value)| !value.value.trim().is_empty())
+        .map(|(field, _)| field.clone())
+        .collect::<BTreeSet<_>>();
+    let resolved = resolve_plugin_role_requirements(
+        &template.domain,
+        &template.document_type,
+        &flags.flags,
+        &present_fields,
+    );
+    for field_id in resolved.required {
         requires.insert(
-            rule.field_id.clone(),
+            field_id.clone(),
             requirement(
-                &rule.field_id,
-                &title_for(&plugin, &rule.field_id),
+                &field_id,
+                &title_for(&plugin, &field_id),
                 &format!("domain rule: {}", plugin.title),
                 data,
                 true,
+            ),
+        );
+    }
+    for field_id in resolved.optional {
+        optional.insert(
+            field_id.clone(),
+            requirement(
+                &field_id,
+                &title_for(&plugin, &field_id),
+                "conditional domain rule",
+                data,
+                false,
             ),
         );
     }

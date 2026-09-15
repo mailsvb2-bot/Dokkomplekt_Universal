@@ -1110,10 +1110,15 @@ fn perform_created_documents_intake(
             };
             // Filesystem publication is irreversible: never refund or silently delete after this boundary.
             case_run.mark_business_terminal();
+            let completion_output_paths = names
+                .iter()
+                .map(|name| patient_dir.join(name))
+                .collect::<Vec<_>>();
             let mut publication_warnings = match generation_publication::confirm_publication(
                 app,
                 &permit,
                 &patient_dir,
+                &completion_output_paths,
             ) {
                 Ok(warnings) => warnings,
                 Err(error) => {

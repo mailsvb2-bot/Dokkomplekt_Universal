@@ -144,6 +144,10 @@ const RECEIPT_SCHEMA: u32 = 3;
 const LEGACY_RECEIPT_SCHEMA_V1: u32 = 1;
 const LEGACY_RECEIPT_SCHEMA_V2: u32 = 2;
 const RECEIPT_DIR: &str = "generation-publication-receipts";
+const COMPLETION_RECEIPT_SCHEMA: u32 = 1;
+const COMPLETION_RECEIPT_DIR: &str = "generation-completion-receipts";
+const COMPLETION_PROOF_CONTRACT: &str = "physical-output-sha256-v1";
+const COMPLETION_VERIFIER_CONTRACT: &str = "published-readback-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,10 +184,32 @@ pub(crate) struct PublicationPlanBinding {
     pub processing_fingerprint: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CompletionOutputProof {
+    ordinal: u32,
+    output_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GenerationCompletionReceipt {
+    schema: u32,
+    receipt_id: String,
+    output_id: String,
+    output_sha256: String,
+    status: String,
+    committed_unix: i64,
+    proof_contract: String,
+    verifier_contract: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_binding_sha256: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PublicationRecoveryContext {
     stage_location: String,
     counter_reservations: Vec<CounterValue>,
+    #[serde(default)]
+    completion_outputs: Vec<CompletionOutputProof>,
     #[serde(default)]
     replacement_target: Option<String>,
     #[serde(default)]
@@ -193,10 +219,6 @@ struct PublicationRecoveryContext {
 impl PublicationReceipt {
     fn effective_phase(&self) -> Option<PublicationPhase> {
         match (self.schema, self.phase) {
-            // Schema v1 receipts predate the phase field and were written only
-            // after filesystem publication. Newer schemas must carry an explicit
-            // phase; accepting a missing phase there would turn corruption into a
-            // false Published proof.
             (LEGACY_RECEIPT_SCHEMA_V1, None) => Some(PublicationPhase::Published),
             (_, Some(phase)) => Some(phase),
             _ => None,
@@ -268,8 +290,6 @@ fn file_link_count(path: &Path) -> Option<u64> {
 
     let file = std::fs::File::open(path).ok()?;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `file` owns a valid open HANDLE for the duration of the call and
-    // `info` is a writable Win32 output structure. No handle ownership is transferred.
     let succeeded =
         unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &raw mut info) };
     (succeeded != 0).then_some(u64::from(info.nNumberOfLinks))
@@ -302,6 +322,7 @@ fn recovery_blob(
     let context = PublicationRecoveryContext {
         stage_location: staged_output.display().to_string(),
         counter_reservations: counter_reservations.to_vec(),
+        completion_outputs: Vec::new(),
         replacement_target: None,
         replacement_backup: None,
     };
@@ -380,6 +401,230 @@ pub(crate) fn output_digest(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn stable_identity_hash(namespace: &str, parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(namespace.as_bytes());
+    hasher.update([0]);
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn raw_file_sha256(path: &Path) -> Result<String, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Не удалось проверить физический результат перед committed GenerationReceipt {}: {error}",
+            path.display()
+        )
+    })?;
+    if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+        return Err(format!(
+            "Физический результат для committed GenerationReceipt имеет небезопасный тип: {}",
+            path.display()
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|error| {
+        format!(
+            "Не удалось прочитать физический результат для committed GenerationReceipt {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn completion_output_proofs(paths: &[PathBuf]) -> Result<Vec<CompletionOutputProof>, String> {
+    if paths.is_empty() {
+        return Err(
+            "Committed GenerationReceipt требует хотя бы один физический опубликованный результат."
+                .into(),
+        );
+    }
+    let mut proofs = Vec::with_capacity(paths.len());
+    for (index, path) in paths.iter().enumerate() {
+        if paths[..index].iter().any(|existing| existing == path) {
+            return Err(format!(
+                "Один физический результат передан в committed GenerationReceipt повторно: {}",
+                path.display()
+            ));
+        }
+        let ordinal = u32::try_from(index).map_err(|_| {
+            "Слишком много физических результатов для committed GenerationReceipt.".to_string()
+        })?;
+        proofs.push(CompletionOutputProof {
+            ordinal,
+            output_sha256: raw_file_sha256(path)?,
+        });
+    }
+    Ok(proofs)
+}
+
+fn completion_receipt_from_publication(
+    receipt: &PublicationReceipt,
+    output: &CompletionOutputProof,
+) -> Result<GenerationCompletionReceipt, String> {
+    if receipt.effective_phase() != Some(PublicationPhase::Published) {
+        return Err(
+            "Generation receipt допускается только после подтверждённой публикации.".into(),
+        );
+    }
+    if output.output_sha256.len() != 64
+        || !output
+            .output_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Physical output proof содержит некорректный SHA-256.".into());
+    }
+    let plan_binding_sha256 = if receipt.has_complete_plan_binding() {
+        Some(stable_identity_hash(
+            "plan-binding-v1",
+            &[
+                receipt.processing_job_sha256.as_deref().unwrap_or_default(),
+                receipt.source_sha256.as_deref().unwrap_or_default(),
+                receipt
+                    .processing_fingerprint
+                    .as_deref()
+                    .unwrap_or_default(),
+            ],
+        ))
+    } else {
+        None
+    };
+    let ordinal = output.ordinal.to_string();
+    let receipt_id = stable_identity_hash(
+        "generation-receipt-v1",
+        &[&receipt.reservation_id, &ordinal, &output.output_sha256],
+    );
+    let output_id = stable_identity_hash(
+        "generation-output-v1",
+        &[&receipt.reservation_id, &ordinal, &output.output_sha256],
+    );
+    Ok(GenerationCompletionReceipt {
+        schema: COMPLETION_RECEIPT_SCHEMA,
+        receipt_id,
+        output_id,
+        output_sha256: output.output_sha256.clone(),
+        status: "committed".into(),
+        committed_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
+        proof_contract: COMPLETION_PROOF_CONTRACT.into(),
+        verifier_contract: COMPLETION_VERIFIER_CONTRACT.into(),
+        plan_binding_sha256,
+    })
+}
+
+fn completion_receipts_match_identity(
+    existing: &GenerationCompletionReceipt,
+    expected: &GenerationCompletionReceipt,
+) -> bool {
+    existing.schema == expected.schema
+        && existing.receipt_id == expected.receipt_id
+        && existing.output_id == expected.output_id
+        && existing.output_sha256 == expected.output_sha256
+        && existing.status == expected.status
+        && existing.proof_contract == expected.proof_contract
+        && existing.verifier_contract == expected.verifier_contract
+        && existing.plan_binding_sha256 == expected.plan_binding_sha256
+}
+
+fn persist_generation_completion_receipt(
+    app_data: &Path,
+    publication: &PublicationReceipt,
+    output: &CompletionOutputProof,
+) -> Result<PathBuf, String> {
+    let receipt = completion_receipt_from_publication(publication, output)?;
+    std::fs::create_dir_all(app_data).map_err(|error| {
+        format!("Не удалось подготовить app-data для committed GenerationReceipt: {error}")
+    })?;
+    let receipt_dir = crate::publication_service_directory(app_data, COMPLETION_RECEIPT_DIR, true)?;
+    let path = receipt_dir.join(format!("{}.json", receipt.receipt_id));
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+                return Err(format!(
+                    "Committed GenerationReceipt имеет небезопасный тип файла: {}",
+                    path.display()
+                ));
+            }
+            let existing_bytes = std::fs::read(&path).map_err(|error| {
+                format!("Не удалось прочитать существующий committed GenerationReceipt: {error}")
+            })?;
+            let existing = serde_json::from_slice::<GenerationCompletionReceipt>(&existing_bytes)
+                .map_err(|error| {
+                format!("Существующий committed GenerationReceipt повреждён: {error}")
+            })?;
+            if !completion_receipts_match_identity(&existing, &receipt) {
+                return Err("Конфликт committed GenerationReceipt: существующая квитанция с тем же identity не соответствует опубликованному результату.".into());
+            }
+            return Ok(path);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Не удалось безопасно проверить committed GenerationReceipt {}: {error}",
+                path.display()
+            ));
+        }
+    }
+    let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
+    crate::atomic_write_file(&path, &bytes).map_err(|error| {
+        format!("Не удалось зафиксировать committed GenerationReceipt: {error}")
+    })?;
+    Ok(path)
+}
+
+fn persist_generation_completion_receipts(
+    app_data: &Path,
+    publication: &PublicationReceipt,
+    outputs: &[CompletionOutputProof],
+) -> Result<Vec<PathBuf>, String> {
+    if outputs.is_empty() {
+        return Err("Publication journal не содержит physical-output proofs для committed GenerationReceipt.".into());
+    }
+    let mut paths = Vec::with_capacity(outputs.len());
+    for (index, output) in outputs.iter().enumerate() {
+        if outputs[..index]
+            .iter()
+            .any(|existing| existing.ordinal == output.ordinal)
+        {
+            return Err(
+                "Publication journal содержит повторяющийся ordinal physical-output proof.".into(),
+            );
+        }
+        paths.push(persist_generation_completion_receipt(
+            app_data,
+            publication,
+            output,
+        )?);
+    }
+    Ok(paths)
+}
+
+fn completion_output_proofs_from_recovery(
+    repo: &LocalRepository,
+    receipt: &PublicationReceipt,
+) -> Result<Vec<CompletionOutputProof>, String> {
+    let context = decode_recovery_blob(repo, receipt)?.ok_or_else(|| {
+        "Published publication journal не содержит recovery-контекста physical outputs.".to_string()
+    })?;
+    if context.completion_outputs.is_empty() {
+        return Err("Published publication journal не содержит physical-output proofs.".into());
+    }
+    Ok(context.completion_outputs)
+}
+
+fn replay_generation_completion_receipts(
+    app: &tauri::AppHandle,
+    app_data: &Path,
+    receipt: &PublicationReceipt,
+) -> Result<Vec<PathBuf>, String> {
+    let state_path = crate::default_state_db_path(app)?;
+    let repo = crate::repository_for(&state_path)?;
+    let outputs = completion_output_proofs_from_recovery(&repo, receipt)?;
+    persist_generation_completion_receipts(app_data, receipt, &outputs)
+}
+
 fn write_receipt(path: &Path, receipt: &PublicationReceipt) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(receipt).map_err(|error| error.to_string())?;
     crate::atomic_write_file(path, &bytes)
@@ -410,7 +655,6 @@ pub(crate) fn prepare_publication(
     plan_binding: Option<&PublicationPlanBinding>,
 ) -> Result<(), String> {
     use tauri::Manager as _;
-
     let app_data = app
         .path()
         .app_data_dir()
@@ -483,28 +727,18 @@ fn verify_published_output_digest(
         format!("Нельзя доказать целостность опубликованного результата: {error}")
     })?;
     if published_sha256 != receipt.output_sha256 {
-        return Err(format!(
-            "Опубликованный результат не совпал с подготовленным snapshot: ожидался SHA-256 {}, получен {}.",
-            receipt.output_sha256, published_sha256
-        ));
+        return Err(format!("Опубликованный результат не совпал с подготовленным snapshot: ожидался SHA-256 {}, получен {}.", receipt.output_sha256, published_sha256));
     }
     Ok(())
 }
 
-/// Verify that the bytes which crossed the filesystem publication boundary are
-/// exactly the bytes protected by the Prepared receipt. An `Err` means the
-/// publication itself is *unverified* and must never be reported as success.
-///
-/// `Ok(warnings)` means byte identity is proven. A warning is possible only when
-/// persisting the Published phase failed after the digest already matched; callers
-/// may then keep the verified artifact and conservatively retain the receipt.
 pub(crate) fn confirm_publication(
     app: &tauri::AppHandle,
     permit: &crate::GenerationPermit,
     published_output: &Path,
+    completion_output_paths: &[PathBuf],
 ) -> Result<Vec<String>, String> {
     use tauri::Manager as _;
-
     let app_data = app.path().app_data_dir().map_err(|error| {
         format!("Не удалось получить app-data для проверки публикации: {error}")
     })?;
@@ -515,22 +749,33 @@ pub(crate) fn confirm_publication(
         )
     })?;
     if !supported_receipt(&receipt) || receipt.reservation_id != permit.reservation.reservation_id {
-        return Err(
-            "Нельзя доказать целостность публикации: квитанция не соответствует резервации генерации."
-                .into(),
-        );
+        return Err("Нельзя доказать целостность публикации: квитанция не соответствует резервации генерации.".into());
     }
     verify_published_output_digest(&receipt, published_output)?;
-
+    let completion_outputs = completion_output_proofs(completion_output_paths)?;
+    let state_path = crate::default_state_db_path(app)?;
+    let repo = crate::repository_for(&state_path)?;
+    let mut recovery_context = decode_recovery_blob(&repo, &receipt)?.ok_or_else(|| {
+        "Pre-publication journal не содержит recovery-контекста для physical-output proof."
+            .to_string()
+    })?;
+    recovery_context.completion_outputs = completion_outputs;
+    let recovery_json =
+        serde_json::to_string(&recovery_context).map_err(|error| error.to_string())?;
+    receipt.recovery_blob = Some(
+        repo.protect_local_value(&recovery_json)
+            .map_err(|error| error.to_string())?,
+    );
     receipt.schema = RECEIPT_SCHEMA;
     receipt.phase = Some(PublicationPhase::Published);
     receipt.published_unix = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-    match write_receipt(&path, &receipt) {
-        Ok(()) => Ok(Vec::new()),
-        Err(error) => Ok(vec![format!(
-            "Байты опубликованного результата подтверждены SHA-256, но durable-квитанцию не удалось перевести в состояние published: {error}"
-        )]),
-    }
+    write_receipt(&path, &receipt).map_err(|error| format!("Байты опубликованного результата подтверждены SHA-256, но durable-квитанцию не удалось перевести в состояние published: {error}"))?;
+    persist_generation_completion_receipts(
+        &app_data,
+        &receipt,
+        &recovery_context.completion_outputs,
+    )?;
+    Ok(Vec::new())
 }
 
 pub(crate) fn abort_prepared_publication(
@@ -538,7 +783,6 @@ pub(crate) fn abort_prepared_publication(
     permit: &crate::GenerationPermit,
 ) -> Result<(), String> {
     use tauri::Manager as _;
-
     let app_data = app
         .path()
         .app_data_dir()
@@ -558,17 +802,15 @@ pub(crate) fn complete_publication_receipt(
     abort_prepared_publication(app, permit)
 }
 
-fn receipt_phase_for_permit(
+fn publication_receipt_for_permit(
     app_data: &Path,
     permit: &crate::GenerationPermit,
-) -> Result<PublicationPhase, String> {
+) -> Result<PublicationReceipt, String> {
     let receipt = load_receipt(&receipt_path(app_data, &permit.reservation.reservation_id))?;
     if !supported_receipt(&receipt) {
         return Err("Некорректная квитанция опубликованной генерации.".into());
     }
-    receipt
-        .effective_phase()
-        .ok_or_else(|| "Квитанция не содержит допустимую фазу публикации.".to_string())
+    Ok(receipt)
 }
 
 pub(crate) fn finalize_published_generation(
@@ -577,38 +819,33 @@ pub(crate) fn finalize_published_generation(
     retain_receipt_for_completion: bool,
 ) -> Vec<String> {
     use tauri::Manager as _;
-
     let app_data = app.path().app_data_dir();
-    let phase = app_data
+    let publication_receipt = app_data
         .as_ref()
         .map_err(|error| error.to_string())
-        .and_then(|app_data| receipt_phase_for_permit(app_data, permit));
+        .and_then(|app_data| publication_receipt_for_permit(app_data, permit));
     let accounting_result = crate::commit_generation_access(app, permit);
-
     if accounting_result.is_ok() {
         let mut warnings = Vec::new();
-        match phase {
-            Ok(PublicationPhase::Published) if !retain_receipt_for_completion => {
+        match publication_receipt {
+            Ok(receipt) if receipt.effective_phase() == Some(PublicationPhase::Published) => {
                 if let Ok(app_data) = app_data {
-                    remove_publication_receipt(&app_data, &permit.reservation.reservation_id);
+                    if let Err(error) = replay_generation_completion_receipts(app, &app_data, &receipt) {
+                        warnings.push(format!("Committed GenerationReceipt уже требовался на publication boundary, но повторная проверка physical-output proof не удалась: {error}"));
+                    } else if !retain_receipt_for_completion {
+                        remove_publication_receipt(&app_data, &permit.reservation.reservation_id);
+                    }
                 }
             }
-            Ok(PublicationPhase::Prepared) => warnings.push(
-                "Документ опубликован, но подтверждение границы публикации не записалось. Учёт зафиксирован, pre-publication квитанция сохранена как защита от двусмысленного повтора."
-                    .to_string(),
-            ),
-            Err(error) => warnings.push(format!(
-                "Документ опубликован и учёт зафиксирован, но квитанция публикации недоступна: {error}"
-            )),
-            _ => {}
+            Ok(_) => warnings.push("Документ опубликован, но publication journal не содержит подтверждённую фазу Published; recovery guard сохранён.".to_string()),
+            Err(error) => warnings.push(format!("Документ опубликован и committed receipt должен был быть записан на publication boundary, но recovery journal недоступен: {error}")),
         }
         return warnings;
     }
-
     let accounting_error = accounting_result
         .err()
         .unwrap_or_else(|| "unknown accounting error".into());
-    let receipt_persisted = phase.is_ok();
+    let receipt_persisted = publication_receipt.is_ok();
     let warning = if receipt_persisted {
         "Документ опубликован. Учёт лимита будет автоматически дофинализирован по защищённой квитанции при следующем запуске.".to_string()
     } else {
@@ -739,10 +976,7 @@ fn restore_interrupted_replacement(
         return Err("Резервная копия после сбоя имеет небезопасный тип файла.".into());
     }
     if target.exists() {
-        report.warnings.push(
-            "После прерванной безопасной замены исходный backup сохранён: пользовательский путь уже занят и не был перезаписан."
-                .into(),
-        );
+        report.warnings.push("После прерванной безопасной замены исходный backup сохранён: пользовательский путь уже занят и не был перезаписан.".into());
         return Ok(());
     }
     std::fs::create_dir_all(target_parent).map_err(|error| {
@@ -751,10 +985,7 @@ fn restore_interrupted_replacement(
     std::fs::rename(backup, target).map_err(|error| {
         format!("Не удалось восстановить предыдущий комплект после сбоя: {error}")
     })?;
-    report.warnings.push(
-        "После прерванной безопасной замены предыдущий пользовательский комплект автоматически восстановлен."
-            .into(),
-    );
+    report.warnings.push("После прерванной безопасной замены предыдущий пользовательский комплект автоматически восстановлен.".into());
     Ok(())
 }
 
@@ -819,28 +1050,18 @@ pub(crate) fn reconcile_publication_receipts(
             Ok(receipt) if supported_receipt(&receipt) => receipt,
             Ok(receipt) if known_receipt_identity(&receipt) => {
                 report.ambiguous += 1;
-                report.warnings.push(
-                    "Квитанция известного формата не содержит допустимую фазу публикации; автоматическая финализация и повтор заблокированы до ручной проверки."
-                        .into(),
-                );
+                report.warnings.push("Квитанция известного формата не содержит допустимую фазу публикации; автоматическая финализация и повтор заблокированы до ручной проверки.".into());
                 continue;
             }
             Ok(_) => {
-                report.warnings.push(
-                    "Некорректная квитанция опубликованной генерации оставлена для ручной проверки."
-                        .into(),
-                );
+                report.warnings.push("Некорректная квитанция опубликованной генерации оставлена для ручной проверки.".into());
                 continue;
             }
             Err(_) => {
-                report.warnings.push(
-                    "Повреждённая квитанция опубликованной генерации оставлена для ручной проверки."
-                        .into(),
-                );
+                report.warnings.push("Повреждённая квитанция опубликованной генерации оставлена для ручной проверки.".into());
                 continue;
             }
         };
-
         if receipt.effective_phase() == Some(PublicationPhase::Prepared)
             && receipt.schema == RECEIPT_SCHEMA
         {
@@ -854,53 +1075,52 @@ pub(crate) fn reconcile_publication_receipts(
                 Err(error) => report.warnings.push(format!("Recovery-контекст pre-publication квитанции повреждён ({error}); применяется консервативная финализация.")),
             }
         }
-
         match repo.finalize_published_usage(&receipt.reservation_id) {
             Ok(true) => {
                 report.finalized += 1;
                 match receipt.effective_phase() {
                     Some(PublicationPhase::Prepared) => {
                         report.ambiguous += 1;
-                        report.warnings.push(
-                            "Обнаружена pre-publication квитанция после прерывания процесса. Публикация не может быть доказанно исключена, поэтому резервация дофинализирована консервативно, а квитанция сохранена от бесплатного или двойного повтора."
-                                .into(),
-                        );
+                        report.warnings.push("Обнаружена pre-publication квитанция после прерывания процесса. Публикация не может быть доказанно исключена, поэтому резервация дофинализирована консервативно, а квитанция сохранена от бесплатного или двойного повтора.".into());
                     }
                     Some(PublicationPhase::Published) if receipt.has_complete_plan_binding() => {
+                        let generation_completion = completion_output_proofs_from_recovery(repo, &receipt)
+                            .and_then(|outputs| {
+                                persist_generation_completion_receipts(app_data, &receipt, &outputs)
+                                    .map(|_| ())
+                            });
                         let local_completion = mark_local_completion(
                             app_data,
                             receipt.processing_job_sha256.as_deref().unwrap_or_default(),
                             receipt.source_sha256.as_deref().unwrap_or_default(),
                             receipt.processing_fingerprint.as_deref().unwrap_or_default(),
                         );
-                        if local_completion.is_ok() {
+                        if generation_completion.is_ok() && local_completion.is_ok() {
                             let _ = std::fs::remove_file(path);
                         } else {
-                            report.warnings.push(
-                                "Учёт опубликованного комплекта восстановлен, но plan-bound квитанцию завершения записать не удалось; publication guard сохранён."
-                                    .into(),
-                            );
+                            report.warnings.push("Учёт опубликованного комплекта восстановлен, но durable completion evidence записано не полностью; publication guard сохранён.".into());
                         }
                     }
                     Some(PublicationPhase::Published) => {
-                        let _ = std::fs::remove_file(path);
+                        let generation_completion = completion_output_proofs_from_recovery(repo, &receipt)
+                            .and_then(|outputs| {
+                                persist_generation_completion_receipts(app_data, &receipt, &outputs)
+                                    .map(|_| ())
+                            });
+                        if generation_completion.is_ok() {
+                            let _ = std::fs::remove_file(path);
+                        } else {
+                            report.warnings.push("Учёт опубликованного результата восстановлен, но physical-output committed GenerationReceipt не записан; publication guard сохранён.".into());
+                        }
                     }
                     None => {
                         report.ambiguous += 1;
-                        report.warnings.push(
-                            "Квитанция не содержит допустимую фазу публикации; состояние оставлено для ручной проверки.".into(),
-                        );
+                        report.warnings.push("Квитанция не содержит допустимую фазу публикации; состояние оставлено для ручной проверки.".into());
                     }
                 }
             }
-            Ok(false) => report.warnings.push(
-                "Квитанция опубликованной генерации не связана с известной резервацией лимита."
-                    .into(),
-            ),
-            Err(_) => report.warnings.push(
-                "Учёт опубликованной генерации пока не удалось финализировать; квитанция сохранена для следующего запуска."
-                    .into(),
-            ),
+            Ok(false) => report.warnings.push("Квитанция опубликованной генерации не связана с известной резервацией лимита.".into()),
+            Err(_) => report.warnings.push("Учёт опубликованной генерации пока не удалось финализировать; квитанция сохранена для следующего запуска.".into()),
         }
     }
     report
@@ -923,7 +1143,7 @@ fn recover_stale_prepublication_reservations(
                 return Err(format!(
                     "Не удалось безопасно проверить publication receipt {}: {error}",
                     path.display()
-                ));
+                ))
             }
         }
         if repo
@@ -938,7 +1158,6 @@ fn recover_stale_prepublication_reservations(
 
 pub(crate) fn recover_startup_generation_state(app: &tauri::AppHandle, repo: &mut LocalRepository) {
     use tauri::Manager as _;
-
     if let Ok(app_data) = app.path().app_data_dir() {
         let report = reconcile_publication_receipts(&app_data, repo);
         if report.finalized > 0 {
@@ -954,10 +1173,7 @@ pub(crate) fn recover_startup_generation_state(app: &tauri::AppHandle, repo: &mu
             );
         }
         if report.ambiguous > 0 {
-            eprintln!(
-                "Обнаружено {} двусмысленных pre-publication состояний; повтор заблокирован до ручной проверки.",
-                report.ambiguous
-            );
+            eprintln!("Обнаружено {} двусмысленных pre-publication состояний; повтор заблокирован до ручной проверки.", report.ambiguous);
         }
         for warning in report.warnings {
             eprintln!("Восстановление опубликованной генерации: {warning}");
@@ -1021,11 +1237,160 @@ mod tests {
     }
 
     #[test]
+    fn physical_completion_proof_uses_raw_sha256_not_bundle_digest() {
+        let root = temp_root("physical-output-proof");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Документ.docx");
+        std::fs::write(&path, b"physical docx bytes").unwrap();
+        let expected_raw = format!("{:x}", Sha256::digest(b"physical docx bytes"));
+        assert_eq!(raw_file_sha256(&path).unwrap(), expected_raw);
+        assert_ne!(output_digest(&path).unwrap(), expected_raw);
+        let proofs = completion_output_proofs(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(proofs.len(), 1);
+        assert_eq!(proofs[0].ordinal, 0);
+        assert_eq!(proofs[0].output_sha256, expected_raw);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn committed_generation_receipt_is_non_pii_and_bound_to_physical_output() {
+        let publication = PublicationReceipt {
+            schema: RECEIPT_SCHEMA,
+            reservation_id: "raw-reservation-secret".into(),
+            output_sha256: "a".repeat(64),
+            phase: Some(PublicationPhase::Published),
+            prepared_unix: Some(1),
+            published_unix: Some(2),
+            processing_job_sha256: Some("b".repeat(64)),
+            source_sha256: Some("c".repeat(64)),
+            processing_fingerprint: Some("d".repeat(64)),
+            recovery_blob: Some("must-never-copy-to-completion".into()),
+        };
+        let output = CompletionOutputProof {
+            ordinal: 0,
+            output_sha256: "9".repeat(64),
+        };
+        let completion = completion_receipt_from_publication(&publication, &output)
+            .expect("published receipt creates committed physical-output proof");
+        let json = serde_json::to_string(&completion).unwrap();
+        assert_eq!(completion.status, "committed");
+        assert_eq!(completion.output_sha256, "9".repeat(64));
+        assert_ne!(completion.output_sha256, publication.output_sha256);
+        assert_eq!(completion.proof_contract, COMPLETION_PROOF_CONTRACT);
+        assert_eq!(completion.verifier_contract, COMPLETION_VERIFIER_CONTRACT);
+        assert!(!json.contains("raw-reservation-secret"));
+        assert!(!json.contains("must-never-copy-to-completion"));
+        assert!(!json.contains("stage_location"));
+        assert!(!json.contains("replacement_target"));
+    }
+
+    #[test]
+    fn committed_generation_receipt_is_idempotent_and_conflict_safe() {
+        let root = temp_root("committed-receipt-idempotency");
+        let publication = PublicationReceipt {
+            schema: RECEIPT_SCHEMA,
+            reservation_id: "stable-reservation".into(),
+            output_sha256: "e".repeat(64),
+            phase: Some(PublicationPhase::Published),
+            prepared_unix: Some(1),
+            published_unix: Some(2),
+            processing_job_sha256: Some("f".repeat(64)),
+            source_sha256: Some("1".repeat(64)),
+            processing_fingerprint: Some("2".repeat(64)),
+            recovery_blob: None,
+        };
+        let output = CompletionOutputProof {
+            ordinal: 0,
+            output_sha256: "3".repeat(64),
+        };
+        let path = persist_generation_completion_receipt(&root, &publication, &output)
+            .expect("first committed receipt write");
+        let mut existing: GenerationCompletionReceipt =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        existing.committed_unix = 123;
+        let stable_bytes = serde_json::to_vec_pretty(&existing).unwrap();
+        std::fs::write(&path, &stable_bytes).unwrap();
+        let replayed = persist_generation_completion_receipt(&root, &publication, &output)
+            .expect("identical replay must reuse committed receipt");
+        assert_eq!(replayed, path);
+        assert_eq!(std::fs::read(&path).unwrap(), stable_bytes);
+        let mut conflicting: GenerationCompletionReceipt =
+            serde_json::from_slice(&stable_bytes).unwrap();
+        conflicting.output_id = "0".repeat(64);
+        std::fs::write(&path, serde_json::to_vec_pretty(&conflicting).unwrap()).unwrap();
+        let error = persist_generation_completion_receipt(&root, &publication, &output)
+            .expect_err("conflicting committed receipt must fail closed");
+        assert!(error.contains("Конфликт committed GenerationReceipt"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_generation_receipt_never_follows_symlinked_service_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("completion-receipt-dir-symlink");
+        let external = temp_root("completion-receipt-dir-external");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        symlink(&external, root.join(COMPLETION_RECEIPT_DIR)).unwrap();
+        let publication = receipt_fixture(RECEIPT_SCHEMA, Some(PublicationPhase::Published));
+        let output = CompletionOutputProof {
+            ordinal: 0,
+            output_sha256: "4".repeat(64),
+        };
+
+        let error = persist_generation_completion_receipt(&root, &publication, &output)
+            .expect_err("symlinked completion receipt directory must fail closed");
+        assert!(error.contains("небезопасный тип"));
+        assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_generation_receipt_never_follows_symlinked_receipt_file() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("completion-receipt-file-symlink");
+        let external = temp_root("completion-receipt-file-external");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let receipt_dir = root.join(COMPLETION_RECEIPT_DIR);
+        std::fs::create_dir_all(&receipt_dir).unwrap();
+        let publication = receipt_fixture(RECEIPT_SCHEMA, Some(PublicationPhase::Published));
+        let output = CompletionOutputProof {
+            ordinal: 0,
+            output_sha256: "5".repeat(64),
+        };
+        let receipt = completion_receipt_from_publication(&publication, &output).unwrap();
+        let external_file = external.join("outside.json");
+        std::fs::write(&external_file, b"outside must stay untouched").unwrap();
+        symlink(
+            &external_file,
+            receipt_dir.join(format!("{}.json", receipt.receipt_id)),
+        )
+        .unwrap();
+
+        let error = persist_generation_completion_receipt(&root, &publication, &output)
+            .expect_err("symlinked committed receipt file must fail closed");
+        assert!(error.contains("небезопасный тип файла"));
+        assert_eq!(
+            std::fs::read(&external_file).unwrap(),
+            b"outside must stay untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
+    }
+
+    #[test]
     fn only_schema_v1_may_omit_publication_phase() {
         let v1 = receipt_fixture(LEGACY_RECEIPT_SCHEMA_V1, None);
         assert_eq!(v1.effective_phase(), Some(PublicationPhase::Published));
         assert!(supported_receipt(&v1));
-
         for schema in [LEGACY_RECEIPT_SCHEMA_V2, RECEIPT_SCHEMA] {
             let missing_phase = receipt_fixture(schema, None);
             assert_eq!(missing_phase.effective_phase(), None);
@@ -1052,7 +1417,6 @@ mod tests {
         std::fs::create_dir_all(&receipts).unwrap();
         let receipt = receipt_fixture(RECEIPT_SCHEMA, None);
         write_receipt(&receipts.join("ambiguous.receipt.json"), &receipt).unwrap();
-
         assert!(plan_bound_publication_guard_exists(&root, "job", "source", "plan").unwrap());
         assert!(
             !plan_bound_publication_guard_exists(&root, "other-job", "source", "plan").unwrap()
@@ -1155,7 +1519,7 @@ mod tests {
         assert!(plan_bound_emergency_completion_exists(&source, &job).unwrap());
         assert!(!plan_bound_emergency_completion_exists(&source, &"c".repeat(64)).unwrap());
         assert!(
-            mark_plan_bound_emergency_guard(&source, &"b".repeat(64), &job, "retryable",).is_err()
+            mark_plan_bound_emergency_guard(&source, &"b".repeat(64), &job, "retryable").is_err()
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1176,6 +1540,7 @@ mod tests {
         let context = PublicationRecoveryContext {
             stage_location: stage.display().to_string(),
             counter_reservations: Vec::new(),
+            completion_outputs: Vec::new(),
             replacement_target: None,
             replacement_backup: None,
         };
@@ -1195,6 +1560,7 @@ mod tests {
         let context = PublicationRecoveryContext {
             stage_location: root.join(".stage").display().to_string(),
             counter_reservations: Vec::new(),
+            completion_outputs: Vec::new(),
             replacement_target: Some(target.display().to_string()),
             replacement_backup: Some(backup.display().to_string()),
         };
@@ -1209,7 +1575,6 @@ mod tests {
     #[test]
     fn interrupted_replacement_never_follows_symlinked_backup_root() {
         use std::os::unix::fs::symlink;
-
         let root = temp_root("replace-symlink-recovery");
         let target = root.join("Комплект");
         let external = temp_root("replace-symlink-recovery-external");
@@ -1224,6 +1589,7 @@ mod tests {
         let context = PublicationRecoveryContext {
             stage_location: root.join(".stage").display().to_string(),
             counter_reservations: Vec::new(),
+            completion_outputs: Vec::new(),
             replacement_target: Some(target.display().to_string()),
             replacement_backup: Some(backup.display().to_string()),
         };
@@ -1248,6 +1614,7 @@ mod tests {
         let context = PublicationRecoveryContext {
             stage_location: stage.display().to_string(),
             counter_reservations: Vec::new(),
+            completion_outputs: Vec::new(),
             replacement_target: None,
             replacement_backup: None,
         };

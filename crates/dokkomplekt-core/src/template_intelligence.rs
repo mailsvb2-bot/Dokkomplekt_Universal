@@ -296,7 +296,72 @@ fn score_domains(text: &str, placeholders: &[String]) -> BTreeMap<String, usize>
     scores.insert("hr".to_string(), hr);
     scores.insert("accounting".to_string(), accounting);
     scores.insert("education".to_string(), education);
+    add_domain_plugin_evidence(&lower, placeholders, &mut scores);
     scores
+}
+
+/// Strengthen template-domain discovery with the same canonical plugin metadata
+/// that owns domain roles and fields at runtime. Plugin fields are supporting
+/// evidence only for the plugin that owns the dominant detected document role.
+/// This prevents shared contract/person fields from inventing a second profession.
+fn add_domain_plugin_evidence(
+    normalized_text: &str,
+    placeholders: &[String],
+    scores: &mut BTreeMap<String, usize>,
+) {
+    let Some((predicted_role, confidence)) = crate::predict_document_role(normalized_text) else {
+        return;
+    };
+    if confidence < 0.45 {
+        return;
+    }
+
+    for plugin in crate::builtin_domain_plugins_v2() {
+        let domain_key = match &plugin.id {
+            crate::DomainPluginId::Medical => "medical",
+            crate::DomainPluginId::Legal => "legal",
+            crate::DomainPluginId::Hr => "hr",
+            crate::DomainPluginId::Education => "education",
+            crate::DomainPluginId::Accounting => "accounting",
+            crate::DomainPluginId::Core | crate::DomainPluginId::Custom => continue,
+        };
+        let Some(role_signals) = plugin.role_signals.get(&predicted_role) else {
+            continue;
+        };
+        let role_signal_hits = role_signals
+            .iter()
+            .filter(|signal| {
+                let signal = normalize_domain_evidence(signal);
+                !signal.is_empty() && normalized_text.contains(&signal)
+            })
+            .count();
+        if role_signal_hits == 0 {
+            continue;
+        }
+        let field_hits = plugin
+            .field_definitions
+            .iter()
+            .filter(|field| {
+                placeholders.iter().any(|placeholder| {
+                    let placeholder = normalize_domain_evidence(placeholder);
+                    placeholder == normalize_domain_evidence(&field.id)
+                        || field
+                            .aliases
+                            .iter()
+                            .any(|alias| placeholder == normalize_domain_evidence(alias))
+                })
+            })
+            .count();
+
+        // Existing Template Intelligence gives canonical prefixed placeholders a
+        // weight of 3. Keep that weight for role-owned plugin fields. Exact role
+        // evidence uses the same 5-point strength as the document router.
+        *scores.entry(domain_key.to_string()).or_default() += role_signal_hits * 5 + field_hits * 3;
+    }
+}
+
+fn normalize_domain_evidence(value: &str) -> String {
+    value.trim().to_lowercase().replace('ё', "е")
 }
 
 fn detect_role(text: &str, title: &str) -> String {
@@ -373,6 +438,54 @@ mod alias_regression_tests {
     use crate::domains::medical_semantics::{
         SICK_LEAVE_VK_PROTOCOL_NUMBER, VK_MSE_PROTOCOL_NUMBER,
     };
+
+    #[test]
+    fn accounting_service_act_uses_role_owned_plugin_evidence_over_shared_legal_vocabulary() {
+        let analysis = analyze_template_text(
+            "АКТ ОКАЗАННЫХ УСЛУГ\n№ {{document.number}} от {{document.date}}\nИсполнитель: {{org.name}}\nЗаказчик: {{counterparty.name}}\nДоговор № {{contract.number}} от {{contract.date}}\nПредмет договора: {{contract.subject}}\nСумма: {{amount.total}} {{amount.currency}}\nНДС: {{amount.vat}}",
+        );
+
+        assert_eq!(best_domain(&analysis), DomainKind::Accounting);
+        assert_eq!(analysis.role_id, "service_act");
+        assert!(
+            analysis
+                .domain_scores
+                .get("accounting")
+                .copied()
+                .unwrap_or_default()
+                > analysis
+                    .domain_scores
+                    .get("legal")
+                    .copied()
+                    .unwrap_or_default()
+        );
+
+        let document = create_document_spec(
+            "accounting.service_act",
+            "service_act.docx",
+            &analysis,
+            Some("Акт оказанных услуг"),
+        );
+        assert_eq!(document.category, DomainKind::Accounting);
+        for field_id in ["document.number", "document.date"] {
+            let prompt = document
+                .popup_fields
+                .iter()
+                .find(|field| field.field_id == field_id)
+                .unwrap_or_else(|| panic!("missing popup field {field_id}"));
+            assert_eq!(prompt.ask_mode, crate::PromptAskMode::Confirm);
+        }
+    }
+
+    #[test]
+    fn legal_acceptance_act_keeps_legal_domain_with_role_owned_plugin_evidence() {
+        let analysis = analyze_template_text(
+            "АКТ ПРИЕМА-ПЕРЕДАЧИ\n№ {{document.number}} от {{document.date}}\nДоговор № {{contract.number}} от {{contract.date}}\nЗаказчик: {{contract.party_a}}\nИсполнитель: {{contract.party_b}}\nПредмет договора: {{contract.subject}}",
+        );
+
+        assert_eq!(best_domain(&analysis), DomainKind::Legal);
+        assert_eq!(analysis.role_id, "acceptance_act");
+    }
 
     #[test]
     fn button_label_truncation_preserves_utf8_boundaries() {

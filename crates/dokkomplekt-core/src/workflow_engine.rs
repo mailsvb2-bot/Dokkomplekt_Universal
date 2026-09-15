@@ -676,6 +676,33 @@ mod tests {
     }
 
     #[test]
+    fn accounting_service_act_prefills_scanned_identity_for_confirmation() {
+        let mut doc = document("service_act", "document.number");
+        doc.category = DomainKind::Accounting;
+        doc.role_id = "service_act".into();
+        doc.required_fields.push("document.date".into());
+        doc.placeholders.push("document.date".into());
+
+        let mut case = SemanticCase::default();
+        crate::set_scanner_value(&mut case, "document.number", "E1-17", 0.97);
+        crate::set_scanner_value(&mut case, "document.date", "13.09.2026", 0.97);
+
+        let plan = plan_workflow(&doc, &case, &WorkflowFlags::default());
+        for (field_id, expected) in [
+            ("document.number", "E1-17"),
+            ("document.date", "13.09.2026"),
+        ] {
+            let prompt = plan
+                .prompts
+                .iter()
+                .find(|prompt| prompt.field_id == field_id)
+                .unwrap_or_else(|| panic!("missing confirmation prompt for {field_id}"));
+            assert_eq!(prompt.ask_mode, PromptAskMode::Confirm);
+            assert_eq!(prompt.current_value.as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
     fn always_prompt_is_shown_even_when_case_has_value() {
         let mut doc = document("one", "document.number");
         let mut config = PopupFieldConfig::new("document.number", "Номер");

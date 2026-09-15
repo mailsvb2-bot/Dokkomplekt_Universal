@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sourceEvidencedLearningFields } from './pendingTemplateIntelligence';
+import { publicationEligibleLearningFields, sourceEvidencedLearningFields } from './pendingTemplateIntelligence';
 
 describe('template learning evidence boundary', () => {
   it('keeps low-confidence fields when matched source evidence exists', () => {
@@ -16,4 +16,24 @@ describe('template learning evidence boundary', () => {
     ]);
     expect(fields).toEqual([]);
   });
+
+  it('blocks high-confidence source evidence when holdout validation failed', () => {
+    const fields = publicationEligibleLearningFields({
+      fields: [{ field_id: 'document.number', confidence: 0.99, source_matches: ['A-17'] }],
+      validation: { passed: false },
+    });
+    expect(fields).toEqual([]);
+  });
+
+  it('allows source-evidenced fields only after a passed holdout verdict', () => {
+    const fields = publicationEligibleLearningFields({
+      fields: [
+        { field_id: 'document.number', confidence: 0.42, source_matches: ['A-17'] },
+        { field_id: 'amount.total', confidence: 0.99, source_matches: [] },
+      ],
+      validation: { passed: true },
+    });
+    expect(fields.map((field) => field.field_id)).toEqual(['document.number']);
+  });
+
 });

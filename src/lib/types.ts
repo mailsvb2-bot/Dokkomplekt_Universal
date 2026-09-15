@@ -734,6 +734,17 @@ export interface ImportLearningExampleFileResult {
   extracted_text: string;
   warnings: string[];
 }
+export interface TemplateLearningValidationVerdict {
+  passed: boolean;
+  holdout_pair_index?: number | null;
+  evaluated_fields: number;
+  matched_fields: number;
+  intervention_fields: number;
+  intervention_matches: number;
+  mismatched_field_ids: string[];
+  reasons: string[];
+}
+
 export interface TemplateLearningReport {
   locale: string;
   fields: LearnedTemplateField[];
@@ -744,6 +755,7 @@ export interface TemplateLearningReport {
   diff: TemplateDiffHunk[];
   confidence: number;
   requires_confirmation: boolean;
+  validation: TemplateLearningValidationVerdict;
   warnings: string[];
 }
 export type TemplateRegressionSeverity = 'info' | 'warning' | 'critical';

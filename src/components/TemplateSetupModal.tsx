@@ -241,7 +241,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
 
                     <div className="templateLearningPairs">
                       <label className="softBtn fileBtn">
-                        <i className="ti ti-file-input" aria-hidden="true" /> 1. Источники (3–10)
+                        <i className="ti ti-file-input" aria-hidden="true" /> 1. Источники (4–10)
                         <input
                           type="file"
                           multiple
@@ -254,7 +254,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                         />
                       </label>
                       <label className="softBtn fileBtn">
-                        <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные результаты (3–10)
+                        <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные результаты (4–10)
                         <input
                           type="file"
                           multiple
@@ -269,7 +269,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                       <button
                         className="softBtn"
                         type="button"
-                        disabled={learningSources.length < 3 || learningSources.length > 10 || learningSources.length !== learningOutputs.length}
+                        disabled={learningSources.length < 4 || learningSources.length > 10 || learningSources.length !== learningOutputs.length}
                         onClick={() => void props.onLearnPendingTemplate(
                           activePending.document_id,
                           learningSources.map((source, index) => ({ source, completed: learningOutputs[index] })),
@@ -277,7 +277,7 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                       >
                         <i className="ti ti-school" aria-hidden="true" /> Обучить на {learningSources.length} паре(ах)
                       </button>
-                      <small className="hint">Выберите одинаковое число исходников и правильных результатов в одинаковом порядке. Программа сопоставляет каждую пару Source → Correct Output; одна высокая «уверенность» сама по себе ничего не публикует.</small>
+                      <small className="hint">Выберите 4–10 пар в одинаковом порядке. Последняя пара резервируется как независимая контрольная и не участвует в обучении: карта должна перенести на ней новое значение Source → Correct Output. Одна высокая «уверенность» ничего не доказывает и не публикует.</small>
                     </div>
                   </div>
                   <details className="manualScannerDetails">

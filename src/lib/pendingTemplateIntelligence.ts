@@ -39,6 +39,11 @@ export function sourceEvidencedLearningFields<T extends { source_matches: string
   return fields.filter((field) => field.source_matches.some((value) => value.trim().length > 0));
 }
 
+export function publicationEligibleLearningFields<T extends { source_matches: string[] }>(report: { fields: T[]; validation: { passed: boolean } }): T[] {
+  if (!report.validation.passed) return [];
+  return sourceEvidencedLearningFields(report.fields);
+}
+
 export function createPendingTemplateIntelligenceHandlers(context: PendingTemplateIntelligenceContext) {
   async function markupPendingTemplate(
     documentId: string,
@@ -83,8 +88,8 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
   async function learnPendingTemplateFromExamples(documentId: string, pairs: TemplateLearningPair[]) {
     const current = context.pendingTemplates.find((item) => item.document_id === documentId);
     if (!current) return;
-    if (pairs.length < 3 || pairs.length > 10) {
-      context.setStatus('Для обучения подготовьте от 3 до 10 пар: исходник → правильный готовый документ.');
+    if (pairs.length < 4 || pairs.length > 10) {
+      context.setStatus('Для доказательного обучения подготовьте от 4 до 10 пар: минимум 3 обучающие и 1 контрольная Source → Correct Output.');
       return;
     }
 
@@ -112,7 +117,12 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     }));
     if (!learned) return;
 
-    const evidencedFields = sourceEvidencedLearningFields(learned.fields);
+    if (!learned.validation.passed) {
+      context.setStatus(`Контрольная пара не прошла независимую проверку. Шаблон не изменён. ${learned.validation.reasons.join(' ')}`);
+      return;
+    }
+
+    const evidencedFields = publicationEligibleLearningFields(learned);
     if (!evidencedFields.length) {
       context.setStatus('Пары изучены, но ни одно поле не подтверждено исходниками. Шаблон не изменён — добавьте более показательные пары или используйте ручную разметку.');
       return;
@@ -123,7 +133,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
       .join(', ');
     const accepted = await context.confirm({
       title: 'Применить карту, подтверждённую примерами?',
-      message: `Парами источник → правильный результат подтверждено полей: ${evidencedFields.length}. ${previewFields}${evidencedFields.length > 8 ? '…' : ''}. Процент — только оценка приоритета, не доказательство. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
+      message: `Независимая контрольная пара пройдена: ${learned.validation.matched_fields}/${learned.validation.evaluated_fields} проверяемых полей, новых значений перенесено ${learned.validation.intervention_matches}/${learned.validation.intervention_fields}. Подтверждено полей для карты: ${evidencedFields.length}. ${previewFields}${evidencedFields.length > 8 ? '…' : ''}. Процент — только оценка приоритета, не доказательство. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
       confirmLabel: 'Применить подтверждённую карту',
     });
     if (!accepted) {
@@ -161,7 +171,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
       : item));
     if (context.importedTemplatePath === current.template_path) context.setImportedTemplatePath(applied.output_path);
     if (context.templateText === current.extracted_text) context.setTemplateText(analyzed.extracted_text);
-    context.setStatus(`Шаблон обучен на ${pairs.length} парах: явно подтверждено и размечено полей — ${applied.applied_field_ids.length}. Исходный Word сохранён без изменений.`);
+    context.setStatus(`Шаблон обучен на ${pairs.length - 1} парах и проверен на 1 независимой контрольной паре: явно подтверждено и размечено полей — ${applied.applied_field_ids.length}. Исходный Word сохранён без изменений.`);
   }
 
   return { markupPendingTemplate, learnPendingTemplateFromExamples };

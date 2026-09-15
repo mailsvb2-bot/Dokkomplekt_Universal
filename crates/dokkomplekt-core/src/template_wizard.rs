@@ -56,6 +56,18 @@ pub struct TemplateDiffHunk {
     pub variable_values: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateLearningValidationVerdict {
+    pub passed: bool,
+    pub holdout_pair_index: Option<usize>,
+    pub evaluated_fields: usize,
+    pub matched_fields: usize,
+    pub intervention_fields: usize,
+    pub intervention_matches: usize,
+    pub mismatched_field_ids: Vec<String>,
+    pub reasons: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemplateLearningReport {
     pub locale: String,
@@ -67,6 +79,7 @@ pub struct TemplateLearningReport {
     pub diff: Vec<TemplateDiffHunk>,
     pub confidence: f32,
     pub requires_confirmation: bool,
+    pub validation: TemplateLearningValidationVerdict,
     pub warnings: Vec<String>,
 }
 
@@ -217,6 +230,65 @@ pub fn suggest_filled_medical_template_markup(
 /// completed documents. The result is always reviewable: no inferred field is
 /// silently written into the user's DOCX before explicit confirmation.
 pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLearningReport {
+    let pair_count = input.completed_examples.len();
+    let counts_match = !input.source_examples.is_empty()
+        && input.source_examples.len() == input.completed_examples.len();
+    let pairs_are_usable = counts_match
+        && input
+            .completed_examples
+            .iter()
+            .zip(&input.source_examples)
+            .all(|(completed, source)| !completed.trim().is_empty() && !source.trim().is_empty());
+
+    if pairs_are_usable && (4..=10).contains(&pair_count) {
+        let holdout_pair_index = pair_count - 1;
+        let mut training = input.clone();
+        let holdout_completed = training
+            .completed_examples
+            .pop()
+            .expect("validated pair count must contain a hold-out output");
+        let holdout_source = training
+            .source_examples
+            .pop()
+            .expect("validated pair count must contain a hold-out source");
+        let mut report = learn_template_from_training_examples(&training);
+        report.validation = validate_template_learning_holdout(
+            &report.fields,
+            &holdout_source,
+            &holdout_completed,
+            input.default_year,
+            holdout_pair_index,
+        );
+        if !report.validation.passed {
+            report.warnings.push(format!(
+                "Контрольная пара {} не доказала перенос карты; автоматическое применение должно быть заблокировано.",
+                holdout_pair_index + 1
+            ));
+        }
+        return report;
+    }
+
+    let mut safe_input = input.clone();
+    let validation_reason = if input.source_examples.is_empty() {
+        "Для доказательной проверки нужны пары Source → Correct Output; обучение только по готовым результатам не может быть опубликовано автоматически."
+    } else if input.source_examples.len() != input.completed_examples.len() {
+        safe_input.source_examples.clear();
+        "Количество источников и правильных результатов не совпадает; доказательная проверка заблокирована."
+    } else if !pairs_are_usable {
+        safe_input.source_examples.clear();
+        "Одна или несколько пар Source → Correct Output пусты; доказательная проверка заблокирована."
+    } else if pair_count < 4 {
+        "Для независимой проверки нужны минимум 4 пары: не менее 3 обучающих и 1 контрольная."
+    } else {
+        "Для одной серии поддерживается не более 10 пар; разделите примеры на отдельные серии."
+    };
+    let mut report = learn_template_from_training_examples(&safe_input);
+    report.validation = unavailable_learning_validation(validation_reason);
+    report.warnings.push(validation_reason.into());
+    report
+}
+
+fn learn_template_from_training_examples(input: &TemplateLearningInput) -> TemplateLearningReport {
     let completed = input
         .completed_examples
         .iter()
@@ -248,6 +320,7 @@ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLe
             diff: Vec::new(),
             confidence: 0.0,
             requires_confirmation: true,
+            validation: unavailable_learning_validation("Контрольная пара ещё не проверена."),
             warnings,
         };
     }
@@ -381,8 +454,127 @@ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLe
         diff,
         confidence,
         requires_confirmation: true,
+        validation: unavailable_learning_validation("Контрольная пара ещё не проверена."),
         warnings,
     }
+}
+
+fn unavailable_learning_validation(reason: &str) -> TemplateLearningValidationVerdict {
+    TemplateLearningValidationVerdict {
+        passed: false,
+        holdout_pair_index: None,
+        evaluated_fields: 0,
+        matched_fields: 0,
+        intervention_fields: 0,
+        intervention_matches: 0,
+        mismatched_field_ids: Vec::new(),
+        reasons: vec![reason.into()],
+    }
+}
+
+fn validate_template_learning_holdout(
+    fields: &[LearnedTemplateField],
+    source_text: &str,
+    completed_text: &str,
+    default_year: i32,
+    holdout_pair_index: usize,
+) -> TemplateLearningValidationVerdict {
+    let source = semantic_value_map(source_text, default_year);
+    let completed_lines = normalized_lines(completed_text);
+    let mut evaluated_fields = 0usize;
+    let mut matched_fields = 0usize;
+    let mut intervention_fields = 0usize;
+    let mut intervention_matches = 0usize;
+    let mut mismatched_field_ids = Vec::new();
+
+    for field in fields
+        .iter()
+        .filter(|field| !field.source_matches.is_empty())
+    {
+        let Some(expected) = source.get(&field.field_id) else {
+            continue;
+        };
+        evaluated_fields += 1;
+        let intervention = !field.source_matches.iter().any(|training_value| {
+            values_equivalent(&normalize_value(expected), training_value)
+                || values_equivalent(&normalize_value(training_value), expected)
+        });
+        if intervention {
+            intervention_fields += 1;
+        }
+
+        let observed = holdout_field_value(field, &completed_lines);
+        let matched = observed.as_deref().is_some_and(|value| {
+            values_equivalent(&normalize_value(value), expected)
+                || values_equivalent(&normalize_value(expected), value)
+        });
+        if matched {
+            matched_fields += 1;
+            if intervention {
+                intervention_matches += 1;
+            }
+        } else {
+            mismatched_field_ids.push(field.field_id.clone());
+        }
+    }
+
+    let mut reasons = Vec::new();
+    if evaluated_fields == 0 {
+        reasons.push(
+            "Контрольный источник не содержит ни одного поля, которому научилась карта.".into(),
+        );
+    }
+    if !mismatched_field_ids.is_empty() {
+        reasons.push(format!(
+            "Контрольный результат не совпал с источником для {} полей.",
+            mismatched_field_ids.len()
+        ));
+    }
+    if intervention_fields == 0 {
+        reasons.push(
+            "Контрольная пара не содержит нового значения относительно обучающих пар; перенос, а не запоминание, не доказан."
+                .into(),
+        );
+    }
+    if intervention_fields > intervention_matches {
+        reasons.push(
+            "Хотя бы одно новое значение из контрольного источника не перенеслось в правильный результат."
+                .into(),
+        );
+    }
+    let passed = evaluated_fields > 0
+        && matched_fields == evaluated_fields
+        && intervention_fields > 0
+        && intervention_matches == intervention_fields;
+    if passed {
+        reasons.push(
+            "Контрольная пара доказала перенос нового значения Source → Correct Output без участия confidence."
+                .into(),
+        );
+    }
+
+    TemplateLearningValidationVerdict {
+        passed,
+        holdout_pair_index: Some(holdout_pair_index),
+        evaluated_fields,
+        matched_fields,
+        intervention_fields,
+        intervention_matches,
+        mismatched_field_ids,
+        reasons,
+    }
+}
+
+fn holdout_field_value(field: &LearnedTemplateField, lines: &[String]) -> Option<String> {
+    let line = lines.get(field.line_index)?;
+    if !field.common_prefix.is_empty() && !line.starts_with(&field.common_prefix) {
+        return None;
+    }
+    if !field.common_suffix.is_empty() && !line.ends_with(&field.common_suffix) {
+        return None;
+    }
+    let value = variable_between(line, &field.common_prefix, &field.common_suffix);
+    (!value.trim().is_empty()).then_some(value)
 }
 
 fn normalized_lines(text: &str) -> Vec<String> {
@@ -765,5 +957,79 @@ mod tests {
             .source_matches
             .iter()
             .all(|value| value.chars().any(|ch| ch.is_ascii_digit())));
+    }
+
+    #[test]
+    fn holdout_validation_passes_only_on_unseen_source_value_transfer() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Карточка\nИНН: __________".into(),
+            completed_examples: vec![
+                "Карточка\nИНН: 7736050003".into(),
+                "Карточка\nИНН: 7707083893".into(),
+                "Карточка\nИНН: 7812014560".into(),
+                "Карточка\nИНН: 7708004767".into(),
+            ],
+            source_examples: vec![
+                "Организация\nИНН: 7736050003".into(),
+                "Организация\nИНН: 7707083893".into(),
+                "Организация\nИНН: 7812014560".into(),
+                "Организация\nИНН: 7708004767".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert!(report.validation.passed, "{:?}", report.validation.reasons);
+        assert_eq!(report.validation.holdout_pair_index, Some(3));
+        assert!(report.validation.evaluated_fields >= 1);
+        assert!(report.validation.intervention_fields >= 1);
+        assert_eq!(
+            report.validation.intervention_matches,
+            report.validation.intervention_fields
+        );
+    }
+
+    #[test]
+    fn holdout_validation_fails_when_correct_output_does_not_follow_source() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Карточка\nИНН: __________".into(),
+            completed_examples: vec![
+                "Карточка\nИНН: 7736050003".into(),
+                "Карточка\nИНН: 7707083893".into(),
+                "Карточка\nИНН: 7812014560".into(),
+                "Карточка\nИНН: 7736050003".into(),
+            ],
+            source_examples: vec![
+                "Организация\nИНН: 7736050003".into(),
+                "Организация\nИНН: 7707083893".into(),
+                "Организация\nИНН: 7812014560".into(),
+                "Организация\nИНН: 7708004767".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert!(!report.validation.passed);
+        assert!(!report.validation.mismatched_field_ids.is_empty());
+    }
+
+    #[test]
+    fn three_pairs_can_learn_but_cannot_claim_independent_validation() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Карточка\nИНН: __________".into(),
+            completed_examples: vec![
+                "Карточка\nИНН: 7736050003".into(),
+                "Карточка\nИНН: 7707083893".into(),
+                "Карточка\nИНН: 7812014560".into(),
+            ],
+            source_examples: vec![
+                "Организация\nИНН: 7736050003".into(),
+                "Организация\nИНН: 7707083893".into(),
+                "Организация\nИНН: 7812014560".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert!(!report.fields.is_empty());
+        assert!(!report.validation.passed);
+        assert_eq!(report.validation.holdout_pair_index, None);
     }
 }

@@ -23,6 +23,28 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Prepare structure-aware held-out patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          core = Path('crates/dokkomplekt-core/src/template_wizard.rs')
+          text = core.read_text(encoding='utf-8')
+          old = '            requires_confirmation: true,\n            warnings,'
+          new = '            requires_confirmation: true,\n            validation: unavailable_learning_validation("Контрольная пара ещё не проверена."),\n            warnings,'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one indented empty-report constructor, found {text.count(old)}')
+          core.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          patcher = Path('.github/scripts/e2_holdout_validation_once.py')
+          script = patcher.read_text(encoding='utf-8')
+          old_guard = 'if count != 2:\n    raise SystemExit(f"expected 2 report constructors, found {count}")'
+          new_guard = 'if count != 1:\n    raise SystemExit(f"expected 1 remaining report constructor, found {count}")'
+          if old_guard not in script:
+              raise SystemExit('staged patcher constructor guard not found')
+          patcher.write_text(script.replace(old_guard, new_guard, 1), encoding='utf-8')
+          PY
       - name: Apply held-out validation contract
         run: python .github/scripts/e2_holdout_validation_once.py
       - name: Format Rust

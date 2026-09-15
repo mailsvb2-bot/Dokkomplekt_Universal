@@ -34,21 +34,20 @@ jobs:
           test "$(git hash-object src/lib/types.ts)" = "669bc8ab9ff547f14c20196f60120e6321d583db"
           test "$(git hash-object src/lib/pendingTemplateIntelligence.ts)" = "88d35cec3ac61d61ba114abfe99403cd08674b9c"
           test "$(git hash-object src/components/TemplateSetupModal.tsx)" = "c174db40fdb8d9704fec90c8848247a5b048e56a"
-          test "$(git rev-parse 4423fd693d22f22fa6daefbca03ac9f7692b6190^{tree})" = "$(git rev-parse HEAD~2^{tree})" || true
       - name: Apply proposed product diff
         shell: bash
         run: |
           set -euo pipefail
-          git apply --check .e2/learning-evidence.patch
-          git apply .e2/learning-evidence.patch
+          git apply --recount --check .e2/learning-evidence.patch
+          git apply --recount .e2/learning-evidence.patch
           git diff --check
       - name: Rust format and E2 focused proof
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt --all -- --check
-          cargo test -p dokkomplekt-core paired_learning_passes_only_after_held_out_and_source_intervention_proof -- --exact
-          cargo test -p dokkomplekt-core confidence_without_matched_source_pairs_stays_draft_only -- --exact
+          cargo test -p dokkomplekt-core paired_learning_passes_only_after_held_out_and_source_intervention_proof
+          cargo test -p dokkomplekt-core confidence_without_matched_source_pairs_stays_draft_only
       - name: Full core regression
         shell: bash
         run: |

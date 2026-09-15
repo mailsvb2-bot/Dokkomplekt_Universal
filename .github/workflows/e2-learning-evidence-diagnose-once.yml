@@ -1,0 +1,63 @@
+name: E2 Learning Evidence Diagnose Once
+
+on:
+  push:
+    branches:
+      - canon-v2/e2-learning-evidence
+    paths:
+      - .github/workflows/e2-learning-evidence-diagnose-once.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove-e2-learning-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Guard exact product inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object crates/dokkomplekt-core/src/template_wizard.rs)" = "b778fbcb4eb74929d25a4e228d023515267243b8"
+          test "$(git hash-object src/lib/types.ts)" = "669bc8ab9ff547f14c20196f60120e6321d583db"
+          test "$(git hash-object src/lib/pendingTemplateIntelligence.ts)" = "88d35cec3ac61d61ba114abfe99403cd08674b9c"
+          test "$(git hash-object src/components/TemplateSetupModal.tsx)" = "c174db40fdb8d9704fec90c8848247a5b048e56a"
+          test "$(git rev-parse 4423fd693d22f22fa6daefbca03ac9f7692b6190^{tree})" = "$(git rev-parse HEAD~2^{tree})" || true
+      - name: Apply proposed product diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .e2/learning-evidence.patch
+          git apply .e2/learning-evidence.patch
+          git diff --check
+      - name: Rust format and E2 focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo test -p dokkomplekt-core paired_learning_passes_only_after_held_out_and_source_intervention_proof -- --exact
+          cargo test -p dokkomplekt-core confidence_without_matched_source_pairs_stays_draft_only -- --exact
+      - name: Full core regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p dokkomplekt-core
+      - name: TypeScript and focused Vitest proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm run test -- src/lib/pendingTemplateIntelligence.test.ts

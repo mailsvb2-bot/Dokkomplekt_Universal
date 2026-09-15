@@ -1,0 +1,489 @@
+diff --git a/crates/dokkomplekt-core/src/template_wizard.rs b/crates/dokkomplekt-core/src/template_wizard.rs
+--- a/crates/dokkomplekt-core/src/template_wizard.rs
++++ b/crates/dokkomplekt-core/src/template_wizard.rs
+@@ -46,6 +46,18 @@ pub struct TemplateDiffHunk {
+     pub variable_values: Vec<String>,
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
++pub struct TemplateLearningValidation {
++    pub passed: bool,
++    pub training_pairs: usize,
++    pub held_out_pairs: usize,
++    pub interventions_checked: usize,
++    pub matched_fields: Vec<String>,
++    pub mismatched_fields: Vec<String>,
++    pub reasons: Vec<String>,
++}
++
+ #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+ pub struct TemplateLearningReport {
+     pub locale: String,
+@@ -58,6 +70,8 @@ pub struct TemplateLearningReport {
+     pub confidence: f32,
+     pub requires_confirmation: bool,
+     pub warnings: Vec<String>,
++    #[serde(default)]
++    pub validation: TemplateLearningValidation,
+ }
+ 
+ pub fn suggest_template_markup(text: &str, default_year: i32) -> Vec<TemplateMarkupCandidate> {
+@@ -224,7 +238,13 @@ pub fn suggest_filled_medical_template_markup(
+ /// completed documents. The result is always reviewable: no inferred field is
+ /// silently written into the user's DOCX before explicit confirmation.
+ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLearningReport {
++    let mut report = learn_template_from_examples_internal(input);
++    report.validation = validate_template_learning(input);
++    report
++}
++
++fn learn_template_from_examples_internal(input: &TemplateLearningInput) -> TemplateLearningReport {
+     let completed = input
+         .completed_examples
+         .iter()
+@@ -257,6 +277,7 @@ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLe
+             confidence: 0.0,
+             requires_confirmation: true,
+             warnings,
++            validation: TemplateLearningValidation::default(),
+         };
+     }
+ 
+@@ -376,9 +397,125 @@ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLe
+         confidence,
+         requires_confirmation: true,
+         warnings,
++        validation: TemplateLearningValidation::default(),
+     }
+ }
+ 
++fn validate_template_learning(input: &TemplateLearningInput) -> TemplateLearningValidation {
++    let pair_count = input.completed_examples.len();
++    let mut validation = TemplateLearningValidation::default();
++    if pair_count != input.source_examples.len() {
++        validation.reasons.push(format!(
++            "Для проверки нужны парные Source→Correct Output примеры: получено {} источников и {} правильных документов.",
++            input.source_examples.len(),
++            pair_count
++        ));
++        return validation;
++    }
++    if !(4..=10).contains(&pair_count) {
++        validation.reasons.push(
++            "Для publish-grade проверки нужны от 4 до 10 пар Source→Correct Output: минимум три пары для обучения и одна невиданная held-out пара."
++                .into(),
++        );
++        return validation;
++    }
++    if input
++        .completed_examples
++        .iter()
++        .chain(input.source_examples.iter())
++        .any(|text| text.trim().is_empty())
++    {
++        validation
++            .reasons
++            .push("Пустая сторона пары Source→Correct Output недопустима.".into());
++        return validation;
++    }
++
++    let held_out_index = pair_count - 1;
++    validation.training_pairs = held_out_index;
++    validation.held_out_pairs = 1;
++    let training_input = TemplateLearningInput {
++        blank_template_text: input.blank_template_text.clone(),
++        completed_examples: input.completed_examples[..held_out_index].to_vec(),
++        source_examples: input.source_examples[..held_out_index].to_vec(),
++        default_year: input.default_year,
++        locale: input.locale.clone(),
++    };
++    let trained = learn_template_from_examples_internal(&training_input);
++    if trained.fields.is_empty() {
++        validation.reasons.push(
++            "Обучающая часть пар не построила ни одного проверяемого поля; held-out проверка невозможна."
++                .into(),
++        );
++        return validation;
++    }
++
++    let training_source_maps = training_input
++        .source_examples
++        .iter()
++        .map(|text| semantic_value_map(text, input.default_year))
++        .collect::<Vec<_>>();
++    let held_out_source = semantic_value_map(&input.source_examples[held_out_index], input.default_year);
++    let wrong_source = &training_source_maps[0];
++    let held_out_output = &input.completed_examples[held_out_index];
++    let mut source_grounded_fields = 0usize;
++    let mut matched_fields = BTreeSet::new();
++    let mut mismatched_fields = BTreeSet::new();
++
++    for field in &trained.fields {
++        let mut observations = 0usize;
++        let mut grounded = true;
++        for (index, output) in training_input.completed_examples.iter().enumerate() {
++            let Some(output_value) = learned_field_value(output, field) else {
++                continue;
++            };
++            observations += 1;
++            let Some(expected) = training_source_maps[index].get(&field.field_id) else {
++                grounded = false;
++                break;
++            };
++            if !values_equivalent(&normalize_value(&output_value), expected) {
++                grounded = false;
++                break;
++            }
++        }
++        if !grounded || observations < 2 {
++            continue;
++        }
++        source_grounded_fields += 1;
++
++        let Some(output_value) = learned_field_value(held_out_output, field) else {
++            mismatched_fields.insert(field.field_id.clone());
++            continue;
++        };
++        let Some(expected) = held_out_source.get(&field.field_id) else {
++            mismatched_fields.insert(field.field_id.clone());
++            continue;
++        };
++        let normalized_output = normalize_value(&output_value);
++        if !values_equivalent(&normalized_output, expected) {
++            mismatched_fields.insert(field.field_id.clone());
++            continue;
++        }
++        matched_fields.insert(field.field_id.clone());
++
++        if let Some(intervention_value) = wrong_source.get(&field.field_id) {
++            if !values_equivalent(&normalize_value(expected), intervention_value)
++                && !values_equivalent(&normalized_output, intervention_value)
++            {
++                validation.interventions_checked += 1;
++            }
++        }
++    }
++
++    validation.matched_fields = matched_fields.into_iter().collect();
++    validation.mismatched_fields = mismatched_fields.into_iter().collect();
++    if source_grounded_fields == 0 {
++        validation.reasons.push(
++            "Не найдено полей, которые подтверждаются источником минимум в двух обучающих парах."
++                .into(),
++        );
++    }
++    if !validation.mismatched_fields.is_empty() {
++        validation.reasons.push(format!(
++            "Held-out документ не подтвердил поля: {}.",
++            validation.mismatched_fields.join(", ")
++        ));
++    }
++    if validation.matched_fields.is_empty() {
++        validation
++            .reasons
++            .push("Held-out пара не подтвердила ни одного source-grounded поля.".into());
++    }
++    if validation.interventions_checked == 0 {
++        validation.reasons.push(
++            "Intervention-проверка не доказала чувствительность карты к источнику: нужна пара, где подмена источника меняет хотя бы одно проверяемое поле."
++                .into(),
++        );
++    }
++    validation.passed = source_grounded_fields > 0
++        && validation.mismatched_fields.is_empty()
++        && !validation.matched_fields.is_empty()
++        && validation.interventions_checked > 0;
++    validation
++}
++
++fn learned_field_value(text: &str, field: &LearnedTemplateField) -> Option<String> {
++    let lines = normalized_lines(text);
++    let line = lines.get(field.line_index)?;
++    let value = variable_between(line, &field.common_prefix, &field.common_suffix);
++    (!value.trim().is_empty()).then_some(value)
++}
++
+ fn normalized_lines(text: &str) -> Vec<String> {
+     text.lines()
+         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+@@ -664,4 +801,65 @@ mod tests {
+             .fields
+             .iter()
+             .all(|field| !field.required || field.line_index != 1));
+     }
++
++    #[test]
++    fn paired_learning_passes_only_after_held_out_and_source_intervention_proof() {
++        let completed_examples = vec![
++            "Карточка сотрудника\nСотрудник: Иванов Иван Иванович".into(),
++            "Карточка сотрудника\nСотрудник: Петров Пётр Петрович".into(),
++            "Карточка сотрудника\nСотрудник: Сидорова Анна Сергеевна".into(),
++            "Карточка сотрудника\nСотрудник: Кузнецов Павел Андреевич".into(),
++        ];
++        let source_examples = completed_examples.clone();
++        let report = learn_template_from_examples(&TemplateLearningInput {
++            blank_template_text: "Карточка сотрудника\nСотрудник: __________".into(),
++            completed_examples,
++            source_examples,
++            default_year: 2026,
++            locale: "ru-RU".into(),
++        });
++
++        assert!(
++            report.validation.passed,
++            "validation reasons: {:?}; fields={:?}",
++            report.validation.reasons, report.fields
++        );
++        assert_eq!(report.validation.training_pairs, 3);
++        assert_eq!(report.validation.held_out_pairs, 1);
++        assert!(report.validation.interventions_checked >= 1);
++        assert!(!report.validation.matched_fields.is_empty());
++        assert!(report.validation.mismatched_fields.is_empty());
++    }
++
++    #[test]
++    fn confidence_without_matched_source_pairs_stays_draft_only() {
++        let report = learn_template_from_examples(&TemplateLearningInput {
++            blank_template_text: "Карточка сотрудника\nСотрудник: __________".into(),
++            completed_examples: vec![
++                "Карточка сотрудника\nСотрудник: Иванов Иван Иванович".into(),
++                "Карточка сотрудника\nСотрудник: Петров Пётр Петрович".into(),
++                "Карточка сотрудника\nСотрудник: Сидорова Анна Сергеевна".into(),
++                "Карточка сотрудника\nСотрудник: Кузнецов Павел Андреевич".into(),
++            ],
++            source_examples: Vec::new(),
++            default_year: 2026,
++            locale: "ru-RU".into(),
++        });
++
++        assert!(
++            report.confidence > 0.90,
++            "the regression requires a tempting high-confidence draft: {}",
++            report.confidence
++        );
++        assert!(!report.validation.passed);
++        assert!(report.validation.matched_fields.is_empty());
++        assert!(report
++            .validation
++            .reasons
++            .iter()
++            .any(|reason| reason.contains("Source→Correct Output")));
++    }
+ }
+diff --git a/src/lib/types.ts b/src/lib/types.ts
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -730,6 +730,15 @@ export interface ImportLearningExampleFileResult {
+   extracted_text: string;
+   warnings: string[];
+ }
++export interface TemplateLearningValidation {
++  passed: boolean;
++  training_pairs: number;
++  held_out_pairs: number;
++  interventions_checked: number;
++  matched_fields: string[];
++  mismatched_fields: string[];
++  reasons: string[];
++}
+ export interface TemplateLearningReport {
+   locale: string;
+   fields: LearnedTemplateField[];
+@@ -741,6 +750,7 @@ export interface TemplateLearningReport {
+   confidence: number;
+   requires_confirmation: boolean;
+   warnings: string[];
++  validation: TemplateLearningValidation;
+ }
+ export type TemplateRegressionSeverity = 'info' | 'warning' | 'critical';
+ export interface TemplateRegressionIssue {
+diff --git a/src/lib/pendingTemplateIntelligence.ts b/src/lib/pendingTemplateIntelligence.ts
+--- a/src/lib/pendingTemplateIntelligence.ts
++++ b/src/lib/pendingTemplateIntelligence.ts
+@@ -1,4 +1,5 @@
+ import type { AppConfirmOptions } from '../components/AppDialogProvider';
++import type { TemplateLearningReport } from './types';
+ import {
+   analyzeTemplateFile,
+   applyTemplateLearningMap,
+@@ -25,6 +26,17 @@ interface PendingTemplateIntelligenceContext {
+   confirm(options: AppConfirmOptions): Promise<boolean>;
+ }
+ 
++export function validatedLearningFields(report: TemplateLearningReport) {
++  if (report.validation?.passed !== true) return [];
++  const matched = new Set(report.validation.matched_fields);
++  return report.fields.filter((field) => field.confidence >= 0.9 && matched.has(field.field_id));
++}
++
+ export function createPendingTemplateIntelligenceHandlers(context: PendingTemplateIntelligenceContext) {
+@@ -73,13 +85,17 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
+     context.setStatus(`Шаблон размечен. Обновлено мест: ${report.replaced_occurrences}. Исходный файл сохранён.`);
+   }
+ 
+-  async function learnPendingTemplateFromExamples(documentId: string, files: File[]) {
++  async function learnPendingTemplateFromExamples(documentId: string, completedFiles: File[], sourceFiles: File[]) {
+     const current = context.pendingTemplates.find((item) => item.document_id === documentId);
+     if (!current) return;
+-    if (files.length < 3 || files.length > 10) {
+-      context.setStatus('Для обучения выберите от 3 до 10 заполненных примеров одного и того же шаблона.');
++    if (completedFiles.length < 4 || completedFiles.length > 10 || completedFiles.length !== sourceFiles.length) {
++      context.setStatus('Для проверяемого обучения выберите от 4 до 10 пар Source→Correct Output с одинаковым количеством источников и правильных документов.');
+       return;
+     }
+ 
+     const completedExamplePaths: string[] = [];
+-    for (const file of files) {
++    for (const file of completedFiles) {
+       const buffer = await readFileBytes(file);
+       const imported = await context.run('import_learning_example_file', () =>
+         importLearningExampleFile(file.name, arrayBufferToBase64(buffer)));
+@@ -87,15 +103,31 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
+       completedExamplePaths.push(imported.source_path);
+     }
++    const sourceExamplePaths: string[] = [];
++    for (const file of sourceFiles) {
++      const buffer = await readFileBytes(file);
++      const imported = await context.run('import_learning_example_file', () =>
++        importLearningExampleFile(file.name, arrayBufferToBase64(buffer)));
++      if (!imported) return;
++      sourceExamplePaths.push(imported.source_path);
++    }
+     const learned = await context.run('learn_template_from_examples_command', () => learnTemplateFromExamples({
+       blankTemplatePath: current.template_path,
+       completedExamplePaths,
++      sourceExamplePaths,
+       defaultYear: currentDefaultYear(),
+     }));
+     if (!learned) return;
+-    const confidentFields = learned.fields.filter((field) => field.confidence >= 0.9);
++    if (learned.validation?.passed !== true) {
++      const reasons = learned.validation?.reasons?.join(' ') || 'Held-out/intervention proof не пройден.';
++      context.setStatus(`Примеры изучены как черновик, но карта не применена: ${reasons}`);
++      return;
++    }
++    const confidentFields = validatedLearningFields(learned);
+     if (!confidentFields.length) {
+-      context.setStatus('Примеры изучены, но однозначных полей не найдено. Шаблон не изменён — используйте ручную разметку или покажите место в Word.');
++      context.setStatus('Проверка пар пройдена, но среди held-out подтверждённых полей нет достаточно уверенных для предложения. Шаблон не изменён.');
+       return;
+     }
+@@ -106,7 +138,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
+     const accepted = await context.confirm({
+       title: 'Применить найденную карту шаблона?',
+-      message: `Найдено надёжных полей: ${confidentFields.length}. ${previewFields}${confidentFields.length > 8 ? '…' : ''}. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
++      message: `Held-out и intervention-проверка пройдены (${learned.validation.training_pairs}+${learned.validation.held_out_pairs} пар; intervention: ${learned.validation.interventions_checked}). Подтверждено полей: ${confidentFields.length}. ${previewFields}${confidentFields.length > 8 ? '…' : ''}. Будет создана новая размеченная копия; исходный Word останется неизменным.`,
+       confirmLabel: 'Применить карту',
+     });
+     if (!accepted) {
+diff --git a/src/components/TemplateSetupModal.tsx b/src/components/TemplateSetupModal.tsx
+--- a/src/components/TemplateSetupModal.tsx
++++ b/src/components/TemplateSetupModal.tsx
+@@ -35,7 +35,7 @@ interface TemplateSetupModalProps {
+   onApplyWorkspaceDomain?(value: DomainKind): void;
+   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
+   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
+-  onLearnPendingTemplate(documentId: string, files: File[]): Promise<void>;
++  onLearnPendingTemplate(documentId: string, completedFiles: File[], sourceFiles: File[]): Promise<void>;
+   onStartGuidedPendingScanner(documentId: string): void;
+   onAnalyze(): void;
+@@ -51,6 +51,8 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
+   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
+   const [activePendingId, setActivePendingId] = useState('');
+   const [marking, setMarking] = useState(false);
++  const [learningSourceFiles, setLearningSourceFiles] = useState<File[]>([]);
++  const [learningOutputFiles, setLearningOutputFiles] = useState<File[]>([]);
+   const activePending = useMemo(
+@@ -75,6 +77,11 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
+     }
+   }, [activePendingId, props.pendingTemplates]);
+ 
++  useEffect(() => {
++    setLearningSourceFiles([]);
++    setLearningOutputFiles([]);
++  }, [activePendingId]);
++
+@@ -222,19 +229,48 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
+                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}><i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место</button>
+ 
+                     <label className="softBtn fileBtn">
+-                      <i className="ti ti-school" aria-hidden="true" /> Обучить по 3–10 примерам
++                      <i className="ti ti-file-import" aria-hidden="true" /> 1. Источники ({learningSourceFiles.length})
+                       <input
+                         type="file"
+                         multiple
+                         accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                         onChange={(event) => {
+                           const files = Array.from(event.currentTarget.files ?? []);
+                           event.currentTarget.value = '';
+-                          if (files.length) void props.onLearnPendingTemplate(activePending.document_id, files);
++                          setLearningSourceFiles(files);
+                         }}
+                         style={{ display: 'none' }}
+                       />
+                     </label>
++                    <label className="softBtn fileBtn">
++                      <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные DOCX/DOCM ({learningOutputFiles.length})
++                      <input
++                        type="file"
++                        multiple
++                        accept=".docx,.docm"
++                        onChange={(event) => {
++                          const files = Array.from(event.currentTarget.files ?? []);
++                          event.currentTarget.value = '';
++                          setLearningOutputFiles(files);
++                        }}
++                        style={{ display: 'none' }}
++                      />
++                    </label>
++                    <button
++                      className="softBtn"
++                      type="button"
++                      disabled={learningSourceFiles.length < 4 || learningSourceFiles.length > 10 || learningSourceFiles.length !== learningOutputFiles.length}
++                      onClick={() => void props.onLearnPendingTemplate(activePending.document_id, learningOutputFiles, learningSourceFiles)}
++                    >
++                      <i className="ti ti-school" aria-hidden="true" /> Проверить пары и обучить
++                    </button>
++                    <small>
++                      Выберите 4–10 пар в одинаковом порядке: источник №1 соответствует правильному документу №1. Последняя пара проверяется отдельно и не участвует в обучении доказательной карты.
++                    </small>
+                   </div>
+                   <details className="manualScannerDetails">
+diff --git a/src/lib/pendingTemplateIntelligence.test.ts b/src/lib/pendingTemplateIntelligence.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/pendingTemplateIntelligence.test.ts
+@@ -0,0 +1,52 @@
++import { describe, expect, it } from 'vitest';
++import type { TemplateLearningReport } from './types';
++import { validatedLearningFields } from './pendingTemplateIntelligence';
++
++function report(passed: boolean, matchedFields: string[]): TemplateLearningReport {
++  return {
++    fields: [
++      { field_id: 'employee.name', confidence: 0.99 },
++      { field_id: 'employee.position', confidence: 0.99 },
++    ],
++    validation: {
++      passed,
++      matched_fields: matchedFields,
++      training_pairs: 3,
++      held_out_pairs: 1,
++      interventions_checked: passed ? 1 : 0,
++      mismatched_fields: [],
++      reasons: passed ? [] : ['proof missing'],
++    },
++  } as unknown as TemplateLearningReport;
++}
++
++describe('validatedLearningFields', () => {
++  it('never treats high confidence as proof when held-out validation failed', () => {
++    const fields = validatedLearningFields(report(false, ['employee.name', 'employee.position']));
++    expect(fields).toEqual([]);
++  });
++
++  it('offers only fields explicitly confirmed by held-out source evidence', () => {
++    const fields = validatedLearningFields(report(true, ['employee.name']));
++    expect(fields.map((field) => field.field_id)).toEqual(['employee.name']);
++  });
++});

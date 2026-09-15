@@ -18,7 +18,7 @@ def test_destructive_cleanup_fails_closed_when_privacy_policy_cannot_load() -> N
 
 
 def test_learning_imports_live_in_active_app_data_sessions() -> None:
-    document = read("src-tauri/src/subsystems/document_commands.rs")
+    document = read("src-tauri/src/subsystems/template_learning_commands.rs")
     assert 'join("template-learning-inputs")' in document
     assert "create_retained_workspace_session(&root)?" in document
     assert "let target = session_root.join(safe_name);" in document
@@ -74,3 +74,11 @@ def test_specialist_rule_uses_exact_decision_key_and_one_persistence_gate() -> N
     assert "Option<KitRuleKey>), String>" in source
     assert '"specialist_rule_key": &specialist_rule_key' in automation
     assert "resolve_exception_and_save_state_value" in source
+
+
+def test_learning_output_cannot_bypass_validation_via_manual_confirm() -> None:
+    source = read("src-tauri/src/subsystems/document_commands.rs")
+    confirm = source[source.index("fn confirm_template_setup("):source.index("fn rename_document_button(")]
+    assert "template_learning_validation_by_output_sha256(snapshot.sha256())" in confirm
+    assert "supplied != Some(validation.validation_id.as_str())" in confirm
+    assert "validation proof" in confirm

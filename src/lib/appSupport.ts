@@ -117,6 +117,7 @@ export type PendingTemplate = {
   popup_fields: PopupFieldConfig[];
   popup_fields_edited?: boolean;
   domain_override: DomainKind | null;
+  learning_validation_id?: string | null;
 };
 
 export function withPendingTemplateDomain(

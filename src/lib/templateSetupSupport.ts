@@ -68,6 +68,9 @@ export function buildTemplateConfirmationRows(
         ? (pending?.popup_fields ?? draftPopupFields)
         : (row.popup_fields ?? []),
       popup_fields_edited: popupFieldsEdited,
+      learning_validation_id: pending?.learning_validation_id
+        ?? row.learning_validation_id
+        ?? null,
       domain_override: userDomainOverride
         ?? row.domain_override
         ?? null,

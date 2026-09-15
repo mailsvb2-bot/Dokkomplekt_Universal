@@ -36,6 +36,7 @@ import {
   updateDocumentTemplate,
 } from '../lib/api';
 import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
+import { hasPublishableLearningProof, publicationEligibleLearningFields } from '../lib/pendingTemplateIntelligence';
 import { STARTER_PACKS, type StarterPackAsset } from '../data/starterPacks';
 import {
   MEDICAL_DIARY_FINAL_PREFIX,
@@ -132,8 +133,12 @@ export function AdvancedToolsPanel({
       onStatus('Для обучения выберите пустой DOCX/DOCM-шаблон.');
       return;
     }
-    if (completedLearningFiles.length < 3 || completedLearningFiles.length > 10) {
-      onStatus('Для обучения нужны от 3 до 10 ранее заполненных DOCX/DOCM-примеров.');
+    if (completedLearningFiles.length < 4 || completedLearningFiles.length > 10) {
+      onStatus('Для доказательного обучения нужны 4–10 пар Source → Correct Output: минимум 3 обучающие и 1 контрольная.');
+      return;
+    }
+    if (sourceLearningFiles.length !== completedLearningFiles.length) {
+      onStatus('Выберите одинаковое количество Source и Correct Output; неполные пары не участвуют в обучении.');
       return;
     }
     const result = await execute('обучение пользовательского шаблона', async () => {
@@ -169,11 +174,13 @@ export function AdvancedToolsPanel({
     if (!result) return;
     setLearningBlankPath(result.blankPath);
     setLearningReport(result.report);
-    setSelectedLearningFields(result.report.fields
-      .filter((field) => field.confidence >= 0.6)
+    const publishable = hasPublishableLearningProof(result.report);
+    setSelectedLearningFields(publicationEligibleLearningFields(result.report)
       .map((field) => field.field_id));
     setLearnedTemplatePath('');
-    onStatus(`Сравнено ${completedLearningFiles.length} примеров. Найдено ${result.report.fields.length} переменных полей; карту нужно подтвердить.`);
+    onStatus(publishable
+      ? `Сравнено ${completedLearningFiles.length} пар: последняя hold-out проверка пройдена. Подтвердите source-evidenced поля карты.`
+      : `Контрольная пара не доказала перенос. Карта не может быть применена: ${result.report.validation.reasons.join(' ')}`);
   }
 
   function toggleLearningField(fieldId: string, checked: boolean) {
@@ -184,8 +191,13 @@ export function AdvancedToolsPanel({
 
   async function applyLearningMap() {
     if (!learningReport || !learningBlankPath) return;
+    if (!hasPublishableLearningProof(learningReport)) {
+      onStatus('Карта не имеет publishable validation proof; повторите обучение на полных Source → Correct Output парах.');
+      return;
+    }
+    const eligibleIds = new Set(publicationEligibleLearningFields(learningReport).map((field) => field.field_id));
     const confirmed = learningReport.fields
-      .filter((field) => selectedLearningFields.includes(field.field_id))
+      .filter((field) => selectedLearningFields.includes(field.field_id) && eligibleIds.has(field.field_id))
       .map((field) => ({
         field_id: field.field_id,
         line_index: field.line_index,
@@ -198,7 +210,7 @@ export function AdvancedToolsPanel({
       return;
     }
     const result = await execute('применение подтверждённой карты', () =>
-      applyTemplateLearningMap(learningBlankPath, learnedOutputPath(learningBlankPath), confirmed));
+      applyTemplateLearningMap(learningBlankPath, learnedOutputPath(learningBlankPath), learningReport.validation_id!, confirmed));
     if (!result) return;
     setLearnedTemplatePath(result.output_path);
     onStatus(`Создана безопасная обученная копия. Вставлено полей: ${result.applied_field_ids.length}; вручную проверить: ${result.skipped_field_ids.length}.`);
@@ -209,8 +221,12 @@ export function AdvancedToolsPanel({
       onStatus('Укажите идентификатор, название документа и сначала создайте обученную копию.');
       return;
     }
+    if (!learningReport?.validation_id) {
+      onStatus('Публикация заблокирована: validation proof отсутствует.');
+      return;
+    }
     const result = await execute('публикация обученного шаблона', () =>
-      registerLearnedTemplate(learnedDocumentId.trim(), learnedButtonLabel.trim(), learnedTemplatePath));
+      registerLearnedTemplate(learnedDocumentId.trim(), learnedButtonLabel.trim(), learnedTemplatePath, learningReport.validation_id!));
     if (!result) return;
     onDocumentsChanged(result.documents);
     onStatus(`Кнопка «${learnedButtonLabel.trim()}» создана из подтверждённой карты. Тексты примеров не используются как источник смыслов.`);
@@ -510,17 +526,17 @@ export function AdvancedToolsPanel({
 
       <section className="utilityCard advancedCard templateLearningCard">
         <strong>2. Научить программу вашим шаблонам</strong>
-        <small>Загрузите пустой шаблон, 3–10 ранее заполненных копий и, при наличии, исходные документы. Программа сравнит их, отделит постоянный текст от переменных значений и покажет карту до публикации.</small>
+        <small>Загрузите пустой шаблон и 4–10 matched-пар Source → Correct Output. Последняя пара используется только как независимый hold-out и не участвует в обучении.</small>
         <div className="learningUploadGrid">
           <label className="fileBtn">Пустой DOCX/DOCM
             <input hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
           </label>
           <span>{blankLearningFile?.name ?? 'не выбран'}</span>
-          <label className="fileBtn">3–10 заполненных примеров
+          <label className="fileBtn">4–10 правильных результатов
             <input hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
           </label>
           <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.name).join(', ') : 'не выбраны'}</span>
-          <label className="fileBtn">Исходные документы, необязательно
+          <label className="fileBtn">4–10 исходных документов Source
             <input hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
           </label>
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
@@ -537,19 +553,19 @@ export function AdvancedToolsPanel({
             <option value="auto">Автоопределение</option>
           </select>
         </label>
-        <button className="utilBtn" disabled={busy || !blankLearningFile || completedLearningFiles.length < 3} onClick={() => void runTemplateLearning()}>Сравнить примеры и предложить карту</button>
+        <button className="utilBtn" disabled={busy || !blankLearningFile || completedLearningFiles.length < 4 || completedLearningFiles.length > 10 || sourceLearningFiles.length !== completedLearningFiles.length} onClick={() => void runTemplateLearning()}>Проверить пары и предложить карту</button>
         {learningReport && (
           <div className="learningReport">
-            <div className="rowBetween"><b>Предложенная карта · уверенность {Math.round(learningReport.confidence * 100)}%</b><small>Публикация без подтверждения запрещена</small></div>
+            <div className="rowBetween"><b>Предложенная карта · оценка {Math.round(learningReport.confidence * 100)}%</b><small>Validation: {learningReport.validation.verdict}; confidence не является доказательством</small></div>
             {learningReport.fields.map((field) => (
               <label key={field.field_id} className="learningField">
-                <input type="checkbox" checked={selectedLearningFields.includes(field.field_id)} onChange={(event) => toggleLearningField(field.field_id, event.target.checked)} />
+                <input type="checkbox" disabled={learningReport.validation.verdict !== 'passed' || !learningReport.validation.publishable || !field.source_matches.some((value) => value.trim().length > 0)} checked={selectedLearningFields.includes(field.field_id)} onChange={(event) => toggleLearningField(field.field_id, event.target.checked)} />
                 <span><b>{field.title}</b> <code>{field.placeholder}</code><small>строка {field.line_index + 1} · {Math.round(field.confidence * 100)}% · примеры: {field.example_values.slice(0, 3).join(' / ') || 'нет'}{field.condition ? ` · условие: ${field.condition}` : ''}</small></span>
               </label>
             ))}
             {!!learningReport.diff.length && <details><summary>Визуальный diff переменных строк</summary>{learningReport.diff.map((hunk) => <div key={hunk.line_index} className="learningDiff"><b>Строка {hunk.line_index + 1}</b><del>{hunk.blank_line || 'пусто'}</del><ins>{hunk.common_prefix}…{hunk.common_suffix}</ins><small>{hunk.example_lines.slice(0, 4).join(' | ')}</small></div>)}</details>}
             {!!learningReport.warnings.length && <small className="badgeWarn">{learningReport.warnings.join('; ')}</small>}
-            <button className="utilBtn" disabled={busy || !selectedLearningFields.length} onClick={() => void applyLearningMap()}>Подтвердить карту и создать копию</button>
+            <button className="utilBtn" disabled={busy || !selectedLearningFields.length || learningReport.validation.verdict !== 'passed' || !learningReport.validation.publishable || !learningReport.validation_id} onClick={() => void applyLearningMap()}>Подтвердить проверенную карту и создать копию</button>
           </div>
         )}
         {learnedTemplatePath && (

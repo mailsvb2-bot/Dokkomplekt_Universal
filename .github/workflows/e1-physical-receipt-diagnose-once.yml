@@ -31,15 +31,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 'e6ceb5448087ad253820612fe5fe8bff20b79e57'
-          test "$(git diff --name-only HEAD^ HEAD)" = '.github/workflows/e1-physical-receipt-diagnose-once.yml'
+          test "$(git rev-parse HEAD^)" = '8db810f98bc9cca5c82656a6e66ca27b144f47bc'
+          test "$(git diff --name-only HEAD^ HEAD | sort)" = $'.github/e1-physical-completion-receipt-callsite.patch\n.github/workflows/e1-physical-receipt-diagnose-once.yml'
           test "$(git hash-object .github/e1-physical-completion-receipt.patch)" = '0b07822dcf307052487dbbe385d0c6c283523363'
           test "$(sha256sum .github/e1-physical-completion-receipt.patch | awk '{print $1}')" = '7d1f81e5dba4a209ca5ccbf40a91bc4845f79282635eb2253ca07ade8941fd2b'
           test "$(git hash-object .github/e1-physical-completion-receipt-rustfmt.patch)" = '1092b0a582e74b5f5e8319169e39c56b40ac65ed'
           test "$(sha256sum .github/e1-physical-completion-receipt-rustfmt.patch | awk '{print $1}')" = '99ea19e973922766360ccb6addb04239472561b82ba2c09b5881afe812ab86c9'
+          test "$(git hash-object .github/e1-physical-completion-receipt-callsite.patch)" = '159f53d49bebb167dcd28bd6b7794e8b35d93cec'
+          test "$(sha256sum .github/e1-physical-completion-receipt-callsite.patch | awk '{print $1}')" = '2bc10ef249e4324f52d7774bf5c4fea82a40103fdfaf3ce1f303653eceff574d'
           test "$(git hash-object src-tauri/src/generation_publication.rs)" = '6bd3ff2cc2bcf4bb913771248c7fb1c598fc64f6'
           test "$(git hash-object src-tauri/src/subsystems/document_commands.rs)" = '5b4776a589391cb7124293617f579d88889ebbd7'
-      - name: Apply exact verified product and rustfmt diffs
+          test "$(git hash-object src-tauri/src/subsystems/automation_mail_merge.rs)" = '533398e06d1b238c8205b9e535c2492a91d5a8fa'
+          test "$(git hash-object src-tauri/src/subsystems/automation_runtime.rs)" = '63f73ccadd2e0e030c0c7df90651c16afbd931c0'
+      - name: Apply exact verified product, rustfmt, and callsite diffs
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +51,8 @@ jobs:
           git apply .github/e1-physical-completion-receipt.patch
           git apply --check .github/e1-physical-completion-receipt-rustfmt.patch
           git apply .github/e1-physical-completion-receipt-rustfmt.patch
+          git apply --check .github/e1-physical-completion-receipt-callsite.patch
+          git apply .github/e1-physical-completion-receipt-callsite.patch
           git diff --check
       - name: Rustfmt must be clean
         shell: bash

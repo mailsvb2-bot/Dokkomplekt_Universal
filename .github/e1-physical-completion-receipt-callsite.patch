@@ -1,0 +1,62 @@
+diff --git a/src-tauri/src/subsystems/automation_mail_merge.rs b/src-tauri/src/subsystems/automation_mail_merge.rs
+index 533398e..b751502 100644
+--- a/src-tauri/src/subsystems/automation_mail_merge.rs
++++ b/src-tauri/src/subsystems/automation_mail_merge.rs
+@@ -225,10 +225,37 @@ fn render_mail_merge(
+             ));
+         }
+     };
++    let completion_output_paths = match files
++        .iter()
++        .map(|path| {
++            path.strip_prefix(&stage)
++                .map(|relative| published.join(relative))
++                .map_err(|_| {
++                    format!(
++                        "Не удалось сопоставить физический mail-merge результат с опубликованной папкой: {}",
++                        path.display()
++                    )
++                })
++        })
++        .collect::<Result<Vec<_>, String>>()
++    {
++        Ok(paths) => paths,
++        Err(error) => {
++            return Err(recover_unverified_batch_publication(
++                &app,
++                &permit,
++                &published,
++                None,
++                error,
++                false,
++            ));
++        }
++    };
+     let mut warnings = match generation_publication::confirm_publication(
+         &app,
+         &permit,
+         &published,
++        &completion_output_paths,
+     ) {
+         Ok(warnings) => warnings,
+         Err(error) => {
+diff --git a/src-tauri/src/subsystems/automation_runtime.rs b/src-tauri/src/subsystems/automation_runtime.rs
+index 63f73cc..d6959ef 100644
+--- a/src-tauri/src/subsystems/automation_runtime.rs
++++ b/src-tauri/src/subsystems/automation_runtime.rs
+@@ -1110,10 +1110,15 @@ fn perform_created_documents_intake(
+             };
+             // Filesystem publication is irreversible: never refund or silently delete after this boundary.
+             case_run.mark_business_terminal();
++            let completion_output_paths = names
++                .iter()
++                .map(|name| patient_dir.join(name))
++                .collect::<Vec<_>>();
+             let mut publication_warnings = match generation_publication::confirm_publication(
+                 app,
+                 &permit,
+                 &patient_dir,
++                &completion_output_paths,
+             ) {
+                 Ok(warnings) => warnings,
+                 Err(error) => {

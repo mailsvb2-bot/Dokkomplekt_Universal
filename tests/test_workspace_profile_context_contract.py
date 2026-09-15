@@ -13,7 +13,7 @@ class WorkspaceProfileContextContract(unittest.TestCase):
         source = read("src-tauri/src/subsystems/document_commands.rs")
         start = source.index("fn prepare_template_setup(")
         end = source.index(
-            "#[derive(Debug, Deserialize)]\nstruct ImportLearningExampleFileRequest", start
+            'include!("template_learning_commands.rs");', start
         )
         command = source[start:end]
 

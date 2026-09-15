@@ -101,14 +101,14 @@ export async function learnTemplateFromExamples(input: {
   });
 }
 
-export async function applyTemplateLearningMap(inputPath: string, outputPath: string, confirmedFields: TemplateLearningMapField[]): Promise<TemplateLearningMapReport> {
+export async function applyTemplateLearningMap(inputPath: string, outputPath: string, validationId: string, confirmedFields: TemplateLearningMapField[]): Promise<TemplateLearningMapReport> {
   return callRust('apply_template_learning_map', {
-    req: { input_path: inputPath, output_path: outputPath, confirmed_fields: confirmedFields },
+    req: { input_path: inputPath, output_path: outputPath, validation_id: validationId, confirmed_fields: confirmedFields },
   });
 }
 
-export async function registerLearnedTemplate(documentId: string, buttonLabel: string, templatePath: string): Promise<DocumentPack> {
-  return callRust('register_learned_template', { req: { document_id: documentId, button_label: buttonLabel, template_path: templatePath } });
+export async function registerLearnedTemplate(documentId: string, buttonLabel: string, templatePath: string, learningValidationId: string): Promise<DocumentPack> {
+  return callRust('register_learned_template', { req: { document_id: documentId, button_label: buttonLabel, template_path: templatePath, learning_validation_id: learningValidationId } });
 }
 
 export async function confirmTemplateSetup(rows: TemplateConfirmationRowDto[], autoInferStaticTemplates = true): Promise<DocumentPack> {

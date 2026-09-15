@@ -39,8 +39,15 @@ export function sourceEvidencedLearningFields<T extends { source_matches: string
   return fields.filter((field) => field.source_matches.some((value) => value.trim().length > 0));
 }
 
-export function publicationEligibleLearningFields<T extends { source_matches: string[] }>(report: { fields: T[]; validation: { passed: boolean } }): T[] {
-  if (!report.validation.passed) return [];
+export function hasPublishableLearningProof(report: { validation: { verdict: string; publishable: boolean; passed: boolean }; validation_id?: string | null }): boolean {
+  return report.validation.verdict === 'passed'
+    && report.validation.publishable
+    && report.validation.passed
+    && Boolean(report.validation_id?.trim());
+}
+
+export function publicationEligibleLearningFields<T extends { source_matches: string[] }>(report: { fields: T[]; validation: { verdict: string; publishable: boolean; passed: boolean }; validation_id?: string | null }): T[] {
+  if (!hasPublishableLearningProof(report)) return [];
   return sourceEvidencedLearningFields(report.fields);
 }
 
@@ -117,7 +124,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     }));
     if (!learned) return;
 
-    if (!learned.validation.passed) {
+    if (!hasPublishableLearningProof(learned)) {
       context.setStatus(`Контрольная пара не прошла независимую проверку. Шаблон не изменён. ${learned.validation.reasons.join(' ')}`);
       return;
     }
@@ -145,6 +152,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
     const applied = await context.run('apply_template_learning_map', () => applyTemplateLearningMap(
       current.template_path,
       outputPath,
+      learned.validation_id!,
       evidencedFields.map((field) => ({
         field_id: field.field_id,
         line_index: field.line_index,
@@ -167,6 +175,7 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
           template_path: applied.output_path,
           extracted_text: analyzed.extracted_text,
           popup_fields: analyzed.document.popup_fields ?? item.popup_fields,
+          learning_validation_id: learned.validation_id,
         }
       : item));
     if (context.importedTemplatePath === current.template_path) context.setImportedTemplatePath(applied.output_path);

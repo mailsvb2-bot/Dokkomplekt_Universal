@@ -56,14 +56,32 @@ pub struct TemplateDiffHunk {
     pub variable_values: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateLearningValidationState {
+    NotRun,
+    Failed,
+    Passed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemplateLearningValidationVerdict {
+    pub verdict: TemplateLearningValidationState,
+    pub publishable: bool,
     pub passed: bool,
+    pub replay_pair_index: Option<usize>,
+    pub replay_evaluated_fields: usize,
+    pub replay_matched_fields: usize,
+    pub replay_passed: bool,
     pub holdout_pair_index: Option<usize>,
     pub evaluated_fields: usize,
     pub matched_fields: usize,
     pub intervention_fields: usize,
     pub intervention_matches: usize,
+    pub immutable_lines_checked: usize,
+    pub immutable_lines_preserved: usize,
+    pub controlled_intervention_passed: bool,
+    pub missing_source_field_ids: Vec<String>,
     pub mismatched_field_ids: Vec<String>,
     pub reasons: Vec<String>,
 }
@@ -243,17 +261,27 @@ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLe
     if pairs_are_usable && (4..=10).contains(&pair_count) {
         let holdout_pair_index = pair_count - 1;
         let mut training = input.clone();
-        let holdout_completed = training
-            .completed_examples
-            .pop()
-            .expect("validated pair count must contain a hold-out output");
-        let holdout_source = training
-            .source_examples
-            .pop()
-            .expect("validated pair count must contain a hold-out source");
+        let Some(holdout_completed) = training.completed_examples.pop() else {
+            let mut report = learn_template_from_training_examples(input);
+            report.validation = unavailable_learning_validation(
+                "Не удалось отделить контрольный Correct Output; публикация заблокирована.",
+            );
+            return report;
+        };
+        let Some(holdout_source) = training.source_examples.pop() else {
+            let mut report = learn_template_from_training_examples(input);
+            report.validation = unavailable_learning_validation(
+                "Не удалось отделить контрольный Source; публикация заблокирована.",
+            );
+            return report;
+        };
         let mut report = learn_template_from_training_examples(&training);
         report.validation = validate_template_learning_holdout(
             &report.fields,
+            &report.immutable_lines,
+            &input.blank_template_text,
+            &training.source_examples,
+            &training.completed_examples,
             &holdout_source,
             &holdout_completed,
             input.default_year,
@@ -461,12 +489,22 @@ fn learn_template_from_training_examples(input: &TemplateLearningInput) -> Templ
 
 fn unavailable_learning_validation(reason: &str) -> TemplateLearningValidationVerdict {
     TemplateLearningValidationVerdict {
+        verdict: TemplateLearningValidationState::NotRun,
+        publishable: false,
         passed: false,
+        replay_pair_index: None,
+        replay_evaluated_fields: 0,
+        replay_matched_fields: 0,
+        replay_passed: false,
         holdout_pair_index: None,
         evaluated_fields: 0,
         matched_fields: 0,
         intervention_fields: 0,
         intervention_matches: 0,
+        immutable_lines_checked: 0,
+        immutable_lines_preserved: 0,
+        controlled_intervention_passed: false,
+        missing_source_field_ids: Vec::new(),
         mismatched_field_ids: Vec::new(),
         reasons: vec![reason.into()],
     }
@@ -474,17 +512,27 @@ fn unavailable_learning_validation(reason: &str) -> TemplateLearningValidationVe
 
 fn validate_template_learning_holdout(
     fields: &[LearnedTemplateField],
+    immutable_lines: &[usize],
+    blank_template_text: &str,
+    training_sources: &[String],
+    training_outputs: &[String],
     source_text: &str,
     completed_text: &str,
     default_year: i32,
     holdout_pair_index: usize,
 ) -> TemplateLearningValidationVerdict {
+    let (replay_pair_index, replay_evaluated_fields, replay_matched_fields) =
+        best_known_replay(fields, training_sources, training_outputs, default_year);
+    let replay_passed =
+        replay_evaluated_fields > 0 && replay_matched_fields == replay_evaluated_fields;
     let source = semantic_value_map(source_text, default_year);
     let completed_lines = normalized_lines(completed_text);
+    let blank_lines = normalized_lines(blank_template_text);
     let mut evaluated_fields = 0usize;
     let mut matched_fields = 0usize;
     let mut intervention_fields = 0usize;
     let mut intervention_matches = 0usize;
+    let mut missing_source_field_ids = Vec::new();
     let mut mismatched_field_ids = Vec::new();
 
     for field in fields
@@ -492,6 +540,7 @@ fn validate_template_learning_holdout(
         .filter(|field| !field.source_matches.is_empty())
     {
         let Some(expected) = source.get(&field.field_id) else {
+            missing_source_field_ids.push(field.field_id.clone());
             continue;
         };
         evaluated_fields += 1;
@@ -524,6 +573,12 @@ fn validate_template_learning_holdout(
             "Контрольный источник не содержит ни одного поля, которому научилась карта.".into(),
         );
     }
+    if !missing_source_field_ids.is_empty() {
+        reasons.push(format!(
+            "Контрольный источник не содержит {} полей, которым обучена карта; неполная контрольная пара не может быть опубликована.",
+            missing_source_field_ids.len()
+        ));
+    }
     if !mismatched_field_ids.is_empty() {
         reasons.push(format!(
             "Контрольный результат не совпал с источником для {} полей.",
@@ -536,16 +591,41 @@ fn validate_template_learning_holdout(
                 .into(),
         );
     }
+    if !replay_passed {
+        reasons.push(
+            "Replay известной обучающей пары не воспроизвёл все source-evidenced поля.".into(),
+        );
+    }
     if intervention_fields > intervention_matches {
         reasons.push(
             "Хотя бы одно новое значение из контрольного источника не перенеслось в правильный результат."
                 .into(),
         );
     }
-    let passed = evaluated_fields > 0
+    let immutable_lines_checked = immutable_lines.len();
+    let immutable_lines_preserved = immutable_lines
+        .iter()
+        .filter(|&&index| {
+            blank_lines
+                .get(index)
+                .is_some_and(|blank| completed_lines.get(index).is_some_and(|line| line == blank))
+        })
+        .count();
+    let controlled_intervention_passed = intervention_fields > 0
+        && intervention_matches == intervention_fields
+        && immutable_lines_preserved == immutable_lines_checked;
+    if immutable_lines_preserved != immutable_lines_checked {
+        reasons.push(format!(
+            "Controlled intervention изменил {} неизменяемых строк; перенос поля не считается безопасным.",
+            immutable_lines_checked.saturating_sub(immutable_lines_preserved)
+        ));
+    }
+    let passed = replay_passed
+        && evaluated_fields > 0
+        && missing_source_field_ids.is_empty()
+        && mismatched_field_ids.is_empty()
         && matched_fields == evaluated_fields
-        && intervention_fields > 0
-        && intervention_matches == intervention_fields;
+        && controlled_intervention_passed;
     if passed {
         reasons.push(
             "Контрольная пара доказала перенос нового значения Source → Correct Output без участия confidence."
@@ -554,15 +634,68 @@ fn validate_template_learning_holdout(
     }
 
     TemplateLearningValidationVerdict {
+        verdict: if passed {
+            TemplateLearningValidationState::Passed
+        } else {
+            TemplateLearningValidationState::Failed
+        },
+        publishable: passed,
         passed,
+        replay_pair_index,
+        replay_evaluated_fields,
+        replay_matched_fields,
+        replay_passed,
         holdout_pair_index: Some(holdout_pair_index),
         evaluated_fields,
         matched_fields,
         intervention_fields,
         intervention_matches,
+        immutable_lines_checked,
+        immutable_lines_preserved,
+        controlled_intervention_passed,
+        missing_source_field_ids,
         mismatched_field_ids,
         reasons,
     }
+}
+
+fn best_known_replay(
+    fields: &[LearnedTemplateField],
+    source_texts: &[String],
+    output_texts: &[String],
+    default_year: i32,
+) -> (Option<usize>, usize, usize) {
+    source_texts
+        .iter()
+        .zip(output_texts)
+        .enumerate()
+        .map(|(index, (source_text, output_text))| {
+            let source = semantic_value_map(source_text, default_year);
+            let output_lines = normalized_lines(output_text);
+            let mut evaluated = 0usize;
+            let mut matched = 0usize;
+            for field in fields
+                .iter()
+                .filter(|field| !field.source_matches.is_empty())
+            {
+                let Some(expected) = source.get(&field.field_id) else {
+                    continue;
+                };
+                evaluated += 1;
+                if holdout_field_value(field, &output_lines)
+                    .as_deref()
+                    .is_some_and(|value| {
+                        values_equivalent(&normalize_value(value), expected)
+                            || values_equivalent(&normalize_value(expected), value)
+                    })
+                {
+                    matched += 1;
+                }
+            }
+            (Some(index), evaluated, matched)
+        })
+        .max_by_key(|(_, evaluated, matched)| (*matched == *evaluated, *evaluated, *matched))
+        .unwrap_or((None, 0, 0))
 }
 
 fn holdout_field_value(field: &LearnedTemplateField, lines: &[String]) -> Option<String> {
@@ -986,6 +1119,49 @@ mod tests {
             report.validation.intervention_matches,
             report.validation.intervention_fields
         );
+        assert_eq!(
+            report.validation.verdict,
+            TemplateLearningValidationState::Passed
+        );
+        assert!(report.validation.publishable);
+        assert!(report.validation.replay_passed);
+        assert_eq!(
+            report.validation.replay_matched_fields,
+            report.validation.replay_evaluated_fields
+        );
+        assert!(report.validation.controlled_intervention_passed);
+        assert_eq!(
+            report.validation.immutable_lines_preserved,
+            report.validation.immutable_lines_checked
+        );
+    }
+
+    #[test]
+    fn holdout_validation_blocks_missing_learned_source_field() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text: "Карточка\nИНН: __________\nДата документа: __________".into(),
+            completed_examples: vec![
+                "Карточка\nИНН: 7736050003\nДата документа: 01.09.2026".into(),
+                "Карточка\nИНН: 7707083893\nДата документа: 02.09.2026".into(),
+                "Карточка\nИНН: 7812014560\nДата документа: 03.09.2026".into(),
+                "Карточка\nИНН: 7708004767\nДата документа: 04.09.2026".into(),
+            ],
+            source_examples: vec![
+                "Организация\nИНН: 7736050003\nДата документа: 01.09.2026".into(),
+                "Организация\nИНН: 7707083893\nДата документа: 02.09.2026".into(),
+                "Организация\nИНН: 7812014560\nДата документа: 03.09.2026".into(),
+                "Организация\nИНН: 7708004767".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert_eq!(
+            report.validation.verdict,
+            TemplateLearningValidationState::Failed
+        );
+        assert!(!report.validation.publishable);
+        assert!(!report.validation.passed);
+        assert!(!report.validation.missing_source_field_ids.is_empty());
     }
 
     #[test]
@@ -1007,6 +1183,11 @@ mod tests {
             default_year: 2026,
             locale: "ru-RU".into(),
         });
+        assert_eq!(
+            report.validation.verdict,
+            TemplateLearningValidationState::Failed
+        );
+        assert!(!report.validation.publishable);
         assert!(!report.validation.passed);
         assert!(!report.validation.mismatched_field_ids.is_empty());
     }
@@ -1029,6 +1210,11 @@ mod tests {
             locale: "ru-RU".into(),
         });
         assert!(!report.fields.is_empty());
+        assert_eq!(
+            report.validation.verdict,
+            TemplateLearningValidationState::NotRun
+        );
+        assert!(!report.validation.publishable);
         assert!(!report.validation.passed);
         assert_eq!(report.validation.holdout_pair_index, None);
     }

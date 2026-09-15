@@ -573,6 +573,7 @@ export interface TemplateConfirmationRowDto {
   role_id: string;
   is_static_copy: boolean;
   analysis: unknown;
+  learning_validation_id?: string | null;
   popup_fields?: PopupFieldConfig[];
   popup_fields_edited?: boolean;
   domain_override?: DomainKind | null;
@@ -702,7 +703,8 @@ export interface TemplateVersionRecord {
   template_path: string;
   template_sha256: string;
   note: string;
-  status: 'published' | 'archived' | string;
+  status: 'published' | 'superseded' | 'revoked' | 'archived' | string;
+  learning_validation_id?: string | null;
   created_at: string;
 }
 export interface LearnedTemplateField {
@@ -734,13 +736,24 @@ export interface ImportLearningExampleFileResult {
   extracted_text: string;
   warnings: string[];
 }
+export type TemplateLearningValidationState = 'not_run' | 'failed' | 'passed';
 export interface TemplateLearningValidationVerdict {
+  verdict: TemplateLearningValidationState;
+  publishable: boolean;
   passed: boolean;
+  replay_pair_index?: number | null;
+  replay_evaluated_fields: number;
+  replay_matched_fields: number;
+  replay_passed: boolean;
   holdout_pair_index?: number | null;
   evaluated_fields: number;
   matched_fields: number;
   intervention_fields: number;
   intervention_matches: number;
+  immutable_lines_checked: number;
+  immutable_lines_preserved: number;
+  controlled_intervention_passed: boolean;
+  missing_source_field_ids: string[];
   mismatched_field_ids: string[];
   reasons: string[];
 }
@@ -756,6 +769,8 @@ export interface TemplateLearningReport {
   confidence: number;
   requires_confirmation: boolean;
   validation: TemplateLearningValidationVerdict;
+  validation_id?: string | null;
+  candidate_mapping_sha256?: string | null;
   warnings: string[];
 }
 export type TemplateRegressionSeverity = 'info' | 'warning' | 'critical';

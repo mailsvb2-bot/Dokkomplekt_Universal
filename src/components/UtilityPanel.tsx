@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { DocumentTemplateSpec, FolderNamePartDto, SemanticCase } from '../lib/types';
 import { AdvancedToolsPanel } from './AdvancedToolsPanel';
 import { AutomationControlCenter } from './AutomationControlCenter';
@@ -68,6 +69,7 @@ const FOLDER_PART_OPTIONS: Array<{ value: FolderNamePartDto; label: string; sens
 ];
 
 export function UtilityPanel(props: UtilityPanelProps) {
+  const [expertOpen, setExpertOpen] = useState(false);
   function toggleFolderPart(part: FolderNamePartDto, checked: boolean) {
     const next = checked
       ? [...new Set([...props.folderParts, part])]
@@ -154,10 +156,19 @@ export function UtilityPanel(props: UtilityPanelProps) {
         </div>
       </div>
 
-      <details className="expertSettings">
-        <summary role="button" aria-label="Экспертные и административные инструменты">Экспертные и административные инструменты</summary>
-        <p>Разметка, серии документов, сохранение сессий, реестры, обучение шаблонов и управление качеством. Для ежедневного создания документов этот раздел не требуется.</p>
-        <div className="utilityGrid expertSettingsGrid">
+      <section className="expertSettings">
+        <button
+          type="button"
+          className="expertSettingsSummary"
+          aria-expanded={expertOpen}
+          onClick={() => setExpertOpen((value) => !value)}
+        >
+          Экспертные и административные инструменты
+        </button>
+        {expertOpen && (
+          <>
+            <p>Разметка, серии документов, сохранение сессий, реестры, обучение шаблонов и управление качеством. Для ежедневного создания документов этот раздел не требуется.</p>
+            <div className="utilityGrid expertSettingsGrid">
           <div className="utilityCard">
             <strong>Серия записей</strong>
             <input value={props.seriesStart} onChange={(event) => props.onSeriesStartChange(event.target.value)} placeholder="дата начала" />
@@ -203,8 +214,10 @@ export function UtilityPanel(props: UtilityPanelProps) {
           <AdvancedToolsPanel documents={props.documents} selectedDocumentIds={props.selectedDocumentIds} outputRoot={props.savedOutputRoot} onStatus={props.onStatus} onDocumentsChanged={props.onDocumentsChanged} />
           <AutomationControlCenter onStatus={props.onStatus} />
           <LearningGovernancePanel documents={props.documents} onStatus={props.onStatus} />
-        </div>
-      </details>
+            </div>
+          </>
+        )}
+      </section>
       </fieldset>
     </section>
   );

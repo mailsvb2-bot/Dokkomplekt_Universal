@@ -41,7 +41,10 @@ def test_expert_settings_are_not_mixed_into_everyday_settings() -> None:
     utility = text("src/components/UtilityPanel.tsx")
     assert "Основные настройки" in utility
     assert "Экспертные и административные инструменты" in utility
-    assert '<details className="expertSettings">' in utility
+    assert '<section className="expertSettings">' in utility
+    assert 'className="expertSettingsSummary"' in utility
+    assert 'aria-expanded={expertOpen}' in utility
+    assert '{expertOpen && (' in utility
     assert "Папка готовых документов" in utility
 
 

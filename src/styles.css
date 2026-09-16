@@ -545,7 +545,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); box-sh
 .settingsSectionHeader small { color: var(--muted); font-size: 11px; }
 .primarySettingsGrid { border-top: 0; padding-top: 8px; }
 .expertSettings { margin: 0 16px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2); }
-.expertSettings > summary { cursor: pointer; padding: 13px 14px; color: var(--text-2); font-size: 12px; font-weight: 700; }
+.expertSettingsSummary { width: 100%; border: 0; background: transparent; cursor: pointer; padding: 13px 14px; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 700; text-align: left; }
 .expertSettings > p { margin: 0; padding: 0 14px 10px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .expertSettingsGrid { border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; padding: 12px; }
 .workflowOption { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }

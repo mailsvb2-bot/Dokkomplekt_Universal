@@ -366,15 +366,19 @@ describe('template learning upload controls', () => {
     const analyzeButton = screen.getByRole('button', { name: 'Проверить пары и предложить карту' }) as HTMLButtonElement;
 
     fireEvent.change(blankInput, { target: { files: [new File(['blank'], 'blank.docx', { lastModified: 1 })] } });
-    for (let index = 1; index <= 4; index += 1) {
+    fireEvent.change(completedInput, { target: { files: [new File(['out-1'], 'correct-1.docx', { lastModified: 1 })] } });
+    expect(screen.getByRole('status', { name: 'Собрано: Correct Output 1/4–10, Source 0/4–10.' })).toBeTruthy();
+    for (let index = 2; index <= 4; index += 1) {
       fireEvent.change(completedInput, { target: { files: [new File([`out-${index}`], `correct-${index}.docx`, { lastModified: index })] } });
     }
+    expect(screen.getByRole('status', { name: 'Собрано: Correct Output 4/4–10, Source 0/4–10.' })).toBeTruthy();
     expect(analyzeButton.disabled).toBe(true);
     for (let index = 1; index <= 4; index += 1) {
       fireEvent.change(sourceInput, { target: { files: [new File([`src-${index}`], `source-${index}.txt`, { lastModified: 10 + index })] } });
     }
 
     expect(await screen.findByText('Готово к проверке. Пар: 4.')).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Готово к проверке. Пар: 4.' })).toBeTruthy();
     expect(analyzeButton.disabled).toBe(false);
 
     fireEvent.change(sourceInput, { target: { files: [new File(['src-1'], 'source-1.txt', { lastModified: 11 })] } });

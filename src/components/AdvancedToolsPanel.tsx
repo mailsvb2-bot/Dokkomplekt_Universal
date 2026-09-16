@@ -126,6 +126,12 @@ export function AdvancedToolsPanel({
   const medicalAvailable = documents.some((document) => document.category === 'Medical');
   const medicalDiarySources = blocks.filter((block) =>
     block.block_id.startsWith(MEDICAL_DIARY_REGULAR_PREFIX) || block.block_id.startsWith(MEDICAL_DIARY_FINAL_PREFIX));
+  const learningReadinessText = blankLearningFile
+    && completedLearningFiles.length >= 4
+    && completedLearningFiles.length <= 10
+    && sourceLearningFiles.length === completedLearningFiles.length
+    ? `Готово к проверке. Пар: ${completedLearningFiles.length}.`
+    : `Собрано: Correct Output ${completedLearningFiles.length}/4–10, Source ${sourceLearningFiles.length}/4–10.`;
 
   useEffect(() => {
     if (!versionedDocument) {
@@ -587,10 +593,8 @@ export function AdvancedToolsPanel({
           <input ref={sourceLearningInputRef} hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
         </div>
-        <small className="learningReadiness" aria-live="polite">
-          {blankLearningFile && completedLearningFiles.length >= 4 && completedLearningFiles.length <= 10 && sourceLearningFiles.length === completedLearningFiles.length
-            ? `Готово к проверке. Пар: ${completedLearningFiles.length}.`
-            : `Собрано: Correct Output ${completedLearningFiles.length}/4–10, Source ${sourceLearningFiles.length}/4–10.`}
+        <small className="learningReadiness" role="status" aria-live="polite" aria-label={learningReadinessText}>
+          {learningReadinessText}
         </small>
         <label>Язык примеров
           <select value={learningLocale} onChange={(event) => setLearningLocale(event.target.value)}>

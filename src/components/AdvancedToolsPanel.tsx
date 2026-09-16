@@ -586,10 +586,10 @@ export function AdvancedToolsPanel({
           <button type="button" className="fileBtn" disabled={busy} onClick={() => blankLearningInputRef.current?.click()}>Пустой DOCX/DOCM</button>
           <input ref={blankLearningInputRef} hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
           <span>{blankLearningFile?.name ?? 'не выбран'}</span>
-          <button type="button" className="fileBtn" disabled={busy} aria-label={completedLearningFiles.length ? `4–10 правильных результатов. ${learningReadinessText}` : undefined} onClick={() => completedLearningInputRef.current?.click()}>4–10 правильных результатов</button>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => completedLearningInputRef.current?.click()}>{completedLearningFiles.length ? `4–10 правильных результатов. ${learningReadinessText}` : '4–10 правильных результатов'}</button>
           <input ref={completedLearningInputRef} hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
           <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.name).join(', ') : 'не выбраны'}</span>
-          <button type="button" className="fileBtn" disabled={busy} aria-label={sourceLearningFiles.length ? `4–10 исходных документов Source. ${learningReadinessText}` : undefined} onClick={() => sourceLearningInputRef.current?.click()}>4–10 исходных документов Source</button>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => sourceLearningInputRef.current?.click()}>{sourceLearningFiles.length ? `4–10 исходных документов Source. ${learningReadinessText}` : '4–10 исходных документов Source'}</button>
           <input ref={sourceLearningInputRef} hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
         </div>

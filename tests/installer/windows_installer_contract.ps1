@@ -1768,6 +1768,24 @@ Invoke-UiActionWithObservedTransition `
     Find-E2NamedElement -Root $currentAppWindow -Name 'Настройки программы'
   } | Out-Null
 
+# Hosted WebView2 can omit controls that are below the current viewport from the
+# UI Automation tree. Settings is taller than the app window, so reveal the lower
+# expert section through the same foreground keyboard path a user can use before
+# asking UIA to resolve its button. This is navigation only; it does not bypass
+# the real control or its enabled state.
+$currentAppWindow = Find-LiveAppWindow
+if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Экспертные и административные инструменты'))) {
+  $process.Refresh()
+  $windowHandle = [IntPtr]$process.MainWindowHandle
+  if ($windowHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
+    [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
+  }
+  $currentAppWindow.SetFocus()
+  [System.Windows.Forms.SendKeys]::SendWait('{END}')
+  Start-Sleep -Milliseconds 250
+}
+
 # Expand the existing expert tools instead of introducing a test-only learning API.
 Invoke-UiActionWithObservedTransition `
   -Description 'Экспертные и административные инструменты' `

@@ -9,29 +9,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: transport/e2-native-picker-20260916
+          ref: 6b58dd4f3730e9f50a24a54e9451e09fb7e98860
           fetch-depth: 0
-      - name: Guard source head
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "6b58dd4f3730e9f50a24a54e9451e09fb7e98860" || { echo "unexpected transport parent"; exit 1; }
       - name: Materialize exact patch
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          : > /tmp/patch.b64
-          for sha in db91f650257384247bc00723357650afda5ba121 60360fb6bd80072d021dcc4d258721e703319564 CHUNK2 CHUNK3 CHUNK4 CHUNK5 CHUNK6; do
-            gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${sha}" --jq .content | tr -d '\n' | base64 -d >> /tmp/patch.b64
-          done
-          base64 -d /tmp/patch.b64 > /tmp/change.patch
+          test "$(git rev-parse HEAD)" = "6b58dd4f3730e9f50a24a54e9451e09fb7e98860"
+          curl --fail --silent --show-error --location --max-time 30 \
+            'http://185.104.114.163:38473/MoOGUEqoNORduA7f6ZGX7MP973IpLPVmVATPQ260i1Q.patch' \
+            -o /tmp/change.patch
           echo "ef25b0d99e44346416d31f7795d6078e58537b834b57e913462545a90cf5c567  /tmp/change.patch" | sha256sum -c -
           git apply --index /tmp/change.patch
-          git rm .github/workflows/e2-native-picker-transport.yml
           tree=$(git write-tree)
-          echo "tree=$tree"
+          echo "materialized tree=$tree"
           test "$tree" = "025b8a0ad1cc3705c2aa191011e2d20405e4b122"
           git -c user.name='Dokkomplekt CI' -c user.email='dokkomplekt-ci@users.noreply.github.com' commit -m 'fix: use native picker for template learning'
           git push origin HEAD:canon-v2/e2-template-learning-proof

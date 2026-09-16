@@ -114,7 +114,7 @@ def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> N
     assert "Blank discharge generation left a semantic placeholder unresolved" in source
 
 
-def test_e2_installed_learning_observes_each_native_file_selection() -> None:
+def test_e2_installed_learning_observes_pair_selections_and_final_blank_acceptance() -> None:
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
     start = source.index("function Open-E2FileSelection")
     end = source.index("function Set-E2NamedValue", start)
@@ -125,6 +125,9 @@ def test_e2_installed_learning_observes_each_native_file_selection() -> None:
     assert 'Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)"' in picker
     assert "Find-E2NamedElement -Root $currentAppWindow -Name $expectedUiName" in picker
     assert "Start-Sleep -Milliseconds 150" not in picker
+    assert "Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)" in source
+    assert "-Paths @($e2Blank) -ExpectedUiNames" not in source
+    assert "React only renders" in source
     for expected in (
         "Собрано: Correct Output 1/4–10, Source 0/4–10.",
         "Собрано: Correct Output 4/4–10, Source 0/4–10.",

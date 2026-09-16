@@ -1745,7 +1745,10 @@ $e2SourceReadiness = @(
   'Собрано: Correct Output 4/4–10, Source 3/4–10.',
   'Готово к проверке. Пар: 4.'
 )
-Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank) -ExpectedUiNames @('e2-blank.docx')
+# Blank acceptance is proven by the final readiness state below: React only renders
+# 'Готово к проверке. Пар: 4.' when blankLearningFile is non-null. The plain
+# filename <span> is not a stable standalone UIA element in hosted WebView2.
+Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)
 Open-E2FileSelection -Label '4–10 правильных результатов' -Paths $e2Outputs -ExpectedUiNames $e2OutputReadiness
 Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
 

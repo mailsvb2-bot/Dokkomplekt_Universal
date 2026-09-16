@@ -1711,7 +1711,7 @@ function Set-E2NamedValue {
 # so the expert <summary> is not in the accessibility tree until Settings is opened.
 Invoke-UiActionWithObservedTransition `
   -Description 'Настройки' `
-  -TransitionDescription 'expert settings summary' `
+  -TransitionDescription 'settings panel' `
   -ActionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
@@ -1720,7 +1720,7 @@ Invoke-UiActionWithObservedTransition `
   -TransitionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'Экспертные и административные инструменты'
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Настройки программы'
   } | Out-Null
 
 # Expand the existing expert tools instead of introducing a test-only learning API.
@@ -1730,7 +1730,7 @@ Invoke-UiActionWithObservedTransition `
   -ActionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'Экспертные и административные инструменты'
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Экспертные и административные инструменты')
   } `
   -TransitionProbe {
     $currentAppWindow = Find-LiveAppWindow

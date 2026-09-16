@@ -372,7 +372,7 @@ describe('Полный прогон пользовательских сцена�
 
     // utility scenarios use real user inputs, not demo constants
     await click(/^Настройки$/);
-    fireEvent.click(screen.getByText('Экспертные и административные инструменты'));
+    fireEvent.click(screen.getByRole('button', { name: 'Экспертные и административные инструменты' }));
     await screen.findByText('Конфиденциальность и хранение');
     const semanticCard = screen.getByText('Локальное понимание документов').closest('.utilityCard');
     expect(semanticCard).toBeTruthy();

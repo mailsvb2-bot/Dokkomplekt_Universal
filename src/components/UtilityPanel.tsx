@@ -155,7 +155,7 @@ export function UtilityPanel(props: UtilityPanelProps) {
       </div>
 
       <details className="expertSettings">
-        <summary>Экспертные и административные инструменты</summary>
+        <summary role="button" aria-label="Экспертные и административные инструменты">Экспертные и административные инструменты</summary>
         <p>Разметка, серии документов, сохранение сессий, реестры, обучение шаблонов и управление качеством. Для ежедневного создания документов этот раздел не требуется.</p>
         <div className="utilityGrid expertSettingsGrid">
           <div className="utilityCard">

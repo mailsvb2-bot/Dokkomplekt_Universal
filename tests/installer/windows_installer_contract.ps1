@@ -415,6 +415,43 @@ function New-PlainDocxFixture {
   }
 }
 
+function New-E2LearningDocxFixture {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Inn,
+    [switch]$Blank
+  )
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    try {
+      $innValue = if ($Blank) { '__________' } else { $Inn }
+      $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        '<w:p><w:r><w:t>Карточка</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Режим: стандарт</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>ИНН: ' + $innValue + '</w:t></w:r></w:p>' +
+        '<w:sectPr/></w:body></w:document>'
+      $parts = @{
+        '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+        '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+        'word/document.xml' = $body
+      }
+      foreach ($name in $parts.Keys) {
+        $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+        try { $writer.Write($parts[$name]) } finally { $writer.Dispose() }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function New-BlankDischargeDocxFixture {
   param([Parameter(Mandatory = $true)][string]$Path)
   Add-Type -AssemblyName System.IO.Compression
@@ -1570,6 +1607,263 @@ if ($restartState.Kind -eq 'empty') {
   throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
 }
 Write-Host 'Persisted template button survived application restart.'
+
+# Canon v2 E2 installed proof. Reuse this already-installed process and the same
+# UI Automation helpers: learn from real Source -> Correct Output pairs, publish
+# a learning-backed button, restart with outbound traffic blocked, then require
+# physical DOCX generation from the persisted button.
+$e2FixtureDir = Join-Path $env:RUNNER_TEMP "dokkomplekt-e2-learning-$PID"
+New-Item -ItemType Directory -Force -Path $e2FixtureDir | Out-Null
+$e2Blank = Join-Path $e2FixtureDir 'e2-blank.docx'
+New-E2LearningDocxFixture -Path $e2Blank -Inn '' -Blank
+$e2Inns = @('7736050003', '7707083893', '7812014560', '7708004767')
+$e2Outputs = @()
+$e2Sources = @()
+for ($index = 0; $index -lt $e2Inns.Count; $index++) {
+  $ordinal = $index + 1
+  $output = Join-Path $e2FixtureDir "e2-correct-$ordinal.docx"
+  $source = Join-Path $e2FixtureDir "e2-source-$ordinal.txt"
+  New-E2LearningDocxFixture -Path $output -Inn $e2Inns[$index]
+  [System.IO.File]::WriteAllText(
+    $source,
+    "Организация`r`nИНН: $($e2Inns[$index])",
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  $e2Outputs += $output
+  $e2Sources += $source
+}
+
+function Find-E2NamedElement {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$Name)
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    $Name
+  )
+  try {
+    return $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  } catch {
+    if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
+    throw
+  }
+}
+
+function Open-E2FileSelection {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string[]]$Paths
+  )
+  $dialog = Invoke-UiActionWithObservedTransition `
+    -Description $Label `
+    -TransitionDescription "$Label file dialog" `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-E2NamedElement -Root $currentAppWindow -Name $Label
+    } `
+    -TransitionProbe { Find-FileDialog }
+  $edit = Wait-UiElement -Description "$Label filename field" -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  $selection = if ($Paths.Count -eq 1) {
+    $Paths[0]
+  } else {
+    ($Paths | ForEach-Object { '"' + $_ + '"' }) -join ' '
+  }
+  Set-UiValue -Element $edit -Value $selection
+  Submit-OpenFileDialog -Dialog $dialog
+}
+
+function Set-E2NamedValue {
+  param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Value)
+  $element = Wait-UiElement -Description "E2 input $Name" -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name $Name
+  }
+  Set-UiValue -Element $element -Value $Value
+}
+
+# Expand the existing expert tools instead of introducing a test-only learning API.
+Invoke-UiActionWithObservedTransition `
+  -Description 'Экспертные и административные инструменты' `
+  -TransitionDescription 'Template Learning card' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Экспертные и административные инструменты'
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name '2. Научить программу вашим шаблонам'
+  } | Out-Null
+
+Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)
+Open-E2FileSelection -Label '4–10 правильных результатов' -Paths $e2Outputs
+Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources
+
+Invoke-UiActionWithObservedTransition `
+  -Description 'Проверить пары и предложить карту' `
+  -TransitionDescription 'publishable held-out learning result' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+  } | Out-Null
+
+Invoke-UiActionWithObservedTransition `
+  -Description 'Подтвердить проверенную карту и создать копию' `
+  -TransitionDescription 'learned template publication fields' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'идентификатор: document.custom'
+  } | Out-Null
+
+$e2DocumentId = 'e2.installed.inn'
+$e2ButtonLabel = 'E2 обученная кнопка'
+Set-E2NamedValue -Name 'идентификатор: document.custom' -Value $e2DocumentId
+Set-E2NamedValue -Name 'название документа' -Value $e2ButtonLabel
+Invoke-UiActionWithObservedTransition `
+  -Description 'Добавить документ в набор' `
+  -TransitionDescription 'E2 learned document button' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Добавить документ в набор')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @($e2ButtonLabel)
+  } | Out-Null
+Write-Host 'E2 INSTALLED: learning-backed button published from four real matched pairs.'
+
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+Start-Sleep -Seconds 1
+
+$firewallRuleName = "Dokkomplekt-E2-offline-$PID"
+$firewallAdded = $false
+try {
+  & netsh advfirewall firewall add rule name="$firewallRuleName" dir=out action=block program="$($app.FullName)" enable=yes | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not add outbound block rule for E2 offline proof.' }
+  $firewallAdded = $true
+
+  $process = Start-Process -FilePath $app.FullName -PassThru
+  $appWindow = Wait-UiElement -Description 'E2 offline restarted installed window' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
+  $learnedAfterRestart = Wait-UiElement -Description 'persisted E2 learned button after offline restart' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @($e2ButtonLabel)
+  }
+  if ($null -eq $learnedAfterRestart) { throw 'E2 learned button disappeared after installed offline restart.' }
+
+  # Load the held-out Source only after the offline restart. Generation must use
+  # local compiled mapping/template/version evidence, never training files or AI.
+  $sourceDialog = Invoke-UiActionWithObservedTransition `
+    -Description 'E2 offline source picker' `
+    -TransitionDescription 'E2 offline source file dialog' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать исходный файл', 'Заменить исходный файл')
+    } `
+    -TransitionProbe { Find-FileDialog }
+  $sourceEdit = Wait-UiElement -Description 'E2 offline source filename' -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $sourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  Set-UiValue -Element $sourceEdit -Value $e2Sources[3]
+  Submit-OpenFileDialog -Dialog $sourceDialog
+  Wait-UiElement -Description 'E2 offline source accepted' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Источник принят'
+  } | Out-Null
+
+  # Select only the learned document.
+  $clear = Find-ReadyButtonByNames -Root $appWindow -Names @('Снять выбор')
+  if ($null -ne $clear) { Invoke-UiElement -Element $clear -Description 'Снять выбор before E2 generation' }
+  $checkbox = Wait-UiElement -Description 'E2 learned document checkbox' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name "Добавить $e2ButtonLabel в комплект"
+  }
+  if (-not $checkbox.Current.IsTogglePatternAvailable) { throw 'E2 learned document checkbox has no TogglePattern.' }
+  $toggle = $checkbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+  if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { $toggle.Toggle() }
+
+  $preflight = Invoke-UiActionWithObservedTransition `
+    -Description 'E2 offline generation action' `
+    -TransitionDescription 'E2 offline preflight' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-E2NamedElement -Root $currentAppWindow -Name 'Проверка перед созданием'
+    }
+  if ($null -eq $preflight) { throw 'E2 offline generation did not open preflight.' }
+  Invoke-UiActionFromProbe -Description 'E2 Создать документы' -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+  }
+
+  $e2ExpectedFile = "$e2ButtonLabel.docx"
+  $e2Deadline = [DateTime]::UtcNow.AddSeconds(60)
+  $e2Created = $null
+  do {
+    $e2Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $e2ExpectedFile -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($null -eq $e2Created) { Start-Sleep -Milliseconds 300 }
+  } while ($null -eq $e2Created -and [DateTime]::UtcNow -lt $e2Deadline)
+  if ($null -eq $e2Created) { throw 'E2 offline installed generation did not publish a physical DOCX.' }
+  $e2Archive = [System.IO.Compression.ZipFile]::OpenRead($e2Created.FullName)
+  try {
+    $entry = $e2Archive.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw 'E2 generated file is not a readable DOCX.' }
+    $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+    try { $xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    if ($xml -notmatch '7708004767') { throw 'E2 offline generation did not render held-out Source INN.' }
+    if ($xml -match '__________') { throw 'E2 offline generation left the learned INN placeholder unresolved.' }
+    if ($xml -notmatch 'Режим: стандарт') { throw 'E2 offline generation changed an immutable template line.' }
+  } finally {
+    $e2Archive.Dispose()
+  }
+  Write-Host "E2 INSTALLED PASS: learn -> publish -> offline restart -> physical DOCX: $($e2Created.FullName)"
+} finally {
+  if ($firewallAdded) {
+    & netsh advfirewall firewall delete rule name="$firewallRuleName" | Out-Null
+  }
+}
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()

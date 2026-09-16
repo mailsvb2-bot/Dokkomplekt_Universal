@@ -276,17 +276,17 @@ pub fn learn_template_from_examples(input: &TemplateLearningInput) -> TemplateLe
             return report;
         };
         let mut report = learn_template_from_training_examples(&training);
-        report.validation = validate_template_learning_holdout(
-            &report.fields,
-            &report.immutable_lines,
-            &input.blank_template_text,
-            &training.source_examples,
-            &training.completed_examples,
-            &holdout_source,
-            &holdout_completed,
-            input.default_year,
+        report.validation = validate_template_learning_holdout(HoldoutValidationInput {
+            fields: &report.fields,
+            immutable_lines: &report.immutable_lines,
+            blank_template_text: &input.blank_template_text,
+            training_sources: &training.source_examples,
+            training_outputs: &training.completed_examples,
+            source_text: &holdout_source,
+            completed_text: &holdout_completed,
+            default_year: input.default_year,
             holdout_pair_index,
-        );
+        });
         if !report.validation.passed {
             report.warnings.push(format!(
                 "Контрольная пара {} не доказала перенос карты; автоматическое применение должно быть заблокировано.",
@@ -510,17 +510,32 @@ fn unavailable_learning_validation(reason: &str) -> TemplateLearningValidationVe
     }
 }
 
-fn validate_template_learning_holdout(
-    fields: &[LearnedTemplateField],
-    immutable_lines: &[usize],
-    blank_template_text: &str,
-    training_sources: &[String],
-    training_outputs: &[String],
-    source_text: &str,
-    completed_text: &str,
+struct HoldoutValidationInput<'a> {
+    fields: &'a [LearnedTemplateField],
+    immutable_lines: &'a [usize],
+    blank_template_text: &'a str,
+    training_sources: &'a [String],
+    training_outputs: &'a [String],
+    source_text: &'a str,
+    completed_text: &'a str,
     default_year: i32,
     holdout_pair_index: usize,
+}
+
+fn validate_template_learning_holdout(
+    input: HoldoutValidationInput<'_>,
 ) -> TemplateLearningValidationVerdict {
+    let HoldoutValidationInput {
+        fields,
+        immutable_lines,
+        blank_template_text,
+        training_sources,
+        training_outputs,
+        source_text,
+        completed_text,
+        default_year,
+        holdout_pair_index,
+    } = input;
     let (replay_pair_index, replay_evaluated_fields, replay_matched_fields) =
         best_known_replay(fields, training_sources, training_outputs, default_year);
     let replay_passed =

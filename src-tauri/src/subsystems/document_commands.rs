@@ -2152,6 +2152,8 @@ struct UpdateDocumentTemplateRequest {
     template_path: String,
     #[serde(default)]
     acknowledge_regressions: bool,
+    #[serde(default)]
+    learning_validation_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2194,6 +2196,19 @@ fn check_template_regression(
     let result =
         compare_candidate_to_published_template(&app, &req.document_id, candidate_snapshot.path())?;
     candidate_snapshot.ensure_current()?;
+    if let Some(report) = result.as_ref().filter(|report| !report.issues.is_empty()) {
+        append_audit_event(
+            &app,
+            "template_drift_detected",
+            candidate_snapshot.sha256(),
+            &serde_json::json!({
+                "document_id": req.document_id,
+                "candidate_sha256": candidate_snapshot.sha256(),
+                "critical": report.critical,
+                "issues": &report.issues,
+            }),
+        )?;
+    }
     Ok(result)
 }
 
@@ -2210,6 +2225,53 @@ fn update_document_template(
     )?;
     let regression_report =
         compare_candidate_to_published_template(&app, &req.document_id, candidate_snapshot.path())?;
+    let validation_repo = repository_for(&default_state_db_path(&app)?)?;
+    let current_published = validation_repo
+        .list_template_versions(req.document_id.trim())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|version| version.status == "published");
+    let candidate_validation = validation_repo
+        .template_learning_validation_by_output_sha256(candidate_snapshot.sha256())
+        .map_err(|error| error.to_string())?;
+    let supplied_validation_id = req
+        .learning_validation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if req.learning_validation_id.is_some() && supplied_validation_id.is_none() {
+        return Err("Пустой learning_validation_id недопустим для repair-публикации.".into());
+    }
+    let current_requires_revalidation = current_published
+        .as_ref()
+        .and_then(|version| version.learning_validation_id.as_deref())
+        .is_some();
+    let learning_validation_id = if current_requires_revalidation || candidate_validation.is_some()
+    {
+        let validation = candidate_validation.ok_or_else(|| {
+            "Текущая версия создана Template Learning. Repair требует новой Replay + Intervention + Held-out validation для байтов кандидата.".to_string()
+        })?;
+        if validation.status != "ready_to_publish" {
+            return Err(format!(
+                "Repair validation нельзя повторно использовать из состояния {}. Выполните новую revalidation.",
+                validation.status
+            ));
+        }
+        if supplied_validation_id != Some(validation.validation_id.as_str()) {
+            return Err(
+                "Repair-кандидат не связан с переданным validation proof; публикация заблокирована."
+                    .into(),
+            );
+        }
+        Some(validation.validation_id)
+    } else {
+        if supplied_validation_id.is_some() {
+            return Err(
+                "Переданный validation proof не принадлежит байтам repair-кандидата.".into(),
+            );
+        }
+        None
+    };
     if !req.acknowledge_regressions {
         if let Some(report) = regression_report.as_ref().filter(|report| report.critical) {
             return Err(format!(
@@ -2243,8 +2305,12 @@ fn update_document_template(
         &req.document_id,
         candidate_snapshot.path(),
         &template_sha256,
-        "Шаблон опубликован после проверенной разметки.",
-        None,
+        if current_requires_revalidation {
+            "Repair опубликован после повторной Replay + Intervention + Held-out validation."
+        } else {
+            "Шаблон опубликован после проверенной разметки."
+        },
+        learning_validation_id.clone(),
     )?;
     updated.template_path = draft.template_path.clone();
     candidate_snapshot.ensure_current()?;
@@ -2278,14 +2344,22 @@ fn update_document_template(
         .into_iter()
         .next()
         .ok_or_else(|| "Атомарная публикация не вернула версию шаблона.".to_string())?;
+    let audit_event = if current_requires_revalidation {
+        "template_repair_published"
+    } else {
+        "template_version_published"
+    };
     let _ = append_audit_event(
         &app,
-        "template_version_published",
+        audit_event,
         &template_sha256,
         &serde_json::json!({
             "document_id": req.document_id,
             "version_id": version.version_id,
             "version_number": version.version_number,
+            "repair_of_version_id": current_published.as_ref().map(|item| item.version_id.as_str()),
+            "learning_validation_id": learning_validation_id,
+            "revalidation_required": current_requires_revalidation,
             "regression_report": &regression_report,
             "regressions_acknowledged": req.acknowledge_regressions,
         }),

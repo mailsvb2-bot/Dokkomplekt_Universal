@@ -2841,6 +2841,128 @@ mod tests {
     }
 
     #[test]
+    fn revalidated_repair_supersedes_previous_version_and_keeps_both_proofs() {
+        let path = temp_db("template-learning-repair-version-chain");
+        let key = [26u8; 32];
+        let mut repo = LocalRepository::open_with_key(&path, key).unwrap();
+        let case = SemanticCase::default();
+
+        let first_validation = repo
+            .register_template_learning_validation(
+                &"1".repeat(64),
+                &"2".repeat(64),
+                r#"{"verdict":"passed","cycle":"initial"}"#,
+            )
+            .unwrap();
+        let first_validation = repo
+            .bind_template_learning_validation_output(
+                &first_validation.validation_id,
+                &"1".repeat(64),
+                &"3".repeat(64),
+                &"a".repeat(64),
+            )
+            .unwrap();
+        let first_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "initial".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let first_versions = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &first_pack,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[TemplateVersionDraft {
+                    document_id: "invoice".into(),
+                    template_path: "C:/archive/invoice-v1.docx".into(),
+                    template_sha256: "a".repeat(64),
+                    note: "initial validated learning publish".into(),
+                    learning_validation_id: Some(first_validation.validation_id.clone()),
+                }],
+            })
+            .unwrap();
+        let first_version_id = first_versions[0].version_id.clone();
+
+        let repair_validation = repo
+            .register_template_learning_validation(
+                &"4".repeat(64),
+                &"5".repeat(64),
+                r#"{"verdict":"passed","cycle":"repair"}"#,
+            )
+            .unwrap();
+        let repair_validation = repo
+            .bind_template_learning_validation_output(
+                &repair_validation.validation_id,
+                &"4".repeat(64),
+                &"6".repeat(64),
+                &"b".repeat(64),
+            )
+            .unwrap();
+        let repaired_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "repair".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let repair_versions = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &repaired_pack,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[TemplateVersionDraft {
+                    document_id: "invoice".into(),
+                    template_path: "C:/archive/invoice-v2.docx".into(),
+                    template_sha256: "b".repeat(64),
+                    note: "revalidated repair".into(),
+                    learning_validation_id: Some(repair_validation.validation_id.clone()),
+                }],
+            })
+            .unwrap();
+        let repair_version_id = repair_versions[0].version_id.clone();
+
+        let versions = repo.list_template_versions("invoice").unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].version_id, repair_version_id);
+        assert_eq!(versions[0].status, "published");
+        assert_eq!(
+            versions[0].learning_validation_id.as_deref(),
+            Some(repair_validation.validation_id.as_str())
+        );
+        assert_eq!(versions[1].version_id, first_version_id);
+        assert_eq!(versions[1].status, "superseded");
+        assert_eq!(
+            versions[1].learning_validation_id.as_deref(),
+            Some(first_validation.validation_id.as_str())
+        );
+
+        let persisted_first = repo
+            .template_learning_validation_by_id(&first_validation.validation_id)
+            .unwrap()
+            .unwrap();
+        let persisted_repair = repo
+            .template_learning_validation_by_id(&repair_validation.validation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted_first.status, "published");
+        assert_eq!(
+            persisted_first.published_version_id.as_deref(),
+            Some(first_version_id.as_str())
+        );
+        assert_eq!(persisted_repair.status, "published");
+        assert_eq!(
+            persisted_repair.published_version_id.as_deref(),
+            Some(repair_version_id.as_str())
+        );
+        assert_eq!(repo.load_pack("default").unwrap(), Some(repaired_pack));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn learning_validation_cannot_publish_different_template_bytes() {
         let path = temp_db("template-learning-proof-mismatch");
         let mut repo = LocalRepository::open_with_key(&path, [25u8; 32]).unwrap();

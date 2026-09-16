@@ -351,8 +351,16 @@ export async function checkTemplateRegression(documentId: string, candidateTempl
   return callRust('check_template_regression', { req: { document_id: documentId, candidate_template_path: candidateTemplatePath } });
 }
 
-export async function updateDocumentTemplate(documentId: string, templatePath: string, acknowledgeRegressions = false): Promise<DocumentPack> {
-  return callRust('update_document_template', { req: { document_id: documentId, template_path: templatePath, acknowledge_regressions: acknowledgeRegressions } });
+export async function updateDocumentTemplate(
+  documentId: string,
+  templatePath: string,
+  acknowledgeRegressions = false,
+  learningValidationId?: string | null,
+): Promise<DocumentPack> {
+  const req: Record<string, unknown> = { document_id: documentId, template_path: templatePath };
+  if (acknowledgeRegressions) req.acknowledge_regressions = true;
+  if (learningValidationId?.trim()) req.learning_validation_id = learningValidationId.trim();
+  return callRust('update_document_template', { req });
 }
 
 export async function listTemplateVersions(documentId: string): Promise<TemplateVersionRecord[]> {

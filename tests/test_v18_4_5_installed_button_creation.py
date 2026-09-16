@@ -51,3 +51,10 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
     assert "ADVERSARIAL OK: output-root collision stayed fail-closed and visible" in smoke
     assert "ADVERSARIAL OK: Desktop output root recovered on clean restart" in smoke
     assert "Persisted template button survived application restart" in smoke
+    assert "E2 INSTALLED PASS: learn -> publish -> offline restart -> physical DOCX" in smoke
+    assert "New-E2LearningDocxFixture" in smoke
+    assert "4–10 правильных результатов" in smoke
+    assert "4–10 исходных документов Source" in smoke
+    assert "Подтвердить проверенную карту и создать копию" in smoke
+    assert "netsh advfirewall firewall add rule" in smoke
+    assert "7708004767" in smoke

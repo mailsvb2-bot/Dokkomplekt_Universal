@@ -534,6 +534,25 @@ describe('Tauri command DTO contracts', () => {
     ]);
   });
 
+  it('carries the backend validation proof for a learned template repair', async () => {
+    const calls: Call[] = [];
+    installContractMock(calls);
+    await updateDocumentTemplate('doc_1', 'repair.learned.docx', true, 'learning-proof-1');
+    expect(calls).toEqual([
+      {
+        command: 'update_document_template',
+        payload: {
+          req: {
+            document_id: 'doc_1',
+            template_path: 'repair.learned.docx',
+            acknowledge_regressions: true,
+            learning_validation_id: 'learning-proof-1',
+          },
+        },
+      },
+    ]);
+  });
+
   it('passes selected folder naming requirements through the same workflow and popup envelopes', async () => {
     const calls: Call[] = [];
     installContractMock(calls);

@@ -93,6 +93,7 @@ export function AdvancedToolsPanel({
   const [learnedButtonLabel, setLearnedButtonLabel] = useState('');
   const [replacementPath, setReplacementPath] = useState('');
   const [replacementRegression, setReplacementRegression] = useState<TemplateRegressionReport | null>(null);
+  const [replacementValidationId, setReplacementValidationId] = useState<string | null>(null);
 
   useEffect(() => {
     listClauseBlocks().then(setBlocks).catch(() => undefined);
@@ -104,6 +105,8 @@ export function AdvancedToolsPanel({
     [documents, selectedDocumentIds],
   );
   const versionedDocument = selectedDocuments.length === 1 ? selectedDocuments[0] : null;
+  const publishedTemplateVersion = templateVersions.find((version) => version.status === 'published') ?? null;
+  const selectedVersionUsesLearningProof = Boolean(publishedTemplateVersion?.learning_validation_id);
   const medicalAvailable = documents.some((document) => document.category === 'Medical');
   const medicalDiarySources = blocks.filter((block) =>
     block.block_id.startsWith(MEDICAL_DIARY_REGULAR_PREFIX) || block.block_id.startsWith(MEDICAL_DIARY_FINAL_PREFIX));
@@ -232,6 +235,25 @@ export function AdvancedToolsPanel({
     onStatus(`Кнопка «${learnedButtonLabel.trim()}» создана из подтверждённой карты. Тексты примеров не используются как источник смыслов.`);
   }
 
+  async function stageLearnedRepair() {
+    if (!versionedDocument || !learnedTemplatePath || !learningReport?.validation_id) {
+      onStatus('Для repair выберите один опубликованный документ и сначала создайте копию с новым validation proof.');
+      return;
+    }
+    const regression = await execute('проверка revalidation repair', () =>
+      checkTemplateRegression(versionedDocument.id, learnedTemplatePath));
+    if (!regression) {
+      onStatus('Repair заблокирован: для выбранного документа не найдена опубликованная базовая версия.');
+      return;
+    }
+    setReplacementPath(learnedTemplatePath);
+    setReplacementRegression(regression);
+    setReplacementValidationId(learningReport.validation_id);
+    onStatus(regression.critical
+      ? 'Repair прошёл Replay + Intervention + Held-out validation, но RegressionReplay нашёл критические структурные изменения. Нужна отдельная явная публикация.'
+      : 'Repair прошёл revalidation и RegressionReplay. Подтвердите публикацию новой версии в разделе истории шаблона.');
+  }
+
   async function inspectReplacement(file: File) {
     if (!versionedDocument) {
       onStatus('Сначала выберите ровно один документ слева.');
@@ -249,9 +271,12 @@ export function AdvancedToolsPanel({
     if (!result) return;
     setReplacementPath(result.path);
     setReplacementRegression(result.regression);
-    onStatus(result.regression?.critical
-      ? 'Новая версия содержит критические структурные изменения. Автопубликация заблокирована.'
-      : 'Новая версия проверена. Критических структурных регрессий не найдено.');
+    setReplacementValidationId(null);
+    onStatus(selectedVersionUsesLearningProof
+      ? 'Структурная проверка выполнена, но текущая Published-версия learning-backed: публикация требует новой Replay + Intervention + Held-out revalidation.'
+      : result.regression?.critical
+        ? 'Новая версия содержит критические структурные изменения. Автопубликация заблокирована.'
+        : 'Новая версия проверена. Критических структурных регрессий не найдено.');
   }
 
   async function publishReplacement(acknowledge: boolean) {
@@ -260,13 +285,21 @@ export function AdvancedToolsPanel({
       onStatus('Критические изменения требуют отдельного явного подтверждения.');
       return;
     }
-    const pack = await execute('публикация версии шаблона', () =>
-      updateDocumentTemplate(versionedDocument.id, replacementPath, acknowledge));
+    if (selectedVersionUsesLearningProof && !replacementValidationId) {
+      onStatus('Публикация заблокирована: learning-backed версия ремонтируется только через новую revalidation.');
+      return;
+    }
+    const validationId = replacementValidationId;
+    const pack = await execute(validationId ? 'публикация проверенной repair-версии' : 'публикация версии шаблона', () =>
+      updateDocumentTemplate(versionedDocument.id, replacementPath, acknowledge, validationId));
     if (!pack) return;
     onDocumentsChanged(pack.documents);
     setReplacementPath('');
     setReplacementRegression(null);
-    onStatus(`Новая версия «${versionedDocument.button_label}» опубликована после структурной проверки.`);
+    setReplacementValidationId(null);
+    onStatus(validationId
+      ? `Repair «${versionedDocument.button_label}» опубликован новой версией после revalidation и RegressionReplay.`
+      : `Новая версия «${versionedDocument.button_label}» опубликована после структурной проверки.`);
     const versions = await execute('история шаблона', () => listTemplateVersions(versionedDocument.id));
     if (versions) setTemplateVersions(versions);
   }
@@ -573,6 +606,12 @@ export function AdvancedToolsPanel({
             <input value={learnedDocumentId} onChange={(event) => setLearnedDocumentId(event.target.value)} placeholder="идентификатор: document.custom" />
             <input value={learnedButtonLabel} onChange={(event) => setLearnedButtonLabel(event.target.value)} placeholder="название документа" />
             <button className="primaryBtn" disabled={busy || !learnedDocumentId.trim() || !learnedButtonLabel.trim()} onClick={() => void publishLearnedTemplate()}>Добавить документ в набор</button>
+            {versionedDocument && (
+              <button className="softBtn" disabled={busy || !learningReport?.validation_id} onClick={() => void stageLearnedRepair()}>
+                Подготовить repair для «{versionedDocument.button_label}»
+              </button>
+            )}
+            {versionedDocument && <small>Repair не изменяет Published in-place: после revalidation создаётся новая версия, а предыдущая становится Superseded.</small>}
           </div>
         )}
       </section>
@@ -672,7 +711,7 @@ export function AdvancedToolsPanel({
 
       <section className="utilityCard advancedCard">
         <strong>Версии пользовательского шаблона</strong>
-        <small>Выберите ровно один документ слева. Каждая публикация получает SHA-256 и номер; предыдущая версия остаётся доступной для безопасного rollback.</small>
+        <small>Выберите ровно один документ слева. Каждая публикация получает SHA-256 и номер; предыдущая версия становится Superseded и остаётся доступной для безопасного rollback. Learning-backed версия требует новой revalidation перед repair.</small>
         {!versionedDocument ? <small>Для просмотра истории отметьте один документ.</small> : (
           <>
             <label className="fileBtn">Проверить новую DOCX/DOCM-версию
@@ -682,8 +721,18 @@ export function AdvancedToolsPanel({
               <div className={`regressionReport ${replacementRegression.critical ? 'critical' : 'safe'}`}>
                 <b>{replacementRegression.critical ? 'Критические изменения' : 'Структурная проверка пройдена'}</b>
                 {replacementRegression.issues.length ? <ul>{replacementRegression.issues.map((issue) => <li key={`${issue.code}:${issue.message}`}><b>{issue.severity}</b> · {issue.message}</li>)}</ul> : <small>Изменений, влияющих на workflow, placeholders, таблицы, секции, headers/footers и page breaks, не найдено.</small>}
-                <button className={replacementRegression.critical ? 'dangerBtn' : 'utilBtn'} disabled={busy} onClick={() => void publishReplacement(replacementRegression.critical)}>
-                  {replacementRegression.critical ? 'Я проверил изменения — опубликовать' : 'Опубликовать новую версию'}
+                <button
+                  className={replacementRegression.critical ? 'dangerBtn' : 'utilBtn'}
+                  disabled={busy || (selectedVersionUsesLearningProof && !replacementValidationId)}
+                  onClick={() => void publishReplacement(replacementRegression.critical)}
+                >
+                  {selectedVersionUsesLearningProof && !replacementValidationId
+                    ? 'Нужна revalidation через Template Learning'
+                    : replacementValidationId
+                      ? 'Опубликовать проверенную repair-версию'
+                      : replacementRegression.critical
+                        ? 'Я проверил изменения — опубликовать'
+                        : 'Опубликовать новую версию'}
                 </button>
               </div>
             )}
@@ -691,7 +740,7 @@ export function AdvancedToolsPanel({
             {templateVersions.length === 0 && <small>История появится после первой проверенной публикации шаблона.</small>}
             {templateVersions.map((item) => (
               <div key={item.version_id}>
-                <span><b>v{item.version_number}</b> · {item.status}<small>{item.note} · {item.template_sha256.slice(0, 12)}…</small></span>
+                <span><b>v{item.version_number}</b> · {item.status}<small>{item.note} · {item.template_sha256.slice(0, 12)}…{item.learning_validation_id ? ' · validation proof' : ''}</small></span>
                 {item.status !== 'published' && <button className="softBtn" disabled={busy} onClick={() => void rollbackVersion(item)}>Вернуть</button>}
               </div>
             ))}

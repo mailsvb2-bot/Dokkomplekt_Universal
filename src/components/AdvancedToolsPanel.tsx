@@ -57,6 +57,19 @@ interface Props {
 
 const YEAR = new Date().getFullYear();
 
+function mergeLearningFiles(current: File[], incoming: File[]): File[] {
+  const merged = [...current];
+  const seen = new Set(current.map((file) => `${file.name}\0${file.size}\0${file.lastModified}`));
+  for (const file of incoming) {
+    const key = `${file.name}\0${file.size}\0${file.lastModified}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(file);
+    if (merged.length === 10) break;
+  }
+  return merged;
+}
+
 export function AdvancedToolsPanel({
   documents,
   selectedDocumentIds,
@@ -568,12 +581,17 @@ export function AdvancedToolsPanel({
           <input ref={blankLearningInputRef} hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
           <span>{blankLearningFile?.name ?? 'не выбран'}</span>
           <button type="button" className="fileBtn" disabled={busy} onClick={() => completedLearningInputRef.current?.click()}>4–10 правильных результатов</button>
-          <input ref={completedLearningInputRef} hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
+          <input ref={completedLearningInputRef} hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
           <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.name).join(', ') : 'не выбраны'}</span>
           <button type="button" className="fileBtn" disabled={busy} onClick={() => sourceLearningInputRef.current?.click()}>4–10 исходных документов Source</button>
-          <input ref={sourceLearningInputRef} hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
+          <input ref={sourceLearningInputRef} hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
         </div>
+        <small className="learningReadiness" aria-live="polite">
+          {blankLearningFile && completedLearningFiles.length >= 4 && completedLearningFiles.length <= 10 && sourceLearningFiles.length === completedLearningFiles.length
+            ? `Готово к проверке. Пар: ${completedLearningFiles.length}.`
+            : `Собрано: Correct Output ${completedLearningFiles.length}/4–10, Source ${sourceLearningFiles.length}/4–10.`}
+        </small>
         <label>Язык примеров
           <select value={learningLocale} onChange={(event) => setLearningLocale(event.target.value)}>
             <option value="ru-RU">Русский</option>

@@ -1655,29 +1655,27 @@ function Open-E2FileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  $dialog = Invoke-UiActionWithObservedTransition `
-    -Description $Label `
-    -TransitionDescription "$Label file dialog" `
-    -ActionProbe {
-      $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
-      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
-    } `
-    -TransitionProbe { Find-FileDialog }
-  $edit = Wait-UiElement -Description "$Label filename field" -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-      '1148'
-    )
-    $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  foreach ($path in $Paths) {
+    $dialog = Invoke-UiActionWithObservedTransition `
+      -Description $Label `
+      -TransitionDescription "$Label file dialog" `
+      -ActionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+      } `
+      -TransitionProbe { Find-FileDialog }
+    $edit = Wait-UiElement -Description "$Label filename field" -Probe {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        '1148'
+      )
+      $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    }
+    Set-UiValue -Element $edit -Value $path
+    Submit-OpenFileDialog -Dialog $dialog
+    Start-Sleep -Milliseconds 150
   }
-  $selection = if ($Paths.Count -eq 1) {
-    $Paths[0]
-  } else {
-    ($Paths | ForEach-Object { '"' + $_ + '"' }) -join ' '
-  }
-  Set-UiValue -Element $edit -Value $selection
-  Submit-OpenFileDialog -Dialog $dialog
 }
 
 function Set-E2NamedValue {

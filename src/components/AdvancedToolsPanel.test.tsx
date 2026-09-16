@@ -336,4 +336,48 @@ describe('template learning upload controls', () => {
     fireEvent.click(blankButton);
     expect(inputClick).toHaveBeenCalledTimes(1);
   });
+
+  it('accumulates repeated native selections until four matched pairs are ready', async () => {
+    __setInvokeForTests(async <T,>(command: string) => {
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'get_process_blueprints') {
+        return { selected_process_id: null, processes: [], notice: 'learning controls ready' } as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <AdvancedToolsPanel
+        documents={[]}
+        selectedDocumentIds={[]}
+        outputRoot="output"
+        onStatus={vi.fn()}
+        onDocumentsChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('learning controls ready');
+    const blankButton = screen.getByRole('button', { name: 'Пустой DOCX/DOCM' });
+    const completedButton = screen.getByRole('button', { name: '4–10 правильных результатов' });
+    const sourceButton = screen.getByRole('button', { name: '4–10 исходных документов Source' });
+    const blankInput = blankButton.nextElementSibling as HTMLInputElement;
+    const completedInput = completedButton.nextElementSibling as HTMLInputElement;
+    const sourceInput = sourceButton.nextElementSibling as HTMLInputElement;
+    const analyzeButton = screen.getByRole('button', { name: 'Проверить пары и предложить карту' }) as HTMLButtonElement;
+
+    fireEvent.change(blankInput, { target: { files: [new File(['blank'], 'blank.docx', { lastModified: 1 })] } });
+    for (let index = 1; index <= 4; index += 1) {
+      fireEvent.change(completedInput, { target: { files: [new File([`out-${index}`], `correct-${index}.docx`, { lastModified: index })] } });
+    }
+    expect(analyzeButton.disabled).toBe(true);
+    for (let index = 1; index <= 4; index += 1) {
+      fireEvent.change(sourceInput, { target: { files: [new File([`src-${index}`], `source-${index}.txt`, { lastModified: 10 + index })] } });
+    }
+
+    expect(await screen.findByText('Готово к проверке. Пар: 4.')).toBeTruthy();
+    expect(analyzeButton.disabled).toBe(false);
+
+    fireEvent.change(sourceInput, { target: { files: [new File(['src-1'], 'source-1.txt', { lastModified: 11 })] } });
+    expect(screen.getByText('Готово к проверке. Пар: 4.')).toBeTruthy();
+  });
 });

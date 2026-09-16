@@ -1690,6 +1690,23 @@ function Set-E2NamedValue {
   Set-UiValue -Element $element -Value $Value
 }
 
+# Navigate through the same Settings entry point a user must use after restart.
+# The restart proof intentionally leaves the application on its restored workspace,
+# so the expert <summary> is not in the accessibility tree until Settings is opened.
+Invoke-UiActionWithObservedTransition `
+  -Description 'Настройки' `
+  -TransitionDescription 'expert settings summary' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Настройки')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Экспертные и административные инструменты'
+  } | Out-Null
+
 # Expand the existing expert tools instead of introducing a test-only learning API.
 Invoke-UiActionWithObservedTransition `
   -Description 'Экспертные и административные инструменты' `

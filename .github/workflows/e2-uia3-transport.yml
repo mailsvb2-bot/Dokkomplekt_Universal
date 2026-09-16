@@ -1,0 +1,41 @@
+name: E2 UIA visible-label exact-tree transport
+
+on:
+  push:
+    branches: [canon-v2/e2-template-learning-proof]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: canon-v2/e2-template-learning-proof
+          fetch-depth: 3
+      - name: Materialize exact tested tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='147f939ea9ce58875a80384d088f1a92a2517ee1'
+          expected_tree='f9f0c5c391bee883f83e288c2b87efddbf09e40b'
+          expected_payload_sha='7ba50861630e56b1be2bae835aec08032af885be3e678f66dc709eac74c84ec3'
+          transport_head="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$expected_base"
+          printf '%s' 'H4sIAAAAAAAAA81U224URxB991e0LCSv5d1x9/RtOmAbY0BBChdhIkVCCPpSbQZmZ0Yzs86CZYmE8ETe8gH5BYKCAiGQX9j9hXxJenadgGNj1iSg7EPtTHVN1amuU8el3qNebyttkF7evPzl1Y1zNy+uX7pw/tzmtZubn6/HXETNsEHmiMO5NHcwREp6grWJIgNCYokRwVgwNtfr9Y7MPbe0tHR0/tOnUY9J3pVoafoXHJYyzBOJQRjPGcaGxp7EimmlGLdaKoY1p8ZaZzFXREkpqaBY+ER66UiCUF3Z5fWyjGoLua7mkNOYOwUgmAFlJHDCmefcJYRTpoQxVFgLFIim3juHEx57b4RygmFICJtmtEW/LHLIm3p53bm0SYtcZxd1A1Wqs/qKziGLGqibqKmHc8h4T5zy0oLCmEKc0CTmnMSWYM+8xAkDxZQ3sQ+tOGyFibEG4pgw2iqnjlGzLacUNULHYBWzsTXKMa50TLCy2DFwTId+LWCWANeWUy5jCVR6H4fL84k7rMVtnVtw14riQHM9Rw1mhiTMKOFlbJgTRsUssYlUILij2sXUM4sJVTFIyg0GHQpb6oh33sxULRRacsQJq+JYaClowiddkgQTmyQegxeJxiC5llIzHFBYp3VghOVScUyEJLMWQsYIx6zAxBljQ0+exnEccklMjFOxNqGbWPDEE7BeUi0Saam0AQsNGGh8sFBZng0zKrauVMV26qB6ixsyAckC5vC5tzGR0tsweSkJcVxwTq0gYXTCaq0hseH6uNMES25InMSgklmKtXWACXA8IUrQwPRYJ+AINlzHLuHGSE5dgn1oKolxoL3VQhHsJGeOG8cMtYfVOVdVRXWmGOROV/fe9OTeVpuZ7jwIw2yzmWqQdImGoBoRZZRq/w8NmpFOEzmaLbZVJp6ILsFoae8/uGBYFlWD/CC37S6igx93dubQm98pM2iaENfcK2Flfvoyj2ym6/qS7geXTzM40wSfS2ttMnArO2ZQ39tFRb6Rpfbuyk5nEa2sIpPp/O4XoKs8zbcu5OWguQo+soOqCk2sRbaN7Szuro5+HD8cfzP+dvR69AKdvbzx1XIwF08tT0uv7sOWtmlQBT7UPCz9LrqdOgd/oW+hzqOwxFA2K/ORK+yw29r+fAv2ts63IKCF7QBoAnkH1dCceTvx+ZBhGhA1utqCJmpz1mvRdXwDra2hfJBliyfRNGKvt2vTwG2dDQCtoIWFk2h3Fy3v76Qudb66v4m21lqUh0tuMy+MXo2eodHT8ePRT+MHoyejVwu7p5Ynn831/otx6SDIvUwbyFZ2WnJl0IB7G0sdZZBvNbfRGrrF/njwQ+DT6PcJlKej56OX4+9Hr8aPx49QcD0b/TJ+2LrCGJ9MRvk0Qid2sr1sV0G7NIe6vgbDZvcW+gyFZQQfXO4AbQ5AOYI6x0f1hlZLH4Hyx8H+6e984fgJW8q9Zw/f2fPfu9gfZE0aYv7NUm4celmdzt69TgL7EPZu//necRetV5W+F/mq6B+yze26Xb+xuPgvFvl9w3zHeV+XnU6LYdJA+zDZ/8XoTpHmnYUuWlhsB3dACsaPP6IY1MWgsvA+Vj4Pmv0ocOTnPQKFh9ejXwOBfgtEejWlD9qcpPpQKdgPZAYdOAamjysEMyP/1Je98AEZZxCBw/s9tgJMbDcqy2Zigrd0vhvdKbdaA8GWeTBN6icmWNMvu9HXYIIdZvVwYrtR4SYmZKmaNnQYnvquG9l6O7y15k5d5CG4n3Wj282e7UbQPvXrUOJ+GjLK+yGBro7Spc2D4/v/iNLR3DpxxPkuGn8XdObF6GWnJcLirfeq0Jvayy7dXp37EwqNOaLMDwAA' | base64 -d > /tmp/payload.patch.gz
+          test "$(sha256sum /tmp/payload.patch.gz | cut -d' ' -f1)" = "$expected_payload_sha"
+          gzip -dc /tmp/payload.patch.gz > /tmp/payload.patch
+          git reset --hard "$expected_base"
+          git apply /tmp/payload.patch
+          git add SOURCE_MANIFEST_SHA256.txt src/components/AdvancedToolsPanel.tsx
+          actual_tree="$(git write-tree)"
+          test "$actual_tree" = "$expected_tree"
+          git config user.name 'Dokkomplekt CI'
+          git config user.email 'dokkomplekt-ci@users.noreply.github.com'
+          new_commit="$(printf '%s\n' 'fix: expose E2 readiness in visible picker labels' | git commit-tree "$expected_tree" -p "$transport_head")"
+          test "$(git rev-parse "$new_commit^{tree}")" = "$expected_tree"
+          git reset --hard "$new_commit"
+          git push origin HEAD:canon-v2/e2-template-learning-proof

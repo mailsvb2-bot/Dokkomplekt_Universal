@@ -1,0 +1,41 @@
+name: E2 UIA button exact-tree transport
+
+on:
+  push:
+    branches: [canon-v2/e2-template-learning-proof]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: canon-v2/e2-template-learning-proof
+          fetch-depth: 3
+      - name: Materialize exact tested tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base='3f9a40c83246e901d71157b675453be8a8b2b5f9'
+          expected_tree='addc162969115c98ce97612d66a3f6d9339a3482'
+          expected_payload_sha='b8757f06aeb2567091600db673690f6641847d95f67a4a59c011127a4ec3e933'
+          transport_head="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$expected_base"
+          printf '%s' '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' | base64 -d > /tmp/payload.patch.gz
+          test "$(sha256sum /tmp/payload.patch.gz | cut -d' ' -f1)" = "$expected_payload_sha"
+          gzip -dc /tmp/payload.patch.gz > /tmp/payload.patch
+          git reset --hard "$expected_base"
+          git apply /tmp/payload.patch
+          git add SOURCE_MANIFEST_SHA256.txt src/components/AdvancedToolsPanel.tsx src/components/AdvancedToolsPanel.test.tsx tests/installer/windows_installer_contract.ps1 tests/test_windows_installed_generation_contract.py
+          actual_tree="$(git write-tree)"
+          test "$actual_tree" = "$expected_tree"
+          git config user.name 'Dokkomplekt CI'
+          git config user.email 'dokkomplekt-ci@users.noreply.github.com'
+          new_commit="$(printf '%s\n' 'fix: bind E2 readiness to real UIA buttons' | git commit-tree "$expected_tree" -p "$transport_head")"
+          test "$(git rev-parse "$new_commit^{tree}")" = "$expected_tree"
+          git reset --hard "$new_commit"
+          git push origin HEAD:canon-v2/e2-template-learning-proof

@@ -1,3 +1,114 @@
+
+#[derive(Debug, Deserialize)]
+struct PickLearningFilesRequest {
+    kind: String,
+    #[serde(default)]
+    initial_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PickedLearningFile {
+    file_name: String,
+    staged_path: String,
+    content_sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PickLearningFilesResponse {
+    files: Vec<PickedLearningFile>,
+}
+
+/// Use the same operating-system picker boundary as the rest of the packaged app,
+/// then copy the chosen inputs into the existing protected learning workspace.
+/// No WebView file-input bytes are trusted for Template Learning on desktop.
+#[tauri::command]
+async fn pick_learning_files(
+    req: PickLearningFilesRequest,
+    app: tauri::AppHandle,
+) -> Result<PickLearningFilesResponse, String> {
+    let kind = req.kind.trim().to_string();
+    let picker_kind = kind.clone();
+    let selected_paths = tauri::async_runtime::spawn_blocking(move || match picker_kind.as_str() {
+        "blank" | "correct_output" => pick_template_files_blocking(req.initial_path),
+        "source" => pick_source_file_blocking(req.initial_path)
+            .map(|selected| selected.into_iter().collect::<Vec<_>>()),
+        _ => Err(format!("Неизвестная роль файла обучения: {picker_kind}")),
+    })
+    .await
+    .map_err(|error| format!("Не удалось открыть системный выбор файлов обучения: {error}"))??;
+
+    if selected_paths.is_empty() {
+        return Ok(PickLearningFilesResponse { files: Vec::new() });
+    }
+    if kind == "blank" && selected_paths.len() != 1 {
+        return Err("Для обучения выберите ровно один пустой DOCX/DOCM-шаблон.".into());
+    }
+
+    let _learning_guard = lock_learning_workspace()?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("template-learning-inputs");
+    let session_root = universal_intake::create_retained_workspace_session(&root)?;
+    let mut files = Vec::with_capacity(selected_paths.len());
+    for selected_path in selected_paths {
+        let canonical = selected_path.canonicalize().map_err(|error| {
+            format!("Не удалось открыть выбранный файл обучения «{}»: {error}", selected_path.display())
+        })?;
+        let metadata = std::fs::metadata(&canonical).map_err(|error| {
+            format!("Не удалось прочитать выбранный файл обучения «{}»: {error}", canonical.display())
+        })?;
+        if !metadata.is_file() {
+            return Err(format!("Выбранный путь не является файлом: {}", canonical.display()));
+        }
+        let file_name = canonical
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "Имя выбранного файла обучения не поддерживается системой.".to_string())?
+            .to_string();
+
+        if kind == "blank" || kind == "correct_output" {
+            if metadata.len() > MAX_PICKED_TEMPLATE_BYTES {
+                return Err("DOCX/DOCM для обучения слишком большой: максимум 50 МБ.".into());
+            }
+            let extension = canonical
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            if extension != "docx" && extension != "docm" {
+                return Err(format!("Для {kind} поддерживаются только DOCX и DOCM: {}", canonical.display()));
+            }
+            validate_safe_template_file(&canonical).map_err(|error| {
+                format!("Файл обучения «{}» содержит активное содержимое или внешние связи и заблокирован: {error}", canonical.display())
+            })?;
+        } else if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
+            return Err(format!(
+                "Source-файл слишком большой: максимум {} МБ.",
+                universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+
+        let extension = canonical
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{value}"))
+            .unwrap_or_default();
+        let (_, _, content_sha256) = file_content_signature(&canonical)?;
+        let target = session_root.join(format!("{}{}", Uuid::new_v4(), extension));
+        std::fs::copy(&canonical, &target).map_err(|error| {
+            format!("Не удалось сохранить защищённую копию файла обучения «{file_name}»: {error}")
+        })?;
+        files.push(PickedLearningFile {
+            file_name,
+            staged_path: target.display().to_string(),
+            content_sha256,
+        });
+    }
+    Ok(PickLearningFilesResponse { files })
+}
+
 #[derive(Debug, Deserialize)]
 struct ImportLearningExampleFileRequest {
     file_name: String,

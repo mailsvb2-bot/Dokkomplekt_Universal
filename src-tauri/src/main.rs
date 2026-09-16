@@ -2318,6 +2318,7 @@ fn main() {
             analyze_template_file,
             prepare_template_setup,
             import_learning_example_file,
+            pick_learning_files,
             learn_template_from_examples_command,
             apply_template_learning_map,
             register_learned_template,

@@ -8,8 +8,9 @@ import {
 
 describe('runtime backend contracts', () => {
   it('registers a fail-closed response kind for every current Tauri command', () => {
-    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(125);
+    expect(Object.keys(COMMAND_RESPONSE_KIND)).toHaveLength(126);
     expect(COMMAND_RESPONSE_KIND.pick_template_files).toBe('object');
+    expect(COMMAND_RESPONSE_KIND.pick_learning_files).toBe('object');
     expect(COMMAND_RESPONSE_KIND.pick_source_file).toBe('nullable-object');
     expect(COMMAND_RESPONSE_KIND.parse_source_path).toBe('object');
     expect(COMMAND_RESPONSE_KIND.import_component_bundle).toBe('object');
@@ -48,6 +49,8 @@ describe('runtime backend contracts', () => {
     expect(validateRustResponse('lookup_business_registry', null)).toBeNull();
     expect(validateRustResponse('pick_source_file', null)).toBeNull();
     expect(validateRustResponse('pick_source_file', { file_name: 'source.docx', selected_path: 'C:/source.docx' })).toMatchObject({ file_name: 'source.docx' });
+    expect(validateRustResponse('pick_learning_files', { files: [{ file_name: 'source.txt', staged_path: 'C:/learning/source.txt', content_sha256: 'abc123' }] })).toBeTruthy();
+    expect(() => validateRustResponse('pick_learning_files', { files: [{ file_name: 'source.txt', staged_path: 'C:/learning/source.txt' }] })).toThrow(/content_sha256/);
     expect(() => validateRustResponse('lookup_business_registry', 'bad')).toThrow(/объектом/);
   });
 

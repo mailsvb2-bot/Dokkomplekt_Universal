@@ -297,22 +297,28 @@ describe('medical diary donor parity', () => {
   });
 });
 
-describe('template learning upload controls', () => {
+describe('template learning native picker controls', () => {
   afterEach(() => {
     __resetInvokeForTests();
     vi.restoreAllMocks();
   });
 
-  it('uses real buttons to activate the hidden learning file inputs', async () => {
-    __setInvokeForTests(async <T,>(command: string) => {
+  it('uses the Rust-backed native picker instead of hidden WebView file inputs', async () => {
+    const pickerKinds: string[] = [];
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
       if (command === 'list_clause_blocks') return [] as T;
       if (command === 'get_process_blueprints') {
         return { selected_process_id: null, processes: [], notice: 'learning controls ready' } as T;
       }
+      if (command === 'pick_learning_files') {
+        const kind = String((payload as { req?: { kind?: string } })?.req?.kind ?? '');
+        pickerKinds.push(kind);
+        return { files: [{ file_name: 'blank.docx', staged_path: 'C:/AppData/template-learning-inputs/session/blank.docx', content_sha256: 'blank-sha' }] } as T;
+      }
       throw new Error(`Unexpected command: ${command}`);
     });
 
-    render(
+    const { container } = render(
       <AdvancedToolsPanel
         documents={[]}
         selectedDocumentIds={[]}
@@ -324,24 +330,33 @@ describe('template learning upload controls', () => {
 
     await screen.findByText('learning controls ready');
     const blankButton = screen.getByRole('button', { name: 'Пустой DOCX/DOCM' });
-    const completedButton = screen.getByRole('button', { name: '4–10 правильных результатов' });
-    const sourceButton = screen.getByRole('button', { name: '4–10 исходных документов Source' });
-    expect((blankButton as HTMLButtonElement).disabled).toBe(false);
-    expect((completedButton as HTMLButtonElement).disabled).toBe(false);
-    expect((sourceButton as HTMLButtonElement).disabled).toBe(false);
-
-    const blankInput = blankButton.nextElementSibling as HTMLInputElement;
-    expect(blankInput?.type).toBe('file');
-    const inputClick = vi.spyOn(blankInput, 'click');
     fireEvent.click(blankButton);
-    expect(inputClick).toHaveBeenCalledTimes(1);
+
+    await screen.findByText('blank.docx');
+    expect(pickerKinds).toEqual(['blank']);
+    expect(container.querySelector('.templateLearningCard input[type="file"]')).toBeNull();
   });
 
-  it('accumulates repeated native selections until four matched pairs are ready', async () => {
-    __setInvokeForTests(async <T,>(command: string) => {
+  it('accumulates repeated native selections until four matched pairs are ready and deduplicates by content hash', async () => {
+    let outputIndex = 0;
+    let sourceIndex = 0;
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
       if (command === 'list_clause_blocks') return [] as T;
       if (command === 'get_process_blueprints') {
         return { selected_process_id: null, processes: [], notice: 'learning controls ready' } as T;
+      }
+      if (command === 'pick_learning_files') {
+        const kind = String((payload as { req?: { kind?: string } })?.req?.kind ?? '');
+        if (kind === 'blank') {
+          return { files: [{ file_name: 'blank.docx', staged_path: 'C:/learning/blank.docx', content_sha256: 'blank-sha' }] } as T;
+        }
+        if (kind === 'correct_output') {
+          outputIndex += 1;
+          return { files: [{ file_name: `correct-${outputIndex}.docx`, staged_path: `C:/learning/correct-${outputIndex}.docx`, content_sha256: `correct-sha-${outputIndex}` }] } as T;
+        }
+        sourceIndex += 1;
+        const stableIndex = Math.min(sourceIndex, 4);
+        return { files: [{ file_name: `source-${stableIndex}.txt`, staged_path: `C:/learning/source-${sourceIndex}.txt`, content_sha256: `source-sha-${stableIndex}` }] } as T;
       }
       throw new Error(`Unexpected command: ${command}`);
     });
@@ -357,34 +372,27 @@ describe('template learning upload controls', () => {
     );
 
     await screen.findByText('learning controls ready');
-    const blankButton = screen.getByRole('button', { name: 'Пустой DOCX/DOCM' });
-    const completedButton = screen.getByRole('button', { name: '4–10 правильных результатов' });
-    const sourceButton = screen.getByRole('button', { name: '4–10 исходных документов Source' });
-    const blankInput = blankButton.nextElementSibling as HTMLInputElement;
-    const completedInput = completedButton.nextElementSibling as HTMLInputElement;
-    const sourceInput = sourceButton.nextElementSibling as HTMLInputElement;
-    const analyzeButton = screen.getByRole('button', { name: 'Проверить пары и предложить карту' }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Пустой DOCX/DOCM' }));
+    await screen.findByText('blank.docx');
 
-    fireEvent.change(blankInput, { target: { files: [new File(['blank'], 'blank.docx', { lastModified: 1 })] } });
-    fireEvent.change(completedInput, { target: { files: [new File(['out-1'], 'correct-1.docx', { lastModified: 1 })] } });
-    expect(screen.getByRole('status', { name: 'Собрано: Correct Output 1/4–10, Source 0/4–10.' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '4–10 правильных результатов. Собрано: Correct Output 1/4–10, Source 0/4–10.' })).toBeTruthy();
-    for (let index = 2; index <= 4; index += 1) {
-      fireEvent.change(completedInput, { target: { files: [new File([`out-${index}`], `correct-${index}.docx`, { lastModified: index })] } });
-    }
-    expect(screen.getByRole('status', { name: 'Собрано: Correct Output 4/4–10, Source 0/4–10.' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '4–10 правильных результатов. Собрано: Correct Output 4/4–10, Source 0/4–10.' })).toBeTruthy();
-    expect(analyzeButton.disabled).toBe(true);
     for (let index = 1; index <= 4; index += 1) {
-      fireEvent.change(sourceInput, { target: { files: [new File([`src-${index}`], `source-${index}.txt`, { lastModified: 10 + index })] } });
+      fireEvent.click(screen.getByRole('button', { name: /4–10 правильных результатов/ }));
+      await screen.findByRole('status', { name: `Собрано: Correct Output ${index}/4–10, Source 0/4–10.` });
     }
+    const analyzeButton = screen.getByRole('button', { name: 'Проверить пары и предложить карту' }) as HTMLButtonElement;
+    expect(analyzeButton.disabled).toBe(true);
 
+    for (let index = 1; index <= 4; index += 1) {
+      fireEvent.click(screen.getByRole('button', { name: /4–10 исходных документов Source/ }));
+      if (index < 4) {
+        await screen.findByRole('status', { name: `Собрано: Correct Output 4/4–10, Source ${index}/4–10.` });
+      }
+    }
     expect(await screen.findByText('Готово к проверке. Пар: 4.')).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Готово к проверке. Пар: 4.' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '4–10 исходных документов Source. Готово к проверке. Пар: 4.' })).toBeTruthy();
     expect(analyzeButton.disabled).toBe(false);
 
-    fireEvent.change(sourceInput, { target: { files: [new File(['src-1'], 'source-1.txt', { lastModified: 11 })] } });
-    expect(screen.getByText('Готово к проверке. Пар: 4.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /4–10 исходных документов Source/ }));
+    await screen.findByText('Готово к проверке. Пар: 4.');
+    expect(screen.getByText('4 файл(ов)')).toBeTruthy();
   });
 });

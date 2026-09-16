@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   ClauseBlockRecord,
   DocumentTemplateSpec,
@@ -20,6 +20,8 @@ import {
   deleteClauseBlock,
   importLearningExampleFile,
   importTemplateFile,
+  pickLearningFiles,
+  type PickedLearningFile,
   learnTemplateFromExamples,
   listClauseBlocks,
   listTemplateVersions,
@@ -57,13 +59,12 @@ interface Props {
 
 const YEAR = new Date().getFullYear();
 
-function mergeLearningFiles(current: File[], incoming: File[]): File[] {
+function mergeLearningFiles(current: PickedLearningFile[], incoming: PickedLearningFile[]): PickedLearningFile[] {
   const merged = [...current];
-  const seen = new Set(current.map((file) => `${file.name}\0${file.size}\0${file.lastModified}`));
+  const seen = new Set(current.map((file) => file.content_sha256));
   for (const file of incoming) {
-    const key = `${file.name}\0${file.size}\0${file.lastModified}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seen.has(file.content_sha256)) continue;
+    seen.add(file.content_sha256);
     merged.push(file);
     if (merged.length === 10) break;
   }
@@ -94,12 +95,9 @@ export function AdvancedToolsPanel({
   const [dryReport, setDryReport] = useState('');
   const [installingPackId, setInstallingPackId] = useState('');
   const [processState, setProcessState] = useState<ProcessBlueprintState | null>(null);
-  const [blankLearningFile, setBlankLearningFile] = useState<File | null>(null);
-  const [completedLearningFiles, setCompletedLearningFiles] = useState<File[]>([]);
-  const [sourceLearningFiles, setSourceLearningFiles] = useState<File[]>([]);
-  const blankLearningInputRef = useRef<HTMLInputElement>(null);
-  const completedLearningInputRef = useRef<HTMLInputElement>(null);
-  const sourceLearningInputRef = useRef<HTMLInputElement>(null);
+  const [blankLearningFile, setBlankLearningFile] = useState<PickedLearningFile | null>(null);
+  const [completedLearningFiles, setCompletedLearningFiles] = useState<PickedLearningFile[]>([]);
+  const [sourceLearningFiles, setSourceLearningFiles] = useState<PickedLearningFile[]>([]);
   const [learningLocale, setLearningLocale] = useState('ru-RU');
   const [learningBlankPath, setLearningBlankPath] = useState('');
   const [learningReport, setLearningReport] = useState<TemplateLearningReport | null>(null);
@@ -153,6 +151,29 @@ export function AdvancedToolsPanel({
       : 'Рабочий процесс выбран.');
   }
 
+  function resetLearningAnalysis() {
+    setLearningBlankPath('');
+    setLearningReport(null);
+    setSelectedLearningFields([]);
+    setLearnedTemplatePath('');
+  }
+
+  async function chooseLearningFiles(kind: 'blank' | 'correct_output' | 'source') {
+    const label = kind === 'blank' ? 'выбор пустого шаблона' : kind === 'correct_output' ? 'выбор правильных результатов' : 'выбор исходных документов';
+    const picked = await execute(label, () => pickLearningFiles(kind));
+    if (!picked?.length) return;
+    resetLearningAnalysis();
+    if (kind === 'blank') {
+      setBlankLearningFile(picked[0]);
+      return;
+    }
+    if (kind === 'correct_output') {
+      setCompletedLearningFiles((current) => mergeLearningFiles(current, picked));
+      return;
+    }
+    setSourceLearningFiles((current) => mergeLearningFiles(current, picked));
+  }
+
   async function runTemplateLearning() {
     if (!blankLearningFile) {
       onStatus('Для обучения выберите пустой DOCX/DOCM-шаблон.');
@@ -167,34 +188,14 @@ export function AdvancedToolsPanel({
       return;
     }
     const result = await execute('обучение пользовательского шаблона', async () => {
-      const blankBytes = await readBytes(blankLearningFile);
-      const blank = await importTemplateFile(`learning_blank_${Date.now()}`, {
-        fileName: blankLearningFile.name,
-        bytesBase64: toBase64(blankBytes),
-      });
-      const completedPaths: string[] = [];
-      for (const [index, file] of completedLearningFiles.entries()) {
-        const bytes = await readBytes(file);
-        const imported = await importTemplateFile(`learning_completed_${Date.now()}_${index}`, {
-          fileName: file.name,
-          bytesBase64: toBase64(bytes),
-        });
-        completedPaths.push(imported.template_path);
-      }
-      const sourcePaths: string[] = [];
-      for (const file of sourceLearningFiles.slice(0, 10)) {
-        const bytes = await readBytes(file);
-        const imported = await importLearningExampleFile(file.name, toBase64(bytes));
-        sourcePaths.push(imported.source_path);
-      }
       const report = await learnTemplateFromExamples({
-        blankTemplatePath: blank.template_path,
-        completedExamplePaths: completedPaths,
-        sourceExamplePaths: sourcePaths,
+        blankTemplatePath: blankLearningFile.staged_path,
+        completedExamplePaths: completedLearningFiles.map((file) => file.staged_path),
+        sourceExamplePaths: sourceLearningFiles.map((file) => file.staged_path),
         defaultYear: YEAR,
         locale: learningLocale,
       });
-      return { blankPath: blank.template_path, report };
+      return { blankPath: blankLearningFile.staged_path, report };
     });
     if (!result) return;
     setLearningBlankPath(result.blankPath);
@@ -583,14 +584,11 @@ export function AdvancedToolsPanel({
         <strong>2. Научить программу вашим шаблонам</strong>
         <small>Загрузите пустой шаблон и 4–10 matched-пар Source → Correct Output. Последняя пара используется только как независимый hold-out и не участвует в обучении.</small>
         <div className="learningUploadGrid">
-          <button type="button" className="fileBtn" disabled={busy} onClick={() => blankLearningInputRef.current?.click()}>Пустой DOCX/DOCM</button>
-          <input ref={blankLearningInputRef} hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
-          <span>{blankLearningFile?.name ?? 'не выбран'}</span>
-          <button type="button" className="fileBtn" disabled={busy} onClick={() => completedLearningInputRef.current?.click()}>{completedLearningFiles.length ? `4–10 правильных результатов. ${learningReadinessText}` : '4–10 правильных результатов'}</button>
-          <input ref={completedLearningInputRef} hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
-          <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.name).join(', ') : 'не выбраны'}</span>
-          <button type="button" className="fileBtn" disabled={busy} onClick={() => sourceLearningInputRef.current?.click()}>{sourceLearningFiles.length ? `4–10 исходных документов Source. ${learningReadinessText}` : '4–10 исходных документов Source'}</button>
-          <input ref={sourceLearningInputRef} hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles((current) => mergeLearningFiles(current, Array.from(event.target.files ?? []))); event.currentTarget.value = ''; }} />
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => void chooseLearningFiles('blank')}>Пустой DOCX/DOCM</button>
+          <span>{blankLearningFile?.file_name ?? 'не выбран'}</span>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => void chooseLearningFiles('correct_output')}>{completedLearningFiles.length ? `4–10 правильных результатов. ${learningReadinessText}` : '4–10 правильных результатов'}</button>
+          <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.file_name).join(', ') : 'не выбраны'}</span>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => void chooseLearningFiles('source')}>{sourceLearningFiles.length ? `4–10 исходных документов Source. ${learningReadinessText}` : '4–10 исходных документов Source'}</button>
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
         </div>
         <small className="learningReadiness" role="status" aria-live="polite" aria-label={learningReadinessText}>

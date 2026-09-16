@@ -83,6 +83,21 @@ export async function importLearningExampleFile(fileName: string, bytesBase64: s
   return callRust('import_learning_example_file', { req: { file_name: fileName, bytes_base64: bytesBase64 } });
 }
 
+export type LearningFileKind = 'blank' | 'correct_output' | 'source';
+
+export interface PickedLearningFile {
+  file_name: string;
+  staged_path: string;
+  content_sha256: string;
+}
+
+export async function pickLearningFiles(kind: LearningFileKind, initialPath?: string | null): Promise<PickedLearningFile[]> {
+  const response = await callRust<{ files: PickedLearningFile[] }>('pick_learning_files', {
+    req: { kind, initial_path: initialPath ?? null },
+  });
+  return response.files;
+}
+
 export async function learnTemplateFromExamples(input: {
   blankTemplatePath: string;
   completedExamplePaths: string[];
@@ -820,6 +835,7 @@ export const rustCommandNames = [
   'export_files_to_pdf',
   'create_kedo_package',
   'pick_template_files',
+  'pick_learning_files',
   'pick_folder',
   'open_in_file_manager',
   'semantic_extract',

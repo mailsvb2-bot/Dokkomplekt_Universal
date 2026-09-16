@@ -421,6 +421,7 @@ export const COMMAND_RESPONSE_KIND = {
   'lookup_business_registry': 'nullable-object',
   'open_in_file_manager': 'void',
   'pick_template_files': 'object',
+  'pick_learning_files': 'object',
   'pick_source_file': 'nullable-object',
   'pick_folder': 'object',
   'parse_source': 'object',
@@ -583,6 +584,17 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
         if (file.import_error !== undefined && file.import_error !== null) {
           string(command, file.import_error, `files[${index}].import_error`);
         }
+      });
+      break;
+    }
+    case 'pick_learning_files': {
+      const root = record(command, value);
+      const files = array(command, root.files, 'files');
+      files.forEach((item, index) => {
+        const file = record(command, item, `files[${index}]`);
+        string(command, file.file_name, `files[${index}].file_name`);
+        string(command, file.staged_path, `files[${index}].staged_path`);
+        string(command, file.content_sha256, `files[${index}].content_sha256`);
       });
       break;
     }

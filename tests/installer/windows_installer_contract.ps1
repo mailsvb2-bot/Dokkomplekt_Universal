@@ -1661,7 +1661,7 @@ function Open-E2FileSelection {
     -ActionProbe {
       $currentAppWindow = Find-LiveAppWindow
       if ($null -eq $currentAppWindow) { return $null }
-      Find-E2NamedElement -Root $currentAppWindow -Name $Label
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
     } `
     -TransitionProbe { Find-FileDialog }
   $edit = Wait-UiElement -Description "$Label filename field" -Probe {

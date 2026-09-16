@@ -296,3 +296,44 @@ describe('medical diary donor parity', () => {
     ]));
   });
 });
+
+describe('template learning upload controls', () => {
+  afterEach(() => {
+    __resetInvokeForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('uses real buttons to activate the hidden learning file inputs', async () => {
+    __setInvokeForTests(async <T,>(command: string) => {
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'get_process_blueprints') {
+        return { selected_process_id: null, processes: [], notice: 'learning controls ready' } as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <AdvancedToolsPanel
+        documents={[]}
+        selectedDocumentIds={[]}
+        outputRoot="output"
+        onStatus={vi.fn()}
+        onDocumentsChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('learning controls ready');
+    const blankButton = screen.getByRole('button', { name: 'Пустой DOCX/DOCM' });
+    const completedButton = screen.getByRole('button', { name: '4–10 правильных результатов' });
+    const sourceButton = screen.getByRole('button', { name: '4–10 исходных документов Source' });
+    expect((blankButton as HTMLButtonElement).disabled).toBe(false);
+    expect((completedButton as HTMLButtonElement).disabled).toBe(false);
+    expect((sourceButton as HTMLButtonElement).disabled).toBe(false);
+
+    const blankInput = blankButton.nextElementSibling as HTMLInputElement;
+    expect(blankInput?.type).toBe('file');
+    const inputClick = vi.spyOn(blankInput, 'click');
+    fireEvent.click(blankButton);
+    expect(inputClick).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ClauseBlockRecord,
   DocumentTemplateSpec,
@@ -84,6 +84,9 @@ export function AdvancedToolsPanel({
   const [blankLearningFile, setBlankLearningFile] = useState<File | null>(null);
   const [completedLearningFiles, setCompletedLearningFiles] = useState<File[]>([]);
   const [sourceLearningFiles, setSourceLearningFiles] = useState<File[]>([]);
+  const blankLearningInputRef = useRef<HTMLInputElement>(null);
+  const completedLearningInputRef = useRef<HTMLInputElement>(null);
+  const sourceLearningInputRef = useRef<HTMLInputElement>(null);
   const [learningLocale, setLearningLocale] = useState('ru-RU');
   const [learningBlankPath, setLearningBlankPath] = useState('');
   const [learningReport, setLearningReport] = useState<TemplateLearningReport | null>(null);
@@ -561,17 +564,14 @@ export function AdvancedToolsPanel({
         <strong>2. Научить программу вашим шаблонам</strong>
         <small>Загрузите пустой шаблон и 4–10 matched-пар Source → Correct Output. Последняя пара используется только как независимый hold-out и не участвует в обучении.</small>
         <div className="learningUploadGrid">
-          <label className="fileBtn">Пустой DOCX/DOCM
-            <input hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
-          </label>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => blankLearningInputRef.current?.click()}>Пустой DOCX/DOCM</button>
+          <input ref={blankLearningInputRef} hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
           <span>{blankLearningFile?.name ?? 'не выбран'}</span>
-          <label className="fileBtn">4–10 правильных результатов
-            <input hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
-          </label>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => completedLearningInputRef.current?.click()}>4–10 правильных результатов</button>
+          <input ref={completedLearningInputRef} hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
           <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.name).join(', ') : 'не выбраны'}</span>
-          <label className="fileBtn">4–10 исходных документов Source
-            <input hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
-          </label>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => sourceLearningInputRef.current?.click()}>4–10 исходных документов Source</button>
+          <input ref={sourceLearningInputRef} hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
         </div>
         <label>Язык примеров

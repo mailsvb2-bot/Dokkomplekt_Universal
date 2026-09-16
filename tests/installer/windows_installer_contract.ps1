@@ -1765,7 +1765,10 @@ Invoke-UiActionWithObservedTransition `
   -TransitionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'Настройки программы'
+    # `Настройки программы` is also the permanent DocumentRail button, so its
+    # accessible name cannot prove that UtilityPanel actually mounted. Require a
+    # control that exists only inside the opened settings panel.
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Проверить и сохранить папку')
   } | Out-Null
 
 # Hosted WebView2 can omit controls that are below the current viewport from the

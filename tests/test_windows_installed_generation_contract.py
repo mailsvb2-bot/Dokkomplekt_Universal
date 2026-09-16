@@ -123,15 +123,17 @@ def test_e2_installed_learning_observes_pair_selections_and_final_blank_acceptan
     assert "[string[]]$ExpectedUiNames = @()" in picker
     assert "expected UI evidence count must match selected path count" in picker
     assert 'Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)"' in picker
-    assert "Find-E2NamedElement -Root $currentAppWindow -Name $expectedUiName" in picker
+    assert "$actionButtonName = if ($selectionIndex -eq 0 -or $ExpectedUiNames.Count -eq 0)" in picker
+    assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)" in picker
+    assert "Find-ButtonByNames -Root $currentAppWindow -Names @($expectedUiName)" in picker
     assert "Start-Sleep -Milliseconds 150" not in picker
     assert "Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)" in source
     assert "-Paths @($e2Blank) -ExpectedUiNames" not in source
     assert "React only renders" in source
     for expected in (
-        "Собрано: Correct Output 1/4–10, Source 0/4–10.",
-        "Собрано: Correct Output 4/4–10, Source 0/4–10.",
-        "Собрано: Correct Output 4/4–10, Source 1/4–10.",
-        "Готово к проверке. Пар: 4.",
+        "4–10 правильных результатов. Собрано: Correct Output 1/4–10, Source 0/4–10.",
+        "4–10 правильных результатов. Собрано: Correct Output 4/4–10, Source 0/4–10.",
+        "4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 1/4–10.",
+        "4–10 исходных документов Source. Готово к проверке. Пар: 4.",
     ):
         assert expected in source

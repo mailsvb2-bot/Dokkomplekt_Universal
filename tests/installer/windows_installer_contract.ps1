@@ -1661,13 +1661,18 @@ function Open-E2FileSelection {
   }
   for ($selectionIndex = 0; $selectionIndex -lt $Paths.Count; $selectionIndex++) {
     $path = $Paths[$selectionIndex]
+    $actionButtonName = if ($selectionIndex -eq 0 -or $ExpectedUiNames.Count -eq 0) {
+      $Label
+    } else {
+      $ExpectedUiNames[$selectionIndex - 1]
+    }
     $dialog = Invoke-UiActionWithObservedTransition `
       -Description $Label `
       -TransitionDescription "$Label file dialog" `
       -ActionProbe {
         $currentAppWindow = Find-LiveAppWindow
         if ($null -eq $currentAppWindow) { return $null }
-        Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)
       } `
       -TransitionProbe { Find-FileDialog }
     $edit = Wait-UiElement -Description "$Label filename field" -Probe {
@@ -1684,7 +1689,7 @@ function Open-E2FileSelection {
       Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)" -TimeoutSeconds 30 -Probe {
         $currentAppWindow = Find-LiveAppWindow
         if ($null -eq $currentAppWindow) { return $null }
-        Find-E2NamedElement -Root $currentAppWindow -Name $expectedUiName
+        Find-ButtonByNames -Root $currentAppWindow -Names @($expectedUiName)
       } | Out-Null
       Write-Host "E2 UI accepted '$Label' selection $($selectionIndex + 1)/$($Paths.Count): $expectedUiName"
     }
@@ -1734,16 +1739,16 @@ Invoke-UiActionWithObservedTransition `
   } | Out-Null
 
 $e2OutputReadiness = @(
-  'Собрано: Correct Output 1/4–10, Source 0/4–10.',
-  'Собрано: Correct Output 2/4–10, Source 0/4–10.',
-  'Собрано: Correct Output 3/4–10, Source 0/4–10.',
-  'Собрано: Correct Output 4/4–10, Source 0/4–10.'
+  '4–10 правильных результатов. Собрано: Correct Output 1/4–10, Source 0/4–10.',
+  '4–10 правильных результатов. Собрано: Correct Output 2/4–10, Source 0/4–10.',
+  '4–10 правильных результатов. Собрано: Correct Output 3/4–10, Source 0/4–10.',
+  '4–10 правильных результатов. Собрано: Correct Output 4/4–10, Source 0/4–10.'
 )
 $e2SourceReadiness = @(
-  'Собрано: Correct Output 4/4–10, Source 1/4–10.',
-  'Собрано: Correct Output 4/4–10, Source 2/4–10.',
-  'Собрано: Correct Output 4/4–10, Source 3/4–10.',
-  'Готово к проверке. Пар: 4.'
+  '4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 1/4–10.',
+  '4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 2/4–10.',
+  '4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 3/4–10.',
+  '4–10 исходных документов Source. Готово к проверке. Пар: 4.'
 )
 # Blank acceptance is proven by the final readiness state below: React only renders
 # 'Готово к проверке. Пар: 4.' when blankLearningFile is non-null. The plain

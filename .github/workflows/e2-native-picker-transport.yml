@@ -1,6 +1,8 @@
 name: E2 Native Picker Exact Transport
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - transport/e2-native-picker-20260916
 permissions:
   contents: write
 jobs:

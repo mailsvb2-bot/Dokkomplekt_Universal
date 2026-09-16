@@ -418,9 +418,12 @@ function New-PlainDocxFixture {
 function New-E2LearningDocxFixture {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][string]$Inn,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Inn,
     [switch]$Blank
   )
+  if (-not $Blank -and [string]::IsNullOrWhiteSpace($Inn)) {
+    throw 'E2 correct-output fixture requires a non-empty Inn.'
+  }
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue

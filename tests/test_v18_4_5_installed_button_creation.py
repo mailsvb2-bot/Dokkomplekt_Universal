@@ -53,6 +53,8 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
     assert "Persisted template button survived application restart" in smoke
     assert "E2 INSTALLED PASS: learn -> publish -> offline restart -> physical DOCX" in smoke
     assert "New-E2LearningDocxFixture" in smoke
+    assert "[AllowEmptyString()][string]$Inn" in smoke
+    assert "if (-not $Blank -and [string]::IsNullOrWhiteSpace($Inn))" in smoke
     assert "4–10 правильных результатов" in smoke
     assert "4–10 исходных документов Source" in smoke
     assert "Подтвердить проверенную карту и создать копию" in smoke

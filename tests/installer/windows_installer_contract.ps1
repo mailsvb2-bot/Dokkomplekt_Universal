@@ -251,6 +251,19 @@ function Invoke-UiElementPhysically {
     if (-not $Element.Current.IsEnabled) {
       throw "$Description is currently disabled."
     }
+    # mouse_event is global input. After a native OpenFileDialog closes, the WebView
+    # can be visible while another runner window still owns the foreground. Restore
+    # the installed app explicitly before the one permitted physical retry so the
+    # click cannot be swallowed as a mere window-activation click.
+    $process.Refresh()
+    $windowHandle = [IntPtr]$process.MainWindowHandle
+    if ($windowHandle -ne [IntPtr]::Zero) {
+      [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
+      [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
+      Start-Sleep -Milliseconds 150
+    }
+    $Element.SetFocus()
+    Start-Sleep -Milliseconds 50
     if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
       $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
       $scroll.ScrollIntoView()
@@ -1801,7 +1814,7 @@ try {
     -TransitionProbe {
       $currentAppWindow = Find-LiveAppWindow
       if ($null -eq $currentAppWindow) { return $null }
-      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+      Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
     } | Out-Null
 } catch {
   $learningFailure = $_
@@ -1810,6 +1823,17 @@ try {
     Write-E2LearningUiDiagnostic -Root $currentAppWindow
   }
   throw $learningFailure
+}
+
+$currentAppWindow = Find-LiveAppWindow
+$publishableLearningAction = if ($null -ne $currentAppWindow) {
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+} else {
+  $null
+}
+if ($null -eq $publishableLearningAction) {
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'E2 learning returned a report, but the held-out verdict is not publishable with validation evidence.'
 }
 
 Invoke-UiActionWithObservedTransition `

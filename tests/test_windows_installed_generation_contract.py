@@ -112,3 +112,23 @@ def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> N
     assert "Blank discharge template did not render the current diagnosis" in source
     assert "Blank discharge compiler consumed the following somatic-status section" in source
     assert "Blank discharge generation left a semantic placeholder unresolved" in source
+
+
+def test_e2_installed_learning_observes_each_native_file_selection() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+    start = source.index("function Open-E2FileSelection")
+    end = source.index("function Set-E2NamedValue", start)
+    picker = source[start:end]
+
+    assert "[string[]]$ExpectedUiNames = @()" in picker
+    assert "expected UI evidence count must match selected path count" in picker
+    assert 'Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)"' in picker
+    assert "Find-E2NamedElement -Root $currentAppWindow -Name $expectedUiName" in picker
+    assert "Start-Sleep -Milliseconds 150" not in picker
+    for expected in (
+        "Собрано: Correct Output 1/4–10, Source 0/4–10.",
+        "Собрано: Correct Output 4/4–10, Source 0/4–10.",
+        "Собрано: Correct Output 4/4–10, Source 1/4–10.",
+        "Готово к проверке. Пар: 4.",
+    ):
+        assert expected in source

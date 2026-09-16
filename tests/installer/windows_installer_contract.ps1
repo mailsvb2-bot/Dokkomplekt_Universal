@@ -1653,9 +1653,14 @@ function Find-E2NamedElement {
 function Open-E2FileSelection {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
-    [Parameter(Mandatory = $true)][string[]]$Paths
+    [Parameter(Mandatory = $true)][string[]]$Paths,
+    [string[]]$ExpectedUiNames = @()
   )
-  foreach ($path in $Paths) {
+  if ($ExpectedUiNames.Count -gt 0 -and $ExpectedUiNames.Count -ne $Paths.Count) {
+    throw "$Label expected UI evidence count must match selected path count."
+  }
+  for ($selectionIndex = 0; $selectionIndex -lt $Paths.Count; $selectionIndex++) {
+    $path = $Paths[$selectionIndex]
     $dialog = Invoke-UiActionWithObservedTransition `
       -Description $Label `
       -TransitionDescription "$Label file dialog" `
@@ -1674,7 +1679,15 @@ function Open-E2FileSelection {
     }
     Set-UiValue -Element $edit -Value $path
     Submit-OpenFileDialog -Dialog $dialog
-    Start-Sleep -Milliseconds 150
+    if ($ExpectedUiNames.Count -gt 0) {
+      $expectedUiName = $ExpectedUiNames[$selectionIndex]
+      Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)" -TimeoutSeconds 30 -Probe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-E2NamedElement -Root $currentAppWindow -Name $expectedUiName
+      } | Out-Null
+      Write-Host "E2 UI accepted '$Label' selection $($selectionIndex + 1)/$($Paths.Count): $expectedUiName"
+    }
   }
 }
 
@@ -1720,9 +1733,21 @@ Invoke-UiActionWithObservedTransition `
     Find-E2NamedElement -Root $currentAppWindow -Name '2. Научить программу вашим шаблонам'
   } | Out-Null
 
-Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)
-Open-E2FileSelection -Label '4–10 правильных результатов' -Paths $e2Outputs
-Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources
+$e2OutputReadiness = @(
+  'Собрано: Correct Output 1/4–10, Source 0/4–10.',
+  'Собрано: Correct Output 2/4–10, Source 0/4–10.',
+  'Собрано: Correct Output 3/4–10, Source 0/4–10.',
+  'Собрано: Correct Output 4/4–10, Source 0/4–10.'
+)
+$e2SourceReadiness = @(
+  'Собрано: Correct Output 4/4–10, Source 1/4–10.',
+  'Собрано: Correct Output 4/4–10, Source 2/4–10.',
+  'Собрано: Correct Output 4/4–10, Source 3/4–10.',
+  'Готово к проверке. Пар: 4.'
+)
+Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank) -ExpectedUiNames @('e2-blank.docx')
+Open-E2FileSelection -Label '4–10 правильных результатов' -Paths $e2Outputs -ExpectedUiNames $e2OutputReadiness
+Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
 
 Invoke-UiActionWithObservedTransition `
   -Description 'Проверить пары и предложить карту' `

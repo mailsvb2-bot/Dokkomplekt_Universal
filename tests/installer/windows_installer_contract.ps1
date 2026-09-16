@@ -1950,9 +1950,16 @@ try {
     if ($null -eq $currentAppWindow) { return $null }
     Find-E2NamedElement -Root $currentAppWindow -Name "Добавить $e2ButtonLabel в комплект"
   }
-  if (-not $checkbox.Current.IsTogglePatternAvailable) { throw 'E2 learned document checkbox has no TogglePattern.' }
-  $toggle = $checkbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-  if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { $toggle.Toggle() }
+  # WebView2 does not consistently expose TogglePattern for an HTML checkbox,
+  # even though the real input is visible and physically actionable. Exercise the
+  # installed control itself, then require the product selection state to become
+  # observable through the enabled one-document generation action.
+  Invoke-UiElementPhysically -Element $checkbox -Description 'E2 learned document checkbox'
+  Wait-UiElement -Description 'E2 learned document selected in package' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } | Out-Null
 
   $preflight = Invoke-UiActionWithObservedTransition `
     -Description 'E2 offline generation action' `

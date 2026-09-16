@@ -137,3 +137,14 @@ def test_e2_installed_learning_observes_pair_selections_and_final_blank_acceptan
         "4–10 исходных документов Source. Готово к проверке. Пар: 4.",
     ):
         assert expected in source
+
+
+def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "function Write-E2LearningUiDiagnostic" in source
+    assert "E2 UI diagnostic begin" in source
+    assert "ошиб|обуч|провер|карт|готов|валид|publish|шаблон|source|correct" in source
+    assert "Write-E2LearningUiDiagnostic -Root $currentAppWindow" in source
+    assert "throw $learningFailure" in source
+    assert "publishable held-out learning result" in source

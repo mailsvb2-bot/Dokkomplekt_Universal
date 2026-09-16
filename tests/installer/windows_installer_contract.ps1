@@ -662,6 +662,38 @@ function Find-ReadyButtonByNames {
   }
 }
 
+function Write-E2LearningUiDiagnostic {
+  param([Parameter(Mandatory = $true)]$Root)
+  Write-Host 'E2 UI diagnostic begin'
+  try {
+    $elements = $Root.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    $seen = [System.Collections.Generic.HashSet[string]]::new()
+    $printed = 0
+    foreach ($element in $elements) {
+      if ($printed -ge 80) { break }
+      try {
+        $name = [string]$element.Current.Name
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        if ($name -notmatch '(?i)ошиб|обуч|провер|карт|готов|валид|publish|шаблон|source|correct') { continue }
+        $controlType = [string]$element.Current.ControlType.ProgrammaticName
+        $key = "$controlType`0$name"
+        if (-not $seen.Add($key)) { continue }
+        Write-Host "E2 UI diagnostic: $controlType | offscreen=$($element.Current.IsOffscreen) | $name"
+        $printed++
+      } catch {
+        # WebView2 may invalidate a descendant while the diagnostic walk is in progress.
+      }
+    }
+    if ($printed -eq 0) { Write-Host 'E2 UI diagnostic: no matching named elements were exposed.' }
+  } catch {
+    Write-Host "E2 UI diagnostic failed: $($_.Exception.Message)"
+  }
+  Write-Host 'E2 UI diagnostic end'
+}
+
 function Get-AppStateCipherFingerprint {
   param(
     [Parameter(Mandatory = $true)][string]$DatabasePath,
@@ -1757,19 +1789,28 @@ Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)
 Open-E2FileSelection -Label '4–10 правильных результатов' -Paths $e2Outputs -ExpectedUiNames $e2OutputReadiness
 Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
 
-Invoke-UiActionWithObservedTransition `
-  -Description 'Проверить пары и предложить карту' `
-  -TransitionDescription 'publishable held-out learning result' `
-  -ActionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
-  } `
-  -TransitionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
-  } | Out-Null
+try {
+  Invoke-UiActionWithObservedTransition `
+    -Description 'Проверить пары и предложить карту' `
+    -TransitionDescription 'publishable held-out learning result' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+    } | Out-Null
+} catch {
+  $learningFailure = $_
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) {
+    Write-E2LearningUiDiagnostic -Root $currentAppWindow
+  }
+  throw $learningFailure
+}
 
 Invoke-UiActionWithObservedTransition `
   -Description 'Подтвердить проверенную карту и создать копию' `

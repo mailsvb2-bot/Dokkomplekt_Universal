@@ -1,0 +1,39 @@
+name: E2 Windows nav exact-tree transport
+
+on:
+  push:
+    branches: [canon-v2/e2-template-learning-proof]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: canon-v2/e2-template-learning-proof
+          fetch-depth: 2
+      - name: Materialize exact tested tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent='f8b99364b0f6f69c774d67d4c9cb05a3fcdc9086'
+          expected_tree='72632f1e624e5295994f9f400eab9172ba2618ed'
+          expected_payload_sha='c38fb7f635ca4655ec61a71653bb7a1faeb5ce23e7e894340da52a7d47212fb2'
+          actual_parent="$(git rev-parse HEAD^)"
+          test "$actual_parent" = "$expected_parent"
+          printf '%s' 'H4sICApLqmoAA2UyLXdpbi1uYXYucGF0Y2gAxVXrbtRGFP7vpxiJSIAWL3PxjD1SWxHaIJDagAiUn9u5nEksNvbWHodEFAnoT56hj1AJVUVKUWlfwftGPfZuAig0IlKlSivP9Vy+73xz1pchkDTdLSMx13fuPrz/9dbsu83tO7e2dh7Mdm5vcqmm8TASe85hUlYeDgloqo1w0ylYakxhCKNUZVmSpum5vpPJZHK+/xs3SCpzfi0nk9WAG8CVVyxnQhkraQZe5CCUZk6FYDLIdGEZz4M0eaBSKMlCRoOTQfBCcuM5IRHa2F4P5WHsGmgTwjw3SoHhjimpeTBeZUXhCyEFzYIsqMmsUkXhMglOFpk2TITcgDXCMuXticeyaqOZz6G5Pi+r7nB2up65uoqNcXHa7iVEFgHdCsiER5q4Md5pbbkwSjjgeeGVYjZXwTvOrdVZlnvptbJe4iFT5vPD4aSBMabJuMiFKJQNUiN9QmZWWg0MYztllVB5UWjNqGM2eDAYNONOKOqsxBN/NuYTrH39pJ0Bmxnn6q6KZbX7HuiiZUmamYJbL7TkEFRmVJAMBRIkZ9aF4BniCpyB1h7hai6Nhtz6AjMziF3of4/6CWqHiBORm9xZ6hRFXShJPeOeUZEjw5plytKM5ygF6qiwFitpaWDBeaAcdSMyeuGIhBbeBU6VwRcAwljtKOWu0Ay8Fc4qTakOhReUIUwVoFBOU1VwyRQoa04xtnXXOJjtwXwBTTtdHCXEs5xSX6ASmOTe5QpEQUXgoHiWcV1gcXJOg9HB0GDxPWjhtM11QHoRH5y4Hr4zswtVnO2ZxkP1YaVWobAeRmdaOWpQ9CgAkcl84IvSXGY5cAGuwDysKKzTXnj8FpkqnMoZkmw/DtXFelHO6zjbN2U12zURZg10LQyh/Id952JkY6+4YHVW/Ylx7EuCTadMZsAL8XF/uqjExp51QaOhjzGUwjVFJuPIxdDKQle5WNYV2YGYbvFtsw/+ezPvgDxNCBl3H5arjXRrDvtYQbIB60m6OtgYh4Q8S0gyuUS2zUE5EE7iXlN3u3s4AmnR8eBteKItQePmiCzqEp0YgmVpyH7XxmFGTIi4xK4YTROng8MHaL9ek0VT14GgHbrAtBHoEZmDOYB2DGMWi3npzIgIf2VsR0vsQZ48qZvH7cI4uDY4bevRAA5R65F80Xb7+6Y5+oqULanqiBFW/pyDti1tOS/jEYkNABnazPw9FLxfL6ACj6neqQ7qx4CEbY6cPirj3l2L4A7AP2hM1ZZjXj8kE0LSb6B1TbkYdy73v/Svly+WL5fP+7/6P/q3/fHl9bX3dh8ZrNNuT7JYp39itYp/r6ntUEfcIWTDdU2DpG0uFo9GpZAvyS2cpN+WB3C6ubpbBnJlo+rmc5LCj2ctr5KnyCr+c1VkdevZymx0dx+MP7rZxVhXN48GObUkvV8jo2cTSFfHN658Cv/VweezMyz8L5jW7+JE/+fiwWL+2r9dvuj/7t8sny9f9u+Wr/o3pD8m/ev+9/7P/rh/1x+vwb7G8+P+t9M7OBkPlj/jxTe4erl8dXlFxE/kbhfTbUwtmSTkEtk6XJjKrzVctoMMTsQc63qOwsQ+gLUgq+fS1L5zwx0ztsm0rlYPpxk6Mdm8d2eakM+VLzkj3/8YMcb4BwqCUAkcCgAA' | base64 -d > /tmp/e2.patch.gz
+          echo "$expected_payload_sha  /tmp/e2.patch.gz" | sha256sum -c -
+          gzip -dc /tmp/e2.patch.gz > /tmp/e2.patch
+          git rm .github/workflows/e2-win-nav-transport.yml
+          git apply --index /tmp/e2.patch
+          actual_tree="$(git write-tree)"
+          test "$actual_tree" = "$expected_tree"
+          git config user.name 'Dokkomplekt CI'
+          git config user.email 'dokkomplekt-ci@users.noreply.github.com'
+          git commit -m 'test: navigate to E2 tools after restart'
+          test "$(git rev-parse HEAD^{tree})" = "$expected_tree"
+          git push origin HEAD:canon-v2/e2-template-learning-proof

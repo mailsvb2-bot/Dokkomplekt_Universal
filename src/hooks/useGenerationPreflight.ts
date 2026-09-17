@@ -106,6 +106,21 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
         options.setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
         return;
       }
+      // A commit-boundary refresh may legitimately introduce a new user-facing
+      // requirement (for example, an output-folder identity field). Never validate
+      // that new question against answers from the previously reviewed plan in the
+      // same click. Return the refreshed canonical plan to the open modal so the
+      // user can see and answer it, then require an explicit second confirmation.
+      const reviewedFieldIds = new Set(reviewedWorkflow.prompts.map((prompt) => prompt.field_id));
+      const introducedVisiblePrompts = activeWorkflowPrompts(workflow.prompts, options.answers)
+        .filter((prompt) => !reviewedFieldIds.has(prompt.field_id))
+        .filter((prompt) => !isInternalWorkflowPrompt(prompt.field_id));
+      if (introducedVisiblePrompts.length) {
+        setGenerationError(null);
+        setGenerationValidationFieldId(null);
+        options.setStatus('План создания обновился. Проверьте появившиеся поля и подтвердите создание ещё раз.');
+        return;
+      }
       if (workflow.prompts.length) {
         const activePrompts = activeWorkflowPrompts(workflow.prompts, options.answers);
         const missing = activePrompts.filter((prompt) => prompt.required

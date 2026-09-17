@@ -40,9 +40,9 @@ jobs:
           python scripts/verify_source_manifest.py \
             --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.after.txt \
             --json-report verification/ci/source-manifest-report-after.json
-          git diff --check
-          mapfile -t changed < <(git diff --name-only)
-          printf 'final working-tree changes: %s\n' "${changed[*]}"
+          git diff --check HEAD
+          mapfile -t changed < <(git diff --name-only HEAD)
+          printf 'final HEAD changes: %s\n' "${changed[*]}"
           test "${#changed[@]}" -eq 2
           test "${changed[0]}" = '.github/workflows/source-provenance.yml'
           test "${changed[1]}" = 'SOURCE_MANIFEST_SHA256.txt'

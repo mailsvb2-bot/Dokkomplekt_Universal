@@ -1882,19 +1882,37 @@ if ($null -eq $publishableLearningAction) {
   throw 'E2 learning returned a report, but the held-out verdict is not publishable with validation evidence.'
 }
 
-Invoke-UiActionWithObservedTransition `
+Invoke-UiActionPhysicallyFromProbe `
   -Description 'Подтвердить проверенную карту и создать копию' `
-  -TransitionDescription 'learned template publication fields' `
   -ActionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
-  } `
-  -TransitionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'идентификатор: document.custom'
-  } | Out-Null
+  }
+
+# The publication inputs are rendered only after the map copy succeeds, but hosted
+# WebView2 may omit descendants that remain below the viewport from the UIA tree.
+# Use one foreground-safe physical action, then bounded real viewport navigation;
+# never infer failure from the still-enabled, legitimately repeatable apply button.
+$e2PublicationIdField = $null
+for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $e2PublicationIdField; $scrollAttempt++) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) {
+    Start-Sleep -Milliseconds 200
+    continue
+  }
+  $e2PublicationIdField = Find-E2NamedElement -Root $currentAppWindow -Name 'идентификатор: document.custom'
+  if ($null -ne $e2PublicationIdField) { break }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  Start-Sleep -Milliseconds 250
+}
+if ($null -eq $e2PublicationIdField) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'UI smoke timeout: learned template publication fields after map application and bounded viewport navigation'
+}
 
 $e2DocumentId = 'e2.installed.inn'
 $e2ButtonLabel = 'E2 обученная кнопка'

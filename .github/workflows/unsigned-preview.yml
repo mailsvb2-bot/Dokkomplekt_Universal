@@ -18,7 +18,7 @@ on:
       - 'tests/installer/windows_installer_contract.ps1'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: unsigned-preview-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
@@ -31,116 +31,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Apply one-time exact E2 publication viewport correction
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'canon-v2/e2-template-learning-proof'
-        shell: python
-        run: |
-          from pathlib import Path
-          import hashlib
-          import subprocess
-
-          harness = Path('tests/installer/windows_installer_contract.ps1')
-          raw = harness.read_bytes()
-          has_bom = raw.startswith(b'\xef\xbb\xbf')
-          text = raw.decode('utf-8-sig')
-          eol = '\r\n' if '\r\n' in text else '\n'
-          normalized = text.replace('\r\n', '\n')
-
-          old = '\n'.join([
-              'Invoke-UiActionWithObservedTransition `',
-              "  -Description 'Подтвердить проверенную карту и создать копию' `",
-              "  -TransitionDescription 'learned template publication fields' `",
-              '  -ActionProbe {',
-              '    $currentAppWindow = Find-LiveAppWindow',
-              '    if ($null -eq $currentAppWindow) { return $null }',
-              "    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')",
-              '  } `',
-              '  -TransitionProbe {',
-              '    $currentAppWindow = Find-LiveAppWindow',
-              '    if ($null -eq $currentAppWindow) { return $null }',
-              "    Find-E2NamedElement -Root $currentAppWindow -Name 'идентификатор: document.custom'",
-              '  } | Out-Null',
-          ])
-          new = '\n'.join([
-              'Invoke-UiActionPhysicallyFromProbe `',
-              "  -Description 'Подтвердить проверенную карту и создать копию' `",
-              '  -ActionProbe {',
-              '    $currentAppWindow = Find-LiveAppWindow',
-              '    if ($null -eq $currentAppWindow) { return $null }',
-              "    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')",
-              '  }',
-              '',
-              '# The publication inputs are rendered only after the map copy succeeds, but hosted',
-              '# WebView2 may omit descendants that remain below the viewport from the UIA tree.',
-              '# Use one foreground-safe physical action, then bounded real viewport navigation;',
-              '# never infer failure from the still-enabled, legitimately repeatable apply button.',
-              '$e2PublicationIdField = $null',
-              'for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $e2PublicationIdField; $scrollAttempt++) {',
-              '  $currentAppWindow = Find-LiveAppWindow',
-              '  if ($null -eq $currentAppWindow) {',
-              '    Start-Sleep -Milliseconds 200',
-              '    continue',
-              '  }',
-              "  $e2PublicationIdField = Find-E2NamedElement -Root $currentAppWindow -Name 'идентификатор: document.custom'",
-              '  if ($null -ne $e2PublicationIdField) { break }',
-              '  Activate-LiveAppWindow -Window $currentAppWindow',
-              '  Start-Sleep -Milliseconds 100',
-              "  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')",
-              '  Start-Sleep -Milliseconds 250',
-              '}',
-              'if ($null -eq $e2PublicationIdField) {',
-              '  $currentAppWindow = Find-LiveAppWindow',
-              '  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }',
-              "  throw 'UI smoke timeout: learned template publication fields after map application and bounded viewport navigation'",
-              '}',
-          ])
-          count = normalized.count(old)
-          if count != 1:
-              raise SystemExit(f'expected exactly one learned publication transition block, found {count}')
-          normalized = normalized.replace(old, new, 1)
-          encoded = normalized.replace('\n', eol).encode('utf-8')
-          if has_bom:
-              encoded = b'\xef\xbb\xbf' + encoded
-          harness.write_bytes(encoded)
-          digest = hashlib.sha256(encoded).hexdigest()
-
-          manifest = Path('SOURCE_MANIFEST_SHA256.txt')
-          manifest_raw = manifest.read_bytes()
-          manifest_bom = manifest_raw.startswith(b'\xef\xbb\xbf')
-          manifest_text = manifest_raw.decode('utf-8-sig')
-          target = 'tests/installer/windows_installer_contract.ps1'
-          lines = manifest_text.splitlines()
-          indexes = [i for i, line in enumerate(lines) if line.endswith('  ' + target)]
-          if len(indexes) != 1:
-              raise SystemExit(f'expected exactly one manifest entry for {target}, found {len(indexes)}')
-          lines[indexes[0]] = f'{digest}  {target}'
-          manifest_eol = '\r\n' if b'\r\n' in manifest_raw else '\n'
-          manifest_bytes = (manifest_eol.join(lines) + manifest_eol).encode('utf-8')
-          if manifest_bom:
-              manifest_bytes = b'\xef\xbb\xbf' + manifest_bytes
-          manifest.write_bytes(manifest_bytes)
-          print(f'updated harness sha256={digest}')
-
-          subprocess.run(['git', 'checkout', '2334e84289f83ce0871ab671ed92289b7cc71a49', '--', '.github/workflows/unsigned-preview.yml'], check=True)
-          subprocess.run(['git', 'diff', '--check'], check=True)
-          names = subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines()
-          expected = ['SOURCE_MANIFEST_SHA256.txt', 'tests/installer/windows_installer_contract.ps1']
-          if names != expected:
-              raise SystemExit(f'unexpected final diff: {names!r}')
-          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
-          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
-          subprocess.run(['git', 'add', 'SOURCE_MANIFEST_SHA256.txt', 'tests/installer/windows_installer_contract.ps1', '.github/workflows/unsigned-preview.yml'], check=True)
-          subprocess.run(['git', 'commit', '-m', 'test: prove learned publication through real viewport'], check=True)
-          subprocess.run(['git', 'push', 'origin', 'HEAD:canon-v2/e2-template-learning-proof'], check=True)
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22

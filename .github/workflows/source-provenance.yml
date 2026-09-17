@@ -16,23 +16,23 @@ concurrency:
 jobs:
   e2-harness-self-patch:
     name: Apply exact E2 WebView2 harness correction
-    if: github.event_name == 'push' && github.ref_name == 'canon-v2/e2-template-learning-proof'
+    if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
     steps:
-      - name: Checkout exact pushed SHA
+      - name: Checkout exact PR head
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+
       - name: Patch only the non-focusable WebView2 root call and restore workflows
         shell: python
         run: |
           from pathlib import Path
           import hashlib
-          import os
           import subprocess
 
           harness = Path("tests/installer/windows_installer_contract.ps1")
@@ -68,11 +68,15 @@ jobs:
           manifest.write_bytes(manifest_encoded)
           print(f"updated harness sha256={digest}")
 
-          sha = os.environ["GITHUB_SHA"]
-          subprocess.run(["git", "checkout", f"{sha}^", "--", ".github/workflows/source-provenance.yml"], check=True)
+          # Restore the exact workflow bytes from the last product/harness-only candidate.
+          subprocess.run([
+              "git", "checkout", "3cdd881fe5b92ce6e56974feb3427a3d13077791", "--",
+              ".github/workflows/source-provenance.yml"
+          ], check=True)
           bootstrap = Path(".github/workflows/e2-harness-self-patch.yml")
           if bootstrap.exists():
               bootstrap.unlink()
+
       - name: Prove and publish surgical final tree
         shell: bash
         run: |

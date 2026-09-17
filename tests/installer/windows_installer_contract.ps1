@@ -1817,7 +1817,9 @@ for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $e2LearningCard; $
   $e2LearningCard = Find-E2NamedElement -Root $currentAppWindow -Name '2. Научить программу вашим шаблонам'
   if ($null -ne $e2LearningCard) { break }
   Activate-LiveAppWindow -Window $currentAppWindow
-  $currentAppWindow.SetFocus()
+  # The top-level WebView2 UIA root may be non-focusable. Foreground activation of
+  # its native HWND is sufficient for real keyboard routing and avoids a false UIA failure.
+  Start-Sleep -Milliseconds 100
   [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
   Start-Sleep -Milliseconds 250
 }

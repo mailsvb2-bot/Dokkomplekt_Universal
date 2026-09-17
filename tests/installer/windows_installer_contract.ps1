@@ -1849,19 +1849,30 @@ Open-E2FileSelection -Label '4–10 правильных результатов'
 Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
 
 try {
-  Invoke-UiActionWithObservedTransition `
-    -Description 'Проверить пары и предложить карту' `
-    -TransitionDescription 'publishable held-out learning result' `
-    -ActionProbe {
-      $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
-      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
-    } `
-    -TransitionProbe {
-      $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
-      Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
-    } | Out-Null
+  # Hosted WebView2 can report a successful InvokePattern/mouse action without
+  # dispatching the DOM click. Exercise the actual focused button with a real
+  # foreground Enter key exactly once, then require the product transition.
+  $e2AnalyzeAction = Wait-UiElement -Description 'Проверить пары и предложить карту button' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+  }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared before E2 analysis.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($e2AnalyzeAction.Current.IsOffscreen -and $e2AnalyzeAction.Current.IsScrollItemPatternAvailable) {
+    $scroll = $e2AnalyzeAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $e2AnalyzeAction.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Wait-UiElement -Description 'publishable held-out learning result after real keyboard action' -TimeoutSeconds 60 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+  } | Out-Null
 } catch {
   $learningFailure = $_
   $currentAppWindow = Find-LiveAppWindow
@@ -2018,21 +2029,67 @@ try {
       Find-E2NamedElement -Root $currentAppWindow -Name 'Проверка перед созданием'
     }
   if ($null -eq $preflight) { throw 'E2 offline generation did not open preflight.' }
-  Invoke-UiActionFromProbe -Description 'E2 Создать документы' -ActionProbe {
+  # Use one real foreground keyboard action for the final E2 publication too.
+  # UIA InvokePattern alone is not evidence that WebView2 dispatched the click.
+  $e2CreateAction = Wait-UiElement -Description 'E2 Создать документы button' -TimeoutSeconds 30 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
   }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared before E2 document generation.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($e2CreateAction.Current.IsOffscreen -and $e2CreateAction.Current.IsScrollItemPatternAvailable) {
+    $scroll = $e2CreateAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $e2CreateAction.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
   $e2ExpectedFile = "$e2ButtonLabel.docx"
   $e2Deadline = [DateTime]::UtcNow.AddSeconds(60)
   $e2Created = $null
+  $e2GenerationFailure = $null
   do {
     $e2Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $e2ExpectedFile -ErrorAction SilentlyContinue |
       Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if ($null -eq $e2Created) { Start-Sleep -Milliseconds 300 }
-  } while ($null -eq $e2Created -and [DateTime]::UtcNow -lt $e2Deadline)
-  if ($null -eq $e2Created) { throw 'E2 offline installed generation did not publish a physical DOCX.' }
+    if ($null -ne $e2Created) { break }
+
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared during E2 generation.' }
+    try {
+      $allNodes = $currentAppWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )
+      foreach ($node in $allNodes) {
+        try {
+          $name = [string]$node.Current.Name
+          if (-not [string]::IsNullOrWhiteSpace($name) -and $name.StartsWith('Документы не созданы')) {
+            $e2GenerationFailure = $name
+            break
+          }
+        } catch {}
+      }
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+    }
+    if ($null -ne $e2GenerationFailure) { break }
+    Start-Sleep -Milliseconds 250
+  } while ([DateTime]::UtcNow -lt $e2Deadline)
+
+  if ($null -ne $e2GenerationFailure) {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+    throw "E2 offline installed generation was rejected by the product: $e2GenerationFailure"
+  }
+  if ($null -eq $e2Created) {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow
+    throw 'E2 real keyboard generation action produced neither a physical DOCX nor a visible product error.'
+  }
   $e2Archive = [System.IO.Compression.ZipFile]::OpenRead($e2Created.FullName)
   try {
     $entry = $e2Archive.GetEntry('word/document.xml')

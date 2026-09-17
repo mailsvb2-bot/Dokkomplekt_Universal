@@ -2,33 +2,30 @@ name: Source Provenance
 
 on:
   push:
-    branches: [main, canon-v2/e2-template-learning-proof]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: source-provenance-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  e2-harness-self-patch:
-    name: Apply exact E2 WebView2 harness correction
-    if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
+  verify-source-manifest:
+    name: Source manifest and clean archive match tree
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
+    timeout-minutes: 15
     steps:
-      - name: Checkout exact PR head
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
 
-      - name: Patch only the non-focusable WebView2 root call and restore workflows
+      - name: Apply one-time exact E2 WebView2 harness correction
+        if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
         shell: python
         run: |
           from pathlib import Path
@@ -39,17 +36,17 @@ jobs:
           raw = harness.read_bytes()
           bom = raw.startswith(b"\xef\xbb\xbf")
           text = raw.decode("utf-8-sig")
-          line_break = "\r\n" if "\r\n" in text else "\n"
+          eol = "\r\n" if "\r\n" in text else "\n"
           old = """  Activate-LiveAppWindow -Window $currentAppWindow
   $currentAppWindow.SetFocus()
   [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
-""".replace("\n", line_break)
+""".replace("\n", eol)
           new = """  Activate-LiveAppWindow -Window $currentAppWindow
   # The top-level WebView2 UIA root may be non-focusable. Foreground activation of
   # its native HWND is sufficient for real keyboard routing and avoids a false UIA failure.
   Start-Sleep -Milliseconds 100
   [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
-""".replace("\n", line_break)
+""".replace("\n", eol)
           count = text.count(old)
           if count != 1:
               raise SystemExit(f"expected exactly one E2 PageDown focus sequence, found {count}")
@@ -64,20 +61,19 @@ jobs:
           manifest_raw = manifest.read_bytes()
           manifest_bom = manifest_raw.startswith(b"\xef\xbb\xbf")
           manifest_text = manifest_raw.decode("utf-8-sig")
-          path = "tests/installer/windows_installer_contract.ps1"
+          target = "tests/installer/windows_installer_contract.ps1"
           lines = manifest_text.splitlines()
-          matches = [i for i, line in enumerate(lines) if line.endswith("  " + path)]
-          if len(matches) != 1:
-              raise SystemExit(f"expected exactly one manifest entry for {path}, found {len(matches)}")
-          lines[matches[0]] = f"{digest}  {path}"
-          newline = "\r\n" if b"\r\n" in manifest_raw else "\n"
-          manifest_encoded = (newline.join(lines) + newline).encode("utf-8")
+          indexes = [i for i, line in enumerate(lines) if line.endswith("  " + target)]
+          if len(indexes) != 1:
+              raise SystemExit(f"expected exactly one manifest entry for {target}, found {len(indexes)}")
+          lines[indexes[0]] = f"{digest}  {target}"
+          manifest_eol = "\r\n" if b"\r\n" in manifest_raw else "\n"
+          manifest_bytes = (manifest_eol.join(lines) + manifest_eol).encode("utf-8")
           if manifest_bom:
-              manifest_encoded = b"\xef\xbb\xbf" + manifest_encoded
-          manifest.write_bytes(manifest_encoded)
+              manifest_bytes = b"\xef\xbb\xbf" + manifest_bytes
+          manifest.write_bytes(manifest_bytes)
           print(f"updated harness sha256={digest}")
 
-          # Restore exact workflow bytes from the last product/harness-only candidate.
           subprocess.run([
               "git", "checkout", "3cdd881fe5b92ce6e56974feb3427a3d13077791", "--",
               ".github/workflows/source-provenance.yml"
@@ -86,7 +82,8 @@ jobs:
           if bootstrap.exists():
               bootstrap.unlink()
 
-      - name: Prove and publish surgical final tree
+      - name: Publish one-time E2 harness correction
+        if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
         shell: bash
         run: |
           set -euo pipefail
@@ -106,17 +103,6 @@ jobs:
           git commit -m 'test: avoid focusing non-focusable WebView2 root'
           git push origin HEAD:canon-v2/e2-template-learning-proof
 
-  verify-source-manifest:
-    name: Source manifest and clean archive match tree
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-        with:
-          # A workflow_dispatch run carries an immutable event SHA. Use that exact
-          # commit instead of resolving the moving branch again when this job starts.
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
-          fetch-depth: 0
       - name: Verify immutable dispatch checkout identity
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -127,6 +113,7 @@ jobs:
             echo "Expected dispatched SHA ${GITHUB_SHA}, checked out $actual" >&2
             exit 1
           }
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'

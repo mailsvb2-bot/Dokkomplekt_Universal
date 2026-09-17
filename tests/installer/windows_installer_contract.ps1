@@ -1790,19 +1790,42 @@ if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $c
 }
 
 # Expand the existing expert tools instead of introducing a test-only learning API.
-Invoke-UiActionWithObservedTransition `
+# This control is a toggle: after a successful click it legitimately remains
+# actionable so it can be collapsed again. The generic observed-transition helper
+# treats a still-actionable control as a potentially swallowed WebView2 Invoke and
+# physically retries it; for a toggle that second click would close the section we
+# just opened. Use one foreground-safe physical click and still require the real
+# Template Learning card to appear.
+Invoke-UiActionPhysicallyFromProbe `
   -Description 'Экспертные и административные инструменты' `
-  -TransitionDescription 'Template Learning card' `
   -ActionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Экспертные и административные инструменты')
-  } `
-  -TransitionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name '2. Научить программу вашим шаблонам'
-  } | Out-Null
+  }
+
+# WebView2 may omit expanded descendants that remain below the viewport. Walk the
+# real settings surface with bounded PageDown input until the actual learning card
+# enters the accessibility tree; never infer expansion merely from the toggle.
+$e2LearningCard = $null
+for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $e2LearningCard; $scrollAttempt++) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) {
+    Start-Sleep -Milliseconds 200
+    continue
+  }
+  $e2LearningCard = Find-E2NamedElement -Root $currentAppWindow -Name '2. Научить программу вашим шаблонам'
+  if ($null -ne $e2LearningCard) { break }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  $currentAppWindow.SetFocus()
+  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  Start-Sleep -Milliseconds 250
+}
+if ($null -eq $e2LearningCard) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'UI smoke timeout: Template Learning card after expanding expert tools and bounded viewport navigation'
+}
 
 $e2OutputReadiness = @(
   '4–10 правильных результатов. Собрано: Correct Output 1/4–10, Source 0/4–10.',

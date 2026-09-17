@@ -2087,7 +2087,7 @@ try {
   }
   if ($null -eq $e2Created) {
     $currentAppWindow = Find-LiveAppWindow
-    if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow
+    if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
     throw 'E2 real keyboard generation action produced neither a physical DOCX nor a visible product error.'
   }
   $e2Archive = [System.IO.Compression.ZipFile]::OpenRead($e2Created.FullName)

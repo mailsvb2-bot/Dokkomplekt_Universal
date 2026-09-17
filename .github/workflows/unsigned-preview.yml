@@ -78,6 +78,56 @@ jobs:
           DOKKOMPLEKT_REQUIRE_AUTHENTICODE: '0'
           DOKKOMPLEKT_ADVERSARIAL: '1'
         run: tests/installer/windows_installer_contract.ps1 -TauriConfig src-tauri/tauri.thin.conf.json -ExpectedWebViewMode downloadBootstrapper
+      - name: Capture installed UI failure diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          $process = Get-Process -Name 'dokkomplekt-tauri' -ErrorAction SilentlyContinue |
+            Where-Object { $_.MainWindowHandle -ne 0 } |
+            Select-Object -First 1
+          if ($null -eq $process) {
+            Write-Host 'E2 DIAGNOSTIC: installed application window is no longer available.'
+            exit 0
+          }
+          try {
+            $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+            $nodes = $root.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              [System.Windows.Automation.Condition]::TrueCondition
+            )
+            $interesting = @()
+            foreach ($node in $nodes) {
+              try {
+                $name = [string]$node.GetCurrentPropertyValue(
+                  [System.Windows.Automation.AutomationElement]::NameProperty
+                )
+                if (-not [string]::IsNullOrWhiteSpace($name) -and
+                    $name -match '(?i)(Документы не созданы|не создан|ошиб|заблок|шаблон|публикац|ИНН|generation|render|document)') {
+                  $interesting += $name.Trim()
+                }
+              } catch {}
+            }
+            $interesting = $interesting | Select-Object -Unique
+            if ($interesting.Count -eq 0) {
+              Write-Host 'E2 DIAGNOSTIC: no matching UIA error text found; dumping last named nodes.'
+              $named = @()
+              foreach ($node in $nodes) {
+                try {
+                  $name = [string]$node.GetCurrentPropertyValue(
+                    [System.Windows.Automation.AutomationElement]::NameProperty
+                  )
+                  if (-not [string]::IsNullOrWhiteSpace($name)) { $named += $name.Trim() }
+                } catch {}
+              }
+              $named | Select-Object -Last 80 | ForEach-Object { Write-Host "E2 UIA: $_" }
+            } else {
+              $interesting | ForEach-Object { Write-Host "E2 DIAGNOSTIC: $_" }
+            }
+          } catch {
+            Write-Host "E2 DIAGNOSTIC ERROR: $($_.Exception.Message)"
+          }
       - name: Stage clearly labelled preview artifact
         shell: pwsh
         run: |

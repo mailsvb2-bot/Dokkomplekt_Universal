@@ -1,4 +1,4 @@
-﻿param(
+param(
   [string]$BundleDir = "target\release\bundle",
   [string]$TauriConfig = "src-tauri\tauri.conf.json",
   [ValidateSet("", "downloadBootstrapper", "offlineInstaller")]
@@ -1893,13 +1893,24 @@ if ($null -eq $publishableLearningAction) {
   throw 'E2 learning returned a report, but the held-out verdict is not publishable with validation evidence.'
 }
 
-Invoke-UiActionPhysicallyFromProbe `
-  -Description 'Подтвердить проверенную карту и создать копию' `
-  -ActionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
-  }
+# Hosted WebView2 can expose this publishable button below the viewport while
+# accepting UIA Invoke/physical mouse without dispatching a DOM click. Bring the
+# actual button into view, activate the installed native window, focus the real
+# HTML button and send one keyboard Enter. Publication is still proven only by
+# the appearance of the real publication fields below.
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'E2 publishable learning window disappeared before map confirmation.' }
+$publishableLearningAction = Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+if ($null -eq $publishableLearningAction) { throw 'E2 publishable learning action disappeared before map confirmation.' }
+if ($publishableLearningAction.Current.IsOffscreen -and $publishableLearningAction.Current.IsScrollItemPatternAvailable) {
+  $scroll = $publishableLearningAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 150
+}
+Activate-LiveAppWindow -Window $currentAppWindow
+$publishableLearningAction.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
 # The publication inputs are rendered only after the map copy succeeds, but hosted
 # WebView2 may omit descendants that remain below the viewport from the UIA tree.

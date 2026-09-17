@@ -18,7 +18,7 @@ on:
       - 'tests/installer/windows_installer_contract.ps1'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: unsigned-preview-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
@@ -31,108 +31,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.97.1
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-
-      - name: Apply one-time exact E2 WebView2 harness correction
-        if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
-        shell: python
-        run: |
-          from pathlib import Path
-          import hashlib
-          import subprocess
-
-          harness = Path("tests/installer/windows_installer_contract.ps1")
-          raw = harness.read_bytes()
-          bom = raw.startswith(b"\xef\xbb\xbf")
-          text = raw.decode("utf-8-sig")
-          eol = "\r\n" if "\r\n" in text else "\n"
-          old = eol.join([
-              "  Activate-LiveAppWindow -Window $currentAppWindow",
-              "  $currentAppWindow.SetFocus()",
-              "  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')",
-              "",
-          ])
-          new = eol.join([
-              "  Activate-LiveAppWindow -Window $currentAppWindow",
-              "  # The top-level WebView2 UIA root may be non-focusable. Foreground activation of",
-              "  # its native HWND is sufficient for real keyboard routing and avoids a false UIA failure.",
-              "  Start-Sleep -Milliseconds 100",
-              "  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')",
-              "",
-          ])
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f"expected exactly one E2 PageDown focus sequence, found {count}")
-          text = text.replace(old, new, 1)
-          encoded = text.encode("utf-8")
-          if bom:
-              encoded = b"\xef\xbb\xbf" + encoded
-          harness.write_bytes(encoded)
-
-          digest = hashlib.sha256(encoded).hexdigest()
-          manifest = Path("SOURCE_MANIFEST_SHA256.txt")
-          manifest_raw = manifest.read_bytes()
-          manifest_bom = manifest_raw.startswith(b"\xef\xbb\xbf")
-          manifest_text = manifest_raw.decode("utf-8-sig")
-          target = "tests/installer/windows_installer_contract.ps1"
-          lines = manifest_text.splitlines()
-          indexes = [i for i, line in enumerate(lines) if line.endswith("  " + target)]
-          if len(indexes) != 1:
-              raise SystemExit(f"expected exactly one manifest entry for {target}, found {len(indexes)}")
-          lines[indexes[0]] = f"{digest}  {target}"
-          manifest_eol = "\r\n" if b"\r\n" in manifest_raw else "\n"
-          manifest_bytes = (manifest_eol.join(lines) + manifest_eol).encode("utf-8")
-          if manifest_bom:
-              manifest_bytes = b"\xef\xbb\xbf" + manifest_bytes
-          manifest.write_bytes(manifest_bytes)
-          print(f"updated harness sha256={digest}")
-
-          subprocess.run([
-              "git", "checkout", "3cdd881fe5b92ce6e56974feb3427a3d13077791", "--",
-              ".github/workflows/source-provenance.yml",
-              ".github/workflows/unsigned-preview.yml"
-          ], check=True)
-          bootstrap = Path(".github/workflows/e2-harness-self-patch.yml")
-          if bootstrap.exists():
-              bootstrap.unlink()
-
-      - name: Publish one-time E2 harness correction
-        if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
-        shell: pwsh
-        run: |
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
-          $changed = @(git status --short)
-          $changed | ForEach-Object { Write-Host $_ }
-          if ($changed.Count -ne 5) { throw "Expected exactly 5 temporary/final changes, found $($changed.Count)" }
-          foreach ($path in @(
-            'SOURCE_MANIFEST_SHA256.txt',
-            'tests/installer/windows_installer_contract.ps1',
-            '.github/workflows/source-provenance.yml',
-            '.github/workflows/unsigned-preview.yml',
-            '.github/workflows/e2-harness-self-patch.yml'
-          )) {
-            if (-not ($changed -match [regex]::Escape($path))) { throw "Expected changed path missing: $path" }
-          }
-          git config user.name 'mailsvb2-bot'
-          git config user.email '254540704+mailsvb2-bot@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          if ($LASTEXITCODE -ne 0) { throw 'git diff --cached --check failed' }
-          git diff --cached --stat
-          git commit -m 'test: avoid focusing non-focusable WebView2 root'
-          if ($LASTEXITCODE -ne 0) { throw 'git commit failed' }
-          git push origin HEAD:canon-v2/e2-template-learning-proof
-          if ($LASTEXITCODE -ne 0) { throw 'git push failed' }
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22

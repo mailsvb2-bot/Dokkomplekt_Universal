@@ -1,7 +1,8 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WINDOWS_CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
+WINDOWS_LAUNCHER = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
+WINDOWS_CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.impl.ps1"
 WORKSPACE = ROOT / "src" / "components" / "Workspace.tsx"
 FOLDER_ONBOARDING = ROOT / "src" / "components" / "FolderNamingOnboarding.tsx"
 
@@ -148,3 +149,20 @@ def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
     assert "Write-E2LearningUiDiagnostic -Root $currentAppWindow" in source
     assert "throw $learningFailure" in source
     assert "publishable held-out learning result" in source
+
+
+def test_e2_launcher_returns_refreshed_output_identity_prompts_to_real_ui() -> None:
+    launcher = WINDOWS_LAUNCHER.read_text(encoding="utf-8-sig")
+    implementation = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "windows_installer_contract.impl.ps1" in launcher
+    assert "expected exactly one commit-boundary anchor" in launcher
+    assert "$implementation.Replace($anchor, $replacement)" in launcher
+    assert "workflow-document-number" in launcher
+    assert "workflow-document-date" in launcher
+    assert "E2-7708004767" in launcher
+    assert "18.09.2026" in launcher
+    assert "E2 Создать документы after refreshed preflight" in launcher
+    assert "confirm a second time instead of bypassing the naming contract" in launcher
+    anchor = """  $e2CreateAction.SetFocus()\n  Start-Sleep -Milliseconds 100\n  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')\n\n  $e2ExpectedFile = \"$e2ButtonLabel.docx\""""
+    assert implementation.count(anchor) == 1

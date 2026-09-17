@@ -2,7 +2,7 @@ name: Source Provenance
 
 on:
   push:
-    branches: [main]
+    branches: [main, canon-v2/e2-template-learning-proof]
   pull_request:
   workflow_dispatch:
 
@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply one-time E2 installed-input hardening
-        if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
+        if: (github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof') || (github.event_name == 'push' && github.ref_name == 'canon-v2/e2-template-learning-proof')
         shell: bash
         run: |
           set -euo pipefail

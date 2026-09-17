@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: source-provenance-${{ github.event_name == 'push' && github.sha || github.ref }}
@@ -21,77 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
+          # A workflow_dispatch run carries an immutable event SHA. Use that exact
+          # commit instead of resolving the moving branch again when this job starts.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.head_ref || github.ref_name }}
           fetch-depth: 0
-      - name: Self-heal E2 rejection diagnostics and BOM
-        if: github.event_name == 'pull_request' && github.head_ref == 'canon-v2/e2-template-learning-proof'
-        shell: bash
-        env:
-          CANONICAL_SHA: df489dbd245768d09839bfd8e6350fe1143a4d17
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import codecs
-          p = Path('tests/installer/windows_installer_contract.ps1')
-          raw = p.read_bytes()
-          text = raw.decode('utf-8-sig')
-          old = r'''      foreach ($node in $allNodes) {
-        try {
-          $name = [string]$node.Current.Name
-          if (-not [string]::IsNullOrWhiteSpace($name) -and $name.StartsWith('Документы не созданы')) {
-            $e2GenerationFailure = $name
-            break
-          }
-        } catch {}
-      }
-'''
-          new = r'''      $e2GenerationMarker = $null
-      foreach ($node in $allNodes) {
-        try {
-          $name = [string]$node.Current.Name
-          if ([string]::IsNullOrWhiteSpace($name)) { continue }
-          if ($name.StartsWith('Не удалось создать документы:')) {
-            $e2GenerationFailure = $name
-            break
-          }
-          if ($name.StartsWith('Документы не созданы')) {
-            $e2GenerationMarker = $name
-          }
-        } catch {}
-      }
-      if ($null -eq $e2GenerationFailure -and $null -ne $e2GenerationMarker) {
-        $e2GenerationFailure = $e2GenerationMarker
-      }
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one E2 rejection scan block, found {text.count(old)}')
-          updated = text.replace(old, new, 1)
-          # Windows PowerShell 5.1 consumes this script in release/installer validation;
-          # preserve the repository contract that Cyrillic scripts are UTF-8 BOM marked.
-          p.write_bytes(codecs.BOM_UTF8 + updated.encode('utf-8'))
-          PY
-          git show "${CANONICAL_SHA}:.github/workflows/source-provenance.yml" > .github/workflows/source-provenance.yml
-          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.before.json || true
-          cp verification/ci/SOURCE_MANIFEST_SHA256.generated.txt SOURCE_MANIFEST_SHA256.txt
-          python scripts/verify_source_manifest.py --candidate verification/ci/SOURCE_MANIFEST_SHA256.generated.txt --json-report verification/ci/source-manifest-report.json
-          python - <<'PY'
-          import json
-          r=json.load(open('verification/ci/source-manifest-report.json', encoding='utf-8'))
-          assert r.get('matches') is True, r
-          print('SELF_HEAL_MANIFEST_OK', r.get('tracked_files'), r.get('matches'))
-          PY
-          python - <<'PY'
-          from pathlib import Path
-          assert Path('tests/installer/windows_installer_contract.ps1').read_bytes().startswith(b'\xef\xbb\xbf')
-          print('WINDOWS_INSTALLER_CONTRACT_BOM_OK')
-          PY
-          git diff --check
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add tests/installer/windows_installer_contract.ps1 SOURCE_MANIFEST_SHA256.txt .github/workflows/source-provenance.yml
-          git commit -m "test: expose E2 backend rejection and restore PowerShell BOM"
-          git push origin HEAD:${GITHUB_HEAD_REF}
       - name: Verify immutable dispatch checkout identity
         if: github.event_name == 'workflow_dispatch'
         shell: bash

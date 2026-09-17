@@ -54,16 +54,20 @@ jobs:
           bom = raw.startswith(b"\xef\xbb\xbf")
           text = raw.decode("utf-8-sig")
           eol = "\r\n" if "\r\n" in text else "\n"
-          old = """  Activate-LiveAppWindow -Window $currentAppWindow
-  $currentAppWindow.SetFocus()
-  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
-""".replace("\n", eol)
-          new = """  Activate-LiveAppWindow -Window $currentAppWindow
-  # The top-level WebView2 UIA root may be non-focusable. Foreground activation of
-  # its native HWND is sufficient for real keyboard routing and avoids a false UIA failure.
-  Start-Sleep -Milliseconds 100
-  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
-""".replace("\n", eol)
+          old = eol.join([
+              "  Activate-LiveAppWindow -Window $currentAppWindow",
+              "  $currentAppWindow.SetFocus()",
+              "  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')",
+              "",
+          ])
+          new = eol.join([
+              "  Activate-LiveAppWindow -Window $currentAppWindow",
+              "  # The top-level WebView2 UIA root may be non-focusable. Foreground activation of",
+              "  # its native HWND is sufficient for real keyboard routing and avoids a false UIA failure.",
+              "  Start-Sleep -Milliseconds 100",
+              "  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')",
+              "",
+          ])
           count = text.count(old)
           if count != 1:
               raise SystemExit(f"expected exactly one E2 PageDown focus sequence, found {count}")

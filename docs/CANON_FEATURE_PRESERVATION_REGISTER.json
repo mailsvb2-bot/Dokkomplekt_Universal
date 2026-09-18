@@ -203,13 +203,13 @@
       "runtime_evidence": [], "runtime_gap": "Clean installed runtime evidence is required for final register closure."
     },
     {
-      "id": "FPR-21", "group": "Domain plugins", "status": "needs-runtime-proof",
-      "actual_state": "domain-neutral core exposes Accounting/Custom/Education/HR/Legal/Medical profiles; installed cross-domain proof pending",
+      "id": "FPR-21", "group": "Domain plugins", "status": "verified",
+      "actual_state": "one installed Windows application proves Medical plus explicit Legal/HR/Accounting/Education/Custom profiles through the same core, UI preflight, physical DOCX publication and committed receipt path",
       "entry": ["src/App.tsx"], "backend": ["crates/dokkomplekt-core/src/domains/mod.rs", "crates/dokkomplekt-core/src/universal_pipeline.rs"],
       "storage": ["crates/dokkomplekt-storage/src/lib.rs"], "result": ["Medical/Legal/HR/Accounting/Education/Custom remain compatible on one core"],
       "before": "source_baseline", "after": "installed_baseline",
-      "evidence_paths": ["crates/dokkomplekt-core/src/domains/mod.rs", "crates/dokkomplekt-core/src/universal_pipeline.rs", "crates/dokkomplekt-core/tests/core_domain_pipeline_contracts.rs"],
-      "runtime_evidence": [], "runtime_gap": "Installed cross-domain evidence is required for final register closure."
+      "evidence_paths": ["crates/dokkomplekt-core/src/domains/mod.rs", "crates/dokkomplekt-core/src/universal_pipeline.rs", "crates/dokkomplekt-core/tests/core_domain_pipeline_contracts.rs", "tests/installer/windows_installer_contract.ps1", "tests/installer/windows_e1_accounting_contract.ps1", ".github/workflows/quality-gate.yml"],
+      "runtime_evidence": ["Quality Gate: Windows installer smoke proves the Medical discharge installed path; Windows E1 cross-domain installed path proves explicit Legal/HR/Accounting/Education/Custom profiles with physical DOCX read-back and committed GenerationReceipt evidence."]
     },
     {
       "id": "FPR-22", "group": "Audit и privacy", "status": "needs-runtime-proof",

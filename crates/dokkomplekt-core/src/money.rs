@@ -80,7 +80,7 @@ fn parse_money(value: &str) -> Result<ParsedMoney, ()> {
         .any(|character| matches!(character, ' ' | '\u{00a0}' | '\''));
     let integer_digits = if has_grouping {
         let groups = integer_text
-            .split(|character| matches!(character, ' ' | '\u{00a0}' | '\''))
+            .split([' ', '\u{00a0}', '\''])
             .collect::<Vec<_>>();
         if groups.is_empty()
             || groups[0].is_empty()

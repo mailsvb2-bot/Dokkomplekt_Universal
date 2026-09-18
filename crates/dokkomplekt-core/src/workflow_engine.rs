@@ -3,8 +3,9 @@ use crate::domains::medical_semantics::{
     SICK_LEAVE_VK_POSITION, SICK_LEAVE_VK_WORKPLACE, VK_MSE_POSITION, VK_MSE_WORKPLACE,
 };
 use crate::{
-    canonical_storage_field_id, effective_popup_fields, is_valid_field_id, popup_config_for_field,
-    profession_derived_field_sources, profession_runtime_control_fields, resolve_popup_default,
+    canonical_storage_field_id, effective_popup_fields, is_valid_field_id,
+    plugin_required_fields_for_category_role, popup_config_for_field, profession_derived_field_sources,
+    profession_runtime_control_fields, resolve_popup_default,
     run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
     PromptAskMode, PromptSpec, SemanticCase, UniversalDomain, UniversalPipelineFlags,
     UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
@@ -93,11 +94,13 @@ pub fn plan_workflow(
     });
 
     let suppressed = suppressed_prompt_fields(document, flags);
-    // The final selected template is the authority for runtime questions. Domain profiles may
-    // suggest fields in the popup designer, but they must not force unrelated questions into a
-    // document that does not physically use those fields. Explicitly configured popup fields are
-    // part of the selected document contract and therefore remain eligible.
+    // The selected template plus its explicitly chosen canonical profession role
+    // define the runtime contract. DomainPluginV2 owns non-medical hard requirements;
+    // the relevance filter must never erase those rules merely because a field is not
+    // already present as a render placeholder.
     let relevant = selected_document_fields(document, flags);
+    let plugin_hard_required =
+        plugin_required_fields_for_category_role(&document.category, &document.role_id);
     let derived_inputs = derived_input_fields(document, flags);
     let derived_hard_required = derived_hard_required_input_fields(document, flags);
     let required = pipeline
@@ -114,6 +117,7 @@ pub fn plan_workflow(
     let hard_required = document
         .required_fields
         .iter()
+        .chain(plugin_hard_required.iter())
         .chain(derived_hard_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| donor_prompt_input_field_id(document, field_id))
@@ -190,6 +194,8 @@ fn selected_document_fields(
     flags: &WorkflowFlags,
 ) -> BTreeSet<String> {
     let runtime_controls = profession_runtime_control_fields(&document.category, &document.role_id);
+    let plugin_required =
+        plugin_required_fields_for_category_role(&document.category, &document.role_id);
     let explicit_popup_fields = document
         .popup_configured
         .then_some(document.popup_fields.iter().map(|field| &field.field_id))
@@ -201,6 +207,7 @@ fn selected_document_fields(
         .chain(document.required_fields.iter())
         .chain(explicit_popup_fields)
         .chain(runtime_controls.iter())
+        .chain(plugin_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .collect::<BTreeSet<_>>();
@@ -257,10 +264,13 @@ pub fn document_required_input_fields(
     document: &DocumentTemplateSpec,
     flags: &WorkflowFlags,
 ) -> BTreeSet<String> {
+    let plugin_required =
+        plugin_required_fields_for_category_role(&document.category, &document.role_id);
     let mut fields = document
         .required_fields
         .iter()
         .chain(document.placeholders.iter())
+        .chain(plugin_required.iter())
         .filter(|field_id| is_valid_field_id(field_id))
         .map(|field_id| donor_prompt_input_field_id(document, field_id))
         .collect::<BTreeSet<_>>();
@@ -606,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn accounting_profile_does_not_force_fields_absent_from_selected_template() {
+    fn canonical_accounting_plugin_requirements_survive_template_relevance_filter() {
         let doc = DocumentTemplateSpec {
             id: "invoice".into(),
             button_label: "Счёт".into(),
@@ -627,32 +637,82 @@ mod tests {
         };
 
         let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
-        let ids = plan
+        let prompts = plan
             .prompts
             .iter()
-            .map(|prompt| prompt.field_id.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            ids,
-            BTreeSet::from([
-                "amount.total",
-                "counterparty.inn",
-                "counterparty.name",
-                "document.date",
-                "document.number",
-            ])
-        );
-        for unrelated in [
+            .map(|prompt| (prompt.field_id.as_str(), prompt))
+            .collect::<BTreeMap<_, _>>();
+        for required in [
             "accounting.invoice_number",
             "accounting.invoice_date",
-            "org.inn",
-            "amount.currency",
-            "amount.vat",
+            "org.name",
+            "counterparty.name",
+            "amount.total",
         ] {
+            let prompt = prompts
+                .get(required)
+                .unwrap_or_else(|| panic!("missing canonical accounting prompt: {required}"));
+            assert!(prompt.required, "{required} must be required");
+            assert!(!prompt.skippable, "{required} must not be bypassable");
+        }
+        for template_field in ["document.number", "document.date", "counterparty.inn"] {
             assert!(
-                !ids.contains(unrelated),
-                "unexpected profile-only prompt: {unrelated}"
+                prompts.contains_key(template_field),
+                "template field disappeared: {template_field}"
             );
+        }
+        for unrelated in ["org.inn", "amount.currency", "amount.vat"] {
+            assert!(
+                !prompts.contains_key(unrelated),
+                "unexpected optional profile-only prompt: {unrelated}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_nonmedical_plugin_requirements_are_hard_runtime_inputs() {
+        for (domain, role, required_fields) in [
+            (
+                DomainKind::Legal,
+                "contract",
+                vec!["contract.date", "contract.party_a", "contract.party_b"],
+            ),
+            (
+                DomainKind::Hr,
+                "employment_contract",
+                vec!["org.name", "employee.position", "employee.hire_date", "employee.contract_number"],
+            ),
+            (
+                DomainKind::Education,
+                "certificate",
+                vec!["document.date", "education.institution"],
+            ),
+            (
+                DomainKind::Accounting,
+                "service_act",
+                vec!["org.name", "counterparty.name", "amount.total"],
+            ),
+        ] {
+            let mut doc = document("domain-proof", "document.number");
+            doc.category = domain;
+            doc.role_id = role.into();
+            doc.required_fields.clear();
+
+            let plan = plan_workflow(&doc, &SemanticCase::default(), &WorkflowFlags::default());
+            let runtime_required = document_required_input_fields(&doc, &WorkflowFlags::default());
+            for field_id in required_fields {
+                let prompt = plan
+                    .prompts
+                    .iter()
+                    .find(|prompt| prompt.field_id == field_id)
+                    .unwrap_or_else(|| panic!("missing canonical domain prompt: {field_id}"));
+                assert!(prompt.required, "{field_id} must be required");
+                assert!(!prompt.skippable, "{field_id} must not be bypassable");
+                assert!(
+                    runtime_required.contains(field_id),
+                    "{field_id} must participate in automatic-run completeness"
+                );
+            }
         }
     }
 

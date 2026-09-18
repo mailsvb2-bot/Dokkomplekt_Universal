@@ -459,6 +459,29 @@ function Find-E1NamedElement {
   )
 }
 
+function Get-E1DomainSelection {
+  param([Parameter(Mandatory = $true)][string]$FileName)
+
+  $combo = Find-E1NamedElement -Name "Профиль для $FileName"
+  if ($null -eq $combo) { return '' }
+
+  try {
+    if ($combo.Current.IsSelectionPatternAvailable) {
+      $selection = $combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
+      if ($null -ne $selection -and $selection.Count -gt 0) {
+        $name = [string]$selection[0].Current.Name
+        if (-not [string]::IsNullOrWhiteSpace($name)) { return $name }
+      }
+    }
+  } catch { }
+
+  try {
+    return [string](Get-UiValue -Element $combo)
+  } catch {
+    return ''
+  }
+}
+
 function Set-E1TemplateDomainOverride {
   param(
     [Parameter(Mandatory = $true)][string]$FileName,
@@ -484,10 +507,9 @@ function Set-E1TemplateDomainOverride {
   }
 
   # Chromium/WebView2 does not consistently publish <option> descendants for an
-  # expanded HTML <select> on hosted Windows runners. Prefer the semantic UIA
-  # option when present, but fall back to the same keyboard navigation a user
-  # can perform on the focused real control. The later canonical required-field
-  # preflight proves that the selected built-in profile actually reached runtime.
+  # expanded HTML <select> on hosted Windows runners. Prefer semantic UIA when
+  # available, but never treat input delivery itself as proof: the live selected
+  # option is read back before this helper returns.
   $option = $null
   try {
     if ($combo.Current.IsExpandCollapsePatternAvailable) {
@@ -521,7 +543,12 @@ function Set-E1TemplateDomainOverride {
     } else {
       Invoke-UiElement -Element $option -Description "select domain '$OptionName' for $FileName"
     }
-  } else {
+    Start-Sleep -Milliseconds 200
+  }
+
+  $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)
+  $expectedDomain = Normalize-UiValue -Value $OptionName
+  if ($actualDomain -ne $expectedDomain) {
     $domainOffsets = @{
       'Универсальный документооборот' = 1
       'Медицина' = 2
@@ -534,15 +561,45 @@ function Set-E1TemplateDomainOverride {
     if (-not $domainOffsets.ContainsKey($OptionName)) {
       throw "Unsupported E1 domain option for keyboard fallback: $OptionName"
     }
+
+    $combo = Wait-UiElement -Description "domain selector before keyboard fallback for $FileName" -Probe {
+      Find-E1NamedElement -Name $comboName
+    }
+    if ($combo.Current.IsExpandCollapsePatternAvailable) {
+      try {
+        $expandCollapse = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if ($expandCollapse.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+          $expandCollapse.Collapse()
+          Start-Sleep -Milliseconds 100
+        }
+      } catch { }
+    }
+
+    $appWindow = Find-LiveAppWindow
+    if ($null -ne $appWindow) {
+      try { $appWindow.SetFocus() } catch { }
+    }
+    $combo = Wait-UiElement -Description "live domain selector for keyboard fallback for $FileName" -Probe {
+      Find-E1NamedElement -Name $comboName
+    }
     $combo.SetFocus()
+    Start-Sleep -Milliseconds 100
     [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
     Start-Sleep -Milliseconds 100
     for ($index = 0; $index -lt [int]$domainOffsets[$OptionName]; $index += 1) {
       [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
+      Start-Sleep -Milliseconds 50
     }
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    Start-Sleep -Milliseconds 250
-    Write-Host "E1 domain selector used foreground keyboard fallback for '$OptionName'."
+    # Blurring the closed HTML select commits Chromium's change event into React.
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+    Start-Sleep -Milliseconds 300
+
+    $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)
+    Write-Host "E1 domain selector keyboard fallback: expected='$OptionName' actual='$actualDomain'."
+  }
+
+  if ($actualDomain -ne $expectedDomain) {
+    throw "E1 domain override did not persist for $FileName. Expected '$OptionName', actual '$actualDomain'."
   }
 
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {

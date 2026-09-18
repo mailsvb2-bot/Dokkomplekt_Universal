@@ -38,6 +38,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_BODY: ${{ github.event.release.body }}
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          AUTO_PRODUCTION_RELEASE_ENABLED: ${{ vars.DOKKOMPLEKT_AUTO_PRODUCTION_RELEASE_ENABLED }}
         shell: bash
         run: |
           set -euo pipefail
@@ -49,6 +50,8 @@ jobs:
 
           if [ "$EVENT_NAME" = "workflow_run" ]; then
             if [ "$WORKFLOW_CONCLUSION" != "success" ]; then
+              should_release=false
+            elif [ "${AUTO_PRODUCTION_RELEASE_ENABLED,,}" != "true" ]; then
               should_release=false
             elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
               should_release=false

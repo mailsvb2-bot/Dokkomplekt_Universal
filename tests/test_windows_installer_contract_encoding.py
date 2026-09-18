@@ -103,6 +103,7 @@ def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
         "SendWait('{HOME}')",
         "SendWait('{DOWN}')",
         "SendWait('{ENTER}')",
-        "canonical required-field preflight proves",
+        "foreach ($fieldId in $PluginRequiredFields)",
+        "did not expose canonical domain-required field",
     ):
         assert marker in source

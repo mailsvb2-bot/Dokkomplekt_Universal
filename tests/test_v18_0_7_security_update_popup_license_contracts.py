@@ -57,12 +57,32 @@ class V1807SecurityUpdatePopupLicenseContracts(unittest.TestCase):
         self.assertIn("передан повторно", source)
         self.assertIn("errors: validation_errors", source)
 
-    def test_popup_rejects_non_finite_and_malformed_money(self) -> None:
-        source = text("crates/dokkomplekt-core/src/popup_engine.rs")
-        self.assertIn("number.is_finite()", source)
-        self.assertIn("fn parse_money", source)
-        self.assertIn("fraction.len() > 2", source)
-        self.assertNotIn(".filter(|character| character.is_ascii_digit()", source)
+    def test_popup_and_semantic_money_share_exact_minor_unit_parser(self) -> None:
+        popup = text("crates/dokkomplekt-core/src/popup_engine.rs")
+        money = text("crates/dokkomplekt-core/src/money.rs")
+        semantic = text("crates/dokkomplekt-core/src/semantic_engine.rs")
+
+        # Generic Number input remains finite-only, while Money is routed to the
+        # dedicated exact parser instead of sharing floating-point validation.
+        self.assertIn("number.is_finite()", popup)
+        self.assertIn("use crate::money::parse_money_minor_units;", popup)
+        self.assertIn("PromptInputKind::Money => parse_money_minor_units(value)", popup)
+        self.assertNotIn("fn parse_money(", popup)
+
+        # Money uses checked integer minor units. Ambiguous separators, malformed
+        # fractions and overflow are rejected instead of rounded or truncated.
+        self.assertIn("pub(crate) fn parse_money_minor_units", money)
+        self.assertIn("minor_units: i128", money)
+        self.assertIn(".checked_mul(100)", money)
+        self.assertIn(".checked_add(fraction_minor)", money)
+        self.assertIn("fraction.len() <= 2", money)
+        self.assertIn("if has_comma && has_dot", money)
+        self.assertNotIn("parse::<f64>", money)
+
+        # Semantic extraction must reuse the same engine; a second permissive
+        # normalizer would reintroduce a conflicting money interpretation.
+        self.assertIn("use crate::money::normalize_money;", semantic)
+        self.assertNotIn("fn normalize_money(", semantic)
 
     def test_popup_designer_rejects_duplicates_self_links_and_cycles(self) -> None:
         source = text("crates/dokkomplekt-core/src/popup_profiles.rs")

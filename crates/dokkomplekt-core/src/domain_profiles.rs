@@ -1,6 +1,6 @@
 use crate::{
     accounting_fields, education_fields, generic_fields, hr_fields, legal_fields, medical_fields,
-    DomainKind, DomainProfile, WorkflowRule,
+    plugin_by_id, DomainKind, DomainPluginId, DomainProfile, WorkflowRule,
 };
 
 pub fn generic_profile() -> DomainProfile {
@@ -60,47 +60,7 @@ pub fn legal_profile() -> DomainProfile {
         title: "Юридические документы".into(),
         kind: DomainKind::Legal,
         fields: legal_fields(),
-        workflow_rules: require_many(&[
-            (
-                "contract",
-                &[
-                    "contract.number",
-                    "contract.date",
-                    "org.name",
-                    "counterparty.name",
-                    "contract.subject",
-                ],
-            ),
-            (
-                "acceptance_act",
-                &[
-                    "document.number",
-                    "document.date",
-                    "contract.number",
-                    "org.name",
-                    "counterparty.name",
-                ],
-            ),
-            (
-                "claim",
-                &[
-                    "document.number",
-                    "document.date",
-                    "org.name",
-                    "counterparty.name",
-                    "legal.claim_subject",
-                ],
-            ),
-            (
-                "cover_letter",
-                &[
-                    "document.number",
-                    "document.date",
-                    "org.name",
-                    "counterparty.name",
-                ],
-            ),
-        ]),
+        workflow_rules: plugin_compat_rules(DomainPluginId::Legal),
     }
 }
 
@@ -110,42 +70,7 @@ pub fn hr_profile() -> DomainProfile {
         title: "Кадровые документы".into(),
         kind: DomainKind::Hr,
         fields: hr_fields(),
-        workflow_rules: require_many(&[
-            (
-                "employment_contract",
-                &[
-                    "document.date",
-                    "employee.name",
-                    "employee.position",
-                    "employee.hire_date",
-                    "employee.contract_number",
-                    "org.name",
-                ],
-            ),
-            (
-                "employment_order",
-                &[
-                    "hr.order_number",
-                    "hr.order_date",
-                    "employee.name",
-                    "employee.position",
-                    "employee.hire_date",
-                ],
-            ),
-            (
-                "personal_data_consent",
-                &["document.date", "employee.name", "org.name"],
-            ),
-            (
-                "familiarization_sheet",
-                &[
-                    "document.date",
-                    "employee.name",
-                    "employee.position",
-                    "org.name",
-                ],
-            ),
-        ]),
+        workflow_rules: plugin_compat_rules(DomainPluginId::Hr),
     }
 }
 
@@ -155,24 +80,7 @@ pub fn education_profile() -> DomainProfile {
         title: "Образовательные документы".into(),
         kind: DomainKind::Education,
         fields: education_fields(),
-        workflow_rules: vec![
-            WorkflowRule::RequireField {
-                document_role: "certificate".into(),
-                field_id: "education.student_name".into(),
-            },
-            WorkflowRule::RequireField {
-                document_role: "grade_report".into(),
-                field_id: "education.student_name".into(),
-            },
-            WorkflowRule::RequireField {
-                document_role: "certificate".into(),
-                field_id: "document.date".into(),
-            },
-            WorkflowRule::RequireField {
-                document_role: "grade_report".into(),
-                field_id: "education.course".into(),
-            },
-        ],
+        workflow_rules: plugin_compat_rules(DomainPluginId::Education),
     }
 }
 
@@ -182,38 +90,25 @@ pub fn accounting_profile() -> DomainProfile {
         title: "Бухгалтерские документы".into(),
         kind: DomainKind::Accounting,
         fields: accounting_fields(),
-        workflow_rules: require_many(&[
-            (
-                "invoice",
-                &[
-                    "accounting.invoice_number",
-                    "accounting.invoice_date",
-                    "counterparty.name",
-                    "amount.total",
-                ],
-            ),
-            (
-                "service_act",
-                &[
-                    "document.number",
-                    "document.date",
-                    "counterparty.name",
-                    "amount.total",
-                ],
-            ),
-            ("reconciliation", &["document.date", "counterparty.name"]),
-        ]),
+        workflow_rules: plugin_compat_rules(DomainPluginId::Accounting),
     }
 }
 
-fn require_many(specs: &[(&str, &[&str])]) -> Vec<WorkflowRule> {
-    specs
-        .iter()
-        .flat_map(|(role, fields)| {
-            fields.iter().map(move |field| WorkflowRule::RequireField {
-                document_role: (*role).to_string(),
-                field_id: (*field).to_string(),
-            })
+/// Legacy `DomainProfile.workflow_rules` is compatibility metadata. Runtime
+/// requiredness is owned by `DomainPluginV2.required_rules`; keep these old
+/// profiles as a projection instead of maintaining a second handwritten rule set.
+///
+/// All built-in non-medical rules are currently unconditional. If a future plugin
+/// adds a condition, the regression below fails and requires an explicit legacy
+/// compatibility decision. Until then, projecting such a rule as hard-required is
+/// conservative/fail-closed rather than silently dropping a canonical requirement.
+fn plugin_compat_rules(plugin_id: DomainPluginId) -> Vec<WorkflowRule> {
+    plugin_by_id(&plugin_id)
+        .required_rules
+        .into_iter()
+        .map(|rule| WorkflowRule::RequireField {
+            document_role: rule.role,
+            field_id: rule.field_id,
         })
         .collect()
 }
@@ -227,4 +122,97 @@ pub fn builtin_profiles() -> Vec<DomainProfile> {
         education_profile(),
         accounting_profile(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expected_rules(plugin_id: DomainPluginId) -> Vec<WorkflowRule> {
+        let plugin = plugin_by_id(&plugin_id);
+        assert!(
+            plugin
+                .required_rules
+                .iter()
+                .all(|rule| rule.when_flag.is_none() && rule.unless_present.is_none()),
+            "{plugin_id:?} gained a conditional required rule; define its legacy compatibility semantics explicitly"
+        );
+        plugin
+            .required_rules
+            .into_iter()
+            .map(|rule| WorkflowRule::RequireField {
+                document_role: rule.role,
+                field_id: rule.field_id,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nonmedical_profile_rules_are_exact_plugin_compatibility_projections() {
+        let cases = [
+            (DomainPluginId::Legal, legal_profile()),
+            (DomainPluginId::Hr, hr_profile()),
+            (DomainPluginId::Education, education_profile()),
+            (DomainPluginId::Accounting, accounting_profile()),
+        ];
+
+        for (plugin_id, profile) in cases {
+            assert_eq!(
+                profile.workflow_rules,
+                expected_rules(plugin_id.clone()),
+                "legacy profile drift for {plugin_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn projection_closes_known_legal_education_and_accounting_drift() {
+        let legal = legal_profile().workflow_rules;
+        assert!(legal.contains(&WorkflowRule::RequireField {
+            document_role: "acceptance_act".into(),
+            field_id: "contract.party_a".into(),
+        }));
+        assert!(legal.contains(&WorkflowRule::RequireField {
+            document_role: "acceptance_act".into(),
+            field_id: "contract.party_b".into(),
+        }));
+
+        let education = education_profile().workflow_rules;
+        assert!(education.contains(&WorkflowRule::RequireField {
+            document_role: "certificate".into(),
+            field_id: "document.number".into(),
+        }));
+        assert!(education.contains(&WorkflowRule::RequireField {
+            document_role: "certificate".into(),
+            field_id: "education.institution".into(),
+        }));
+
+        let accounting = accounting_profile().workflow_rules;
+        assert!(accounting.contains(&WorkflowRule::RequireField {
+            document_role: "invoice".into(),
+            field_id: "org.name".into(),
+        }));
+        assert!(accounting.contains(&WorkflowRule::RequireField {
+            document_role: "service_act".into(),
+            field_id: "org.name".into(),
+        }));
+        assert!(accounting.contains(&WorkflowRule::RequireField {
+            document_role: "reconciliation".into(),
+            field_id: "org.name".into(),
+        }));
+    }
+
+    #[test]
+    fn medical_profile_remains_owned_by_medical_compatibility_mechanics() {
+        let medical = medical_profile();
+        assert!(medical.workflow_rules.contains(&WorkflowRule::SkipForRole {
+            document_role: "diaries".into(),
+            field_id: "medical.treatment".into(),
+        }));
+        assert!(medical.workflow_rules.contains(&WorkflowRule::RequireFieldWhenFlag {
+            document_role: "discharge".into(),
+            field_id: "medical.sick_leave_number".into(),
+            flag: "sick_leave_enabled".into(),
+        }));
+    }
 }

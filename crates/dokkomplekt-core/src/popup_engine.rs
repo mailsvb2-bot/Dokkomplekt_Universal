@@ -1,10 +1,10 @@
+use crate::money::parse_money_minor_units;
 use crate::{
     merge_value, parse_flexible_date, plan_workflow, set_user_value, validate_case_relations,
     validate_inn, validate_kpp, validate_ogrn, validate_snils, validate_vin, DocumentTemplateSpec,
     PromptInputKind, PromptSpec, SemanticCase, SemanticValue, ValueSource, WorkflowFlags,
     WorkflowPlan,
 };
-use crate::money::parse_money_minor_units;
 use chrono::{Datelike, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

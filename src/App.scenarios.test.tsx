@@ -372,7 +372,7 @@ describe('Полный прогон пользовательских сцена�
 
     // utility scenarios use real user inputs, not demo constants
     await click(/^Настройки$/);
-    fireEvent.click(screen.getByText('Экспертные и административные инструменты'));
+    fireEvent.click(screen.getByRole('button', { name: 'Экспертные и административные инструменты' }));
     await screen.findByText('Конфиденциальность и хранение');
     const semanticCard = screen.getByText('Локальное понимание документов').closest('.utilityCard');
     expect(semanticCard).toBeTruthy();
@@ -548,7 +548,7 @@ describe('Полный прогон пользовательских сцена�
     // Every user-facing command is reached. Profile-only legacy diary planning
     // and focused approval/registry flows remain covered by dedicated tests, not fake clicks in this already broad scenario.
     const reached = new Set(calls.map((c) => c.command));
-    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_default_output_root', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'pick_component_bundle', 'import_component_bundle', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'replace_clause_blocks', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
+    const internalOrProfileOnly = new Set(['icd10_suggest', 'get_default_output_root', 'get_diary_plan', 'route_intake', 'retry_case_run', 'rollback_template_version', 'install_component', 'refresh_component_catalog', 'remove_component', 'pick_component_bundle', 'import_component_bundle', 'get_print_triage', 'approve_document_template', 'import_business_registry', 'lookup_business_registry', 'apply_business_registry_record', 'export_one_c_counterparties', 'import_learning_example_file', 'pick_learning_files', 'replace_clause_blocks', 'learn_template_from_examples_command', 'apply_template_learning_map', 'register_learned_template', 'check_template_regression', 'confirm_bundle_exception_and_retry', 'upsert_organization_knowledge', 'delete_organization_knowledge', 'apply_organization_knowledge', 'select_process_blueprint', 'render_docx']);
     const expected = rustCommandNames.filter((command) => !internalOrProfileOnly.has(command));
     expect([...reached].sort()).toEqual([...expected].sort());
   }, 60_000);

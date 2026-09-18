@@ -83,6 +83,21 @@ export async function importLearningExampleFile(fileName: string, bytesBase64: s
   return callRust('import_learning_example_file', { req: { file_name: fileName, bytes_base64: bytesBase64 } });
 }
 
+export type LearningFileKind = 'blank' | 'correct_output' | 'source';
+
+export interface PickedLearningFile {
+  file_name: string;
+  staged_path: string;
+  content_sha256: string;
+}
+
+export async function pickLearningFiles(kind: LearningFileKind, initialPath?: string | null): Promise<PickedLearningFile[]> {
+  const response = await callRust<{ files: PickedLearningFile[] }>('pick_learning_files', {
+    req: { kind, initial_path: initialPath ?? null },
+  });
+  return response.files;
+}
+
 export async function learnTemplateFromExamples(input: {
   blankTemplatePath: string;
   completedExamplePaths: string[];
@@ -101,14 +116,14 @@ export async function learnTemplateFromExamples(input: {
   });
 }
 
-export async function applyTemplateLearningMap(inputPath: string, outputPath: string, confirmedFields: TemplateLearningMapField[]): Promise<TemplateLearningMapReport> {
+export async function applyTemplateLearningMap(inputPath: string, outputPath: string, validationId: string, confirmedFields: TemplateLearningMapField[]): Promise<TemplateLearningMapReport> {
   return callRust('apply_template_learning_map', {
-    req: { input_path: inputPath, output_path: outputPath, confirmed_fields: confirmedFields },
+    req: { input_path: inputPath, output_path: outputPath, validation_id: validationId, confirmed_fields: confirmedFields },
   });
 }
 
-export async function registerLearnedTemplate(documentId: string, buttonLabel: string, templatePath: string): Promise<DocumentPack> {
-  return callRust('register_learned_template', { req: { document_id: documentId, button_label: buttonLabel, template_path: templatePath } });
+export async function registerLearnedTemplate(documentId: string, buttonLabel: string, templatePath: string, learningValidationId: string): Promise<DocumentPack> {
+  return callRust('register_learned_template', { req: { document_id: documentId, button_label: buttonLabel, template_path: templatePath, learning_validation_id: learningValidationId } });
 }
 
 export async function confirmTemplateSetup(rows: TemplateConfirmationRowDto[], autoInferStaticTemplates = true): Promise<DocumentPack> {
@@ -351,8 +366,16 @@ export async function checkTemplateRegression(documentId: string, candidateTempl
   return callRust('check_template_regression', { req: { document_id: documentId, candidate_template_path: candidateTemplatePath } });
 }
 
-export async function updateDocumentTemplate(documentId: string, templatePath: string, acknowledgeRegressions = false): Promise<DocumentPack> {
-  return callRust('update_document_template', { req: { document_id: documentId, template_path: templatePath, acknowledge_regressions: acknowledgeRegressions } });
+export async function updateDocumentTemplate(
+  documentId: string,
+  templatePath: string,
+  acknowledgeRegressions = false,
+  learningValidationId?: string | null,
+): Promise<DocumentPack> {
+  const req: Record<string, unknown> = { document_id: documentId, template_path: templatePath };
+  if (acknowledgeRegressions) req.acknowledge_regressions = true;
+  if (learningValidationId?.trim()) req.learning_validation_id = learningValidationId.trim();
+  return callRust('update_document_template', { req });
 }
 
 export async function listTemplateVersions(documentId: string): Promise<TemplateVersionRecord[]> {
@@ -812,6 +835,7 @@ export const rustCommandNames = [
   'export_files_to_pdf',
   'create_kedo_package',
   'pick_template_files',
+  'pick_learning_files',
   'pick_folder',
   'open_in_file_manager',
   'semantic_extract',

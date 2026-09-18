@@ -117,6 +117,39 @@ describe('useGenerationPreflight', () => {
     expect(onConfirmed).toHaveBeenCalledWith(expect.objectContaining({ documentIds: ['medical.discharge'] }));
   });
 
+  it('returns a newly introduced commit-boundary prompt to review before publication', async () => {
+    const reviewedPlan: WorkflowPlan = { document_id: 'e2.installed.inn', prompts: [], blocked: false, block_reasons: [] };
+    const freshPlan: WorkflowPlan = {
+      document_id: 'e2.installed.inn',
+      prompts: [{
+        field_id: 'document.number', title: 'Номер документа', required: true, input_kind: 'text', ask_mode: 'always',
+      }],
+      blocked: false, block_reasons: [],
+    };
+    const requestWorkflowPlan = vi.fn()
+      .mockResolvedValueOnce(reviewedPlan)
+      .mockResolvedValueOnce(freshPlan);
+    const setPreflightPlan = vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>;
+    const setStatus = vi.fn();
+    const applyAnswers = vi.fn(async () => null as PopupApplyResult | null);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['e2.installed.inn'], ...context('e2.installed.inn'), preflightPlan: reviewedPlan,
+      preflightLoading: false, answers: {}, skippedAnswers: {}, setPreflightPlan, setStatus,
+      requestWorkflowPlan, applyAnswers, onConfirmed,
+    }));
+
+    await act(async () => { await result.current.openGenerationPreflight(); });
+    await act(async () => { await result.current.confirmGenerationPreflight(); });
+
+    expect(setPreflightPlan).toHaveBeenLastCalledWith(freshPlan);
+    expect(result.current.generationPreflightOpen).toBe(true);
+    expect(result.current.generationError).toBeNull();
+    expect(setStatus).toHaveBeenLastCalledWith('План создания обновился. Проверьте появившиеся поля и подтвердите создание ещё раз.');
+    expect(applyAnswers).not.toHaveBeenCalled();
+    expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
   it('binds popup and publication to the same immutable donor-style generation snapshot', async () => {
     let outputRoot = 'C:/Desktop/Выписанные пациенты';
     let sickLeaveEnabled = false;
@@ -217,8 +250,8 @@ describe('useGenerationPreflight', () => {
     const applyAnswers = vi.fn(async () => null);
     const onConfirmed = vi.fn(async () => null);
     const { result } = renderHook(() => useGenerationPreflight({
-      selectedDocumentIds: ['diaries'], ...context('diaries'), preflightPlan: runtimePlan, preflightLoading: false,
-      answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
+      selectedDocumentIds: ['diaries'], ...context('diaries'), preflightPlan: runtimePlan,
+      preflightLoading: false, answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
       setStatus, requestWorkflowPlan: vi.fn(async () => runtimePlan), applyAnswers, onConfirmed,
     }));
     await act(async () => { await result.current.openGenerationPreflight(); });

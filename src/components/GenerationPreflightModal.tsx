@@ -106,7 +106,12 @@ export function GenerationPreflightModal(props: GenerationPreflightModalProps) {
         )}
 
         {props.generationError ? (
-          <div className="readyMessage notReady generationActionError" role="alert" data-testid="generation-error">
+          <div
+            className="readyMessage notReady generationActionError"
+            role="alert"
+            aria-label={`Документы не созданы: ${props.generationError}`}
+            data-testid="generation-error"
+          >
             <i className="ti ti-alert-triangle" aria-hidden="true" />
             <div><strong>Документы не созданы</strong><span>{props.generationError}</span></div>
           </div>

@@ -136,5 +136,9 @@ async function renderUtility(onCheckUpdates = vi.fn()) {
       onVerifyLicense={vi.fn()}
     />,
   );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Экспертные и административные инструменты" }),
+  );
   await screen.findByText("Неразрешённых остановок нет.");
+  await screen.findByRole("button", { name: "Проверить обновления" });
 }

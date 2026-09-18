@@ -20,6 +20,8 @@ import {
   deleteClauseBlock,
   importLearningExampleFile,
   importTemplateFile,
+  pickLearningFiles,
+  type PickedLearningFile,
   learnTemplateFromExamples,
   listClauseBlocks,
   listTemplateVersions,
@@ -36,6 +38,7 @@ import {
   updateDocumentTemplate,
 } from '../lib/api';
 import { useActionRunner, labelledActionError } from '../hooks/useActionRunner';
+import { hasPublishableLearningProof, publicationEligibleLearningFields } from '../lib/pendingTemplateIntelligence';
 import { STARTER_PACKS, type StarterPackAsset } from '../data/starterPacks';
 import {
   MEDICAL_DIARY_FINAL_PREFIX,
@@ -55,6 +58,18 @@ interface Props {
 }
 
 const YEAR = new Date().getFullYear();
+
+function mergeLearningFiles(current: PickedLearningFile[], incoming: PickedLearningFile[]): PickedLearningFile[] {
+  const merged = [...current];
+  const seen = new Set(current.map((file) => file.content_sha256));
+  for (const file of incoming) {
+    if (seen.has(file.content_sha256)) continue;
+    seen.add(file.content_sha256);
+    merged.push(file);
+    if (merged.length === 10) break;
+  }
+  return merged;
+}
 
 export function AdvancedToolsPanel({
   documents,
@@ -80,9 +95,9 @@ export function AdvancedToolsPanel({
   const [dryReport, setDryReport] = useState('');
   const [installingPackId, setInstallingPackId] = useState('');
   const [processState, setProcessState] = useState<ProcessBlueprintState | null>(null);
-  const [blankLearningFile, setBlankLearningFile] = useState<File | null>(null);
-  const [completedLearningFiles, setCompletedLearningFiles] = useState<File[]>([]);
-  const [sourceLearningFiles, setSourceLearningFiles] = useState<File[]>([]);
+  const [blankLearningFile, setBlankLearningFile] = useState<PickedLearningFile | null>(null);
+  const [completedLearningFiles, setCompletedLearningFiles] = useState<PickedLearningFile[]>([]);
+  const [sourceLearningFiles, setSourceLearningFiles] = useState<PickedLearningFile[]>([]);
   const [learningLocale, setLearningLocale] = useState('ru-RU');
   const [learningBlankPath, setLearningBlankPath] = useState('');
   const [learningReport, setLearningReport] = useState<TemplateLearningReport | null>(null);
@@ -92,6 +107,7 @@ export function AdvancedToolsPanel({
   const [learnedButtonLabel, setLearnedButtonLabel] = useState('');
   const [replacementPath, setReplacementPath] = useState('');
   const [replacementRegression, setReplacementRegression] = useState<TemplateRegressionReport | null>(null);
+  const [replacementValidationId, setReplacementValidationId] = useState<string | null>(null);
 
   useEffect(() => {
     listClauseBlocks().then(setBlocks).catch(() => undefined);
@@ -103,9 +119,17 @@ export function AdvancedToolsPanel({
     [documents, selectedDocumentIds],
   );
   const versionedDocument = selectedDocuments.length === 1 ? selectedDocuments[0] : null;
+  const publishedTemplateVersion = templateVersions.find((version) => version.status === 'published') ?? null;
+  const selectedVersionUsesLearningProof = Boolean(publishedTemplateVersion?.learning_validation_id);
   const medicalAvailable = documents.some((document) => document.category === 'Medical');
   const medicalDiarySources = blocks.filter((block) =>
     block.block_id.startsWith(MEDICAL_DIARY_REGULAR_PREFIX) || block.block_id.startsWith(MEDICAL_DIARY_FINAL_PREFIX));
+  const learningReadinessText = blankLearningFile
+    && completedLearningFiles.length >= 4
+    && completedLearningFiles.length <= 10
+    && sourceLearningFiles.length === completedLearningFiles.length
+    ? `Готово к проверке. Пар: ${completedLearningFiles.length}.`
+    : `Собрано: Correct Output ${completedLearningFiles.length}/4–10, Source ${sourceLearningFiles.length}/4–10.`;
 
   useEffect(() => {
     if (!versionedDocument) {
@@ -127,53 +151,62 @@ export function AdvancedToolsPanel({
       : 'Рабочий процесс выбран.');
   }
 
+  function resetLearningAnalysis() {
+    setLearningBlankPath('');
+    setLearningReport(null);
+    setSelectedLearningFields([]);
+    setLearnedTemplatePath('');
+  }
+
+  async function chooseLearningFiles(kind: 'blank' | 'correct_output' | 'source') {
+    const label = kind === 'blank' ? 'выбор пустого шаблона' : kind === 'correct_output' ? 'выбор правильных результатов' : 'выбор исходных документов';
+    const picked = await execute(label, () => pickLearningFiles(kind));
+    if (!picked?.length) return;
+    resetLearningAnalysis();
+    if (kind === 'blank') {
+      setBlankLearningFile(picked[0]);
+      return;
+    }
+    if (kind === 'correct_output') {
+      setCompletedLearningFiles((current) => mergeLearningFiles(current, picked));
+      return;
+    }
+    setSourceLearningFiles((current) => mergeLearningFiles(current, picked));
+  }
+
   async function runTemplateLearning() {
     if (!blankLearningFile) {
       onStatus('Для обучения выберите пустой DOCX/DOCM-шаблон.');
       return;
     }
-    if (completedLearningFiles.length < 3 || completedLearningFiles.length > 10) {
-      onStatus('Для обучения нужны от 3 до 10 ранее заполненных DOCX/DOCM-примеров.');
+    if (completedLearningFiles.length < 4 || completedLearningFiles.length > 10) {
+      onStatus('Для доказательного обучения нужны 4–10 пар Source → Correct Output: минимум 3 обучающие и 1 контрольная.');
+      return;
+    }
+    if (sourceLearningFiles.length !== completedLearningFiles.length) {
+      onStatus('Выберите одинаковое количество Source и Correct Output; неполные пары не участвуют в обучении.');
       return;
     }
     const result = await execute('обучение пользовательского шаблона', async () => {
-      const blankBytes = await readBytes(blankLearningFile);
-      const blank = await importTemplateFile(`learning_blank_${Date.now()}`, {
-        fileName: blankLearningFile.name,
-        bytesBase64: toBase64(blankBytes),
-      });
-      const completedPaths: string[] = [];
-      for (const [index, file] of completedLearningFiles.entries()) {
-        const bytes = await readBytes(file);
-        const imported = await importTemplateFile(`learning_completed_${Date.now()}_${index}`, {
-          fileName: file.name,
-          bytesBase64: toBase64(bytes),
-        });
-        completedPaths.push(imported.template_path);
-      }
-      const sourcePaths: string[] = [];
-      for (const file of sourceLearningFiles.slice(0, 10)) {
-        const bytes = await readBytes(file);
-        const imported = await importLearningExampleFile(file.name, toBase64(bytes));
-        sourcePaths.push(imported.source_path);
-      }
       const report = await learnTemplateFromExamples({
-        blankTemplatePath: blank.template_path,
-        completedExamplePaths: completedPaths,
-        sourceExamplePaths: sourcePaths,
+        blankTemplatePath: blankLearningFile.staged_path,
+        completedExamplePaths: completedLearningFiles.map((file) => file.staged_path),
+        sourceExamplePaths: sourceLearningFiles.map((file) => file.staged_path),
         defaultYear: YEAR,
         locale: learningLocale,
       });
-      return { blankPath: blank.template_path, report };
+      return { blankPath: blankLearningFile.staged_path, report };
     });
     if (!result) return;
     setLearningBlankPath(result.blankPath);
     setLearningReport(result.report);
-    setSelectedLearningFields(result.report.fields
-      .filter((field) => field.confidence >= 0.6)
+    const publishable = hasPublishableLearningProof(result.report);
+    setSelectedLearningFields(publicationEligibleLearningFields(result.report)
       .map((field) => field.field_id));
     setLearnedTemplatePath('');
-    onStatus(`Сравнено ${completedLearningFiles.length} примеров. Найдено ${result.report.fields.length} переменных полей; карту нужно подтвердить.`);
+    onStatus(publishable
+      ? `Сравнено ${completedLearningFiles.length} пар: последняя hold-out проверка пройдена. Подтвердите source-evidenced поля карты.`
+      : `Контрольная пара не доказала перенос. Карта не может быть применена: ${result.report.validation.reasons.join(' ')}`);
   }
 
   function toggleLearningField(fieldId: string, checked: boolean) {
@@ -184,8 +217,13 @@ export function AdvancedToolsPanel({
 
   async function applyLearningMap() {
     if (!learningReport || !learningBlankPath) return;
+    if (!hasPublishableLearningProof(learningReport)) {
+      onStatus('Карта не имеет publishable validation proof; повторите обучение на полных Source → Correct Output парах.');
+      return;
+    }
+    const eligibleIds = new Set(publicationEligibleLearningFields(learningReport).map((field) => field.field_id));
     const confirmed = learningReport.fields
-      .filter((field) => selectedLearningFields.includes(field.field_id))
+      .filter((field) => selectedLearningFields.includes(field.field_id) && eligibleIds.has(field.field_id))
       .map((field) => ({
         field_id: field.field_id,
         line_index: field.line_index,
@@ -198,7 +236,7 @@ export function AdvancedToolsPanel({
       return;
     }
     const result = await execute('применение подтверждённой карты', () =>
-      applyTemplateLearningMap(learningBlankPath, learnedOutputPath(learningBlankPath), confirmed));
+      applyTemplateLearningMap(learningBlankPath, learnedOutputPath(learningBlankPath), learningReport.validation_id!, confirmed));
     if (!result) return;
     setLearnedTemplatePath(result.output_path);
     onStatus(`Создана безопасная обученная копия. Вставлено полей: ${result.applied_field_ids.length}; вручную проверить: ${result.skipped_field_ids.length}.`);
@@ -209,11 +247,34 @@ export function AdvancedToolsPanel({
       onStatus('Укажите идентификатор, название документа и сначала создайте обученную копию.');
       return;
     }
+    if (!learningReport?.validation_id) {
+      onStatus('Публикация заблокирована: validation proof отсутствует.');
+      return;
+    }
     const result = await execute('публикация обученного шаблона', () =>
-      registerLearnedTemplate(learnedDocumentId.trim(), learnedButtonLabel.trim(), learnedTemplatePath));
+      registerLearnedTemplate(learnedDocumentId.trim(), learnedButtonLabel.trim(), learnedTemplatePath, learningReport.validation_id!));
     if (!result) return;
     onDocumentsChanged(result.documents);
     onStatus(`Кнопка «${learnedButtonLabel.trim()}» создана из подтверждённой карты. Тексты примеров не используются как источник смыслов.`);
+  }
+
+  async function stageLearnedRepair() {
+    if (!versionedDocument || !learnedTemplatePath || !learningReport?.validation_id) {
+      onStatus('Для repair выберите один опубликованный документ и сначала создайте копию с новым validation proof.');
+      return;
+    }
+    const regression = await execute('проверка revalidation repair', () =>
+      checkTemplateRegression(versionedDocument.id, learnedTemplatePath));
+    if (!regression) {
+      onStatus('Repair заблокирован: для выбранного документа не найдена опубликованная базовая версия.');
+      return;
+    }
+    setReplacementPath(learnedTemplatePath);
+    setReplacementRegression(regression);
+    setReplacementValidationId(learningReport.validation_id);
+    onStatus(regression.critical
+      ? 'Repair прошёл Replay + Intervention + Held-out validation, но RegressionReplay нашёл критические структурные изменения. Нужна отдельная явная публикация.'
+      : 'Repair прошёл revalidation и RegressionReplay. Подтвердите публикацию новой версии в разделе истории шаблона.');
   }
 
   async function inspectReplacement(file: File) {
@@ -233,9 +294,12 @@ export function AdvancedToolsPanel({
     if (!result) return;
     setReplacementPath(result.path);
     setReplacementRegression(result.regression);
-    onStatus(result.regression?.critical
-      ? 'Новая версия содержит критические структурные изменения. Автопубликация заблокирована.'
-      : 'Новая версия проверена. Критических структурных регрессий не найдено.');
+    setReplacementValidationId(null);
+    onStatus(selectedVersionUsesLearningProof
+      ? 'Структурная проверка выполнена, но текущая Published-версия learning-backed: публикация требует новой Replay + Intervention + Held-out revalidation.'
+      : result.regression?.critical
+        ? 'Новая версия содержит критические структурные изменения. Автопубликация заблокирована.'
+        : 'Новая версия проверена. Критических структурных регрессий не найдено.');
   }
 
   async function publishReplacement(acknowledge: boolean) {
@@ -244,13 +308,21 @@ export function AdvancedToolsPanel({
       onStatus('Критические изменения требуют отдельного явного подтверждения.');
       return;
     }
-    const pack = await execute('публикация версии шаблона', () =>
-      updateDocumentTemplate(versionedDocument.id, replacementPath, acknowledge));
+    if (selectedVersionUsesLearningProof && !replacementValidationId) {
+      onStatus('Публикация заблокирована: learning-backed версия ремонтируется только через новую revalidation.');
+      return;
+    }
+    const validationId = replacementValidationId;
+    const pack = await execute(validationId ? 'публикация проверенной repair-версии' : 'публикация версии шаблона', () =>
+      updateDocumentTemplate(versionedDocument.id, replacementPath, acknowledge, validationId));
     if (!pack) return;
     onDocumentsChanged(pack.documents);
     setReplacementPath('');
     setReplacementRegression(null);
-    onStatus(`Новая версия «${versionedDocument.button_label}» опубликована после структурной проверки.`);
+    setReplacementValidationId(null);
+    onStatus(validationId
+      ? `Repair «${versionedDocument.button_label}» опубликован новой версией после revalidation и RegressionReplay.`
+      : `Новая версия «${versionedDocument.button_label}» опубликована после структурной проверки.`);
     const versions = await execute('история шаблона', () => listTemplateVersions(versionedDocument.id));
     if (versions) setTemplateVersions(versions);
   }
@@ -510,21 +582,18 @@ export function AdvancedToolsPanel({
 
       <section className="utilityCard advancedCard templateLearningCard">
         <strong>2. Научить программу вашим шаблонам</strong>
-        <small>Загрузите пустой шаблон, 3–10 ранее заполненных копий и, при наличии, исходные документы. Программа сравнит их, отделит постоянный текст от переменных значений и покажет карту до публикации.</small>
+        <small>Загрузите пустой шаблон и 4–10 matched-пар Source → Correct Output. Последняя пара используется только как независимый hold-out и не участвует в обучении.</small>
         <div className="learningUploadGrid">
-          <label className="fileBtn">Пустой DOCX/DOCM
-            <input hidden type="file" accept=".docx,.docm" onChange={(event) => { setBlankLearningFile(event.target.files?.[0] ?? null); event.currentTarget.value = ''; }} />
-          </label>
-          <span>{blankLearningFile?.name ?? 'не выбран'}</span>
-          <label className="fileBtn">3–10 заполненных примеров
-            <input hidden multiple type="file" accept=".docx,.docm" onChange={(event) => { setCompletedLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
-          </label>
-          <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.name).join(', ') : 'не выбраны'}</span>
-          <label className="fileBtn">Исходные документы, необязательно
-            <input hidden multiple type="file" accept=".docx,.docm,.doc,.ppt,.pptx,.pdf,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.xlsx,.xls,.ods,.odt,.rtf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.eml,.msg,.zip,.7z,.rar" onChange={(event) => { setSourceLearningFiles(Array.from(event.target.files ?? []).slice(0, 10)); event.currentTarget.value = ''; }} />
-          </label>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => void chooseLearningFiles('blank')}>Пустой DOCX/DOCM</button>
+          <span>{blankLearningFile?.file_name ?? 'не выбран'}</span>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => void chooseLearningFiles('correct_output')}>{completedLearningFiles.length ? `4–10 правильных результатов. ${learningReadinessText}` : '4–10 правильных результатов'}</button>
+          <span>{completedLearningFiles.length ? completedLearningFiles.map((file) => file.file_name).join(', ') : 'не выбраны'}</span>
+          <button type="button" className="fileBtn" disabled={busy} onClick={() => void chooseLearningFiles('source')}>{sourceLearningFiles.length ? `4–10 исходных документов Source. ${learningReadinessText}` : '4–10 исходных документов Source'}</button>
           <span>{sourceLearningFiles.length ? `${sourceLearningFiles.length} файл(ов)` : 'не выбраны'}</span>
         </div>
+        <small className="learningReadiness" role="status" aria-live="polite" aria-label={learningReadinessText}>
+          {learningReadinessText}
+        </small>
         <label>Язык примеров
           <select value={learningLocale} onChange={(event) => setLearningLocale(event.target.value)}>
             <option value="ru-RU">Русский</option>
@@ -537,19 +606,19 @@ export function AdvancedToolsPanel({
             <option value="auto">Автоопределение</option>
           </select>
         </label>
-        <button className="utilBtn" disabled={busy || !blankLearningFile || completedLearningFiles.length < 3} onClick={() => void runTemplateLearning()}>Сравнить примеры и предложить карту</button>
+        <button className="utilBtn" disabled={busy || !blankLearningFile || completedLearningFiles.length < 4 || completedLearningFiles.length > 10 || sourceLearningFiles.length !== completedLearningFiles.length} onClick={() => void runTemplateLearning()}>Проверить пары и предложить карту</button>
         {learningReport && (
           <div className="learningReport">
-            <div className="rowBetween"><b>Предложенная карта · уверенность {Math.round(learningReport.confidence * 100)}%</b><small>Публикация без подтверждения запрещена</small></div>
+            <div className="rowBetween"><b>Предложенная карта · оценка {Math.round(learningReport.confidence * 100)}%</b><small>Validation: {learningReport.validation.verdict}; confidence не является доказательством</small></div>
             {learningReport.fields.map((field) => (
               <label key={field.field_id} className="learningField">
-                <input type="checkbox" checked={selectedLearningFields.includes(field.field_id)} onChange={(event) => toggleLearningField(field.field_id, event.target.checked)} />
+                <input type="checkbox" disabled={learningReport.validation.verdict !== 'passed' || !learningReport.validation.publishable || !field.source_matches.some((value) => value.trim().length > 0)} checked={selectedLearningFields.includes(field.field_id)} onChange={(event) => toggleLearningField(field.field_id, event.target.checked)} />
                 <span><b>{field.title}</b> <code>{field.placeholder}</code><small>строка {field.line_index + 1} · {Math.round(field.confidence * 100)}% · примеры: {field.example_values.slice(0, 3).join(' / ') || 'нет'}{field.condition ? ` · условие: ${field.condition}` : ''}</small></span>
               </label>
             ))}
             {!!learningReport.diff.length && <details><summary>Визуальный diff переменных строк</summary>{learningReport.diff.map((hunk) => <div key={hunk.line_index} className="learningDiff"><b>Строка {hunk.line_index + 1}</b><del>{hunk.blank_line || 'пусто'}</del><ins>{hunk.common_prefix}…{hunk.common_suffix}</ins><small>{hunk.example_lines.slice(0, 4).join(' | ')}</small></div>)}</details>}
             {!!learningReport.warnings.length && <small className="badgeWarn">{learningReport.warnings.join('; ')}</small>}
-            <button className="utilBtn" disabled={busy || !selectedLearningFields.length} onClick={() => void applyLearningMap()}>Подтвердить карту и создать копию</button>
+            <button className="utilBtn" disabled={busy || !selectedLearningFields.length || learningReport.validation.verdict !== 'passed' || !learningReport.validation.publishable || !learningReport.validation_id} onClick={() => void applyLearningMap()}>Подтвердить проверенную карту и создать копию</button>
           </div>
         )}
         {learnedTemplatePath && (
@@ -557,6 +626,12 @@ export function AdvancedToolsPanel({
             <input value={learnedDocumentId} onChange={(event) => setLearnedDocumentId(event.target.value)} placeholder="идентификатор: document.custom" />
             <input value={learnedButtonLabel} onChange={(event) => setLearnedButtonLabel(event.target.value)} placeholder="название документа" />
             <button className="primaryBtn" disabled={busy || !learnedDocumentId.trim() || !learnedButtonLabel.trim()} onClick={() => void publishLearnedTemplate()}>Добавить документ в набор</button>
+            {versionedDocument && (
+              <button className="softBtn" disabled={busy || !learningReport?.validation_id} onClick={() => void stageLearnedRepair()}>
+                Подготовить repair для «{versionedDocument.button_label}»
+              </button>
+            )}
+            {versionedDocument && <small>Repair не изменяет Published in-place: после revalidation создаётся новая версия, а предыдущая становится Superseded.</small>}
           </div>
         )}
       </section>
@@ -656,7 +731,7 @@ export function AdvancedToolsPanel({
 
       <section className="utilityCard advancedCard">
         <strong>Версии пользовательского шаблона</strong>
-        <small>Выберите ровно один документ слева. Каждая публикация получает SHA-256 и номер; предыдущая версия остаётся доступной для безопасного rollback.</small>
+        <small>Выберите ровно один документ слева. Каждая публикация получает SHA-256 и номер; предыдущая версия становится Superseded и остаётся доступной для безопасного rollback. Learning-backed версия требует новой revalidation перед repair.</small>
         {!versionedDocument ? <small>Для просмотра истории отметьте один документ.</small> : (
           <>
             <label className="fileBtn">Проверить новую DOCX/DOCM-версию
@@ -666,8 +741,18 @@ export function AdvancedToolsPanel({
               <div className={`regressionReport ${replacementRegression.critical ? 'critical' : 'safe'}`}>
                 <b>{replacementRegression.critical ? 'Критические изменения' : 'Структурная проверка пройдена'}</b>
                 {replacementRegression.issues.length ? <ul>{replacementRegression.issues.map((issue) => <li key={`${issue.code}:${issue.message}`}><b>{issue.severity}</b> · {issue.message}</li>)}</ul> : <small>Изменений, влияющих на workflow, placeholders, таблицы, секции, headers/footers и page breaks, не найдено.</small>}
-                <button className={replacementRegression.critical ? 'dangerBtn' : 'utilBtn'} disabled={busy} onClick={() => void publishReplacement(replacementRegression.critical)}>
-                  {replacementRegression.critical ? 'Я проверил изменения — опубликовать' : 'Опубликовать новую версию'}
+                <button
+                  className={replacementRegression.critical ? 'dangerBtn' : 'utilBtn'}
+                  disabled={busy || (selectedVersionUsesLearningProof && !replacementValidationId)}
+                  onClick={() => void publishReplacement(replacementRegression.critical)}
+                >
+                  {selectedVersionUsesLearningProof && !replacementValidationId
+                    ? 'Нужна revalidation через Template Learning'
+                    : replacementValidationId
+                      ? 'Опубликовать проверенную repair-версию'
+                      : replacementRegression.critical
+                        ? 'Я проверил изменения — опубликовать'
+                        : 'Опубликовать новую версию'}
                 </button>
               </div>
             )}
@@ -675,7 +760,7 @@ export function AdvancedToolsPanel({
             {templateVersions.length === 0 && <small>История появится после первой проверенной публикации шаблона.</small>}
             {templateVersions.map((item) => (
               <div key={item.version_id}>
-                <span><b>v{item.version_number}</b> · {item.status}<small>{item.note} · {item.template_sha256.slice(0, 12)}…</small></span>
+                <span><b>v{item.version_number}</b> · {item.status}<small>{item.note} · {item.template_sha256.slice(0, 12)}…{item.learning_validation_id ? ' · validation proof' : ''}</small></span>
                 {item.status !== 'published' && <button className="softBtn" disabled={busy} onClick={() => void rollbackVersion(item)}>Вернуть</button>}
               </div>
             ))}

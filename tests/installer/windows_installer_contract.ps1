@@ -251,6 +251,19 @@ function Invoke-UiElementPhysically {
     if (-not $Element.Current.IsEnabled) {
       throw "$Description is currently disabled."
     }
+    # mouse_event is global input. After a native OpenFileDialog closes, the WebView
+    # can be visible while another runner window still owns the foreground. Restore
+    # the installed app explicitly before the one permitted physical retry so the
+    # click cannot be swallowed as a mere window-activation click.
+    $process.Refresh()
+    $windowHandle = [IntPtr]$process.MainWindowHandle
+    if ($windowHandle -ne [IntPtr]::Zero) {
+      [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
+      [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
+      Start-Sleep -Milliseconds 150
+    }
+    $Element.SetFocus()
+    Start-Sleep -Milliseconds 50
     if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
       $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
       $scroll.ScrollIntoView()
@@ -401,6 +414,46 @@ function New-PlainDocxFixture {
         '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
         '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
         'word/document.xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Проверочная кнопка</w:t></w:r></w:p><w:p><w:r><w:t>Обычный статический шаблон без технической разметки.</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'
+      }
+      foreach ($name in $parts.Keys) {
+        $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $writer = [System.IO.StreamWriter]::new($entry.Open(), [System.Text.UTF8Encoding]::new($false))
+        try { $writer.Write($parts[$name]) } finally { $writer.Dispose() }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
+function New-E2LearningDocxFixture {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Inn,
+    [switch]$Blank
+  )
+  if (-not $Blank -and [string]::IsNullOrWhiteSpace($Inn)) {
+    throw 'E2 correct-output fixture requires a non-empty Inn.'
+  }
+  Add-Type -AssemblyName System.IO.Compression
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+  try {
+    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    try {
+      $innValue = if ($Blank) { '__________' } else { $Inn }
+      $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        '<w:p><w:r><w:t>Карточка</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>Режим: стандарт</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>ИНН: ' + $innValue + '</w:t></w:r></w:p>' +
+        '<w:sectPr/></w:body></w:document>'
+      $parts = @{
+        '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+        '_rels/.rels' = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+        'word/document.xml' = $body
       }
       foreach ($name in $parts.Keys) {
         $entry = $archive.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
@@ -620,6 +673,38 @@ function Find-ReadyButtonByNames {
   } catch {
     return $null
   }
+}
+
+function Write-E2LearningUiDiagnostic {
+  param([Parameter(Mandatory = $true)]$Root)
+  Write-Host 'E2 UI diagnostic begin'
+  try {
+    $elements = $Root.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    $seen = [System.Collections.Generic.HashSet[string]]::new()
+    $printed = 0
+    foreach ($element in $elements) {
+      if ($printed -ge 80) { break }
+      try {
+        $name = [string]$element.Current.Name
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        if ($name -notmatch '(?i)ошиб|обуч|провер|карт|готов|валид|publish|шаблон|source|correct') { continue }
+        $controlType = [string]$element.Current.ControlType.ProgrammaticName
+        $key = "$controlType`0$name"
+        if (-not $seen.Add($key)) { continue }
+        Write-Host "E2 UI diagnostic: $controlType | offscreen=$($element.Current.IsOffscreen) | $name"
+        $printed++
+      } catch {
+        # WebView2 may invalidate a descendant while the diagnostic walk is in progress.
+      }
+    }
+    if ($printed -eq 0) { Write-Host 'E2 UI diagnostic: no matching named elements were exposed.' }
+  } catch {
+    Write-Host "E2 UI diagnostic failed: $($_.Exception.Message)"
+  }
+  Write-Host 'E2 UI diagnostic end'
 }
 
 function Get-AppStateCipherFingerprint {
@@ -1570,6 +1655,520 @@ if ($restartState.Kind -eq 'empty') {
   throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
 }
 Write-Host 'Persisted template button survived application restart.'
+
+# Canon v2 E2 installed proof. Reuse this already-installed process and the same
+# UI Automation helpers: learn from real Source -> Correct Output pairs, publish
+# a learning-backed button, restart with outbound traffic blocked, then require
+# physical DOCX generation from the persisted button.
+$e2FixtureDir = Join-Path $env:RUNNER_TEMP "dokkomplekt-e2-learning-$PID"
+New-Item -ItemType Directory -Force -Path $e2FixtureDir | Out-Null
+$e2Blank = Join-Path $e2FixtureDir 'e2-blank.docx'
+New-E2LearningDocxFixture -Path $e2Blank -Inn '' -Blank
+$e2Inns = @('7736050003', '7707083893', '7812014560', '7708004767')
+$e2Outputs = @()
+$e2Sources = @()
+for ($index = 0; $index -lt $e2Inns.Count; $index++) {
+  $ordinal = $index + 1
+  $output = Join-Path $e2FixtureDir "e2-correct-$ordinal.docx"
+  $source = Join-Path $e2FixtureDir "e2-source-$ordinal.txt"
+  New-E2LearningDocxFixture -Path $output -Inn $e2Inns[$index]
+  [System.IO.File]::WriteAllText(
+    $source,
+    "Организация`r`nИНН: $($e2Inns[$index])",
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  $e2Outputs += $output
+  $e2Sources += $source
+}
+
+function Find-E2NamedElement {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$Name)
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    $Name
+  )
+  try {
+    return $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  } catch {
+    if (Test-UiaTransientTimeout -ErrorRecord $_) { return $null }
+    throw
+  }
+}
+
+function Open-E2FileSelection {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string[]]$Paths,
+    [string[]]$ExpectedUiNames = @()
+  )
+  if ($ExpectedUiNames.Count -gt 0 -and $ExpectedUiNames.Count -ne $Paths.Count) {
+    throw "$Label expected UI evidence count must match selected path count."
+  }
+  for ($selectionIndex = 0; $selectionIndex -lt $Paths.Count; $selectionIndex++) {
+    $path = $Paths[$selectionIndex]
+    $actionButtonName = if ($selectionIndex -eq 0 -or $ExpectedUiNames.Count -eq 0) {
+      $Label
+    } else {
+      $ExpectedUiNames[$selectionIndex - 1]
+    }
+    $dialog = Invoke-UiActionWithObservedTransition `
+      -Description $Label `
+      -TransitionDescription "$Label file dialog" `
+      -ActionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)
+      } `
+      -TransitionProbe { Find-FileDialog }
+    $edit = Wait-UiElement -Description "$Label filename field" -Probe {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        '1148'
+      )
+      $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    }
+    Set-UiValue -Element $edit -Value $path
+    Submit-OpenFileDialog -Dialog $dialog
+    if ($ExpectedUiNames.Count -gt 0) {
+      $expectedUiName = $ExpectedUiNames[$selectionIndex]
+      Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)" -TimeoutSeconds 30 -Probe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ButtonByNames -Root $currentAppWindow -Names @($expectedUiName)
+      } | Out-Null
+      Write-Host "E2 UI accepted '$Label' selection $($selectionIndex + 1)/$($Paths.Count): $expectedUiName"
+    }
+  }
+}
+
+function Set-E2NamedValue {
+  param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Value)
+  $element = Wait-UiElement -Description "E2 input $Name" -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name $Name
+  }
+  Set-UiValue -Element $element -Value $Value
+}
+
+# Navigate through the same Settings entry point a user must use after restart.
+# The restart proof intentionally leaves the application on its restored workspace,
+# so the expert <summary> is not in the accessibility tree until Settings is opened.
+Invoke-UiActionWithObservedTransition `
+  -Description 'Настройки' `
+  -TransitionDescription 'settings panel' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Настройки')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    # `Настройки программы` is also the permanent DocumentRail button, so its
+    # accessible name cannot prove that UtilityPanel actually mounted. Require a
+    # control that exists only inside the opened settings panel.
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Проверить и сохранить папку')
+  } | Out-Null
+
+# Hosted WebView2 can omit controls that are below the current viewport from the
+# UI Automation tree. Settings is taller than the app window, so reveal the lower
+# expert section through the same foreground keyboard path a user can use before
+# asking UIA to resolve its button. This is navigation only; it does not bypass
+# the real control or its enabled state.
+$currentAppWindow = Find-LiveAppWindow
+if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Экспертные и административные инструменты'))) {
+  $process.Refresh()
+  $windowHandle = [IntPtr]$process.MainWindowHandle
+  if ($windowHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
+    [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
+  }
+  $currentAppWindow.SetFocus()
+  [System.Windows.Forms.SendKeys]::SendWait('{END}')
+  Start-Sleep -Milliseconds 250
+}
+
+# Expand the existing expert tools instead of introducing a test-only learning API.
+# This control is a toggle: after a successful click it legitimately remains
+# actionable so it can be collapsed again. The generic observed-transition helper
+# treats a still-actionable control as a potentially swallowed WebView2 Invoke and
+# physically retries it; for a toggle that second click would close the section we
+# just opened. Use one foreground-safe physical click and still require the real
+# Template Learning card to appear.
+Invoke-UiActionPhysicallyFromProbe `
+  -Description 'Экспертные и административные инструменты' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Экспертные и административные инструменты')
+  }
+
+# WebView2 may omit expanded descendants that remain below the viewport. Walk the
+# real settings surface with bounded PageDown input until the actual learning card
+# enters the accessibility tree; never infer expansion merely from the toggle.
+$e2LearningCard = $null
+for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $e2LearningCard; $scrollAttempt++) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) {
+    Start-Sleep -Milliseconds 200
+    continue
+  }
+  $e2LearningCard = Find-E2NamedElement -Root $currentAppWindow -Name '2. Научить программу вашим шаблонам'
+  if ($null -ne $e2LearningCard) { break }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  # The top-level WebView2 UIA root may be non-focusable. Foreground activation of
+  # its native HWND is sufficient for real keyboard routing and avoids a false UIA failure.
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  Start-Sleep -Milliseconds 250
+}
+if ($null -eq $e2LearningCard) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'UI smoke timeout: Template Learning card after expanding expert tools and bounded viewport navigation'
+}
+
+$e2OutputReadiness = @(
+  '4–10 правильных результатов. Собрано: Correct Output 1/4–10, Source 0/4–10.',
+  '4–10 правильных результатов. Собрано: Correct Output 2/4–10, Source 0/4–10.',
+  '4–10 правильных результатов. Собрано: Correct Output 3/4–10, Source 0/4–10.',
+  '4–10 правильных результатов. Собрано: Correct Output 4/4–10, Source 0/4–10.'
+)
+$e2SourceReadiness = @(
+  '4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 1/4–10.',
+  '4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 2/4–10.',
+  '4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 3/4–10.',
+  '4–10 исходных документов Source. Готово к проверке. Пар: 4.'
+)
+# Blank acceptance is proven by the final readiness state below: React only renders
+# 'Готово к проверке. Пар: 4.' when blankLearningFile is non-null. The plain
+# filename <span> is not a stable standalone UIA element in hosted WebView2.
+Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)
+Open-E2FileSelection -Label '4–10 правильных результатов' -Paths $e2Outputs -ExpectedUiNames $e2OutputReadiness
+Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
+
+try {
+  # Hosted WebView2 can report a successful InvokePattern/mouse action without
+  # dispatching the DOM click. Exercise the actual focused button with a real
+  # foreground Enter key exactly once, then require the product transition.
+  $e2AnalyzeAction = Wait-UiElement -Description 'Проверить пары и предложить карту button' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+  }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared before E2 analysis.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($e2AnalyzeAction.Current.IsOffscreen -and $e2AnalyzeAction.Current.IsScrollItemPatternAvailable) {
+    $scroll = $e2AnalyzeAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $e2AnalyzeAction.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Wait-UiElement -Description 'publishable held-out learning result after real keyboard action' -TimeoutSeconds 60 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+  } | Out-Null
+} catch {
+  $learningFailure = $_
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) {
+    Write-E2LearningUiDiagnostic -Root $currentAppWindow
+  }
+  throw $learningFailure
+}
+
+$currentAppWindow = Find-LiveAppWindow
+$publishableLearningAction = if ($null -ne $currentAppWindow) {
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+} else {
+  $null
+}
+if ($null -eq $publishableLearningAction) {
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'E2 learning returned a report, but the held-out verdict is not publishable with validation evidence.'
+}
+
+# Hosted WebView2 can expose this publishable button below the viewport while
+# accepting UIA Invoke/physical mouse without dispatching a DOM click. Bring the
+# actual button into view, activate the installed native window, focus the real
+# HTML button and send one keyboard Enter. Publication is still proven only by
+# the appearance of the real publication fields below.
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'E2 publishable learning window disappeared before map confirmation.' }
+$publishableLearningAction = Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+if ($null -eq $publishableLearningAction) { throw 'E2 publishable learning action disappeared before map confirmation.' }
+if ($publishableLearningAction.Current.IsOffscreen -and $publishableLearningAction.Current.IsScrollItemPatternAvailable) {
+  $scroll = $publishableLearningAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 150
+}
+Activate-LiveAppWindow -Window $currentAppWindow
+$publishableLearningAction.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+# The publication inputs are rendered only after the map copy succeeds, but hosted
+# WebView2 may omit descendants that remain below the viewport from the UIA tree.
+# Use one foreground-safe physical action, then bounded real viewport navigation;
+# never infer failure from the still-enabled, legitimately repeatable apply button.
+$e2PublicationIdField = $null
+for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $e2PublicationIdField; $scrollAttempt++) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) {
+    Start-Sleep -Milliseconds 200
+    continue
+  }
+  $e2PublicationIdField = Find-E2NamedElement -Root $currentAppWindow -Name 'идентификатор: document.custom'
+  if ($null -ne $e2PublicationIdField) { break }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  Start-Sleep -Milliseconds 250
+}
+if ($null -eq $e2PublicationIdField) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'UI smoke timeout: learned template publication fields after map application and bounded viewport navigation'
+}
+
+$e2DocumentId = 'e2.installed.inn'
+$e2ButtonLabel = 'E2 обученная кнопка'
+Set-E2NamedValue -Name 'идентификатор: document.custom' -Value $e2DocumentId
+Set-E2NamedValue -Name 'название документа' -Value $e2ButtonLabel
+Invoke-UiActionWithObservedTransition `
+  -Description 'Добавить документ в набор' `
+  -TransitionDescription 'E2 learned document button' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Добавить документ в набор')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @($e2ButtonLabel)
+  } | Out-Null
+Write-Host 'E2 INSTALLED: learning-backed button published from four real matched pairs.'
+
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+Start-Sleep -Seconds 1
+
+$firewallRuleName = "Dokkomplekt-E2-offline-$PID"
+$firewallAdded = $false
+try {
+  & netsh advfirewall firewall add rule name="$firewallRuleName" dir=out action=block program="$($app.FullName)" enable=yes | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not add outbound block rule for E2 offline proof.' }
+  $firewallAdded = $true
+
+  $process = Start-Process -FilePath $app.FullName -PassThru
+  $appWindow = Wait-UiElement -Description 'E2 offline restarted installed window' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$process.Id
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
+  $learnedAfterRestart = Wait-UiElement -Description 'persisted E2 learned button after offline restart' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @($e2ButtonLabel)
+  }
+  if ($null -eq $learnedAfterRestart) { throw 'E2 learned button disappeared after installed offline restart.' }
+
+  # Load the held-out Source only after the offline restart. Generation must use
+  # local compiled mapping/template/version evidence, never training files or AI.
+  $sourceDialog = Invoke-UiActionWithObservedTransition `
+    -Description 'E2 offline source picker' `
+    -TransitionDescription 'E2 offline source file dialog' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать исходный файл', 'Заменить исходный файл')
+    } `
+    -TransitionProbe { Find-FileDialog }
+  $sourceEdit = Wait-UiElement -Description 'E2 offline source filename' -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $sourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  Set-UiValue -Element $sourceEdit -Value $e2Sources[3]
+  Submit-OpenFileDialog -Dialog $sourceDialog
+  Wait-UiElement -Description 'E2 offline source accepted' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Источник принят'
+  } | Out-Null
+
+  # Select only the learned document.
+  $clear = Find-ReadyButtonByNames -Root $appWindow -Names @('Снять выбор')
+  if ($null -ne $clear) { Invoke-UiElement -Element $clear -Description 'Снять выбор before E2 generation' }
+  $checkbox = Wait-UiElement -Description 'E2 learned document checkbox' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name "Добавить $e2ButtonLabel в комплект"
+  }
+  # WebView2 does not consistently expose TogglePattern for an HTML checkbox,
+  # even though the real input is visible and physically actionable. Exercise the
+  # installed control itself, then require the product selection state to become
+  # observable through the enabled one-document generation action.
+  Invoke-UiElementPhysically -Element $checkbox -Description 'E2 learned document checkbox'
+  Wait-UiElement -Description 'E2 learned document selected in package' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } | Out-Null
+
+  $preflight = Invoke-UiActionWithObservedTransition `
+    -Description 'E2 offline generation action' `
+    -TransitionDescription 'E2 offline preflight' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-E2NamedElement -Root $currentAppWindow -Name 'Проверка перед созданием'
+    }
+  if ($null -eq $preflight) { throw 'E2 offline generation did not open preflight.' }
+  # Use one real foreground keyboard action for the final E2 publication too.
+  # UIA InvokePattern alone is not evidence that WebView2 dispatched the click.
+  $e2CreateAction = Wait-UiElement -Description 'E2 Создать документы button' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+  }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared before E2 document generation.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($e2CreateAction.Current.IsOffscreen -and $e2CreateAction.Current.IsScrollItemPatternAvailable) {
+    $scroll = $e2CreateAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $e2CreateAction.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+  # The canonical plan is re-read at the publication boundary. If that refresh
+  # introduces output-folder identity fields, the product returns them to the
+  # still-open preflight. Fill those real user-facing controls, then explicitly
+  # confirm a second time instead of bypassing the naming contract.
+  $e2DocumentNumberInput = Wait-UiElement -Description 'E2 refreshed document number' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      'workflow-document-number'
+    )
+    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  Set-UiValue -Element $e2DocumentNumberInput -Value 'E2-7708004767'
+  $e2DocumentDateInput = Wait-UiElement -Description 'E2 refreshed document date' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      'workflow-document-date'
+    )
+    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  Set-UiValue -Element $e2DocumentDateInput -Value '18.09.2026'
+
+  $e2CreateAction = Wait-UiElement -Description 'E2 Создать документы after refreshed preflight' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+  }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared after refreshed E2 preflight.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($e2CreateAction.Current.IsOffscreen -and $e2CreateAction.Current.IsScrollItemPatternAvailable) {
+    $scroll = $e2CreateAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $e2CreateAction.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+  $e2ExpectedFile = "$e2ButtonLabel.docx"
+  $e2Deadline = [DateTime]::UtcNow.AddSeconds(60)
+  $e2Created = $null
+  $e2GenerationFailure = $null
+  do {
+    $e2Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $e2ExpectedFile -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($null -ne $e2Created) { break }
+
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared during E2 generation.' }
+    try {
+      $allNodes = $currentAppWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )
+      $e2GenerationMarker = $null
+      foreach ($node in $allNodes) {
+        try {
+          $name = [string]$node.Current.Name
+          if ([string]::IsNullOrWhiteSpace($name)) { continue }
+          if ($name.StartsWith('Документы не созданы:')) {
+            $e2GenerationFailure = $name
+            break
+          }
+          if ($name.StartsWith('Документы не созданы')) {
+            $e2GenerationMarker = $name
+          }
+        } catch {}
+      }
+      if ($null -eq $e2GenerationFailure -and $null -ne $e2GenerationMarker) {
+        $e2GenerationFailure = $e2GenerationMarker
+      }
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+    }
+    if ($null -ne $e2GenerationFailure) { break }
+    Start-Sleep -Milliseconds 250
+  } while ([DateTime]::UtcNow -lt $e2Deadline)
+
+  if ($null -ne $e2GenerationFailure) {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+    throw "E2 offline installed generation was rejected by the product: $e2GenerationFailure"
+  }
+  if ($null -eq $e2Created) {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+    throw 'E2 real keyboard generation action produced neither a physical DOCX nor a visible product error.'
+  }
+  $e2Archive = [System.IO.Compression.ZipFile]::OpenRead($e2Created.FullName)
+  try {
+    $entry = $e2Archive.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw 'E2 generated file is not a readable DOCX.' }
+    $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+    try { $xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    if ($xml -notmatch '7708004767') { throw 'E2 offline generation did not render held-out Source INN.' }
+    if ($xml -match '__________') { throw 'E2 offline generation left the learned INN placeholder unresolved.' }
+    if ($xml -notmatch 'Режим: стандарт') { throw 'E2 offline generation changed an immutable template line.' }
+  } finally {
+    $e2Archive.Dispose()
+  }
+  Write-Host "E2 INSTALLED PASS: learn -> publish -> offline restart -> physical DOCX: $($e2Created.FullName)"
+} finally {
+  if ($firewallAdded) {
+    & netsh advfirewall firewall delete rule name="$firewallRuleName" | Out-Null
+  }
+}
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()

@@ -640,6 +640,7 @@ fn migrate_loaded_medical_template_contracts(
             &compiled.path,
             &template_sha256,
             "Автоматическая миграция старого doctor-owned шаблона в структурный semantic-contract.",
+            None,
         )?;
         candidate_document.template_path = draft.template_path.clone();
         *document = candidate_document;

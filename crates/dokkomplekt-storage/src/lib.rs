@@ -69,6 +69,7 @@ pub struct TemplateVersionRecord {
     pub template_sha256: String,
     pub note: String,
     pub status: String,
+    pub learning_validation_id: Option<String>,
     pub created_at: String,
 }
 
@@ -78,6 +79,20 @@ pub struct TemplateVersionDraft {
     pub template_path: String,
     pub template_sha256: String,
     pub note: String,
+    pub learning_validation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TemplateLearningValidationRecord {
+    pub validation_id: String,
+    pub blank_template_sha256: String,
+    pub candidate_mapping_sha256: String,
+    pub applied_mapping_sha256: Option<String>,
+    pub learned_template_sha256: Option<String>,
+    pub evidence_json: String,
+    pub status: String,
+    pub published_version_id: Option<String>,
+    pub created_at: String,
 }
 
 pub struct DesktopSnapshotPublication<'a, T: ?Sized> {
@@ -295,6 +310,19 @@ impl LocalRepository {
             );
             CREATE INDEX IF NOT EXISTS idx_template_versions_document
               ON template_versions(document_id, version_number DESC);
+            CREATE TABLE IF NOT EXISTS template_learning_validations (
+              validation_id TEXT PRIMARY KEY,
+              blank_template_sha256 TEXT NOT NULL,
+              candidate_mapping_sha256 TEXT NOT NULL,
+              applied_mapping_sha256 TEXT,
+              learned_template_sha256 TEXT,
+              evidence_json TEXT NOT NULL,
+              status TEXT NOT NULL,
+              published_version_id TEXT,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_template_learning_validations_output
+              ON template_learning_validations(learned_template_sha256, status);
             CREATE TABLE IF NOT EXISTS case_runs (
               case_id TEXT PRIMARY KEY,
               source_sha256 TEXT NOT NULL,
@@ -380,6 +408,7 @@ impl LocalRepository {
             "recovery_protocol",
             "TEXT NOT NULL DEFAULT 'legacy_conservative'",
         )?;
+        self.ensure_column("template_versions", "learning_validation_id", "TEXT")?;
         Ok(())
     }
 
@@ -995,6 +1024,167 @@ impl LocalRepository {
         Ok(changed)
     }
 
+    pub fn register_template_learning_validation(
+        &self,
+        blank_template_sha256: &str,
+        candidate_mapping_sha256: &str,
+        evidence_json: &str,
+    ) -> StorageResult<TemplateLearningValidationRecord> {
+        for (label, digest) in [
+            ("blank_template_sha256", blank_template_sha256),
+            ("candidate_mapping_sha256", candidate_mapping_sha256),
+        ] {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(StorageError::Crypto(format!(
+                    "{label} must be lowercase SHA-256"
+                )));
+            }
+        }
+        let validation_id = random_record_id("learning")?;
+        let protected_evidence = self.encode_sensitive(evidence_json)?;
+        self.conn.execute(
+            "INSERT INTO template_learning_validations(validation_id,blank_template_sha256,candidate_mapping_sha256,evidence_json,status) VALUES (?1,?2,?3,?4,'validated')",
+            params![
+                validation_id.as_str(),
+                blank_template_sha256,
+                candidate_mapping_sha256,
+                protected_evidence,
+            ],
+        )?;
+        self.template_learning_validation_by_id(&validation_id)?
+            .ok_or_else(|| {
+                StorageError::Crypto("registered learning validation disappeared".into())
+            })
+    }
+
+    pub fn template_learning_validation_by_id(
+        &self,
+        validation_id: &str,
+    ) -> StorageResult<Option<TemplateLearningValidationRecord>> {
+        let raw = self
+            .conn
+            .query_row(
+                "SELECT validation_id,blank_template_sha256,candidate_mapping_sha256,applied_mapping_sha256,learned_template_sha256,evidence_json,status,published_version_id,created_at FROM template_learning_validations WHERE validation_id=?1",
+                params![validation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+        raw.map(|row| {
+            Ok(TemplateLearningValidationRecord {
+                validation_id: row.0,
+                blank_template_sha256: row.1,
+                candidate_mapping_sha256: row.2,
+                applied_mapping_sha256: row.3,
+                learned_template_sha256: row.4,
+                evidence_json: self.decode_sensitive(&row.5)?,
+                status: row.6,
+                published_version_id: row.7,
+                created_at: row.8,
+            })
+        })
+        .transpose()
+    }
+
+    pub fn template_learning_validation_by_output_sha256(
+        &self,
+        learned_template_sha256: &str,
+    ) -> StorageResult<Option<TemplateLearningValidationRecord>> {
+        let validation_id = self
+            .conn
+            .query_row(
+                "SELECT validation_id FROM template_learning_validations WHERE learned_template_sha256=?1 AND status IN ('ready_to_publish','published') ORDER BY created_at DESC LIMIT 1",
+                params![learned_template_sha256],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        validation_id
+            .map(|validation_id| self.template_learning_validation_by_id(&validation_id))
+            .transpose()
+            .map(|record| record.flatten())
+    }
+
+    pub fn bind_template_learning_validation_output(
+        &mut self,
+        validation_id: &str,
+        blank_template_sha256: &str,
+        applied_mapping_sha256: &str,
+        learned_template_sha256: &str,
+    ) -> StorageResult<TemplateLearningValidationRecord> {
+        for (label, digest) in [
+            ("blank_template_sha256", blank_template_sha256),
+            ("applied_mapping_sha256", applied_mapping_sha256),
+            ("learned_template_sha256", learned_template_sha256),
+        ] {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(StorageError::Crypto(format!(
+                    "{label} must be lowercase SHA-256"
+                )));
+            }
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let persisted: Option<(String, String, String, Option<String>)> = tx
+            .query_row(
+                "SELECT blank_template_sha256,candidate_mapping_sha256,status,learned_template_sha256 FROM template_learning_validations WHERE validation_id=?1",
+                params![validation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((stored_blank, _candidate_mapping, status, stored_output)) = persisted else {
+            return Err(StorageError::Crypto("learning validation not found".into()));
+        };
+        if stored_blank != blank_template_sha256 {
+            return Err(StorageError::Crypto(
+                "learning validation belongs to a different blank template".into(),
+            ));
+        }
+        if status == "ready_to_publish" && stored_output.as_deref() == Some(learned_template_sha256)
+        {
+            tx.commit()?;
+            return self
+                .template_learning_validation_by_id(validation_id)?
+                .ok_or_else(|| StorageError::Crypto("learning validation disappeared".into()));
+        }
+        if status != "validated" {
+            return Err(StorageError::Crypto(format!(
+                "learning validation cannot bind output from status {status}"
+            )));
+        }
+        let changed = tx.execute(
+            "UPDATE template_learning_validations SET applied_mapping_sha256=?2,learned_template_sha256=?3,status='ready_to_publish' WHERE validation_id=?1 AND status='validated'",
+            params![validation_id, applied_mapping_sha256, learned_template_sha256],
+        )?;
+        if changed != 1 {
+            return Err(StorageError::Crypto(
+                "learning validation output binding lost a concurrent race".into(),
+            ));
+        }
+        tx.commit()?;
+        self.template_learning_validation_by_id(validation_id)?
+            .ok_or_else(|| StorageError::Crypto("bound learning validation disappeared".into()))
+    }
+
     /// Atomically publishes the complete desktop snapshot together with all
     /// template-version records that make the candidate pack auditable.
     ///
@@ -1077,17 +1267,43 @@ impl LocalRepository {
 
         let mut published_ids = Vec::with_capacity(prepared.len());
         for (draft, version_id, encrypted_path, encrypted_note) in prepared {
-            let current: Option<(String, String)> = tx
+            let current: Option<(String, String, Option<String>)> = tx
                 .query_row(
-                    "SELECT version_id,template_sha256 FROM template_versions WHERE document_id=?1 AND status='published' ORDER BY version_number DESC LIMIT 1",
+                    "SELECT version_id,template_sha256,learning_validation_id FROM template_versions WHERE document_id=?1 AND status='published' ORDER BY version_number DESC LIMIT 1",
                     params![draft.document_id.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?;
-            if let Some((current_id, current_sha256)) = current {
-                if current_sha256 == draft.template_sha256 {
+            if let Some((current_id, current_sha256, current_validation_id)) = current {
+                if current_sha256 == draft.template_sha256
+                    && current_validation_id == draft.learning_validation_id
+                {
                     published_ids.push(current_id);
                     continue;
+                }
+            }
+            if let Some(validation_id) = draft.learning_validation_id.as_deref() {
+                let validation: Option<(String, Option<String>)> = tx
+                    .query_row(
+                        "SELECT status,learned_template_sha256 FROM template_learning_validations WHERE validation_id=?1",
+                        params![validation_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((status, learned_template_sha256)) = validation else {
+                    return Err(StorageError::Crypto(
+                        "template version references missing learning validation".into(),
+                    ));
+                };
+                if status != "ready_to_publish" {
+                    return Err(StorageError::Crypto(format!(
+                        "learning validation is not ready to publish: {status}"
+                    )));
+                }
+                if learned_template_sha256.as_deref() != Some(draft.template_sha256.as_str()) {
+                    return Err(StorageError::Crypto(
+                        "learning validation belongs to different learned template bytes".into(),
+                    ));
                 }
             }
             let next: i64 = tx.query_row(
@@ -1096,11 +1312,11 @@ impl LocalRepository {
                 |row| row.get(0),
             )?;
             tx.execute(
-                "UPDATE template_versions SET status='archived' WHERE document_id=?1 AND status='published'",
+                "UPDATE template_versions SET status='superseded' WHERE document_id=?1 AND status='published'",
                 params![draft.document_id.as_str()],
             )?;
             tx.execute(
-                "INSERT INTO template_versions(version_id,document_id,version_number,template_path,template_sha256,note,status) VALUES (?1,?2,?3,?4,?5,?6,'published')",
+                "INSERT INTO template_versions(version_id,document_id,version_number,template_path,template_sha256,note,status,learning_validation_id) VALUES (?1,?2,?3,?4,?5,?6,'published',?7)",
                 params![
                     version_id.as_str(),
                     draft.document_id.as_str(),
@@ -1108,8 +1324,20 @@ impl LocalRepository {
                     encrypted_path,
                     draft.template_sha256.as_str(),
                     encrypted_note,
+                    draft.learning_validation_id.as_deref(),
                 ],
             )?;
+            if let Some(validation_id) = draft.learning_validation_id.as_deref() {
+                let changed = tx.execute(
+                    "UPDATE template_learning_validations SET status='published',published_version_id=?2 WHERE validation_id=?1 AND status='ready_to_publish'",
+                    params![validation_id, version_id.as_str()],
+                )?;
+                if changed != 1 {
+                    return Err(StorageError::Crypto(
+                        "learning validation publication lost a concurrent race".into(),
+                    ));
+                }
+            }
             published_ids.push(version_id);
         }
         tx.commit()?;
@@ -1158,11 +1386,11 @@ impl LocalRepository {
             |row| row.get(0),
         )?;
         tx.execute(
-            "UPDATE template_versions SET status='archived' WHERE document_id=?1 AND status='published'",
+            "UPDATE template_versions SET status='superseded' WHERE document_id=?1 AND status='published'",
             params![document_id],
         )?;
         tx.execute(
-            "INSERT INTO template_versions(version_id,document_id,version_number,template_path,template_sha256,note,status) VALUES (?1,?2,?3,?4,?5,?6,'published')",
+            "INSERT INTO template_versions(version_id,document_id,version_number,template_path,template_sha256,note,status,learning_validation_id) VALUES (?1,?2,?3,?4,?5,?6,'published',NULL)",
             params![version_id, document_id, next, encrypted_path, template_sha256, encrypted_note],
         )?;
         tx.commit()?;
@@ -1177,7 +1405,7 @@ impl LocalRepository {
         let raw = self
             .conn
             .query_row(
-                "SELECT version_id,document_id,version_number,template_path,template_sha256,note,status,created_at FROM template_versions WHERE version_id=?1",
+                "SELECT version_id,document_id,version_number,template_path,template_sha256,note,status,learning_validation_id,created_at FROM template_versions WHERE version_id=?1",
                 params![version_id],
                 |row| {
                     Ok((
@@ -1188,7 +1416,8 @@ impl LocalRepository {
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
-                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 },
             )
@@ -1202,7 +1431,7 @@ impl LocalRepository {
         document_id: &str,
     ) -> StorageResult<Vec<TemplateVersionRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT version_id,document_id,version_number,template_path,template_sha256,note,status,created_at FROM template_versions WHERE document_id=?1 ORDER BY version_number DESC",
+            "SELECT version_id,document_id,version_number,template_path,template_sha256,note,status,learning_validation_id,created_at FROM template_versions WHERE document_id=?1 ORDER BY version_number DESC",
         )?;
         let raw = statement
             .query_map(params![document_id], |row| {
@@ -1214,7 +1443,8 @@ impl LocalRepository {
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1225,7 +1455,17 @@ impl LocalRepository {
 
     fn decode_template_version_row(
         &self,
-        row: (String, String, i64, String, String, String, String, String),
+        row: (
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+        ),
     ) -> StorageResult<TemplateVersionRecord> {
         Ok(TemplateVersionRecord {
             version_id: row.0,
@@ -1235,7 +1475,8 @@ impl LocalRepository {
             template_sha256: row.4,
             note: self.decode_sensitive(&row.5)?,
             status: row.6,
-            created_at: row.7,
+            learning_validation_id: row.7,
+            created_at: row.8,
         })
     }
 
@@ -2485,6 +2726,7 @@ mod tests {
             template_path: "C:/archive/invoice.docx".into(),
             template_sha256: "a".repeat(64),
             note: "atomic publish".into(),
+            learning_validation_id: None,
         };
         let versions = repo
             .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
@@ -2510,6 +2752,277 @@ mod tests {
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].status, "published");
         assert_eq!(repo.list_template_versions("invoice").unwrap().len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn learning_validation_is_bound_atomically_to_published_version_and_survives_reopen() {
+        let path = temp_db("template-learning-version-bundle");
+        let key = [24u8; 32];
+        let mut repo = LocalRepository::open_with_key(&path, key).unwrap();
+        let validation = repo
+            .register_template_learning_validation(
+                &"1".repeat(64),
+                &"2".repeat(64),
+                r#"{"verdict":"passed","source_profile_field_ids":["invoice.number"]}"#,
+            )
+            .unwrap();
+        let validation = repo
+            .bind_template_learning_validation_output(
+                &validation.validation_id,
+                &"1".repeat(64),
+                &"3".repeat(64),
+                &"a".repeat(64),
+            )
+            .unwrap();
+        assert_eq!(validation.status, "ready_to_publish");
+        let by_output = repo
+            .template_learning_validation_by_output_sha256(&"a".repeat(64))
+            .unwrap()
+            .expect("validation by learned output sha");
+        assert_eq!(by_output.validation_id, validation.validation_id);
+
+        let case = SemanticCase::default();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "candidate".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let draft = TemplateVersionDraft {
+            document_id: "invoice".into(),
+            template_path: "C:/archive/invoice-learned.docx".into(),
+            template_sha256: "a".repeat(64),
+            note: "validated learning publish".into(),
+            learning_validation_id: Some(validation.validation_id.clone()),
+        };
+        let versions = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[draft],
+            })
+            .unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(
+            versions[0].learning_validation_id.as_deref(),
+            Some(validation.validation_id.as_str())
+        );
+        let published_version_id = versions[0].version_id.clone();
+        drop(repo);
+
+        let reopened = LocalRepository::open_with_key(&path, key).unwrap();
+        assert_eq!(reopened.load_pack("default").unwrap(), Some(candidate));
+        let version = reopened
+            .list_template_versions("invoice")
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("published learned version");
+        assert_eq!(version.version_id, published_version_id);
+        assert_eq!(
+            version.learning_validation_id.as_deref(),
+            Some(validation.validation_id.as_str())
+        );
+        let persisted = reopened
+            .template_learning_validation_by_id(&validation.validation_id)
+            .unwrap()
+            .expect("persisted learning validation");
+        assert_eq!(persisted.status, "published");
+        assert_eq!(
+            persisted.published_version_id.as_deref(),
+            Some(version.version_id.as_str())
+        );
+        assert!(persisted.evidence_json.contains("invoice.number"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn revalidated_repair_supersedes_previous_version_and_keeps_both_proofs() {
+        let path = temp_db("template-learning-repair-version-chain");
+        let key = [26u8; 32];
+        let mut repo = LocalRepository::open_with_key(&path, key).unwrap();
+        let case = SemanticCase::default();
+
+        let first_validation = repo
+            .register_template_learning_validation(
+                &"1".repeat(64),
+                &"2".repeat(64),
+                r#"{"verdict":"passed","cycle":"initial"}"#,
+            )
+            .unwrap();
+        let first_validation = repo
+            .bind_template_learning_validation_output(
+                &first_validation.validation_id,
+                &"1".repeat(64),
+                &"3".repeat(64),
+                &"a".repeat(64),
+            )
+            .unwrap();
+        let first_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "initial".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let first_versions = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &first_pack,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[TemplateVersionDraft {
+                    document_id: "invoice".into(),
+                    template_path: "C:/archive/invoice-v1.docx".into(),
+                    template_sha256: "a".repeat(64),
+                    note: "initial validated learning publish".into(),
+                    learning_validation_id: Some(first_validation.validation_id.clone()),
+                }],
+            })
+            .unwrap();
+        let first_version_id = first_versions[0].version_id.clone();
+
+        let repair_validation = repo
+            .register_template_learning_validation(
+                &"4".repeat(64),
+                &"5".repeat(64),
+                r#"{"verdict":"passed","cycle":"repair"}"#,
+            )
+            .unwrap();
+        let repair_validation = repo
+            .bind_template_learning_validation_output(
+                &repair_validation.validation_id,
+                &"4".repeat(64),
+                &"6".repeat(64),
+                &"b".repeat(64),
+            )
+            .unwrap();
+        let repaired_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "repair".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let repair_versions = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &repaired_pack,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[TemplateVersionDraft {
+                    document_id: "invoice".into(),
+                    template_path: "C:/archive/invoice-v2.docx".into(),
+                    template_sha256: "b".repeat(64),
+                    note: "revalidated repair".into(),
+                    learning_validation_id: Some(repair_validation.validation_id.clone()),
+                }],
+            })
+            .unwrap();
+        let repair_version_id = repair_versions[0].version_id.clone();
+
+        let versions = repo.list_template_versions("invoice").unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].version_id, repair_version_id);
+        assert_eq!(versions[0].status, "published");
+        assert_eq!(
+            versions[0].learning_validation_id.as_deref(),
+            Some(repair_validation.validation_id.as_str())
+        );
+        assert_eq!(versions[1].version_id, first_version_id);
+        assert_eq!(versions[1].status, "superseded");
+        assert_eq!(
+            versions[1].learning_validation_id.as_deref(),
+            Some(first_validation.validation_id.as_str())
+        );
+
+        let persisted_first = repo
+            .template_learning_validation_by_id(&first_validation.validation_id)
+            .unwrap()
+            .unwrap();
+        let persisted_repair = repo
+            .template_learning_validation_by_id(&repair_validation.validation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted_first.status, "published");
+        assert_eq!(
+            persisted_first.published_version_id.as_deref(),
+            Some(first_version_id.as_str())
+        );
+        assert_eq!(persisted_repair.status, "published");
+        assert_eq!(
+            persisted_repair.published_version_id.as_deref(),
+            Some(repair_version_id.as_str())
+        );
+        assert_eq!(repo.load_pack("default").unwrap(), Some(repaired_pack));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn learning_validation_cannot_publish_different_template_bytes() {
+        let path = temp_db("template-learning-proof-mismatch");
+        let mut repo = LocalRepository::open_with_key(&path, [25u8; 32]).unwrap();
+        let validation = repo
+            .register_template_learning_validation(
+                &"1".repeat(64),
+                &"2".repeat(64),
+                r#"{"verdict":"passed"}"#,
+            )
+            .unwrap();
+        let validation = repo
+            .bind_template_learning_validation_output(
+                &validation.validation_id,
+                &"1".repeat(64),
+                &"2".repeat(64),
+                &"a".repeat(64),
+            )
+            .unwrap();
+        let case = SemanticCase::default();
+        let old_pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "old".into(),
+            documents: Vec::new(),
+        };
+        repo.save_case_and_pack_atomic("current", "default", &case, &old_pack)
+            .unwrap();
+        let candidate = DocumentPack {
+            pack_id: "default".into(),
+            name: "candidate".into(),
+            documents: vec![workspace_document("invoice", "invoice", "invoice.number")],
+        };
+        let draft = TemplateVersionDraft {
+            document_id: "invoice".into(),
+            template_path: "C:/archive/tampered.docx".into(),
+            template_sha256: "b".repeat(64),
+            note: "must fail".into(),
+            learning_validation_id: Some(validation.validation_id.clone()),
+        };
+        let error = repo
+            .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
+                case_id: "current",
+                pack_id: "default",
+                case: &case,
+                pack: &candidate,
+                state_key: "license_document",
+                state_value: &Option::<String>::None,
+                versions: &[draft],
+            })
+            .expect_err("proof for different bytes must fail closed");
+        assert!(error
+            .to_string()
+            .contains("different learned template bytes"));
+        assert_eq!(repo.load_pack("default").unwrap(), Some(old_pack));
+        assert!(repo.list_template_versions("invoice").unwrap().is_empty());
+        let persisted = repo
+            .template_learning_validation_by_id(&validation.validation_id)
+            .unwrap()
+            .expect("validation must remain available for the correct candidate");
+        assert_eq!(persisted.status, "ready_to_publish");
+        assert!(persisted.published_version_id.is_none());
         let _ = std::fs::remove_file(path);
     }
 
@@ -2541,6 +3054,7 @@ mod tests {
             template_path: "C:/archive/invoice.docx".into(),
             template_sha256: "NOT-A-SHA".into(),
             note: "invalid".into(),
+            learning_validation_id: None,
         };
         assert!(repo
             .save_desktop_snapshot_with_template_versions(DesktopSnapshotPublication {
@@ -2587,6 +3101,7 @@ mod tests {
             template_path: "C:/archive/ghost.docx".into(),
             template_sha256: "f".repeat(64),
             note: "must be rejected".into(),
+            learning_validation_id: None,
         };
 
         let error = repo
@@ -2631,7 +3146,7 @@ mod tests {
         assert_eq!(second.version_number, 2);
         let versions = repo.list_template_versions("invoice").unwrap();
         assert_eq!(versions[0].status, "published");
-        assert_eq!(versions[1].status, "archived");
+        assert_eq!(versions[1].status, "superseded");
         let raw: String = repo
             .conn
             .query_row(

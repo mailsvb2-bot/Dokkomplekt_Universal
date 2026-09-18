@@ -112,3 +112,40 @@ def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> N
     assert "Blank discharge template did not render the current diagnosis" in source
     assert "Blank discharge compiler consumed the following somatic-status section" in source
     assert "Blank discharge generation left a semantic placeholder unresolved" in source
+
+
+def test_e2_installed_learning_observes_pair_selections_and_final_blank_acceptance() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+    start = source.index("function Open-E2FileSelection")
+    end = source.index("function Set-E2NamedValue", start)
+    picker = source[start:end]
+
+    assert "[string[]]$ExpectedUiNames = @()" in picker
+    assert "expected UI evidence count must match selected path count" in picker
+    assert 'Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)"' in picker
+    assert "$actionButtonName = if ($selectionIndex -eq 0 -or $ExpectedUiNames.Count -eq 0)" in picker
+    assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)" in picker
+    assert "Find-ButtonByNames -Root $currentAppWindow -Names @($expectedUiName)" in picker
+    assert "Start-Sleep -Milliseconds 150" not in picker
+    assert "Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)" in source
+    assert "-Paths @($e2Blank) -ExpectedUiNames" not in source
+    assert "React only renders" in source
+    for expected in (
+        "4–10 правильных результатов. Собрано: Correct Output 1/4–10, Source 0/4–10.",
+        "4–10 правильных результатов. Собрано: Correct Output 4/4–10, Source 0/4–10.",
+        "4–10 исходных документов Source. Собрано: Correct Output 4/4–10, Source 1/4–10.",
+        "4–10 исходных документов Source. Готово к проверке. Пар: 4.",
+    ):
+        assert expected in source
+
+
+def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "function Write-E2LearningUiDiagnostic" in source
+    assert "E2 UI diagnostic begin" in source
+    assert "ошиб|обуч|провер|карт|готов|валид|publish|шаблон|source|correct" in source
+    assert "Write-E2LearningUiDiagnostic -Root $currentAppWindow" in source
+    assert "throw $learningFailure" in source
+    assert "publishable held-out learning result" in source
+

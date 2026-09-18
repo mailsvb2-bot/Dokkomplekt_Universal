@@ -22,6 +22,18 @@ def test_legacy_windows_powershell_contract_is_utf8_bom_marked() -> None:
     assert any(ord(character) > 127 for character in source)
 
 
+def test_direct_bom_contract_exercises_refreshed_output_identity_prompts() -> None:
+    source = CONTRACT.read_text(encoding="utf-8-sig")
+    assert "E2 refreshed document number" in source
+    assert "E2 refreshed document date" in source
+    assert "workflow-document-number" in source
+    assert "workflow-document-date" in source
+    assert "E2-7708004767" in source
+    assert "18.09.2026" in source
+    assert "E2 Создать документы after refreshed preflight" in source
+    assert "confirm a second time instead of bypassing the naming contract" in source
+
+
 def test_quality_gate_still_executes_contract_with_legacy_powershell() -> None:
     source = QUALITY_GATE_BAT.read_text(encoding="utf-8")
     assert (

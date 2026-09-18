@@ -35,7 +35,7 @@ interface TemplateSetupModalProps {
   onApplyWorkspaceDomain?(value: DomainKind): void;
   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
-  onLearnPendingTemplate(documentId: string, files: File[]): Promise<void>;
+  onLearnPendingTemplate(documentId: string, pairs: Array<{ source: File; completed: File }>): Promise<void>;
   onStartGuidedPendingScanner(documentId: string): void;
   onAnalyze(): void;
   onPickFile(event: ChangeEvent<HTMLInputElement>): void;
@@ -50,6 +50,8 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
   const [marking, setMarking] = useState(false);
+  const [learningSources, setLearningSources] = useState<File[]>([]);
+  const [learningOutputs, setLearningOutputs] = useState<File[]>([]);
   const activePending = useMemo(
     () => props.pendingTemplates.find((item) => item.document_id === activePendingId) ?? props.pendingTemplates[0] ?? null,
     [activePendingId, props.pendingTemplates],
@@ -72,6 +74,11 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
       setActivePendingId(props.pendingTemplates[0].document_id);
     }
   }, [activePendingId, props.pendingTemplates]);
+
+  useEffect(() => {
+    setLearningSources([]);
+    setLearningOutputs([]);
+  }, [activePending?.document_id]);
 
   useEffect(() => {
     for (const item of props.pendingTemplates) {
@@ -232,20 +239,46 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                     <div><strong>Показать место для автоматического заполнения</strong><small>Этот шаг не нужен для создания кнопки. Его можно выполнить позже.</small></div>
                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}><i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место</button>
 
-                    <label className="softBtn fileBtn">
-                      <i className="ti ti-school" aria-hidden="true" /> Обучить по 3–10 примерам
-                      <input
-                        type="file"
-                        multiple
-                        accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                        onChange={(event) => {
-                          const files = Array.from(event.currentTarget.files ?? []);
-                          event.currentTarget.value = '';
-                          if (files.length) void props.onLearnPendingTemplate(activePending.document_id, files);
-                        }}
-                        style={{ display: 'none' }}
-                      />
-                    </label>
+                    <div className="templateLearningPairs">
+                      <label className="softBtn fileBtn">
+                        <i className="ti ti-file-input" aria-hidden="true" /> 1. Источники (4–10)
+                        <input
+                          type="file"
+                          multiple
+                          accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                          onChange={(event) => {
+                            setLearningSources(Array.from(event.currentTarget.files ?? []));
+                            event.currentTarget.value = '';
+                          }}
+                          style={{ display: 'none' }}
+                        />
+                      </label>
+                      <label className="softBtn fileBtn">
+                        <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные результаты (4–10)
+                        <input
+                          type="file"
+                          multiple
+                          accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                          onChange={(event) => {
+                            setLearningOutputs(Array.from(event.currentTarget.files ?? []));
+                            event.currentTarget.value = '';
+                          }}
+                          style={{ display: 'none' }}
+                        />
+                      </label>
+                      <button
+                        className="softBtn"
+                        type="button"
+                        disabled={learningSources.length < 4 || learningSources.length > 10 || learningSources.length !== learningOutputs.length}
+                        onClick={() => void props.onLearnPendingTemplate(
+                          activePending.document_id,
+                          learningSources.map((source, index) => ({ source, completed: learningOutputs[index] })),
+                        )}
+                      >
+                        <i className="ti ti-school" aria-hidden="true" /> Обучить на {learningSources.length} паре(ах)
+                      </button>
+                      <small className="hint">Выберите 4–10 пар в одинаковом порядке. Последняя пара резервируется как независимая контрольная и не участвует в обучении: карта должна перенести на ней новое значение Source → Correct Output. Одна высокая «уверенность» ничего не доказывает и не публикует.</small>
+                    </div>
                   </div>
                   <details className="manualScannerDetails">
                     <summary>Ручная разметка</summary>

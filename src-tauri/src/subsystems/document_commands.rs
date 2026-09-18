@@ -143,196 +143,9 @@ fn prepare_template_setup(
     ))
 }
 
-#[derive(Debug, Deserialize)]
-struct ImportLearningExampleFileRequest {
-    file_name: String,
-    bytes_base64: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ImportLearningExampleFileResponse {
-    source_path: String,
-    source_kind: String,
-    extracted_text: String,
-    warnings: Vec<String>,
-}
-
-/// Persist and validate a user-supplied learning example. Unlike template import,
-/// this accepts every format supported by the universal intake pipeline, so source
-/// examples can be PDF, images, spreadsheets, e-mail or archives. The original
-/// upload is retained only in the local app-data learning workspace.
-#[tauri::command]
-fn import_learning_example_file(
-    req: ImportLearningExampleFileRequest,
-    app: tauri::AppHandle,
-) -> Result<ImportLearningExampleFileResponse, String> {
-    let bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
-    let _learning_guard = lock_learning_workspace()?;
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-learning-inputs");
-    let session_root = universal_intake::create_retained_workspace_session(&root)?;
-    let safe_name = sanitize_path_component(
-        Path::new(&req.file_name)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("example"),
-    );
-    if safe_name.is_empty() {
-        return Err("Имя учебного примера некорректно.".into());
-    }
-    let target = session_root.join(safe_name);
-    std::fs::write(&target, &bytes)
-        .map_err(|error| format!("Не удалось сохранить учебный пример: {error}"))?;
-    let work = session_root.join("normalized-work");
-    let normalized = match universal_intake::normalize_path(&target, &work, 0) {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&session_root);
-            return Err(error);
-        }
-    };
-    append_audit_event(
-        &app,
-        "template_learning_example_imported",
-        &format!("{:x}", Sha256::digest(&bytes)),
-        &serde_json::json!({
-            "file_name": req.file_name,
-            "source_kind": normalized.source_kind,
-            "byte_count": bytes.len(),
-            "document_text_not_logged": true,
-        }),
-    )?;
-    Ok(ImportLearningExampleFileResponse {
-        source_path: target.display().to_string(),
-        source_kind: normalized.source_kind,
-        extracted_text: normalized.text,
-        warnings: normalized.warnings,
-    })
-}
-
-#[derive(Debug, Deserialize)]
-struct LearnTemplateFromExamplesRequest {
-    blank_template_path: String,
-    completed_example_paths: Vec<String>,
-    #[serde(default)]
-    source_example_paths: Vec<String>,
-    default_year: i32,
-    #[serde(default)]
-    locale: Option<String>,
-}
-
-fn read_learning_text(app: &tauri::AppHandle, value: &str) -> Result<String, String> {
-    let path = resolve_user_path(app, value)?;
-    let learning_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-learning-inputs");
-    let _ = universal_intake::refresh_retained_workspace_session(&learning_root, &path)?;
-    let extension = path
-        .extension()
-        .and_then(|item| item.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if matches!(extension.as_str(), "docx" | "docm") {
-        return extract_docx_text(&path).map_err(|error| error.to_string());
-    }
-    let workspace = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-learning-work");
-    universal_intake::normalize_path(&path, &workspace, 0).map(|source| source.text)
-}
-
-#[tauri::command]
-fn learn_template_from_examples_command(
-    req: LearnTemplateFromExamplesRequest,
-    app: tauri::AppHandle,
-) -> Result<TemplateLearningReport, String> {
-    if req.completed_example_paths.len() < 3 {
-        return Err("Добавьте минимум три заполненных примера (поддерживается 3–10).".into());
-    }
-    let _learning_guard = lock_learning_workspace()?;
-    let blank_template_text = read_learning_text(&app, &req.blank_template_path)?;
-    let completed_examples = req
-        .completed_example_paths
-        .iter()
-        .take(10)
-        .map(|path| read_learning_text(&app, path))
-        .collect::<Result<Vec<_>, _>>()?;
-    let source_examples = req
-        .source_example_paths
-        .iter()
-        .take(10)
-        .map(|path| read_learning_text(&app, path))
-        .collect::<Result<Vec<_>, _>>()?;
-    let report = dokkomplekt_core::learn_template_from_examples(&TemplateLearningInput {
-        blank_template_text,
-        completed_examples,
-        source_examples,
-        default_year: req.default_year,
-        locale: req.locale.unwrap_or_else(|| "ru-RU".into()),
-    });
-    append_audit_event(
-        &app,
-        "template_examples_analyzed",
-        "",
-        &serde_json::json!({
-            "blank_template_path": req.blank_template_path,
-            "completed_example_count": req.completed_example_paths.len().min(10),
-            "source_example_count": req.source_example_paths.len().min(10),
-            "field_count": report.fields.len(),
-            "confidence": report.confidence,
-            "requires_confirmation": report.requires_confirmation,
-        }),
-    )?;
-    Ok(report)
-}
-
-#[derive(Debug, Deserialize)]
-struct ApplyTemplateLearningMapRequest {
-    input_path: String,
-    output_path: String,
-    confirmed_fields: Vec<TemplateLearningMapField>,
-}
-
-#[tauri::command]
-fn apply_template_learning_map(
-    req: ApplyTemplateLearningMapRequest,
-    app: tauri::AppHandle,
-) -> Result<TemplateLearningMapReport, String> {
-    if req.confirmed_fields.is_empty() {
-        return Err("Подтвердите хотя бы одно найденное поле.".into());
-    }
-    let input_path = resolve_user_path(&app, &req.input_path)?;
-    let output_path = resolve_user_path(&app, &req.output_path)?;
-    if input_path == output_path {
-        return Err("Обученная карта применяется только к новой копии; исходный шаблон не перезаписывается.".into());
-    }
-    let report = apply_template_learning_map_file(
-        &input_path,
-        &output_path,
-        &req.confirmed_fields,
-    )
-    .map_err(|error| error.to_string())?;
-    append_audit_event(
-        &app,
-        "template_learning_map_applied",
-        &format!("{:x}", Sha256::digest(output_path.display().to_string().as_bytes())),
-        &serde_json::json!({
-            "input_path": input_path.display().to_string(),
-            "output_path": output_path.display().to_string(),
-            "applied_field_ids": &report.applied_field_ids,
-            "skipped_field_ids": &report.skipped_field_ids,
-            "explicit_confirmation": true,
-        }),
-    )?;
-    Ok(report)
-}
+// E2 Template Intelligence commands stay in this module scope via include!,
+// but live separately to keep the desktop command owner below the god-module limit.
+include!("template_learning_commands.rs");
 
 fn publish_pack_with_template_versions<F>(
     app: &tauri::AppHandle,
@@ -448,6 +261,7 @@ struct RegisterLearnedTemplateRequest {
     document_id: String,
     button_label: String,
     template_path: String,
+    learning_validation_id: String,
 }
 
 #[tauri::command]
@@ -458,6 +272,7 @@ fn register_learned_template(
 ) -> Result<DocumentPack, String> {
     let document_id = req.document_id.trim();
     let button_label = req.button_label.trim();
+    let learning_validation_id = req.learning_validation_id.trim();
     if document_id.is_empty()
         || !document_id
             .chars()
@@ -468,11 +283,11 @@ fn register_learned_template(
     if button_label.is_empty() {
         return Err("Укажите название кнопки.".into());
     }
-    let template_snapshot = template_snapshot::TemplateSnapshot::capture(
-        &app,
-        &req.template_path,
-        button_label,
-    )?;
+    if learning_validation_id.is_empty() {
+        return Err("Публикация обученного шаблона требует validation proof.".into());
+    }
+    let template_snapshot =
+        template_snapshot::TemplateSnapshot::capture(&app, &req.template_path, button_label)?;
     let text = extract_docx_text(template_snapshot.path()).map_err(|error| error.to_string())?;
     let live_template_path = template_snapshot.live_path().display().to_string();
     let mut document = dokkomplekt_core::create_button_from_template_text(
@@ -492,6 +307,7 @@ fn register_learned_template(
         template_snapshot.path(),
         &template_sha256,
         "Публикация шаблона после подтверждённого Template Intelligence Wizard.",
+        Some(learning_validation_id.to_string()),
     )?;
     document.template_path = draft.template_path.clone();
     template_snapshot.ensure_current()?;
@@ -501,7 +317,10 @@ fn register_learned_template(
         if pack.documents.iter().any(|item| {
             dokkomplekt_core::button_label_collision_key(&item.button_label) == requested_key
         }) {
-            return Err("Кнопка с таким названием или совпадающим именем выходного файла уже существует.".into());
+            return Err(
+                "Кнопка с таким названием или совпадающим именем выходного файла уже существует."
+                    .into(),
+            );
         }
         pack.documents.push(document);
         pack.documents
@@ -516,6 +335,7 @@ fn register_learned_template(
             "document_id": document_id,
             "button_label": button_label,
             "template_path": template_snapshot.live_path().display().to_string(),
+            "learning_validation_id": learning_validation_id,
             "explicit_confirmation": true,
         }),
     )?;
@@ -523,8 +343,16 @@ fn register_learned_template(
 }
 
 #[derive(Debug, Deserialize)]
+struct ConfirmTemplateRowInput {
+    #[serde(flatten)]
+    row: TemplateConfirmationRow,
+    #[serde(default)]
+    learning_validation_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ConfirmTemplatesRequest {
-    rows: Vec<TemplateConfirmationRow>,
+    rows: Vec<ConfirmTemplateRowInput>,
     #[serde(default)]
     auto_infer_static_templates: bool,
 }
@@ -541,19 +369,42 @@ fn confirm_template_setup(
     if req
         .rows
         .iter()
-        .any(|row| row.editable_button_label.trim().is_empty())
+        .any(|input| input.row.editable_button_label.trim().is_empty())
     {
         return Err("У каждого шаблона должно быть название кнопки.".into());
     }
+    if req.rows.iter().any(|input| {
+        input
+            .learning_validation_id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+    }) {
+        return Err("Пустой learning_validation_id недопустим.".into());
+    }
     let mut request_document_ids = BTreeSet::new();
-    if req.rows.iter().any(|row| {
-        let id = row.document_id.trim();
+    if req.rows.iter().any(|input| {
+        let id = input.row.document_id.trim();
         id.is_empty() || !request_document_ids.insert(id.to_string())
     }) {
         return Err("Шаблоны должны иметь непустые уникальные идентификаторы документов.".into());
     }
-
-    let requested_rows = req.rows;
+    let learning_validation_ids = req
+        .rows
+        .iter()
+        .filter_map(|input| {
+            input.learning_validation_id.as_ref().map(|validation_id| {
+                (
+                    input.row.document_id.clone(),
+                    validation_id.trim().to_string(),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let requested_rows = req
+        .rows
+        .into_iter()
+        .map(|input| input.row)
+        .collect::<Vec<_>>();
     let LegacyTemplateInferenceResult {
         mut rows,
         workspace: _inference_workspace,
@@ -576,6 +427,21 @@ fn confirm_template_setup(
             .map(|snapshot| (row.document_id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let validation_repo = repository_for(&default_state_db_path(&app)?)?;
+    for (document_id, snapshot) in &template_snapshots {
+        if let Some(validation) = validation_repo
+            .template_learning_validation_by_output_sha256(snapshot.sha256())
+            .map_err(|error| error.to_string())?
+        {
+            let supplied = learning_validation_ids.get(document_id).map(String::as_str);
+            if supplied != Some(validation.validation_id.as_str()) {
+                return Err(
+                    "Этот файл создан Template Learning и не может быть опубликован как обычный ручной шаблон без исходного validation proof."
+                        .into(),
+                );
+            }
+        }
+    }
     let existing_pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     reanalyze_confirmation_rows_from_snapshots(
         &mut rows,
@@ -627,6 +493,7 @@ fn confirm_template_setup(
             snapshot.path(),
             snapshot.sha256(),
             "Первичная публикация пользовательского шаблона.",
+            learning_validation_ids.get(&row.document_id).cloned(),
         )?);
     }
     template_snapshot::ensure_all_current(&template_snapshots)?;
@@ -1049,8 +916,7 @@ fn render_docx(
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
-    let template_snapshot =
-        template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;
+    let template_snapshot = template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;
     let prepared_template =
         prepare_medical_template_for_render(&app, &doc, template_snapshot.path())?;
     let template_text = prepared_template.template_text.clone();
@@ -1077,27 +943,27 @@ fn render_docx(
         &effective_document.role_id,
     );
     let publication_binding = match manual_publication_plan_binding(
-    &state,
-    &render_case,
-    &serde_json::json!({
-        "schema": 1,
-        "mode": "manual_single_v1",
-        "engine_version": env!("CARGO_PKG_VERSION"),
-        "document_id": &effective_document.id,
-        "role_id": &effective_document.role_id,
-        "category": &effective_document.category,
-        "template_sha256": template_snapshot.sha256(),
-        "strict": req.strict,
-        "watermark": permit.watermark.as_deref(),
-    }),
-) {
-    Ok(binding) => binding,
-    Err(error) => {
-        rollback_counter_reservations(&app, &hydrated.counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
-};
+        &state,
+        &render_case,
+        &serde_json::json!({
+            "schema": 1,
+            "mode": "manual_single_v1",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "document_id": &effective_document.id,
+            "role_id": &effective_document.role_id,
+            "category": &effective_document.category,
+            "template_sha256": template_snapshot.sha256(),
+            "strict": req.strict,
+            "watermark": permit.watermark.as_deref(),
+        }),
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            rollback_counter_reservations(&app, &hydrated.counter_reservations);
+            rollback_generation_access(&app, &state, &permit);
+            return Err(error);
+        }
+    };
     let render_result = render_docx_with_assets(
         &app,
         &prepared_template.path,
@@ -1132,9 +998,13 @@ fn render_docx(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
-    if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &reservation.path, &hydrated.counter_reservations, Some(&publication_binding))
-    {
+    if let Err(error) = generation_publication::prepare_publication(
+        &app,
+        &permit,
+        &reservation.path,
+        &hydrated.counter_reservations,
+        Some(&publication_binding),
+    ) {
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
@@ -1142,8 +1012,7 @@ fn render_docx(
     let output_path = match reservation.commit() {
         Ok(path) => path,
         Err(error) => {
-            let journal_cleanup =
-                generation_publication::abort_prepared_publication(&app, &permit);
+            let journal_cleanup = generation_publication::abort_prepared_publication(&app, &permit);
             rollback_counter_reservations(&app, &hydrated.counter_reservations);
             if journal_cleanup.is_ok() {
                 rollback_generation_access(&app, &state, &permit);
@@ -1312,7 +1181,8 @@ fn render_docx_batch(
                 .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
-    let output_root = resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
+    let output_root =
+        resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
     // Revalidate the previously confirmed destination immediately before generation.
     // This catches deleted/unmounted/read-only folders before licensing or rendering.
     ensure_output_root_path(&output_root)?;
@@ -1352,9 +1222,9 @@ fn render_docx_batch(
         let mut paths = Vec::new();
         let mut trust_document_evidence = Vec::new();
         for document in &documents {
-            let template_snapshot = template_snapshots
-                .get(&document.id)
-                .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", document.button_label))?;
+            let template_snapshot = template_snapshots.get(&document.id).ok_or_else(|| {
+                format!("Не найден snapshot шаблона «{}».", document.button_label)
+            })?;
             let prepared_template =
                 prepare_medical_template_for_render(&app, document, template_snapshot.path())?;
             let template_text = prepared_template.template_text.clone();
@@ -1384,12 +1254,12 @@ fn render_docx_batch(
                 &effective_document.role_id,
             );
             frozen_render_inputs.push(serde_json::json!({
-        "document_id": &effective_document.id,
-        "role_id": &effective_document.role_id,
-        "category": &effective_document.category,
-        "template_sha256": template_snapshot.sha256(),
-        "resolved_case": &render_case,
-    }));
+                "document_id": &effective_document.id,
+                "role_id": &effective_document.role_id,
+                "category": &effective_document.category,
+                "template_sha256": template_snapshot.sha256(),
+                "resolved_case": &render_case,
+            }));
             let proof = render_docx_with_assets(
                 &app,
                 &prepared_template.path,
@@ -1486,35 +1356,39 @@ fn render_docx_batch(
         return Err(error);
     }
     let publication_binding = match manual_publication_plan_binding(
-    &state,
-    &base_case,
-    &serde_json::json!({
-        "schema": 1,
-        "mode": "manual_batch_v1",
-        "engine_version": env!("CARGO_PKG_VERSION"),
-        "publication_plan": &publication_plan,
-        "folder_parts": &req.folder_parts,
-        "sick_leave_enabled": req.sick_leave_enabled,
-        "existing_output_policy": format!("{:?}", req.existing_output_policy),
-        "strict": req.strict,
-        "watermark": permit.watermark.as_deref(),
-        "write_trust_report": privacy.write_trust_report,
-        "include_values_in_trust_report": privacy.include_values_in_trust_report,
-        "source_copy_present": staged_source_copy.is_some(),
-        "render_inputs": &frozen_render_inputs,
-    }),
-) {
-    Ok(binding) => binding,
-    Err(error) => {
-        let _ = std::fs::remove_dir_all(&stage);
-        rollback_counter_reservations(&app, &counter_reservations);
-        rollback_generation_access(&app, &state, &permit);
-        return Err(error);
-    }
-};
-    if let Err(error) =
-        generation_publication::prepare_publication(&app, &permit, &stage, &counter_reservations, Some(&publication_binding))
-    {
+        &state,
+        &base_case,
+        &serde_json::json!({
+            "schema": 1,
+            "mode": "manual_batch_v1",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "publication_plan": &publication_plan,
+            "folder_parts": &req.folder_parts,
+            "sick_leave_enabled": req.sick_leave_enabled,
+            "existing_output_policy": format!("{:?}", req.existing_output_policy),
+            "strict": req.strict,
+            "watermark": permit.watermark.as_deref(),
+            "write_trust_report": privacy.write_trust_report,
+            "include_values_in_trust_report": privacy.include_values_in_trust_report,
+            "source_copy_present": staged_source_copy.is_some(),
+            "render_inputs": &frozen_render_inputs,
+        }),
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&stage);
+            rollback_counter_reservations(&app, &counter_reservations);
+            rollback_generation_access(&app, &state, &permit);
+            return Err(error);
+        }
+    };
+    if let Err(error) = generation_publication::prepare_publication(
+        &app,
+        &permit,
+        &stage,
+        &counter_reservations,
+        Some(&publication_binding),
+    ) {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
         rollback_generation_access(&app, &state, &permit);
@@ -1533,7 +1407,8 @@ fn render_docx_batch(
                 &desired_output_folder,
                 &backup,
             ) {
-                let journal_cleanup = generation_publication::abort_prepared_publication(&app, &permit);
+                let journal_cleanup =
+                    generation_publication::abort_prepared_publication(&app, &permit);
                 let _ = std::fs::remove_dir_all(&stage);
                 rollback_counter_reservations(&app, &counter_reservations);
                 if journal_cleanup.is_ok() {
@@ -1547,22 +1422,21 @@ fn render_docx_batch(
         }
     };
     let publication = match req.existing_output_policy {
-        ExistingOutputPolicy::Version => publish_stage_to_unique_directory(&stage, &desired_output_folder)
-            .map(|path| (path, None)),
+        ExistingOutputPolicy::Version => {
+            publish_stage_to_unique_directory(&stage, &desired_output_folder)
+                .map(|path| (path, None))
+        }
         ExistingOutputPolicy::ReplaceWithBackup => match replacement_backup.as_deref() {
-            Some(backup) => publish_stage_replacing_with_backup(
-                &stage,
-                &desired_output_folder,
-                backup,
-            ),
+            Some(backup) => {
+                publish_stage_replacing_with_backup(&stage, &desired_output_folder, backup)
+            }
             None => Err("Безопасная замена не получила recovery-путь резервной копии.".into()),
         },
     };
     let (output_folder, backup_folder) = match publication {
         Ok(value) => value,
         Err(error) => {
-            let journal_cleanup =
-                generation_publication::abort_prepared_publication(&app, &permit);
+            let journal_cleanup = generation_publication::abort_prepared_publication(&app, &permit);
             let _ = std::fs::remove_dir_all(&stage);
             rollback_counter_reservations(&app, &counter_reservations);
             if journal_cleanup.is_ok() {
@@ -1580,11 +1454,8 @@ fn render_docx_batch(
     // destination. This preserves the donor applications' rule that a broken
     // replacement must never displace the last known-good user folder.
     let verification = (|| -> Result<Vec<String>, String> {
-        let created_files = verify_published_batch_files(
-            &output_folder,
-            &staged_paths,
-            documents.len(),
-        )?;
+        let created_files =
+            verify_published_batch_files(&output_folder, &staged_paths, documents.len())?;
         if let Some(staged_source) = staged_source_copy.as_ref() {
             let source_name = staged_source.file_name().ok_or_else(|| {
                 "Публикация комплекта не подтверждена: копия исходника не имеет имени файла."
@@ -1748,7 +1619,9 @@ fn start_word_scanner(
                     .map_err(|_| "uploaded source state lock failed")?;
                 retained
                     .as_ref()
-                    .ok_or_else(|| "Загруженный источник уже очищен. Выберите файл заново.".to_string())?
+                    .ok_or_else(|| {
+                        "Загруженный источник уже очищен. Выберите файл заново.".to_string()
+                    })?
                     .materialize(&workspace)?
             };
             let path = materialized.original_path()?;
@@ -1771,9 +1644,7 @@ fn start_word_scanner(
             return Err("Сканер мышью открывает только DOCX и DOCM.".into());
         }
         validate_safe_template_file(&original).map_err(|error| {
-            format!(
-                "Word-сканер заблокировал активное или внешнее содержимое документа: {error}"
-            )
+            format!("Word-сканер заблокировал активное или внешнее содержимое документа: {error}")
         })?;
         let previous = state
             .word_scanner
@@ -2203,10 +2074,7 @@ fn save_learned_scanner_rule(
     }
     let label_hint = infer_scanner_label(&req.context_text, &selected);
     let audit_label_hint = label_hint.clone();
-    let layout_fingerprint = req
-        .source_text
-        .as_deref()
-        .map(source_layout_fingerprint);
+    let layout_fingerprint = req.source_text.as_deref().map(source_layout_fingerprint);
     let _rules_guard = lock_learned_scanner_rules()?;
     let mut rules = load_learned_scanner_rules(&app)?;
     rules.retain(|rule| {
@@ -2284,6 +2152,8 @@ struct UpdateDocumentTemplateRequest {
     template_path: String,
     #[serde(default)]
     acknowledge_regressions: bool,
+    #[serde(default)]
+    learning_validation_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2323,12 +2193,22 @@ fn check_template_regression(
         &req.candidate_template_path,
         "кандидат новой версии шаблона",
     )?;
-    let result = compare_candidate_to_published_template(
-        &app,
-        &req.document_id,
-        candidate_snapshot.path(),
-    )?;
+    let result =
+        compare_candidate_to_published_template(&app, &req.document_id, candidate_snapshot.path())?;
     candidate_snapshot.ensure_current()?;
+    if let Some(report) = result.as_ref().filter(|report| !report.issues.is_empty()) {
+        append_audit_event(
+            &app,
+            "template_drift_detected",
+            candidate_snapshot.sha256(),
+            &serde_json::json!({
+                "document_id": req.document_id,
+                "candidate_sha256": candidate_snapshot.sha256(),
+                "critical": report.critical,
+                "issues": &report.issues,
+            }),
+        )?;
+    }
     Ok(result)
 }
 
@@ -2343,11 +2223,55 @@ fn update_document_template(
         &req.template_path,
         "новая версия шаблона",
     )?;
-    let regression_report = compare_candidate_to_published_template(
-        &app,
-        &req.document_id,
-        candidate_snapshot.path(),
-    )?;
+    let regression_report =
+        compare_candidate_to_published_template(&app, &req.document_id, candidate_snapshot.path())?;
+    let validation_repo = repository_for(&default_state_db_path(&app)?)?;
+    let current_published = validation_repo
+        .list_template_versions(req.document_id.trim())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|version| version.status == "published");
+    let candidate_validation = validation_repo
+        .template_learning_validation_by_output_sha256(candidate_snapshot.sha256())
+        .map_err(|error| error.to_string())?;
+    let supplied_validation_id = req
+        .learning_validation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if req.learning_validation_id.is_some() && supplied_validation_id.is_none() {
+        return Err("Пустой learning_validation_id недопустим для repair-публикации.".into());
+    }
+    let current_requires_revalidation = current_published
+        .as_ref()
+        .and_then(|version| version.learning_validation_id.as_deref())
+        .is_some();
+    let learning_validation_id = if current_requires_revalidation || candidate_validation.is_some()
+    {
+        let validation = candidate_validation.ok_or_else(|| {
+            "Текущая версия создана Template Learning. Repair требует новой Replay + Intervention + Held-out validation для байтов кандидата.".to_string()
+        })?;
+        if validation.status != "ready_to_publish" {
+            return Err(format!(
+                "Repair validation нельзя повторно использовать из состояния {}. Выполните новую revalidation.",
+                validation.status
+            ));
+        }
+        if supplied_validation_id != Some(validation.validation_id.as_str()) {
+            return Err(
+                "Repair-кандидат не связан с переданным validation proof; публикация заблокирована."
+                    .into(),
+            );
+        }
+        Some(validation.validation_id)
+    } else {
+        if supplied_validation_id.is_some() {
+            return Err(
+                "Переданный validation proof не принадлежит байтам repair-кандидата.".into(),
+            );
+        }
+        None
+    };
     if !req.acknowledge_regressions {
         if let Some(report) = regression_report.as_ref().filter(|report| report.critical) {
             return Err(format!(
@@ -2355,7 +2279,10 @@ fn update_document_template(
                 report
                     .issues
                     .iter()
-                    .filter(|issue| matches!(&issue.severity, dokkomplekt_docx::TemplateRegressionSeverity::Critical))
+                    .filter(|issue| matches!(
+                        &issue.severity,
+                        dokkomplekt_docx::TemplateRegressionSeverity::Critical
+                    ))
                     .map(|issue| issue.message.as_str())
                     .collect::<Vec<_>>()
                     .join("; ")
@@ -2378,7 +2305,12 @@ fn update_document_template(
         &req.document_id,
         candidate_snapshot.path(),
         &template_sha256,
-        "Шаблон опубликован после проверенной разметки.",
+        if current_requires_revalidation {
+            "Repair опубликован после повторной Replay + Intervention + Held-out validation."
+        } else {
+            "Шаблон опубликован после проверенной разметки."
+        },
+        learning_validation_id.clone(),
     )?;
     updated.template_path = draft.template_path.clone();
     candidate_snapshot.ensure_current()?;
@@ -2412,14 +2344,22 @@ fn update_document_template(
         .into_iter()
         .next()
         .ok_or_else(|| "Атомарная публикация не вернула версию шаблона.".to_string())?;
+    let audit_event = if current_requires_revalidation {
+        "template_repair_published"
+    } else {
+        "template_version_published"
+    };
     let _ = append_audit_event(
         &app,
-        "template_version_published",
+        audit_event,
         &template_sha256,
         &serde_json::json!({
             "document_id": req.document_id,
             "version_id": version.version_id,
             "version_number": version.version_number,
+            "repair_of_version_id": current_published.as_ref().map(|item| item.version_id.as_str()),
+            "learning_validation_id": learning_validation_id,
+            "revalidation_required": current_requires_revalidation,
             "regression_report": &regression_report,
             "regressions_acknowledged": req.acknowledge_regressions,
         }),
@@ -2455,12 +2395,11 @@ fn archive_template_version_source(
         if actual == expected_sha256 {
             return Ok(destination);
         }
-        return Err("Архивная копия шаблона имеет неожиданный SHA-256; публикация заблокирована.".into());
+        return Err(
+            "Архивная копия шаблона имеет неожиданный SHA-256; публикация заблокирована.".into(),
+        );
     }
-    let temporary = archive_dir.join(format!(
-        ".{expected_sha256}.tmp-{}",
-        Uuid::new_v4()
-    ));
+    let temporary = archive_dir.join(format!(".{expected_sha256}.tmp-{}", Uuid::new_v4()));
     std::fs::copy(source, &temporary)
         .map_err(|error| format!("Не удалось создать архивную копию шаблона: {error}"))?;
     let copied_sha256 = file_content_signature(&temporary)?.2;
@@ -2476,12 +2415,16 @@ fn archive_template_version_source(
             if actual == expected_sha256 {
                 Ok(destination)
             } else {
-                Err(format!("Конфликт публикации архивной версии шаблона: {error}"))
+                Err(format!(
+                    "Конфликт публикации архивной версии шаблона: {error}"
+                ))
             }
         }
         Err(error) => {
             let _ = std::fs::remove_file(&temporary);
-            Err(format!("Не удалось опубликовать архивную версию шаблона: {error}"))
+            Err(format!(
+                "Не удалось опубликовать архивную версию шаблона: {error}"
+            ))
         }
     }
 }
@@ -2492,14 +2435,15 @@ fn prepare_template_version_draft(
     source: &Path,
     template_sha256: &str,
     note: &str,
+    learning_validation_id: Option<String>,
 ) -> Result<TemplateVersionDraft, String> {
-    let archived_path =
-        archive_template_version_source(app, document_id, source, template_sha256)?;
+    let archived_path = archive_template_version_source(app, document_id, source, template_sha256)?;
     Ok(TemplateVersionDraft {
         document_id: document_id.to_string(),
         template_path: archived_path.display().to_string(),
         template_sha256: template_sha256.to_string(),
         note: note.to_string(),
+        learning_validation_id,
     })
 }
 
@@ -2552,6 +2496,7 @@ fn rollback_template_version(
         &path,
         &record.template_sha256,
         &rollback_note,
+        None,
     )?;
     let (result, versions) = publish_pack_with_template_versions(&app, &state, &[draft], |pack| {
         let existing = pack
@@ -2602,6 +2547,7 @@ mod published_template_binding_tests {
             template_sha256: sha256.into(),
             note: "test".into(),
             status: "published".into(),
+            learning_validation_id: None,
             created_at: "2026-08-08T00:00:00Z".into(),
         }
     }
@@ -2628,15 +2574,16 @@ mod published_template_binding_tests {
         let mut document = document("C:/Users/user/Documents/invoice.docx");
         assert!(bind_document_to_published_template(&mut document, &version));
         assert_eq!(document.template_path, version.template_path);
-        assert!(!bind_document_to_published_template(&mut document, &version));
+        assert!(!bind_document_to_published_template(
+            &mut document,
+            &version
+        ));
     }
 
     #[test]
     fn published_template_sha_verification_rejects_archive_mutation() {
-        let root = std::env::temp_dir().join(format!(
-            "dkk-published-template-binding-{}",
-            Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("dkk-published-template-binding-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("template.docx");
         std::fs::write(&archive, b"published-template-v1").unwrap();
@@ -2699,12 +2646,7 @@ fn get_output_plan(
     let root = resolve_user_visible_absolute_path(&req.root_folder, "Папка готовых документов")?;
     ensure_output_root_path(&root)?;
     validate_output_button_labels(&req.button_labels)?;
-    let plan = plan_output_paths(
-        &root,
-        &case,
-        &req.folder_parts,
-        &req.button_labels,
-    );
+    let plan = plan_output_paths(&root, &case, &req.folder_parts, &req.button_labels);
     serde_json::to_value(plan).map_err(|e| e.to_string())
 }
 
@@ -2800,7 +2742,11 @@ mod loaded_pack_role_canonicalization_tests {
         assert_eq!(pack.documents[1].role_id, "diaries");
         assert_eq!(pack.documents[2].role_id, "invoice");
         assert_eq!(pack.documents[3].role_id, "my-special-role");
-        assert_eq!(canonicalize_loaded_pack_roles(&mut pack), 0, "migration must be idempotent");
+        assert_eq!(
+            canonicalize_loaded_pack_roles(&mut pack),
+            0,
+            "migration must be idempotent"
+        );
     }
 }
 
@@ -2811,12 +2757,17 @@ fn load_state_from_locked(
     load_commercial_state: bool,
 ) -> Result<(), String> {
     let mut repo = repository_for(db_path)?;
-    repo.quick_integrity_check().map_err(|error| error.to_string())?;
+    repo.quick_integrity_check()
+        .map_err(|error| error.to_string())?;
 
     // Decode and validate every row before touching the live in-memory state.
     // A damaged late row can therefore never leave a mixed old/new snapshot.
-    let loaded_case = repo.load_case("current").map_err(|error| error.to_string())?;
-    let loaded_pack = repo.load_pack("default").map_err(|error| error.to_string())?;
+    let loaded_case = repo
+        .load_case("current")
+        .map_err(|error| error.to_string())?;
+    let loaded_pack = repo
+        .load_pack("default")
+        .map_err(|error| error.to_string())?;
     let loaded_license = if load_commercial_state {
         repo.load_state_value::<Option<LicenseDocument>>("license_document")
             .map_err(|error| error.to_string())?

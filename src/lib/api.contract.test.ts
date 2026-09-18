@@ -61,6 +61,7 @@ import {
   loadState,
   openInFileManager,
   pickFolder,
+  pickLearningFiles,
   pickSourceFile,
   pickTemplateFiles,
   printFiles,
@@ -210,6 +211,7 @@ export const registeredBackendCommands = [
   'export_files_to_pdf',
   'create_kedo_package',
   'pick_template_files',
+  'pick_learning_files',
   'pick_folder',
   'open_in_file_manager',
   'get_semantic_model_config',
@@ -313,6 +315,8 @@ function installContractMock(calls: Call[]) {
         return { components: [{ id: 'archive', label: 'Архивы', description: '', target: 'windows-x86_64', size_bytes: 84, size_label: '84 МБ', unlocks: ['7zip'], state: 'downloaded', installed: true, available: true, catalog_available: true, message: 'imported' }], imported_component_ids: ['archive'], catalog_scope: 'partial' } as never;
       case 'pick_template_files':
         return { files: [{ file_name: 'Договор.docx', template_path: 'C:/AppData/user-templates/Договор.docx', extracted_text: 'Договор {{document.number}}' }] } as never;
+      case 'pick_learning_files':
+        return { files: [{ file_name: 'correct.docx', staged_path: 'C:/AppData/template-learning-inputs/session/correct.docx', content_sha256: 'learning-sha' }] } as never;
       case 'pick_folder':
         return { selected_path: 'C:/Desktop/output' } as never;
       case 'parse_web_source':
@@ -534,6 +538,25 @@ describe('Tauri command DTO contracts', () => {
     ]);
   });
 
+  it('carries the backend validation proof for a learned template repair', async () => {
+    const calls: Call[] = [];
+    installContractMock(calls);
+    await updateDocumentTemplate('doc_1', 'repair.learned.docx', true, 'learning-proof-1');
+    expect(calls).toEqual([
+      {
+        command: 'update_document_template',
+        payload: {
+          req: {
+            document_id: 'doc_1',
+            template_path: 'repair.learned.docx',
+            acknowledge_regressions: true,
+            learning_validation_id: 'learning-proof-1',
+          },
+        },
+      },
+    ]);
+  });
+
   it('passes selected folder naming requirements through the same workflow and popup envelopes', async () => {
     const calls: Call[] = [];
     installContractMock(calls);
@@ -668,6 +691,7 @@ describe('Tauri command DTO contracts', () => {
     await runCreatedDocumentsIntake('C:/Desktop/Созданные документы/Первичный.docx', 'C:/Desktop/Созданные документы', ['FullSubjectName'], 2026, false);
     await printFiles([{ path: 'out.docx', copies: 3 }]);
     await pickTemplateFiles('C:/Desktop');
+    await pickLearningFiles('correct_output', 'C:/Desktop');
     await pickFolder('C:/Desktop');
     await openInFileManager('C:/Desktop/output');
     await semanticExtract('ИНН 7736050003', 2026);
@@ -689,6 +713,7 @@ describe('Tauri command DTO contracts', () => {
       { command: 'run_created_documents_intake', payload: { req: { source_path: 'C:/Desktop/Созданные документы/Первичный.docx', output_root: 'C:/Desktop/Созданные документы', folder_parts: ['FullSubjectName'], default_year: 2026, sick_leave_enabled: false } } },
       { command: 'print_files', payload: { req: { jobs: [{ path: 'out.docx', copies: 3 }] } } },
       { command: 'pick_template_files', payload: { req: { initial_path: 'C:/Desktop' } } },
+      { command: 'pick_learning_files', payload: { req: { kind: 'correct_output', initial_path: 'C:/Desktop' } } },
       { command: 'pick_folder', payload: { req: { initial_path: 'C:/Desktop' } } },
       { command: 'open_in_file_manager', payload: { req: { path: 'C:/Desktop/output' } } },
       { command: 'semantic_extract', payload: { req: { source_text: 'ИНН 7736050003', default_year: 2026, model_output: null } } },

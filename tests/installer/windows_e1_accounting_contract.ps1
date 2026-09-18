@@ -458,29 +458,71 @@ function Set-E1TemplateDomainOverride {
     }
   }
 
-  if ($combo.Current.IsExpandCollapsePatternAvailable) {
-    $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    Start-Sleep -Milliseconds 150
-  } else {
-    Invoke-UiElement -Element $combo -Description "open domain selector for $FileName"
-    Start-Sleep -Milliseconds 150
+  if ($combo.Current.IsOffscreen -and $combo.Current.IsScrollItemPatternAvailable) {
+    $combo.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+    Start-Sleep -Milliseconds 100
   }
 
-  $option = Wait-UiElement -Description "domain option '$OptionName' for $FileName" -Probe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    $window.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        $OptionName
-      )
-    )
+  # Chromium/WebView2 does not consistently publish <option> descendants for an
+  # expanded HTML <select> on hosted Windows runners. Prefer the semantic UIA
+  # option when present, but fall back to the same keyboard navigation a user
+  # can perform on the focused real control. The later canonical required-field
+  # preflight proves that the selected built-in profile actually reached runtime.
+  $option = $null
+  try {
+    if ($combo.Current.IsExpandCollapsePatternAvailable) {
+      $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    } else {
+      Invoke-UiElement -Element $combo -Description "open domain selector for $FileName"
+    }
+    Start-Sleep -Milliseconds 150
+    $optionDeadline = [DateTime]::UtcNow.AddSeconds(2)
+    do {
+      $window = Find-LiveAppWindow
+      if ($null -ne $window) {
+        $option = $window.FindFirst(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $OptionName
+          )
+        )
+      }
+      if ($null -ne $option) { break }
+      Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $optionDeadline)
+  } catch {
+    $option = $null
   }
-  if ($option.Current.IsSelectionItemPatternAvailable) {
-    $option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+
+  if ($null -ne $option) {
+    if ($option.Current.IsSelectionItemPatternAvailable) {
+      $option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    } else {
+      Invoke-UiElement -Element $option -Description "select domain '$OptionName' for $FileName"
+    }
   } else {
-    Invoke-UiElement -Element $option -Description "select domain '$OptionName' for $FileName"
+    $domainOffsets = @{
+      'Универсальный документооборот' = 1
+      'Медицина' = 2
+      'Юридическая работа' = 3
+      'Кадровая работа' = 4
+      'Бухгалтерия' = 5
+      'Образование' = 6
+      'Своя профессия / профиль' = 7
+    }
+    if (-not $domainOffsets.ContainsKey($OptionName)) {
+      throw "Unsupported E1 domain option for keyboard fallback: $OptionName"
+    }
+    $combo.SetFocus()
+    [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
+    Start-Sleep -Milliseconds 100
+    for ($index = 0; $index -lt [int]$domainOffsets[$OptionName]; $index += 1) {
+      [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
+    }
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Start-Sleep -Milliseconds 250
+    Write-Host "E1 domain selector used foreground keyboard fallback for '$OptionName'."
   }
 
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {

@@ -102,6 +102,27 @@ def test_production_build_requires_real_compile_time_trust_anchors() -> None:
     assert "placeholder or local host is forbidden" in errors
 
 
+def test_signed_installer_workflow_requires_explicit_auto_release_opt_in() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "build-installers.yml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "AUTO_PRODUCTION_RELEASE_ENABLED: ${{ "
+        "vars.DOKKOMPLEKT_AUTO_PRODUCTION_RELEASE_ENABLED }}"
+    ) in workflow
+    workflow_run_guard = 'if [ "$EVENT_NAME" = "workflow_run" ]; then'
+    opt_in_guard = 'elif [ "${AUTO_PRODUCTION_RELEASE_ENABLED,,}" != "true" ]; then'
+    explicit_release_branch = 'elif [ "$EVENT_NAME" = "release" ]; then'
+    assert workflow_run_guard in workflow
+    assert opt_in_guard in workflow
+    assert explicit_release_branch in workflow
+    assert workflow.index(workflow_run_guard) < workflow.index(opt_in_guard)
+    assert workflow.index(opt_in_guard) < workflow.index(explicit_release_branch)
+    assert "Validate production compile-time trust anchors" in workflow
+    assert "environment: windows-production-signing" in workflow
+
+
 def test_production_build_rejects_documentation_credentials_and_private_hosts() -> None:
     cases = (
         "https://updates.example.com/manifest.json",

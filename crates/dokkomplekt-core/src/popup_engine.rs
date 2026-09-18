@@ -1,3 +1,4 @@
+use crate::money::parse_money_minor_units;
 use crate::{
     merge_value, parse_flexible_date, plan_workflow, set_user_value, validate_case_relations,
     validate_inn, validate_kpp, validate_ogrn, validate_snils, validate_vin, DocumentTemplateSpec,
@@ -264,7 +265,7 @@ fn validate_prompt_value(prompt: &PromptSpec, value: &str) -> Result<(), String>
         PromptInputKind::Number => parse_finite_number(value)
             .map(|_| ())
             .map_err(|_| format!("{}: ожидается конечное число", prompt.title)),
-        PromptInputKind::Money => parse_money(value)
+        PromptInputKind::Money => parse_money_minor_units(value)
             .map(|_| ())
             .map_err(|_| format!("{}: ожидается корректная денежная сумма", prompt.title)),
         PromptInputKind::Inn => validate_inn(value),
@@ -308,46 +309,6 @@ fn parse_finite_number(value: &str) -> Result<f64, ()> {
         return Err(());
     }
     let number = normalized.parse::<f64>().map_err(|_| ())?;
-    if number.is_finite() {
-        Ok(number)
-    } else {
-        Err(())
-    }
-}
-
-fn parse_money(value: &str) -> Result<f64, ()> {
-    let mut normalized = value.trim().to_lowercase();
-    for suffix in ["рублей", "рубля", "руб.", "руб", "₽"] {
-        if normalized.ends_with(suffix) {
-            let new_len = normalized.len().saturating_sub(suffix.len());
-            normalized.truncate(new_len);
-            normalized = normalized.trim().to_string();
-            break;
-        }
-    }
-    if normalized.is_empty()
-        || normalized.chars().any(|character| {
-            !(character.is_ascii_digit()
-                || matches!(character, '-' | '+' | ',' | '.' | ' ' | '\u{00a0}'))
-        })
-    {
-        return Err(());
-    }
-    let compact = normalized.replace([' ', '\u{00a0}'], "").replace(',', ".");
-    if compact.matches('.').count() > 1
-        || compact.matches('-').count() > 1
-        || compact.matches('+').count() > 1
-        || (compact.contains('-') && !compact.starts_with('-'))
-        || (compact.contains('+') && !compact.starts_with('+'))
-    {
-        return Err(());
-    }
-    if let Some((_, fraction)) = compact.split_once('.') {
-        if fraction.len() > 2 || fraction.is_empty() {
-            return Err(());
-        }
-    }
-    let number = compact.parse::<f64>().map_err(|_| ())?;
     if number.is_finite() {
         Ok(number)
     } else {
@@ -980,6 +941,35 @@ mod tests {
         assert_eq!(
             result.semantic_case.get("document.date"),
             Some("10.05.2026")
+        );
+    }
+
+    #[test]
+    fn money_parser_uses_exact_minor_units_for_large_values() {
+        assert_eq!(
+            parse_money_minor_units("9 007 199 254 740 993,01 руб."),
+            Ok(900_719_925_474_099_301)
+        );
+    }
+
+    #[test]
+    fn money_parser_preserves_sign_and_single_fraction_digit() {
+        assert_eq!(parse_money_minor_units("-12,5 ₽"), Ok(-1_250));
+        assert_eq!(parse_money_minor_units("+0.01"), Ok(1));
+    }
+
+    #[test]
+    fn money_parser_rejects_ambiguous_or_malformed_notation() {
+        for value in ["1.234,56", "12.345", "1.", ".50", "NaN", "12 34,56"] {
+            assert_eq!(parse_money_minor_units(value), Err(()), "{value}");
+        }
+    }
+
+    #[test]
+    fn money_parser_rejects_minor_unit_overflow() {
+        assert_eq!(
+            parse_money_minor_units("170141183460469231731687303715884105727"),
+            Err(())
         );
     }
 }

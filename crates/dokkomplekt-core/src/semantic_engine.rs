@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::label_search::find_label_end;
+use crate::money::normalize_money;
 use crate::{
     canonical_storage_field_id, parse_flexible_date, SemanticCase, SemanticValue, ValueSource,
 };
@@ -782,55 +783,6 @@ fn digits_only(value: &str) -> String {
     value.chars().filter(char::is_ascii_digit).collect()
 }
 
-fn normalize_money(raw: &str) -> Option<String> {
-    // Accept a run of digits / spaces / nbsp with an optional decimal part.
-    let mut int_part = String::new();
-    let mut frac_part = String::new();
-    let mut seen_sep = false;
-    for ch in raw.chars() {
-        match ch {
-            '0'..='9' => {
-                if seen_sep {
-                    frac_part.push(ch);
-                } else {
-                    int_part.push(ch);
-                }
-            }
-            ' ' | '\u{00A0}' | '\'' => {}
-            ',' | '.' if !seen_sep && !int_part.is_empty() => seen_sep = true,
-            _ => {
-                if !int_part.is_empty() {
-                    break;
-                }
-            }
-        }
-    }
-    if int_part.is_empty() {
-        return None;
-    }
-    // group thousands with spaces
-    let grouped = group_thousands(&int_part);
-    if seen_sep {
-        let frac = format!("{:0<2}", frac_part.chars().take(2).collect::<String>());
-        Some(format!("{grouped},{frac}"))
-    } else {
-        Some(grouped)
-    }
-}
-
-fn group_thousands(digits: &str) -> String {
-    let bytes: Vec<char> = digits.chars().collect();
-    let mut out = String::new();
-    let len = bytes.len();
-    for (i, ch) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push('\u{00A0}');
-        }
-        out.push(*ch);
-    }
-    out
-}
-
 /// Parse dates written with a Russian month word, e.g. «21 февраля 2026 г.».
 fn normalize_date_ru(raw: &str, default_year: i32) -> Option<String> {
     const MONTHS: [&str; 12] = [
@@ -1396,6 +1348,10 @@ mod tests {
             normalize_money("1000000").as_deref(),
             Some("1\u{00A0}000\u{00A0}000")
         );
+        assert_eq!(normalize_money("-12,5 ₽").as_deref(), Some("-12,50"));
+        assert!(normalize_money("1.234,56").is_none());
+        assert!(normalize_money("12.345").is_none());
+        assert!(normalize_money("1.").is_none());
     }
 
     #[test]

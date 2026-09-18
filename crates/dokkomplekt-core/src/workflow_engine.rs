@@ -717,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn explicitly_configured_popup_field_remains_in_final_plan() {
+    fn custom_popup_cannot_hide_canonical_plugin_requirements() {
         let mut doc = document("one", "document.number");
         doc.category = DomainKind::Accounting;
         doc.role_id = "invoice".into();
@@ -729,10 +729,21 @@ mod tests {
             .prompts
             .iter()
             .any(|prompt| prompt.field_id == "amount.currency"));
-        assert!(!plan
-            .prompts
-            .iter()
-            .any(|prompt| prompt.field_id == "accounting.invoice_date"));
+        for field_id in [
+            "accounting.invoice_number",
+            "accounting.invoice_date",
+            "org.name",
+            "counterparty.name",
+            "amount.total",
+        ] {
+            let prompt = plan
+                .prompts
+                .iter()
+                .find(|prompt| prompt.field_id == field_id)
+                .unwrap_or_else(|| panic!("custom popup hid canonical requirement: {field_id}"));
+            assert!(prompt.required);
+            assert!(!prompt.skippable);
+        }
     }
 
     #[test]

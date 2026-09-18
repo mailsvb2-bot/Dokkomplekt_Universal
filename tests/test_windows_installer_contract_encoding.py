@@ -88,3 +88,21 @@ def test_quality_gate_names_and_uploads_cross_domain_installed_evidence() -> Non
     assert "installer-e1-domain-matrix-${{ runner.os }}.log" in source
     assert "DOKKOMPLEKT_ADVERSARIAL: '1'" in source
     assert source.index("Windows installer smoke") < source.index("Windows E1 cross-domain installed path")
+
+
+def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    assert "Chromium/WebView2 does not consistently publish <option> descendants" in source
+    assert "$domainOffsets = @{" in source
+    for marker in (
+        "'Юридическая работа' = 3",
+        "'Кадровая работа' = 4",
+        "'Бухгалтерия' = 5",
+        "'Образование' = 6",
+        "'Своя профессия / профиль' = 7",
+        "SendWait('{HOME}')",
+        "SendWait('{DOWN}')",
+        "SendWait('{ENTER}')",
+        "canonical required-field preflight proves",
+    ):
+        assert marker in source

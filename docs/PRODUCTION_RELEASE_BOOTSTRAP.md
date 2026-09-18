@@ -2,6 +2,8 @@
 
 A public production release is intentionally fail-closed until two independent domains are ready: the protected GitHub-hosted signing environment and the single physical Windows hardware-evidence runner. There is no production `dokkomplekt-runtime` self-hosted signing runner.
 
+Automatic production publication after a successful `FULL DOKKOMPLEKT AUTOPILOT` run is deliberately opt-in. Repository variable `DOKKOMPLEKT_AUTO_PRODUCTION_RELEASE_ENABLED` must equal `true` before the `workflow_run` path may enter production signing. When the variable is unset or false, normal merges finish cleanly without attempting a production release. Explicit `workflow_dispatch` and GitHub Release publication remain fail-closed and still require the complete production trust/signing/hardware configuration.
+
 ## 1. Protected hosted build/signing domain
 
 `windows-production-signing` belongs to the private `mailsvb2-bot/Dokkomplekt_Hardware_Validation` workflow. Its `prepare` run is the **only Windows release producer**: it uses GitHub-hosted `windows-latest` to build/sign the canonical handoff that the physical machine tests and that the public release later publishes. The environment must provide the real production trust anchors and immutable HTTPS delivery endpoints:

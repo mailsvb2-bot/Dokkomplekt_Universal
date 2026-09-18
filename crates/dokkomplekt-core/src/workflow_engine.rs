@@ -4,8 +4,8 @@ use crate::domains::medical_semantics::{
 };
 use crate::{
     canonical_storage_field_id, effective_popup_fields, is_valid_field_id,
-    plugin_required_fields_for_category_role, popup_config_for_field, profession_derived_field_sources,
-    profession_runtime_control_fields, resolve_popup_default,
+    plugin_required_fields_for_category_role, popup_config_for_field,
+    profession_derived_field_sources, profession_runtime_control_fields, resolve_popup_default,
     run_universal_constructor_pipeline, DocumentTemplateSpec, DomainKind, PopupFieldConfig,
     PromptAskMode, PromptSpec, SemanticCase, UniversalDomain, UniversalPipelineFlags,
     UniversalPipelineInput, WorkflowFlags, WorkflowPlan,
@@ -680,7 +680,12 @@ mod tests {
             (
                 DomainKind::Hr,
                 "employment_contract",
-                vec!["org.name", "employee.position", "employee.hire_date", "employee.contract_number"],
+                vec![
+                    "org.name",
+                    "employee.position",
+                    "employee.hire_date",
+                    "employee.contract_number",
+                ],
             ),
             (
                 DomainKind::Education,

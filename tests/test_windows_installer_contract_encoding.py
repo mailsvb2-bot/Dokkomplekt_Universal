@@ -113,6 +113,23 @@ def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
 
 
 
+def test_e1_custom_domain_value_commits_through_react_input_event() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        "React controls this input",
+        "Set-UiValue -Element $custom -Value $CustomProfile",
+        "SendWait(' ')",
+        "SendWait('{BACKSPACE}')",
+        "persisted custom domain value for $FileName",
+        "E1 custom domain value commit:",
+        "custom domain override did not persist",
+    ):
+        assert marker in source
+    assert source.index("Set-UiValue -Element $custom -Value $CustomProfile") < source.index("SendWait(' ')")
+    assert source.index("SendWait('{BACKSPACE}')") < source.index("persisted custom domain value for $FileName")
+
+
+
 def test_e1_cross_domain_scenarios_reset_case_through_real_ui() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
     for marker in (

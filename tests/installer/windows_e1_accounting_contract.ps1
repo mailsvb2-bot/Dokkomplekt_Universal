@@ -1164,6 +1164,20 @@ $domainScenarios = @(
 )
 
 foreach ($scenario in $domainScenarios) {
+  # Every profession scenario is a fresh case. Reusing the previous Accounting
+  # semantic case would make source-owned values such as contract.date appear
+  # already satisfied and would weaken the installed required-field proof.
+  Invoke-UiActionPhysicallyFromProbe -Description "reset case before $($scenario.Label)" -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  }
+  $null = Wait-UiElement -Description "empty case before $($scenario.Label)" -TimeoutSeconds 30 -Probe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
+
   $templatePath = Join-Path $fixtureDir $scenario.FileName
   New-E1TextDocx -Path $templatePath -Lines $scenario.TemplateLines
   Add-E1DomainTemplate `

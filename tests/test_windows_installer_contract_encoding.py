@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
 QUALITY_GATE_BAT = ROOT / "scripts" / "run_quality_gate.bat"
 UNSIGNED_PREVIEW = ROOT / ".github" / "workflows" / "unsigned-preview.yml"
+E1_DOMAIN_MATRIX = ROOT / "tests" / "installer" / "windows_e1_accounting_contract.ps1"
+QUALITY_GATE = ROOT / ".github" / "workflows" / "quality-gate.yml"
 
 
 def test_legacy_windows_powershell_contract_is_utf8_bom_marked() -> None:
@@ -49,3 +51,40 @@ def test_unsigned_windows_preview_pins_python_for_sqlite_installer_evidence() ->
     assert setup in source
     assert "python-version: '3.12'" in source
     assert source.index(setup) < source.index(contract_call)
+
+
+def test_e1_installed_domain_matrix_keeps_all_canon_domains_and_physical_proof() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        "E1 INSTALLED PASS: Accounting",
+        "E1 Юридический договор",
+        "E1 Трудовой договор",
+        "E1 Справка об обучении",
+        "E1 Архитектурное заключение",
+        "Юридическая работа",
+        "Кадровая работа",
+        "Бухгалтерия",
+        "Образование",
+        "Своя профессия / профиль",
+        "E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom",
+        "physical DOCX -> committed receipt",
+    ):
+        assert marker in source
+
+    for required_field in (
+        "contract.party_a",
+        "contract.party_b",
+        "employee.position",
+        "employee.hire_date",
+        "employee.contract_number",
+        "education.institution",
+    ):
+        assert required_field in source
+
+
+def test_quality_gate_names_and_uploads_cross_domain_installed_evidence() -> None:
+    source = QUALITY_GATE.read_text(encoding="utf-8")
+    assert "Windows E1 cross-domain installed path" in source
+    assert "installer-e1-domain-matrix-${{ runner.os }}.log" in source
+    assert "DOKKOMPLEKT_ADVERSARIAL: '1'" in source
+    assert source.index("Windows installer smoke") < source.index("Windows E1 cross-domain installed path")

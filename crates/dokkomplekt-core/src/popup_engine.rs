@@ -264,7 +264,7 @@ fn validate_prompt_value(prompt: &PromptSpec, value: &str) -> Result<(), String>
         PromptInputKind::Number => parse_finite_number(value)
             .map(|_| ())
             .map_err(|_| format!("{}: ожидается конечное число", prompt.title)),
-        PromptInputKind::Money => parse_money(value)
+        PromptInputKind::Money => parse_money_minor_units(value)
             .map(|_| ())
             .map_err(|_| format!("{}: ожидается корректная денежная сумма", prompt.title)),
         PromptInputKind::Inn => validate_inn(value),
@@ -315,7 +315,7 @@ fn parse_finite_number(value: &str) -> Result<f64, ()> {
     }
 }
 
-fn parse_money(value: &str) -> Result<f64, ()> {
+fn parse_money_minor_units(value: &str) -> Result<i128, ()> {
     let mut normalized = value.trim().to_lowercase();
     for suffix in ["рублей", "рубля", "руб.", "руб", "₽"] {
         if normalized.ends_with(suffix) {
@@ -325,33 +325,99 @@ fn parse_money(value: &str) -> Result<f64, ()> {
             break;
         }
     }
-    if normalized.is_empty()
-        || normalized.chars().any(|character| {
-            !(character.is_ascii_digit()
-                || matches!(character, '-' | '+' | ',' | '.' | ' ' | '\u{00a0}'))
-        })
-    {
+    if normalized.is_empty() {
         return Err(());
     }
-    let compact = normalized.replace([' ', '\u{00a0}'], "").replace(',', ".");
-    if compact.matches('.').count() > 1
-        || compact.matches('-').count() > 1
-        || compact.matches('+').count() > 1
-        || (compact.contains('-') && !compact.starts_with('-'))
-        || (compact.contains('+') && !compact.starts_with('+'))
-    {
+
+    let (negative, unsigned) = if let Some(rest) = normalized.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = normalized.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, normalized.as_str())
+    };
+    if unsigned.is_empty() || unsigned.contains(['+', '-']) {
         return Err(());
     }
-    if let Some((_, fraction)) = compact.split_once('.') {
-        if fraction.len() > 2 || fraction.is_empty() {
+
+    let has_comma = unsigned.contains(',');
+    let has_dot = unsigned.contains('.');
+    if has_comma && has_dot {
+        return Err(());
+    }
+    let separator = if has_comma {
+        Some(',')
+    } else if has_dot {
+        Some('.')
+    } else {
+        None
+    };
+    if separator.is_some_and(|separator| unsigned.matches(separator).count() != 1) {
+        return Err(());
+    }
+
+    let (integer_text, fraction_text) = match separator {
+        Some(separator) => {
+            let (integer, fraction) = unsigned.split_once(separator).ok_or(())?;
+            (integer, Some(fraction))
+        }
+        None => (unsigned, None),
+    };
+    if integer_text.is_empty() {
+        return Err(());
+    }
+
+    let integer_digits = if integer_text.contains([' ', '\u{00a0}']) {
+        let groups = integer_text
+            .split(|character| matches!(character, ' ' | '\u{00a0}'))
+            .collect::<Vec<_>>();
+        if groups.is_empty()
+            || groups[0].is_empty()
+            || groups[0].len() > 3
+            || !groups[0].chars().all(|character| character.is_ascii_digit())
+            || groups[1..].iter().any(|group| {
+                group.len() != 3 || !group.chars().all(|character| character.is_ascii_digit())
+            })
+        {
             return Err(());
         }
-    }
-    let number = compact.parse::<f64>().map_err(|_| ())?;
-    if number.is_finite() {
-        Ok(number)
+        groups.concat()
     } else {
-        Err(())
+        if !integer_text
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        {
+            return Err(());
+        }
+        integer_text.to_string()
+    };
+
+    let integer = integer_digits.parse::<i128>().map_err(|_| ())?;
+    let fraction_minor = match fraction_text {
+        None => 0_i128,
+        Some(fraction)
+            if !fraction.is_empty()
+                && fraction.len() <= 2
+                && fraction.chars().all(|character| character.is_ascii_digit()) =>
+        {
+            let parsed = fraction.parse::<i128>().map_err(|_| ())?;
+            if fraction.len() == 1 {
+                parsed.checked_mul(10).ok_or(())?
+            } else {
+                parsed
+            }
+        }
+        Some(_) => return Err(()),
+    };
+
+    let amount = integer
+        .checked_mul(100)
+        .and_then(|scaled| scaled.checked_add(fraction_minor))
+        .ok_or(())?;
+    if negative {
+        amount.checked_neg().ok_or(())
+    } else {
+        Ok(amount)
     }
 }
 
@@ -982,4 +1048,34 @@ mod tests {
             Some("10.05.2026")
         );
     }
+
+    #[test]
+    fn money_parser_uses_exact_minor_units_for_large_values() {
+        assert_eq!(
+            parse_money_minor_units("9 007 199 254 740 993,01 руб."),
+            Ok(900_719_925_474_099_301)
+        );
+    }
+
+    #[test]
+    fn money_parser_preserves_sign_and_single_fraction_digit() {
+        assert_eq!(parse_money_minor_units("-12,5 ₽"), Ok(-1_250));
+        assert_eq!(parse_money_minor_units("+0.01"), Ok(1));
+    }
+
+    #[test]
+    fn money_parser_rejects_ambiguous_or_malformed_notation() {
+        for value in ["1.234,56", "12.345", "1.", ".50", "NaN", "12 34,56"] {
+            assert_eq!(parse_money_minor_units(value), Err(()), "{value}");
+        }
+    }
+
+    #[test]
+    fn money_parser_rejects_minor_unit_overflow() {
+        assert_eq!(
+            parse_money_minor_units("170141183460469231731687303715884105727"),
+            Err(())
+        );
+    }
+
 }

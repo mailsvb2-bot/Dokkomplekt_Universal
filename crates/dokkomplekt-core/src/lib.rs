@@ -146,8 +146,9 @@ pub use universal_behavior_port::{
     UNIVERSAL_BEHAVIOR_PORT_VERSION,
 };
 pub use universal_pipeline::{
-    required_fields_for_domain, run_universal_constructor_pipeline, UniversalDomain,
-    UniversalPipelineFlags, UniversalPipelineInput, UniversalPipelineResult,
+    plugin_required_fields_for_category_role, required_fields_for_domain,
+    run_universal_constructor_pipeline, UniversalDomain, UniversalPipelineFlags,
+    UniversalPipelineInput, UniversalPipelineResult,
 };
 pub use validators::*;
 pub use workflow_engine::*;

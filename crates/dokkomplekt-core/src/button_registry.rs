@@ -647,7 +647,9 @@ mod tests {
         );
         for field_id in ["contract.date", "contract.party_a", "contract.party_b"] {
             assert!(
-                plan.prompts.iter().any(|prompt| prompt.field_id == field_id),
+                plan.prompts
+                    .iter()
+                    .any(|prompt| prompt.field_id == field_id),
                 "explicit Legal contract lost canonical required prompt {field_id}; role={}",
                 document.role_id
             );

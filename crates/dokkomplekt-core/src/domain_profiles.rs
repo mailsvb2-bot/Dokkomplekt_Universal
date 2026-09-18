@@ -209,10 +209,12 @@ mod tests {
             document_role: "diaries".into(),
             field_id: "medical.treatment".into(),
         }));
-        assert!(medical.workflow_rules.contains(&WorkflowRule::RequireFieldWhenFlag {
-            document_role: "discharge".into(),
-            field_id: "medical.sick_leave_number".into(),
-            flag: "sick_leave_enabled".into(),
-        }));
+        assert!(medical
+            .workflow_rules
+            .contains(&WorkflowRule::RequireFieldWhenFlag {
+                document_role: "discharge".into(),
+                field_id: "medical.sick_leave_number".into(),
+                flag: "sick_leave_enabled".into(),
+            }));
     }
 }

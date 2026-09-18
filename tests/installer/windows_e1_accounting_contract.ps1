@@ -62,6 +62,8 @@ public static class DokkomplektE1NativeMouse {
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
+  [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
+  public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern int GetWindowTextLength(IntPtr hWnd);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -326,9 +328,41 @@ function Normalize-UiValue {
 
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
-  $open = Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')
-  if ($null -eq $open) { throw 'Native file dialog has no enabled Open button.' }
-  Invoke-UiElementPhysically -Element $open -Description 'native Open button'
+
+  # Common OpenFileDialog uses stable IDOK=1 independent of locale. Prefer the
+  # exact AutomationId contract used by the main installed smoke instead of
+  # depending on the localized button name or transient UIA IsEnabled state.
+  $automationId = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1'
+  )
+  $kind = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+  )
+  $openButton = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.AndCondition]::new($automationId, $kind)
+  )
+  if ($null -ne $openButton) {
+    Invoke-UiElement -Element $openButton -Description 'native Open button'
+    return
+  }
+
+  # Hosted Windows runners can omit the localized Open button from UIA entirely.
+  # WM_COMMAND/IDOK confirms the same native common dialog without bypassing the
+  # application's real file-picker path.
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+  }
+  $null = [DokkomplektE1NativeMouse]::SendMessagePtr(
+    $dialogHandle,
+    0x0111,
+    [IntPtr]1,
+    [IntPtr]::Zero
+  )
+  Start-Sleep -Milliseconds 500
 }
 
 function New-AccountingSourceDocx {

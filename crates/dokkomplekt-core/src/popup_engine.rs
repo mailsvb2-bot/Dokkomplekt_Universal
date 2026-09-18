@@ -4,6 +4,7 @@ use crate::{
     PromptInputKind, PromptSpec, SemanticCase, SemanticValue, ValueSource, WorkflowFlags,
     WorkflowPlan,
 };
+use crate::money::parse_money_minor_units;
 use chrono::{Datelike, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -312,114 +313,6 @@ fn parse_finite_number(value: &str) -> Result<f64, ()> {
         Ok(number)
     } else {
         Err(())
-    }
-}
-
-fn parse_money_minor_units(value: &str) -> Result<i128, ()> {
-    let mut normalized = value.trim().to_lowercase();
-    for suffix in ["рублей", "рубля", "руб.", "руб", "₽"] {
-        if normalized.ends_with(suffix) {
-            let new_len = normalized.len().saturating_sub(suffix.len());
-            normalized.truncate(new_len);
-            normalized = normalized.trim().to_string();
-            break;
-        }
-    }
-    if normalized.is_empty() {
-        return Err(());
-    }
-
-    let (negative, unsigned) = if let Some(rest) = normalized.strip_prefix('-') {
-        (true, rest)
-    } else if let Some(rest) = normalized.strip_prefix('+') {
-        (false, rest)
-    } else {
-        (false, normalized.as_str())
-    };
-    if unsigned.is_empty() || unsigned.contains(['+', '-']) {
-        return Err(());
-    }
-
-    let has_comma = unsigned.contains(',');
-    let has_dot = unsigned.contains('.');
-    if has_comma && has_dot {
-        return Err(());
-    }
-    let separator = if has_comma {
-        Some(',')
-    } else if has_dot {
-        Some('.')
-    } else {
-        None
-    };
-    if separator.is_some_and(|separator| unsigned.matches(separator).count() != 1) {
-        return Err(());
-    }
-
-    let (integer_text, fraction_text) = match separator {
-        Some(separator) => {
-            let (integer, fraction) = unsigned.split_once(separator).ok_or(())?;
-            (integer, Some(fraction))
-        }
-        None => (unsigned, None),
-    };
-    if integer_text.is_empty() {
-        return Err(());
-    }
-
-    let integer_digits = if integer_text.contains([' ', '\u{00a0}']) {
-        let groups = integer_text
-            .split(|character| matches!(character, ' ' | '\u{00a0}'))
-            .collect::<Vec<_>>();
-        if groups.is_empty()
-            || groups[0].is_empty()
-            || groups[0].len() > 3
-            || !groups[0]
-                .chars()
-                .all(|character| character.is_ascii_digit())
-            || groups[1..].iter().any(|group| {
-                group.len() != 3 || !group.chars().all(|character| character.is_ascii_digit())
-            })
-        {
-            return Err(());
-        }
-        groups.concat()
-    } else {
-        if !integer_text
-            .chars()
-            .all(|character| character.is_ascii_digit())
-        {
-            return Err(());
-        }
-        integer_text.to_string()
-    };
-
-    let integer = integer_digits.parse::<i128>().map_err(|_| ())?;
-    let fraction_minor = match fraction_text {
-        None => 0_i128,
-        Some(fraction)
-            if !fraction.is_empty()
-                && fraction.len() <= 2
-                && fraction.chars().all(|character| character.is_ascii_digit()) =>
-        {
-            let parsed = fraction.parse::<i128>().map_err(|_| ())?;
-            if fraction.len() == 1 {
-                parsed.checked_mul(10).ok_or(())?
-            } else {
-                parsed
-            }
-        }
-        Some(_) => return Err(()),
-    };
-
-    let amount = integer
-        .checked_mul(100)
-        .and_then(|scaled| scaled.checked_add(fraction_minor))
-        .ok_or(())?;
-    if negative {
-        amount.checked_neg().ok_or(())
-    } else {
-        Ok(amount)
     }
 }
 

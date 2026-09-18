@@ -34,6 +34,7 @@ pub mod legacy_parity;
 pub mod legacy_template_inference;
 pub mod mail_merge;
 pub mod medical_profile;
+mod money;
 pub mod output_engine;
 pub mod output_naming;
 pub mod popup_engine;

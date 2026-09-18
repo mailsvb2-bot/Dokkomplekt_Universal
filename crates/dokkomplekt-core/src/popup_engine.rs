@@ -374,7 +374,9 @@ fn parse_money_minor_units(value: &str) -> Result<i128, ()> {
         if groups.is_empty()
             || groups[0].is_empty()
             || groups[0].len() > 3
-            || !groups[0].chars().all(|character| character.is_ascii_digit())
+            || !groups[0]
+                .chars()
+                .all(|character| character.is_ascii_digit())
             || groups[1..].iter().any(|group| {
                 group.len() != 3 || !group.chars().all(|character| character.is_ascii_digit())
             })
@@ -1076,6 +1078,4 @@ mod tests {
             parse_money_minor_units("170141183460469231731687303715884105727"),
             Err(())
         );
-    }
-
-}
+    }}

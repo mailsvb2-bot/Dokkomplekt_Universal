@@ -582,7 +582,10 @@ mod tests {
         )
         .expect("contract role prediction");
         assert_eq!(role, "contract");
-        assert!(confidence >= 0.45, "contract confidence too low: {confidence}");
+        assert!(
+            confidence >= 0.45,
+            "contract confidence too low: {confidence}"
+        );
     }
 
     #[test]
@@ -592,7 +595,10 @@ mod tests {
         )
         .expect("employment contract role prediction");
         assert_eq!(role, "employment_contract");
-        assert!(confidence >= 0.45, "employment contract confidence too low: {confidence}");
+        assert!(
+            confidence >= 0.45,
+            "employment contract confidence too low: {confidence}"
+        );
     }
 
     use super::*;

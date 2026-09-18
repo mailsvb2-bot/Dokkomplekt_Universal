@@ -608,9 +608,26 @@ function Set-E1TemplateDomainOverride {
       Find-E1NamedElement -Name $customName
     }
     Set-UiValue -Element $custom -Value $CustomProfile
+
+    # React controls this input. UIA ValuePattern.SetValue can update the DOM
+    # without dispatching React's input/onChange event, so force one
+    # user-equivalent no-op edit and then blur. This commits exactly the
+    # already supplied Unicode value without depending on the runner keyboard
+    # layout for Cyrillic text.
+    $custom.SetFocus()
+    Start-Sleep -Milliseconds 50
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+    Start-Sleep -Milliseconds 300
+
+    $custom = Wait-UiElement -Description "persisted custom domain value for $FileName" -Probe {
+      Find-E1NamedElement -Name $customName
+    }
     $actualCustom = Normalize-UiValue -Value (Get-UiValue -Element $custom)
+    Write-Host "E1 custom domain value commit: expected='$CustomProfile' actual='$actualCustom'."
     if ($actualCustom -ne (Normalize-UiValue -Value $CustomProfile)) {
-      throw "E1 custom domain override did not persist for $FileName."
+      throw "E1 custom domain override did not persist for $FileName. Expected '$CustomProfile', actual '$actualCustom'."
     }
   }
 }

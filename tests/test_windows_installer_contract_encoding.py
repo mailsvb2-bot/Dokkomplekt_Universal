@@ -112,6 +112,20 @@ def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
         assert marker in source
 
 
+
+def test_e1_cross_domain_scenarios_reset_case_through_real_ui() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        'reset case before $($scenario.Label)',
+        "'Новый комплект', 'Новый пациент / дело'",
+        'empty case before $($scenario.Label)',
+        "'Выбрать исходный файл'",
+        'Set-E1DomainSource -SourcePath $crossDomainSource',
+    ):
+        assert marker in source
+    assert source.index('reset case before $($scenario.Label)') < source.index('Set-E1DomainSource -SourcePath $crossDomainSource')
+
+
 def test_e1_physical_retry_restores_installed_app_foreground() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
     for marker in (

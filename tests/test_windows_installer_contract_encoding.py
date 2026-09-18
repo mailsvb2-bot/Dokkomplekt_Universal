@@ -107,3 +107,17 @@ def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
         "did not expose canonical domain-required field",
     ):
         assert marker in source
+
+
+def test_e1_physical_retry_restores_installed_app_foreground() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        "public static extern bool ShowWindow",
+        "public static extern bool SetForegroundWindow",
+        "$process.Refresh()",
+        "$windowHandle = [IntPtr]$process.MainWindowHandle",
+        "[DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)",
+        "[DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)",
+        "$Element.SetFocus()",
+    ):
+        assert marker in source

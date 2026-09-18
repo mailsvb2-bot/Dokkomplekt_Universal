@@ -572,7 +572,7 @@ function Set-E1DomainSource {
 function Invoke-E1DomainScenario {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
-    [Parameter(Mandatory = $true)][hashtable]$PromptValues,
+    [Parameter(Mandatory = $true)][System.Collections.IDictionary]$PromptValues,
     [Parameter(Mandatory = $true)][string[]]$PluginRequiredFields,
     [Parameter(Mandatory = $true)][string[]]$ExpectedOutputValues,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
@@ -701,6 +701,11 @@ function Invoke-E1DomainScenario {
   $receiptCountAfter = @(Get-ChildItem -LiteralPath $ReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
   if ($receiptCountAfter -ne ($receiptCountBefore + 1)) {
     throw "E1 $Label did not add exactly one committed receipt."
+  }
+  $null = Wait-UiElement -Description "workspace ready after $Label" -TimeoutSeconds 30 -Probe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Добавить шаблоны')
   }
   Write-Host "E1 CROSS-DOMAIN PASS: $Label -> physical DOCX -> committed receipt"
 }

@@ -424,6 +424,8 @@ fn role_phrases() -> Vec<(&'static str, Vec<(&'static str, f32)>)> {
             "contract",
             vec![
                 ("настоящий договор", 5.0),
+                ("договор №", 4.5),
+                ("юридический договор", 4.0),
                 ("предмет договора", 2.0),
                 ("стороны договора", 2.0),
             ],
@@ -572,6 +574,27 @@ const STOP_WORDS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn plain_numbered_legal_contract_is_a_canonical_contract_role() {
+        let (role, confidence) = predict_document_role(
+            "ДОГОВОР\nДокумент № {{document.number}} от {{document.date}}\nДоговор № {{contract.number}}\nE1 Юридический договор",
+        )
+        .expect("contract role prediction");
+        assert_eq!(role, "contract");
+        assert!(confidence >= 0.45, "contract confidence too low: {confidence}");
+    }
+
+    #[test]
+    fn numbered_employment_contract_stays_hr_role() {
+        let (role, confidence) = predict_document_role(
+            "ТРУДОВОЙ ДОГОВОР № 51\nРаботодатель: ООО Кадры\nРаботник: Иванов И.И.",
+        )
+        .expect("employment contract role prediction");
+        assert_eq!(role, "employment_contract");
+        assert!(confidence >= 0.45, "employment contract confidence too low: {confidence}");
+    }
+
     use super::*;
     use crate::{DocumentTemplateSpec, ValueSource};
 

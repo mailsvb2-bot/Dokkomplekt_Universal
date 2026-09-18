@@ -108,7 +108,7 @@ fn explicit_domain_role_from_title(
     title: &str,
 ) -> Option<String> {
     let domain = domain_hint?;
-    let role = crate::canonical_role_for_category(domain, title)?;
+    let role = crate::universal_pipeline::canonical_role_for_category(domain, title)?;
     (!crate::plugin_required_fields_for_category_role(domain, &role).is_empty()).then_some(role)
 }
 

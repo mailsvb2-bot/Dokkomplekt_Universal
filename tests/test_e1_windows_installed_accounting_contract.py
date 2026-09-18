@@ -38,7 +38,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "E1 INSTALLED PASS: Accounting source -> UI -> physical DOCX -> committed receipt" in source
     assert "Windows installer smoke" in workflow
     assert "Windows E1 cross-domain installed path" in workflow
-    assert workflow.index("Windows installer smoke") < workflow.index("Windows E1 Accounting installed path")
+    assert workflow.index("Windows installer smoke") < workflow.index("Windows E1 cross-domain installed path")
     assert "tests/installer/windows_e1_accounting_contract.ps1" in workflow
     assert "public static extern IntPtr SendMessage" in source
     assert "public static extern IntPtr SendMessagePtr" in source

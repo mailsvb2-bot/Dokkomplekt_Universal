@@ -68,6 +68,10 @@ public static class DokkomplektE1NativeMouse {
   public static extern int GetWindowTextLength(IntPtr hWnd);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 "@
 
@@ -214,6 +218,22 @@ function Invoke-UiActionWithObservedTransition {
 function Invoke-UiElementPhysically {
   param([Parameter(Mandatory = $true)]$Element, [string]$Description = 'UI element')
   if (-not $Element.Current.IsEnabled) { throw "$Description is disabled" }
+
+  # A native OpenFileDialog can close while another hosted-runner window still
+  # owns foreground. In that state the first global click merely activates the
+  # Dokkomplekt window and never reaches the WebView2 button. Mirror the proven
+  # baseline installed smoke: restore the real installed app to foreground before
+  # the one bounded physical retry, then focus and dispatch the user-equivalent input.
+  $process.Refresh()
+  $windowHandle = [IntPtr]$process.MainWindowHandle
+  if ($windowHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)
+    [void][DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)
+    Start-Sleep -Milliseconds 150
+  }
+
+  $Element.SetFocus()
+  Start-Sleep -Milliseconds 50
   if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
     $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100

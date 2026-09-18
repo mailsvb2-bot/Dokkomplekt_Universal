@@ -102,7 +102,10 @@ def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
         "'Своя профессия / профиль' = 7",
         "SendWait('{HOME}')",
         "SendWait('{DOWN}')",
-        "SendWait('{ENTER}')",
+        "SendWait('{TAB}')",
+        "Get-E1DomainSelection -FileName $FileName",
+        "IsSelectionPatternAvailable",
+        "domain override did not persist",
         "foreach ($fieldId in $PluginRequiredFields)",
         "did not expose canonical domain-required field",
     ):

@@ -224,9 +224,9 @@ function Invoke-UiElementPhysically {
   # Dokkomplekt window and never reaches the WebView2 control. Restore the real
   # installed app to foreground before dispatching user-equivalent input.
   #
-  # HTML <label> controls that own hidden file inputs are intentionally mouse
-  # clickable but are not necessarily UIA-focusable. A real user can click them,
-  # so physical proof must not reject them solely because SetFocus is unsupported.
+  # Prefer the historical focus-before-click path for normal buttons, but do not
+  # make focus a precondition: HTML <label> controls that own hidden file inputs
+  # are intentionally mouse-clickable while UIA SetFocus can be unsupported.
   $process.Refresh()
   $windowHandle = [IntPtr]$process.MainWindowHandle
   if ($windowHandle -ne [IntPtr]::Zero) {
@@ -239,16 +239,26 @@ function Invoke-UiElementPhysically {
     $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
   }
+
+  $focusAvailable = $true
+  try {
+    $Element.SetFocus()
+    Start-Sleep -Milliseconds 50
+  } catch {
+    $focusAvailable = $false
+  }
+
   try {
     $point = $Element.GetClickablePoint()
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
   } catch {
-    # Keyboard fallback still requires a focusable control. Preserve fail-closed
-    # behaviour when neither a physical click point nor focus is available.
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
+    # Keyboard fallback is valid only for a control that accepted focus. If the
+    # control is neither physically clickable nor focusable, fail closed.
+    if (-not $focusAvailable) {
+      throw "$Description exposes neither a physical click point nor keyboard focus."
+    }
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   }
 }

@@ -162,7 +162,10 @@ describe('AdditionalMaterialsPanel', () => {
     expect(within(selection).getByText('Дневники F20.0.txt')).toBeTruthy();
     expect(within(selection).getByText('Дневники F32.1.txt')).toBeTruthy();
     await waitFor(() => expect(within(selection).getAllByText('Сохранён')).toHaveLength(2));
-    expect(screen.getByRole('status').textContent).toContain('сохранено 2 из 2');
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('сохранено 2 из 2');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.getAttribute('aria-label')).toContain('сохранено 2 из 2');
   });
 
   it('fails early when explicit diary text is picked before the current diagnosis is known', async () => {

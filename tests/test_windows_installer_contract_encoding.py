@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
 QUALITY_GATE_BAT = ROOT / "scripts" / "run_quality_gate.bat"
 UNSIGNED_PREVIEW = ROOT / ".github" / "workflows" / "unsigned-preview.yml"
+E1_DOMAIN_MATRIX = ROOT / "tests" / "installer" / "windows_e1_accounting_contract.ps1"
+QUALITY_GATE = ROOT / ".github" / "workflows" / "quality-gate.yml"
 
 
 def test_legacy_windows_powershell_contract_is_utf8_bom_marked() -> None:
@@ -49,3 +51,107 @@ def test_unsigned_windows_preview_pins_python_for_sqlite_installer_evidence() ->
     assert setup in source
     assert "python-version: '3.12'" in source
     assert source.index(setup) < source.index(contract_call)
+
+
+def test_e1_installed_domain_matrix_keeps_all_canon_domains_and_physical_proof() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        "E1 INSTALLED PASS: Accounting",
+        "E1 Юридический договор",
+        "E1 Трудовой договор",
+        "E1 Справка об обучении",
+        "E1 Архитектурное заключение",
+        "Юридическая работа",
+        "Кадровая работа",
+        "Бухгалтерия",
+        "Образование",
+        "Своя профессия / профиль",
+        "E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom",
+        "physical DOCX -> committed receipt",
+    ):
+        assert marker in source
+
+    for required_field in (
+        "contract.party_a",
+        "contract.party_b",
+        "employee.position",
+        "employee.hire_date",
+        "employee.contract_number",
+        "education.institution",
+    ):
+        assert required_field in source
+
+
+def test_quality_gate_names_and_uploads_cross_domain_installed_evidence() -> None:
+    source = QUALITY_GATE.read_text(encoding="utf-8")
+    assert "Windows E1 cross-domain installed path" in source
+    assert "installer-e1-domain-matrix-${{ runner.os }}.log" in source
+    assert "DOKKOMPLEKT_ADVERSARIAL: '1'" in source
+    assert source.index("Windows installer smoke") < source.index("Windows E1 cross-domain installed path")
+
+
+def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    assert "Chromium/WebView2 does not consistently publish <option> descendants" in source
+    assert "$domainOffsets = @{" in source
+    for marker in (
+        "'Юридическая работа' = 3",
+        "'Кадровая работа' = 4",
+        "'Бухгалтерия' = 5",
+        "'Образование' = 6",
+        "'Своя профессия / профиль' = 7",
+        "SendWait('{HOME}')",
+        "SendWait('{DOWN}')",
+        "SendWait('{TAB}')",
+        "Get-E1DomainSelection -FileName $FileName",
+        "IsSelectionPatternAvailable",
+        "domain override did not persist",
+        "foreach ($fieldId in $PluginRequiredFields)",
+        "did not expose canonical domain-required field",
+    ):
+        assert marker in source
+
+
+
+def test_e1_custom_domain_value_commits_through_react_input_event() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        "React controls this input",
+        "Set-UiValue -Element $custom -Value $CustomProfile",
+        "SendWait(' ')",
+        "SendWait('{BACKSPACE}')",
+        "persisted custom domain value for $FileName",
+        "E1 custom domain value commit:",
+        "custom domain override did not persist",
+    ):
+        assert marker in source
+    assert source.index("Set-UiValue -Element $custom -Value $CustomProfile") < source.index("SendWait(' ')")
+    assert source.index("SendWait('{BACKSPACE}')") < source.index("persisted custom domain value for $FileName")
+
+
+
+def test_e1_cross_domain_scenarios_reset_case_through_real_ui() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        'reset case before $($scenario.Label)',
+        "'Новый комплект', 'Новый пациент / дело'",
+        'empty case before $($scenario.Label)',
+        "'Выбрать исходный файл'",
+        'Set-E1DomainSource -SourcePath $crossDomainSource',
+    ):
+        assert marker in source
+    assert source.index('reset case before $($scenario.Label)') < source.index('Set-E1DomainSource -SourcePath $crossDomainSource')
+
+
+def test_e1_physical_retry_restores_installed_app_foreground() -> None:
+    source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    for marker in (
+        "public static extern bool ShowWindow",
+        "public static extern bool SetForegroundWindow",
+        "$process.Refresh()",
+        "$windowHandle = [IntPtr]$process.MainWindowHandle",
+        "[DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)",
+        "[DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)",
+        "$Element.SetFocus()",
+    ):
+        assert marker in source

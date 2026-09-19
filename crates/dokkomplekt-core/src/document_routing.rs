@@ -572,6 +572,7 @@ const STOP_WORDS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::{DocumentTemplateSpec, ValueSource};
 

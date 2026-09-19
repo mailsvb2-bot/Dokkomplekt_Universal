@@ -161,6 +161,30 @@ pub fn canonical_role_for_category(category: &crate::DomainKind, raw_role: &str)
     Some(canonical_role_for_domain(&domain, raw_role))
 }
 
+pub fn plugin_required_fields_for_category_role(
+    category: &crate::DomainKind,
+    raw_role: &str,
+) -> BTreeSet<String> {
+    let domain = match category {
+        crate::DomainKind::Legal => UniversalDomain::Legal,
+        crate::DomainKind::Hr => UniversalDomain::Hr,
+        crate::DomainKind::Education => UniversalDomain::Education,
+        crate::DomainKind::Accounting => UniversalDomain::Accounting,
+        crate::DomainKind::Medical | crate::DomainKind::Generic | crate::DomainKind::Custom(_) => {
+            return BTreeSet::new();
+        }
+    };
+    let role = canonical_role_for_domain(&domain, raw_role);
+    required_fields_for_plugin_role(
+        &plugin_id_for_universal_domain(&domain),
+        &role,
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+    )
+    .into_iter()
+    .collect()
+}
+
 #[cfg(test)]
 mod canonical_category_role_tests {
     use super::*;

@@ -34,7 +34,12 @@ pub fn analyze_template_text_with_context(
     let evidence_text = label
         .map(|value| format!("{text}\n{value}"))
         .unwrap_or_else(|| text.to_string());
-    let role_id = detect_role(&evidence_text, &title);
+    let detected_role = detect_role(&evidence_text, &title);
+    let role_id = if detected_role == "unknown" {
+        explicit_domain_role_from_title(domain_hint, &title).unwrap_or(detected_role)
+    } else {
+        detected_role
+    };
     let raw_placeholders = template_field_references(text);
     let initial_scores = score_domains(&evidence_text, &raw_placeholders);
     let preferred_domain = domain_hint
@@ -96,6 +101,15 @@ pub fn analyze_template_text_with_context(
         warnings,
         template_errors: inspect_template_syntax(text),
     }
+}
+
+fn explicit_domain_role_from_title(
+    domain_hint: Option<&DomainKind>,
+    title: &str,
+) -> Option<String> {
+    let domain = domain_hint?;
+    let role = crate::universal_pipeline::canonical_role_for_category(domain, title)?;
+    (!crate::plugin_required_fields_for_category_role(domain, &role).is_empty()).then_some(role)
 }
 
 fn canonical_template_fields(placeholder: &str, domain: &DomainKind, role_id: &str) -> Vec<String> {
@@ -438,6 +452,18 @@ mod alias_regression_tests {
     use crate::domains::medical_semantics::{
         SICK_LEAVE_VK_PROTOCOL_NUMBER, VK_MSE_PROTOCOL_NUMBER,
     };
+
+    #[test]
+    fn explicit_legal_hint_routes_plain_numbered_contract_title() {
+        let analysis = analyze_template_text_with_context(
+            "ДОГОВОР\nДокумент № {{document.number}} от {{document.date}}\nДоговор № {{contract.number}}",
+            Some(&DomainKind::Legal),
+            Some("E1 Юридический договор"),
+        );
+
+        assert_eq!(analysis.role_id, "contract");
+        assert_eq!(best_domain(&analysis), DomainKind::Legal);
+    }
 
     #[test]
     fn accounting_service_act_uses_role_owned_plugin_evidence_over_shared_legal_vocabulary() {

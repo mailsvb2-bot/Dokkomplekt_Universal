@@ -10,13 +10,15 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_final_workflow_plan_is_bounded_by_selected_template_fields() -> None:
+def test_final_workflow_plan_keeps_template_bounds_and_canonical_role_requirements() -> None:
     source = text("crates/dokkomplekt-core/src/workflow_engine.rs")
     assert "selected_document_fields(document, flags)" in source
     assert ".filter(|field_id| relevant.contains(field_id))" in source
     assert ".filter(|config| relevant.contains(&config.field_id))" in source
-    assert "accounting_profile_does_not_force_fields_absent_from_selected_template" in source
-    assert "explicitly_configured_popup_field_remains_in_final_plan" in source
+    assert "plugin_required_fields_for_category_role" in source
+    assert "canonical_accounting_plugin_requirements_survive_template_relevance_filter" in source
+    assert "canonical_nonmedical_plugin_requirements_are_hard_runtime_inputs" in source
+    assert "custom_popup_cannot_hide_canonical_plugin_requirements" in source
 
 
 def test_preflight_uses_selected_single_or_batch_generation_plan() -> None:

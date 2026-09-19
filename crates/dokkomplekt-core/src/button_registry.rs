@@ -618,6 +618,45 @@ mod tests {
     }
 
     #[test]
+    fn explicit_legal_domain_preserves_confirmed_contract_role_in_pack() {
+        let rows = prepare_template_confirmations(&[TemplateCandidate {
+            document_id: "e1-legal-contract".into(),
+            template_path: "e1-legal-contract.docx".into(),
+            extracted_text: "ДОГОВОР\nДокумент № {{document.number}} от {{document.date}}\nДоговор № {{contract.number}}".into(),
+            preferred_button_label: Some("E1 Юридический договор".into()),
+            domain_override: Some(DomainKind::Legal),
+        }]);
+
+        assert_eq!(rows[0].domain_override, Some(DomainKind::Legal));
+        assert_eq!(
+            crate::domains::legal::canonical_legal_role(&rows[0].role_id),
+            "contract"
+        );
+
+        let result = create_pack_from_confirmations("default", "Pack", &rows);
+        let document = &result.pack.documents[0];
+        assert_eq!(document.category, DomainKind::Legal);
+        assert_eq!(
+            crate::domains::legal::canonical_legal_role(&document.role_id),
+            "contract"
+        );
+        let plan = crate::plan_workflow(
+            document,
+            &crate::SemanticCase::default(),
+            &crate::WorkflowFlags::default(),
+        );
+        for field_id in ["contract.date", "contract.party_a", "contract.party_b"] {
+            assert!(
+                plan.prompts
+                    .iter()
+                    .any(|prompt| prompt.field_id == field_id),
+                "explicit Legal contract lost canonical required prompt {field_id}; role={}",
+                document.role_id
+            );
+        }
+    }
+
+    #[test]
     fn explicit_custom_domain_override_is_saved_in_document_pack() {
         let mut rows = prepare_template_confirmations(&[TemplateCandidate {
             document_id: "custom-report".into(),

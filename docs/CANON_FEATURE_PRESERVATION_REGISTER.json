@@ -70,8 +70,8 @@
     {
       "id": "FPR-02",
       "group": "Дневники",
-      "status": "needs-runtime-proof",
-      "actual_state": "current diary planner and diary-specific professional-record modules are present; installed proof pending",
+      "status": "verified",
+      "actual_state": "canonical paragraph-only diary path plus installed golden proof implemented on candidate",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#get_diary_plan"
       ],
@@ -92,8 +92,13 @@
         "crates/dokkomplekt-core/src/diary_engine.rs",
         "crates/dokkomplekt-core/src/diary_professional_records.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Installed diary golden evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-02 installed diary golden",
+        "crates/dokkomplekt-docx/tests/program_calendar_diary_docx.rs#centered paragraph golden",
+        "tests/test_donor_diary_output_parity.py#canonical diary layout lock",
+        "tests/test_e1_windows_installed_accounting_contract.py#installed FPR-02 regression lock"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-03",

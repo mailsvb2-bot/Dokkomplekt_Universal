@@ -131,7 +131,8 @@ describe('AdditionalMaterialsPanel', () => {
   it('uses the donor program calendar and asks only for Texts in the normal diary flow', () => {
     render(<AdditionalMaterialsPanel documents={[medicalDiary, legal]} selectedDocumentIds={['diary']} busy={false} />);
     expect(screen.getByText('Медицинские дневники')).toBeTruthy();
-    expect(screen.getByText('Тексты')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Тексты' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'выбрать папку «Тексты»' })).toBeTruthy();
     expect(screen.queryByText('Даты')).toBeNull();
     expect(screen.getByText(/Отдельная папка «Даты 01–31» для обычного создания не нужна/)).toBeTruthy();
     expect(screen.getByText(/сама построит календарь D0\+1 → выписка/)).toBeTruthy();
@@ -149,8 +150,7 @@ describe('AdditionalMaterialsPanel', () => {
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0" />);
 
-    const label = screen.getByText('Тексты').closest('label');
-    const input = label?.querySelector('input[type="file"]') as HTMLInputElement | null;
+    const input = document.querySelector('#medical-diary-text-files') as HTMLInputElement | null;
     expect(input).toBeTruthy();
     expect(input?.multiple).toBe(true);
     const first = new File(['статус 1'], 'Дневники F20.0.txt', { type: 'text/plain' });
@@ -172,7 +172,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
-    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-files') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(['docx'], 'психотерапия.docx')] } });
     expect((await screen.findByRole('status')).textContent).toContain('Сначала укажите или подтвердите диагноз');
     expect(savedBlocks).toHaveLength(0);
@@ -193,7 +193,7 @@ describe('AdditionalMaterialsPanel', () => {
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0 Шизофрения параноидная" />);
 
-    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-files') as HTMLInputElement;
     const file = new File(['docx'], 'психотерапия.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     fireEvent.change(input, { target: { files: [file] } });
 
@@ -212,7 +212,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     const view = render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0 Исходная формулировка" />);
-    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-files') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(['docx'], 'a.docx')] } });
     await screen.findByRole('region', { name: 'Выбранные файлы дневников' });
 
@@ -245,7 +245,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0 Новая формулировка" />);
-    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-files') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(['docx'], 'актуальный.docx')] } });
     await waitFor(() => expect(saved).toHaveLength(2));
     const regular = saved.find(block => block.blockId === 'professional.medical.diary.regular.f200');
@@ -274,7 +274,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
-    const input = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-folder') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [
       new File(['a'], 'Дневники F20.0 — вариант 1.txt'),
       new File(['b'], 'F20.0 вариант 2.txt'),
@@ -301,7 +301,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
-    const input = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-folder') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(['current'], 'F20.0 актуальный.txt')] } });
     await waitFor(() => expect(saved).toHaveLength(2));
     expect(saved).toEqual(expect.arrayContaining([
@@ -325,7 +325,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} medicalDiagnosis="F20.0" />);
-    const input = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-files') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [
       new File(['ok'], 'regular.docx'),
       new File(['bad'], 'финал broken.docx'),
@@ -353,7 +353,7 @@ describe('AdditionalMaterialsPanel', () => {
       throw new Error(`Unexpected command: ${command}`);
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
-    const input = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-folder') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [
       new File(['ok20'], 'F20.0 regular.docx'),
       new File(['bad20'], 'F20.0 финал broken.docx'),
@@ -393,7 +393,7 @@ describe('AdditionalMaterialsPanel', () => {
     });
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
 
-    const input = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector('#medical-diary-text-folder') as HTMLInputElement;
     const good = new File(['статус'], 'Дневники F20.0.txt', { type: 'text/plain' });
     const broken = new File(['bad'], 'broken.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const junk = new File(['system'], 'desktop.ini', { type: 'text/plain' });
@@ -410,10 +410,14 @@ describe('AdditionalMaterialsPanel', () => {
     expect(screen.getByRole('status').textContent).toContain('сохранено 1 из 3; пропущено 1; ошибок 1');
   });
 
-  it('shows Word files from the main Texts button and keeps whole-folder import explicit', () => {
+  it('shows keyboard-accessible diary picker buttons and keeps whole-folder import explicit', () => {
     render(<AdditionalMaterialsPanel documents={[medicalDiary]} selectedDocumentIds={['diary']} busy={false} />);
-    const fileInput = screen.getByText('Тексты').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement | null;
-    const folderInput = screen.getByText('выбрать папку «Тексты»').closest('label')?.querySelector('input[type="file"]') as HTMLInputElement | null;
+    const textsButton = screen.getByRole('button', { name: 'Тексты' });
+    const folderButton = screen.getByRole('button', { name: 'выбрать папку «Тексты»' });
+    const fileInput = document.querySelector('#medical-diary-text-files') as HTMLInputElement | null;
+    const folderInput = document.querySelector('#medical-diary-text-folder') as HTMLInputElement | null;
+    expect(textsButton.getAttribute('aria-controls')).toBe('medical-diary-text-files');
+    expect(folderButton.getAttribute('aria-controls')).toBe('medical-diary-text-folder');
     expect(fileInput).toBeTruthy();
     expect(fileInput?.multiple).toBe(true);
     expect(fileInput?.getAttribute('accept')).toContain('.docx');

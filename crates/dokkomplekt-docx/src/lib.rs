@@ -819,7 +819,9 @@ pub fn create_docx_from_text_with_centered_exact_lines(
             .iter()
             .any(|expected| line.trim() == expected.trim());
         if centered {
-            body.push_str(\n                "<w:p><w:pPr><w:jc w:val=\\\"center\\\"/></w:pPr><w:r><w:t xml:space=\\\"preserve\\\">",\n            );
+            body.push_str(
+                "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t xml:space=\"preserve\">",
+            );
         } else {
             body.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
         }

@@ -137,6 +137,8 @@ export function AdditionalMaterialsPanel(props: {
   const [status, setStatus] = useState('');
   const [working, setWorking] = useState(false);
   const workingRef = useRef(false);
+  const diaryTextInputRef = useRef<HTMLInputElement>(null);
+  const diaryFolderInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [customRvk, setCustomRvk] = useState('');
   const [diaryFiles, setDiaryFiles] = useState<DiaryFileSelection[]>([]);
@@ -479,29 +481,45 @@ export function AdditionalMaterialsPanel(props: {
           </div>
           <div className="medicalSourceButtons">
             <div className="medicalSourceChoice">
-              <label className="primaryBtn fileBtn">
+              <button
+                type="button"
+                className="primaryBtn fileBtn"
+                onClick={() => diaryTextInputRef.current?.click()}
+                disabled={working || props.busy}
+                aria-controls="medical-diary-text-files"
+              >
                 <i className="ti ti-notes" aria-hidden="true" /> Тексты
-                <input
-                  type="file"
-                  multiple
-                  accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
-                  onChange={(event) => { void importDiaryTexts(filesFrom(event), true); }}
-                  disabled={working || props.busy}
-                  style={{ display: 'none' }}
-                />
-              </label>
-              <label className="textBtn fileBtn">
+              </button>
+              <input
+                ref={diaryTextInputRef}
+                id="medical-diary-text-files"
+                type="file"
+                multiple
+                accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
+                onChange={(event) => { void importDiaryTexts(filesFrom(event), true); }}
+                disabled={working || props.busy}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                className="textBtn fileBtn"
+                onClick={() => diaryFolderInputRef.current?.click()}
+                disabled={working || props.busy}
+                aria-controls="medical-diary-text-folder"
+              >
                 выбрать папку «Тексты»
-                <input
-                  type="file"
-                  multiple
-                  accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
-                  onChange={(event) => { void importDiaryTexts(filesFrom(event), false); }}
-                  disabled={working || props.busy}
-                  style={{ display: 'none' }}
-                  {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
-                />
-              </label>
+              </button>
+              <input
+                ref={diaryFolderInputRef}
+                id="medical-diary-text-folder"
+                type="file"
+                multiple
+                accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
+                onChange={(event) => { void importDiaryTexts(filesFrom(event), false); }}
+                disabled={working || props.busy}
+                style={{ display: 'none' }}
+                {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+              />
               <small>Кнопка «Тексты» выбирает актуальные файлы для текущего диагноза и заменяет ранее выбранный набор для того же кода. Для импорта большой библиотеки по именам файлов используйте «выбрать папку “Тексты”». Программа спросит стиль/ритм и сама построит календарь D0+1 → выписка.</small>
               {diaryFiles.length > 0 && (
                 <div className="medicalDiarySelection" role="region" aria-label="Выбранные файлы дневников">

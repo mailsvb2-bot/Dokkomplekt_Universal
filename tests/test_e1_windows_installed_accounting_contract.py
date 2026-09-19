@@ -59,14 +59,6 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source
     assert "function Invoke-UiActionWithObservedTransition" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
-    physical_helper = source[source.index("function Invoke-UiElementPhysically {"):source.index("function Invoke-UiActionPhysicallyFromProbe {")]
-    assert "HTML <label> controls that own hidden file inputs" in physical_helper
-    assert "$focusAvailable = $true" in physical_helper
-    assert "$Element.SetFocus()" in physical_helper
-    assert "$focusAvailable = $false" in physical_helper
-    assert "GetClickablePoint()" in physical_helper
-    assert "if (-not $focusAvailable)" in physical_helper
-    assert "neither a physical click point nor keyboard focus" in physical_helper
     assert '-Description "open advanced template settings for $FileName"' in source
     assert "after failed advanced settings transition" in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source

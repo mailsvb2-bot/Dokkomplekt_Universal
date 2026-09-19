@@ -5,8 +5,8 @@ use dokkomplekt_docx::{
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use zip::ZipArchive;
 use std::time::{SystemTime, UNIX_EPOCH};
+use zip::ZipArchive;
 
 const TEMPLATE: &str = dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
 
@@ -97,7 +97,10 @@ fn program_calendar_template_becomes_a_real_text_diary_docx() {
     assert!(!text.contains("{{"), "{text}");
 
     let xml = read_document_xml(&output);
-    assert!(!xml.contains("<w:tbl"), "canonical diary output must remain paragraph text");
+    assert!(
+        !xml.contains("<w:tbl"),
+        "canonical diary output must remain paragraph text"
+    );
     for date in ["11.05.2026", "12.05.2026"] {
         let date_pos = xml.find(date).expect("rendered diary date");
         let paragraph_start = xml[..date_pos].rfind("<w:p").expect("date paragraph start");

@@ -1,7 +1,7 @@
 // Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
 
 const MEDICAL_RVK_OPTIONS_BLOCK_ID: &str = "professional.medical.rvk.quick_options";
-const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v5";
+const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v6";
 const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str =
     dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
 
@@ -203,8 +203,12 @@ fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
     let temp_path = parent.join(format!(".{stem}-{}.tmp.docx", uuid::Uuid::new_v4()));
 
     let publish = (|| -> Result<(), String> {
-        create_docx_from_text(&temp_path, MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT)
-            .map_err(|error| format!("Не удалось создать временный шаблон текстовых дневников: {error}"))?;
+        dokkomplekt_docx::create_docx_from_text_with_centered_exact_lines(
+            &temp_path,
+            MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT,
+            &["{{diary.datetime}}"],
+        )
+        .map_err(|error| format!("Не удалось создать временный шаблон текстовых дневников: {error}"))?;
         validate_safe_template_file(&temp_path)
             .map_err(|error| format!("Временный шаблон дневников не прошёл проверку: {error}"))?;
         if !medical_diary_template_is_usable(&temp_path) {

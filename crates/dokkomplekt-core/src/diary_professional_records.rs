@@ -20,7 +20,8 @@ const NEUTRAL_FINAL_DIARY_TEXT: &str = "Состояние улучшилось.
 
 pub const MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT: &str = concat!(
     "{{#each diaries}}\n",
-    "{{diary.datetime}} {{#if diary.is_final}}",
+    "{{diary.datetime}}\n",
+    "{{#if diary.is_final}}",
     "Состояние улучшилось. Жалоб активно не предъявляет. Отрицательной динамики не отмечается. ",
     "Общее самочувствие стабильное, режим соблюдает, назначения выполняет. ",
     "На текущую дату оформлена выписка из стационара. Даны рекомендации",

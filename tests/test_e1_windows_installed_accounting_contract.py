@@ -65,3 +65,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$templateDialog = Invoke-UiActionWithObservedTransition" in source
     assert "$sourceDialog = Invoke-UiActionWithObservedTransition" in source
     assert "-TransitionProbe { Find-FileDialog }" in source
+    assert "FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts." in source
+    assert "Проверить и создать (2)" in source
+    assert "$fpr01OutputHashes = New-Object System.Collections.Generic.HashSet[string]" in source
+    assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
+    assert "one batch did not add exactly" in source

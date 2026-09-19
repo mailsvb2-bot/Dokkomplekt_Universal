@@ -59,6 +59,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source
     assert "function Invoke-UiActionWithObservedTransition" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
+    assert '-Description "open advanced template settings for $FileName"' in source
+    assert "after failed advanced settings transition" in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source
     assert "$templateDialog = Invoke-UiActionWithObservedTransition" in source
     assert "$sourceDialog = Invoke-UiActionWithObservedTransition" in source

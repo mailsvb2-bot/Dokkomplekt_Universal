@@ -459,6 +459,22 @@ function Find-E1NamedElement {
   )
 }
 
+function Find-E1NamedElementContaining {
+  param([Parameter(Mandatory = $true)][string]$Text)
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  foreach ($element in $window.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+  )) {
+    try { $name = [string]$element.Current.Name } catch { continue }
+    if (-not [string]::IsNullOrWhiteSpace($name) -and $name.Contains($Text)) {
+      return $element
+    }
+  }
+  return $null
+}
+
 function Get-E1DomainSelection {
   param([Parameter(Mandatory = $true)][string]$FileName)
 
@@ -1512,9 +1528,14 @@ $diaryTextEdit = $diaryTextDialog.FindFirst(
 )
 Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText
 Submit-OpenFileDialog -Dialog $diaryTextDialog
-$null = Wait-UiElement -Description 'FPR-02 diary text saved' -TimeoutSeconds 40 -Probe {
-  Find-E1NamedElement -Name 'Сохранён'
+$fpr02ImportStatus = Wait-UiElement -Description 'FPR-02 diary text terminal import status' -TimeoutSeconds 40 -Probe {
+  Find-E1NamedElementContaining -Text '«Тексты»:'
 }
+$fpr02ImportStatusText = [string]$fpr02ImportStatus.Current.Name
+if ($fpr02ImportStatusText -notmatch 'сохранено\s+1\s+из\s+1' -or $fpr02ImportStatusText -notmatch 'ошибок\s+0') {
+  throw "FPR-02 diary text import did not complete cleanly: $fpr02ImportStatusText"
+}
+Write-Host "FPR-02 Texts import PASS: $fpr02ImportStatusText"
 
 $null = Invoke-UiActionWithObservedTransition `
   -Description 'FPR-02 diary generation action' `

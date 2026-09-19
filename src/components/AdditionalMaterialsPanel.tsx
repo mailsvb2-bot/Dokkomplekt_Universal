@@ -558,7 +558,16 @@ export function AdditionalMaterialsPanel(props: {
         </details>
       )}
 
-      {status && <p className="additionalMaterialsStatus" role="status">{status}</p>}
+      {status && (
+        <p
+          className="additionalMaterialsStatus"
+          role="status"
+          aria-live="polite"
+          aria-label={status}
+        >
+          {status}
+        </p>
+      )}
     </section>
   );
 }

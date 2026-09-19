@@ -685,17 +685,21 @@ function Add-E1DomainTemplate {
   Set-UiValue -Element $labelInput -Value $Label
   Set-E1TemplateDomainOverride -FileName $fileName -OptionName $DomainOption -CustomProfile $CustomProfile
 
-  Invoke-UiActionPhysicallyFromProbe -Description "create $Label button" -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
-  }
   try {
-    $null = Wait-UiElement -Description "$Label document button" -TimeoutSeconds 90 -Probe {
-      $window = Find-LiveAppWindow
-      if ($null -eq $window) { return $null }
-      Find-ButtonByNames -Root $window -Names @($Label)
-    }
+    $null = Invoke-UiActionWithObservedTransition `
+      -Description "create $Label button" `
+      -TransitionDescription "$Label document button" `
+      -TransitionSeconds 8 `
+      -ActionProbe {
+        $window = Find-LiveAppWindow
+        if ($null -eq $window) { return $null }
+        Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
+      } `
+      -TransitionProbe {
+        $window = Find-LiveAppWindow
+        if ($null -eq $window) { return $null }
+        Find-ButtonByNames -Root $window -Names @($Label)
+      }
   } catch {
     Write-Host ("E1 UI snapshot after failed template confirmation for '$Label': " + (Get-E1UiSnapshot))
     throw

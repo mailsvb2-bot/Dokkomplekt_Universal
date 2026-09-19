@@ -221,12 +221,9 @@ function Invoke-UiElementPhysically {
 
   # A native OpenFileDialog can close while another hosted-runner window still
   # owns foreground. In that state the first global click merely activates the
-  # Dokkomplekt window and never reaches the WebView2 control. Restore the real
-  # installed app to foreground before dispatching user-equivalent input.
-  #
-  # Prefer the historical focus-before-click path for normal buttons, but do not
-  # make focus a precondition: HTML <label> controls that own hidden file inputs
-  # are intentionally mouse-clickable while UIA SetFocus can be unsupported.
+  # Dokkomplekt window and never reaches the WebView2 button. Mirror the proven
+  # baseline installed smoke: restore the real installed app to foreground before
+  # the one bounded physical retry, then focus and dispatch the user-equivalent input.
   $process.Refresh()
   $windowHandle = [IntPtr]$process.MainWindowHandle
   if ($windowHandle -ne [IntPtr]::Zero) {
@@ -235,30 +232,19 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
+  $Element.SetFocus()
+  Start-Sleep -Milliseconds 50
   if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
     $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
   }
-
-  $focusAvailable = $true
-  try {
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
-  } catch {
-    $focusAvailable = $false
-  }
-
   try {
     $point = $Element.GetClickablePoint()
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
   } catch {
-    # Keyboard fallback is valid only for a control that accepted focus. If the
-    # control is neither physically clickable nor focusable, fail closed.
-    if (-not $focusAvailable) {
-      throw "$Description exposes neither a physical click point nor keyboard focus."
-    }
+    $Element.SetFocus()
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   }
 }

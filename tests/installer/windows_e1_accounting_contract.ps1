@@ -1247,6 +1247,192 @@ foreach ($scenario in $domainScenarios) {
     -OutputRoot $defaultOutputRoot `
     -ReceiptRoot $completionReceiptRoot
 }
+# FPR-01: prove the installed main-document batch boundary, not merely a
+# sequence of single-document generations. Two ordinary Universal templates are
+# selected together, share one preflight, and must each produce a readable
+# physical DOCX plus its own committed GenerationReceipt.
+Invoke-UiActionPhysicallyFromProbe -Description 'reset case before FPR-01 main-document batch' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+}
+$null = Wait-UiElement -Description 'empty case before FPR-01 main-document batch' -TimeoutSeconds 30 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+}
+
+$fpr01Documents = @(
+  [pscustomobject]@{
+    FileName = 'fpr01-main-a.docx'
+    Label = 'FPR01 Основной документ А'
+    Marker = 'FPR01-MAIN-A'
+  },
+  [pscustomobject]@{
+    FileName = 'fpr01-main-b.docx'
+    Label = 'FPR01 Основной документ Б'
+    Marker = 'FPR01-MAIN-B'
+  }
+)
+foreach ($document in $fpr01Documents) {
+  $templatePath = Join-Path $fixtureDir $document.FileName
+  New-E1TextDocx -Path $templatePath -Lines @(
+    $document.Marker,
+    'Документ № {{document.number}}',
+    'Дата документа: {{document.date}}'
+  )
+  Add-E1DomainTemplate `
+    -TemplatePath $templatePath `
+    -Label $document.Label `
+    -DomainOption 'Универсальный документооборот'
+}
+
+Set-E1DomainSource -SourcePath $crossDomainSource
+$window = Find-LiveAppWindow
+$clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
+if ($null -ne $clearSelection) {
+  Invoke-UiElementPhysically -Element $clearSelection -Description 'clear selection before FPR-01 batch'
+}
+Start-Sleep -Milliseconds 200
+
+foreach ($document in $fpr01Documents) {
+  Invoke-UiActionPhysicallyFromProbe -Description "select $($document.Label) for FPR-01 batch" -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    $window.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        "Добавить $($document.Label) в комплект"
+      )
+    )
+  }
+  Start-Sleep -Milliseconds 150
+}
+
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-01 two-document generation action' `
+  -TransitionDescription 'FPR-01 shared preflight' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (2)', 'Создать документы (2)')
+  } `
+  -TransitionProbe {
+    Find-E1NamedElement -Name 'Проверка перед созданием'
+  }
+
+$fpr01PromptValues = [ordered]@{
+  'document.number' = 'FPR01-2DOCS'
+  'document.date' = '18.09.2026'
+}
+foreach ($fieldId in $fpr01PromptValues.Keys) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+  )
+  if ($null -eq $control) {
+    throw "FPR-01 shared preflight did not expose required field: $fieldId"
+  }
+  Set-UiValue -Element $control -Value ([string]$fpr01PromptValues[$fieldId])
+}
+
+$fpr01ReceiptCountBefore = if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
+  @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
+} else { 0 }
+foreach ($document in $fpr01Documents) {
+  $outputName = "$($document.Label).docx"
+  foreach ($existing in @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $outputName -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $existing.FullName -Force -ErrorAction SilentlyContinue
+  }
+}
+
+Invoke-UiActionPhysicallyFromProbe -Description 'create FPR-01 two-document batch' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+}
+
+$fpr01Deadline = [DateTime]::UtcNow.AddSeconds(75)
+$fpr01Created = @{}
+do {
+  if ($process.HasExited) { throw 'Installed application exited during FPR-01 two-document generation.' }
+  foreach ($document in $fpr01Documents) {
+    if ($fpr01Created.ContainsKey($document.Label)) { continue }
+    $outputName = "$($document.Label).docx"
+    $created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $outputName -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if ($null -ne $created) { $fpr01Created[$document.Label] = $created }
+  }
+  if ($fpr01Created.Count -eq $fpr01Documents.Count) { break }
+  $failure = Find-E1NamedElement -Name 'Документы не созданы'
+  if ($null -ne $failure) { throw 'FPR-01 installed backend rejected the two-document batch.' }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr01Deadline)
+
+if ($fpr01Created.Count -ne $fpr01Documents.Count) {
+  $missing = @($fpr01Documents | Where-Object { -not $fpr01Created.ContainsKey($_.Label) } | ForEach-Object Label) -join ', '
+  throw "FPR-01 did not publish every selected document. Missing: $missing"
+}
+
+$fpr01OutputHashes = New-Object System.Collections.Generic.HashSet[string]
+foreach ($document in $fpr01Documents) {
+  $created = $fpr01Created[$document.Label]
+  if ($created.Length -le 0) { throw "FPR-01 created empty DOCX: $($created.FullName)" }
+  $archive = [System.IO.Compression.ZipFile]::OpenRead($created.FullName)
+  try {
+    $entry = $archive.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw "FPR-01 output is not a readable DOCX: $($created.FullName)" }
+    $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+    try { $xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    foreach ($expected in @($document.Marker, 'FPR01-2DOCS', '18.09.2026')) {
+      if ($xml -notmatch [regex]::Escape($expected)) {
+        throw "FPR-01 physical read-back for '$($document.Label)' is missing: $expected"
+      }
+    }
+    if ($xml -match '\{\{') {
+      throw "FPR-01 physical read-back for '$($document.Label)' contains unresolved placeholders."
+    }
+  } finally {
+    $archive.Dispose()
+  }
+  $hash = (Get-FileHash -LiteralPath $created.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+  if (-not $fpr01OutputHashes.Add($hash)) {
+    throw 'FPR-01 selected documents unexpectedly produced identical physical output hashes.'
+  }
+}
+
+$fpr01ReceiptDeadline = [DateTime]::UtcNow.AddSeconds(30)
+$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]
+do {
+  if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
+    foreach ($file in @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
+      try {
+        $data = (Get-Content -LiteralPath $file.FullName -Raw) | ConvertFrom-Json
+        $receiptHash = [string]$data.output_sha256
+        if ($data.status -eq 'committed' -and $fpr01OutputHashes.Contains($receiptHash)) {
+          $null = $fpr01MatchedHashes.Add($receiptHash)
+        }
+      } catch { }
+    }
+  }
+  if ($fpr01MatchedHashes.Count -eq $fpr01Documents.Count) { break }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr01ReceiptDeadline)
+
+if ($fpr01MatchedHashes.Count -ne $fpr01Documents.Count) {
+  throw "FPR-01 expected $($fpr01Documents.Count) committed receipts bound to the selected physical outputs; matched $($fpr01MatchedHashes.Count)."
+}
+$fpr01ReceiptCountAfter = @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
+if ($fpr01ReceiptCountAfter -ne ($fpr01ReceiptCountBefore + $fpr01Documents.Count)) {
+  throw "FPR-01 one batch did not add exactly $($fpr01Documents.Count) committed GenerationReceipts."
+}
+Write-Host 'FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts.'
+
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
 Stop-Process -Id $process.Id -Force

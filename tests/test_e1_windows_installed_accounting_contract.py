@@ -70,3 +70,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$fpr01OutputHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "one batch did not add exactly" in source
+    assert "FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt." in source
+    assert "$fpr02DoctorText" in source
+    assert "FPR-02 canonical diary output regressed to a Word table." in source
+    assert "FPR-02 diary date is not centered in paragraph text" in source
+    assert "FPR-02 incorrectly emitted an ordinary diary on admission day D0." in source
+    assert "FPR-02 emitted a diary after the discharge boundary." in source
+    assert "FPR-02 diary output has no matching committed GenerationReceipt." in source

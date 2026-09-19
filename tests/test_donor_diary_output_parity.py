@@ -65,6 +65,11 @@ def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
     assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
     assert "{{#each diaries}}" in profile_sources
     assert "{{diary.datetime}}" in profile_sources
+    assert 'MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v6"' in profile_sources
+    assert "create_docx_from_text_with_centered_exact_lines" in profile_sources
+    assert '&["{{diary.datetime}}"]' in profile_sources
+    assert '"{{diary.datetime}}\\n"' in records
+    assert '"{{diary.datetime}} {{#if diary.is_final}}"' not in records
     assert "{{else}}{{diary.text}}{{/if}}" in profile_sources
     assert "{{diary.treating_physician_signature}}" in profile_sources
     assert "{{diary.department_head_signature}}" in profile_sources

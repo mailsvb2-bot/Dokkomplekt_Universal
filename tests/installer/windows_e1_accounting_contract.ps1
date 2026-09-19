@@ -1433,6 +1433,240 @@ if ($fpr01ReceiptCountAfter -ne ($fpr01ReceiptCountBefore + $fpr01Documents.Coun
 }
 Write-Host 'FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts.'
 
+# FPR-02: prove the real installed medical diary path. The registered diary
+# button must route through the single program-calendar template, doctor-owned
+# Texts library and canonical preflight; the physical DOCX must remain paragraph
+# text (not the retired legacy table engine), start at D0+1, stop on discharge,
+# preserve the dedicated final row, both signature blocks and centered date paragraphs.
+Invoke-UiActionPhysicallyFromProbe -Description 'reset case before FPR-02 diary proof' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+}
+$null = Wait-UiElement -Description 'empty case before FPR-02 diary proof' -TimeoutSeconds 30 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+}
+
+$fpr02DiaryLabel = 'Дневники FPR02'
+$fpr02DiaryTemplate = Join-Path $fixtureDir 'fpr02-diaries.docx'
+New-E1TextDocx -Path $fpr02DiaryTemplate -Lines @(
+  'Дневники',
+  'Календарные дневниковые записи пациента'
+)
+Add-E1DomainTemplate `
+  -TemplatePath $fpr02DiaryTemplate `
+  -Label $fpr02DiaryLabel `
+  -DomainOption 'Медицина'
+
+$fpr02Source = Join-Path $fixtureDir 'fpr02-медицинский-источник.docx'
+New-E1TextDocx -Path $fpr02Source -Lines @(
+  'Первичный осмотр',
+  'Ф.И.О.: Петров Пётр Петрович',
+  'Дата рождения: 02.02.1982',
+  'Дата поступления: 10.05.2026',
+  'Дата выписки: 13.05.2026',
+  'Диагноз: F20.0 Параноидная шизофрения',
+  'Лечение: рисперидон 4 мг/сут'
+)
+Set-E1DomainSource -SourcePath $fpr02Source
+
+$window = Find-LiveAppWindow
+$clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
+if ($null -ne $clearSelection) {
+  Invoke-UiElementPhysically -Element $clearSelection -Description 'clear selection before FPR-02 diary'
+}
+Start-Sleep -Milliseconds 200
+Invoke-UiActionPhysicallyFromProbe -Description 'select FPR-02 diary document' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  $window.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      "Добавить $fpr02DiaryLabel в комплект"
+    )
+  )
+}
+$null = Wait-UiElement -Description 'medical diary additional sources panel' -TimeoutSeconds 30 -Probe {
+  Find-E1NamedElement -Name 'Медицинские дневники'
+}
+
+$fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.txt'
+$fpr02DoctorText = 'FPR02 профессиональный текст дневника, подтверждённый врачом.'
+[System.IO.File]::WriteAllText($fpr02DiaryText, $fpr02DoctorText, [System.Text.UTF8Encoding]::new($false))
+$diaryTextDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-02 Тексты' `
+  -TransitionDescription 'native diary Texts picker' `
+  -ActionProbe {
+    Find-E1NamedElement -Name 'Тексты'
+  } `
+  -TransitionProbe { Find-FileDialog }
+$diaryTextEdit = $diaryTextDialog.FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+)
+Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText
+Submit-OpenFileDialog -Dialog $diaryTextDialog
+$null = Wait-UiElement -Description 'FPR-02 diary text saved' -TimeoutSeconds 40 -Probe {
+  Find-E1NamedElement -Name 'Сохранён'
+}
+
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-02 diary generation action' `
+  -TransitionDescription 'FPR-02 diary preflight' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe { Find-E1NamedElement -Name 'Проверка перед созданием' }
+
+$fpr02SourceValues = [ordered]@{
+  'medical.admission_date' = '10.05.2026'
+  'medical.discharge_date' = '13.05.2026'
+  'medical.diagnosis' = 'F20.0'
+}
+foreach ($fieldId in $fpr02SourceValues.Keys) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+  )
+  if ($null -eq $control) { throw "FPR-02 preflight did not expose source-owned field: $fieldId" }
+  $actual = Normalize-UiValue -Value (Get-UiValue -Element $control)
+  if ($fieldId -eq 'medical.diagnosis') {
+    if ($actual -notmatch 'F20\.0') { throw "FPR-02 diagnosis was not sourced from the medical input: $actual" }
+  } elseif ($actual -ne $fpr02SourceValues[$fieldId]) {
+    throw "FPR-02 source-owned date drift for $fieldId`: expected '$($fpr02SourceValues[$fieldId])', got '$actual'"
+  }
+}
+
+$fpr02PromptValues = [ordered]@{
+  'medical.diary_schedule_style' = 'Каждый день'
+  'medical.diary_intraday_rhythm' = 'Один раз в день'
+}
+foreach ($fieldId in $fpr02PromptValues.Keys) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+  )
+  if ($null -eq $control) { throw "FPR-02 missing required diary decision: $fieldId" }
+  Set-UiValue -Element $control -Value $fpr02PromptValues[$fieldId]
+}
+
+$fpr02SickLeaveId = 'workflow-medical-diary_sick_leave_epicrisis'
+$fpr02SickLeave = (Find-LiveAppWindow).FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    $fpr02SickLeaveId
+  )
+)
+if ($null -eq $fpr02SickLeave) { throw 'FPR-02 preflight did not expose the donor sick-leave decision.' }
+$fpr02SickLeave.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{HOME}')
+[System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
+[System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+Start-Sleep -Milliseconds 250
+$fpr02SickLeaveValue = Normalize-UiValue -Value (Get-UiValue -Element $fpr02SickLeave)
+if ($fpr02SickLeaveValue -ne 'Нет') {
+  throw "FPR-02 sick-leave decision did not commit as 'Нет': '$fpr02SickLeaveValue'"
+}
+
+$fpr02OutputName = "$fpr02DiaryLabel.docx"
+foreach ($existing in @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr02OutputName -ErrorAction SilentlyContinue)) {
+  Remove-Item -LiteralPath $existing.FullName -Force -ErrorAction SilentlyContinue
+}
+$fpr02ReceiptCountBefore = if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
+  @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
+} else { 0 }
+
+Invoke-UiActionPhysicallyFromProbe -Description 'create FPR-02 diary DOCX' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+}
+$fpr02Deadline = [DateTime]::UtcNow.AddSeconds(75)
+$fpr02Doc = $null
+do {
+  if ($process.HasExited) { throw 'Installed application exited during FPR-02 diary generation.' }
+  $fpr02Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr02OutputName -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -ne $fpr02Doc) { break }
+  $failure = Find-E1NamedElement -Name 'Документы не созданы'
+  if ($null -ne $failure) { throw 'FPR-02 installed backend rejected the completed diary preflight.' }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr02Deadline)
+if ($null -eq $fpr02Doc) { throw 'FPR-02 did not publish a physical diary DOCX.' }
+
+$archive = [System.IO.Compression.ZipFile]::OpenRead($fpr02Doc.FullName)
+try {
+  $entry = $archive.GetEntry('word/document.xml')
+  if ($null -eq $entry) { throw 'FPR-02 output is not a readable DOCX package.' }
+  $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr02Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+} finally { $archive.Dispose() }
+
+if ($fpr02Xml -match '<w:tbl') { throw 'FPR-02 canonical diary output regressed to a Word table.' }
+foreach ($date in @('11.05.2026', '12.05.2026', '13.05.2026')) {
+  if ($fpr02Xml -notmatch [regex]::Escape($date)) { throw "FPR-02 diary schedule is missing $date" }
+  $datePattern = '<w:p(?:\s[^>]*)?>.*?' + [regex]::Escape($date) + '.*?</w:p>'
+  $dateParagraph = [regex]::Match($fpr02Xml, $datePattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  if (-not $dateParagraph.Success -or $dateParagraph.Value -notmatch '<w:jc\s+w:val="center"\s*/>') {
+    throw "FPR-02 diary date is not centered in paragraph text: $date"
+  }
+}
+if ($fpr02Xml -match [regex]::Escape('10.05.2026')) { throw 'FPR-02 incorrectly emitted an ordinary diary on admission day D0.' }
+if ($fpr02Xml -match [regex]::Escape('14.05.2026')) { throw 'FPR-02 emitted a diary after the discharge boundary.' }
+$doctorTextCount = [regex]::Matches($fpr02Xml, [regex]::Escape($fpr02DoctorText)).Count
+if ($doctorTextCount -ne 2) { throw "FPR-02 expected doctor-owned regular text on exactly two ordinary rows, got $doctorTextCount." }
+if ($fpr02Xml -notmatch [regex]::Escape('На текущую дату оформлена выписка из стационара.')) {
+  throw 'FPR-02 final discharge diary text is missing.'
+}
+if ([regex]::Matches($fpr02Xml, 'Лечащий врач').Count -ne 3) {
+  throw 'FPR-02 did not retain the treating-physician signature on every diary row.'
+}
+if ([regex]::Matches($fpr02Xml, 'Заведующий отделением').Count -ne 3) {
+  throw 'FPR-02 did not retain the department-head signature on every diary row.'
+}
+if ($fpr02Xml -match '\{\{') { throw 'FPR-02 physical diary DOCX contains unresolved placeholders.' }
+
+$fpr02Hash = (Get-FileHash -LiteralPath $fpr02Doc.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+$fpr02ReceiptDeadline = [DateTime]::UtcNow.AddSeconds(30)
+$fpr02ReceiptMatched = $false
+do {
+  if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
+    foreach ($file in @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
+      try {
+        $data = (Get-Content -LiteralPath $file.FullName -Raw) | ConvertFrom-Json
+        if ($data.status -eq 'committed' -and $data.output_sha256 -eq $fpr02Hash) {
+          $fpr02ReceiptMatched = $true
+          break
+        }
+      } catch { }
+    }
+  }
+  if (-not $fpr02ReceiptMatched) { Start-Sleep -Milliseconds 250 }
+} while (-not $fpr02ReceiptMatched -and [DateTime]::UtcNow -lt $fpr02ReceiptDeadline)
+if (-not $fpr02ReceiptMatched) { throw 'FPR-02 diary output has no matching committed GenerationReceipt.' }
+$fpr02ReceiptCountAfter = @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
+if ($fpr02ReceiptCountAfter -ne ($fpr02ReceiptCountBefore + 1)) {
+  throw 'FPR-02 diary generation did not add exactly one committed GenerationReceipt.'
+}
+Write-Host 'FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
 Stop-Process -Id $process.Id -Force

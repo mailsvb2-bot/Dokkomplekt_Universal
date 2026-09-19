@@ -632,6 +632,25 @@ function Set-E1TemplateDomainOverride {
   }
 }
 
+function Get-E1UiSnapshot {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return 'window=<missing>' }
+  $parts = New-Object System.Collections.Generic.List[string]
+  try {
+    foreach ($element in $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+      $name = [string]$element.Current.Name
+      if ([string]::IsNullOrWhiteSpace($name)) { continue }
+      $type = [string]$element.Current.ControlType.ProgrammaticName
+      $enabled = [bool]$element.Current.IsEnabled
+      $parts.Add(("$type|enabled=$enabled|$name"))
+      if ($parts.Count -ge 120) { break }
+    }
+  } catch {
+    $parts.Add(("snapshot-error=" + $_.Exception.Message))
+  }
+  return ($parts -join ' || ')
+}
+
 function Add-E1DomainTemplate {
   param(
     [Parameter(Mandatory = $true)][string]$TemplatePath,
@@ -671,10 +690,15 @@ function Add-E1DomainTemplate {
     if ($null -eq $window) { return $null }
     Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
   }
-  $null = Wait-UiElement -Description "$Label document button" -TimeoutSeconds 90 -Probe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ButtonByNames -Root $window -Names @($Label)
+  try {
+    $null = Wait-UiElement -Description "$Label document button" -TimeoutSeconds 90 -Probe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ButtonByNames -Root $window -Names @($Label)
+    }
+  } catch {
+    Write-Host ("E1 UI snapshot after failed template confirmation for '$Label': " + (Get-E1UiSnapshot))
+    throw
   }
 }
 

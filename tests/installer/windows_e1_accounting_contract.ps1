@@ -221,9 +221,12 @@ function Invoke-UiElementPhysically {
 
   # A native OpenFileDialog can close while another hosted-runner window still
   # owns foreground. In that state the first global click merely activates the
-  # Dokkomplekt window and never reaches the WebView2 button. Mirror the proven
-  # baseline installed smoke: restore the real installed app to foreground before
-  # the one bounded physical retry, then focus and dispatch the user-equivalent input.
+  # Dokkomplekt window and never reaches the WebView2 control. Restore the real
+  # installed app to foreground before dispatching user-equivalent input.
+  #
+  # HTML <label> controls that own hidden file inputs are intentionally mouse
+  # clickable but are not necessarily UIA-focusable. A real user can click them,
+  # so physical proof must not reject them solely because SetFocus is unsupported.
   $process.Refresh()
   $windowHandle = [IntPtr]$process.MainWindowHandle
   if ($windowHandle -ne [IntPtr]::Zero) {
@@ -232,8 +235,6 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
-  $Element.SetFocus()
-  Start-Sleep -Milliseconds 50
   if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
     $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
@@ -244,7 +245,10 @@ function Invoke-UiElementPhysically {
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
   } catch {
+    # Keyboard fallback still requires a focusable control. Preserve fail-closed
+    # behaviour when neither a physical click point nor focus is available.
     $Element.SetFocus()
+    Start-Sleep -Milliseconds 50
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   }
 }

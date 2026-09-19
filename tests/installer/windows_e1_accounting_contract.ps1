@@ -492,12 +492,20 @@ function Set-E1TemplateDomainOverride {
   $comboName = "Профиль для $FileName"
   $combo = Find-E1NamedElement -Name $comboName
   if ($null -eq $combo) {
-    $advanced = Wait-UiElement -Description "advanced template settings for $FileName" -Probe {
-      Find-E1NamedElement -Name 'Необязательно: настроить автоматическое заполнение'
-    }
-    Invoke-UiElement -Element $advanced -Description "open advanced template settings for $FileName"
-    $combo = Wait-UiElement -Description "domain selector for $FileName" -Probe {
-      Find-E1NamedElement -Name $comboName
+    try {
+      $combo = Invoke-UiActionWithObservedTransition `
+        -Description "open advanced template settings for $FileName" `
+        -TransitionDescription "domain selector for $FileName" `
+        -TransitionSeconds 5 `
+        -ActionProbe {
+          Find-E1NamedElement -Name 'Необязательно: настроить автоматическое заполнение'
+        } `
+        -TransitionProbe {
+          Find-E1NamedElement -Name $comboName
+        }
+    } catch {
+      Write-Host ("E1 UI snapshot after failed advanced settings transition for '$FileName': " + (Get-E1UiSnapshot))
+      throw
     }
   }
 

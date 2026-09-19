@@ -798,12 +798,31 @@ fn commit_temporary_file(temporary: &Path, output_path: &Path) -> std::io::Resul
 /// pipeline. Text is XML-escaped; `xml:space="preserve"` keeps leading and
 /// trailing spaces.
 pub fn create_docx_from_text(output_path: &Path, text: &str) -> DocxResult<()> {
+    create_docx_from_text_with_centered_exact_lines(output_path, text, &[])
+}
+
+/// Create the same paragraph-only DOCX as create_docx_from_text, while
+/// centering only lines whose trimmed visible text exactly matches one of
+/// `centered_lines`. The caller owns layout policy; this generic DOCX helper
+/// only applies the explicitly requested paragraph formatting.
+pub fn create_docx_from_text_with_centered_exact_lines(
+    output_path: &Path,
+    text: &str,
+    centered_lines: &[&str],
+) -> DocxResult<()> {
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut body = String::new();
     for line in text.lines() {
-        body.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+        let centered = centered_lines
+            .iter()
+            .any(|expected| line.trim() == expected.trim());
+        if centered {
+            body.push_str("<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t xml:space=\"preserve\">");
+        } else {
+            body.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+        }
         body.push_str(&escape_xml_text(line));
         body.push_str("</w:t></w:r></w:p>");
     }
@@ -811,19 +830,19 @@ pub fn create_docx_from_text(output_path: &Path, text: &str) -> DocxResult<()> {
         body.push_str("<w:p/>");
     }
     let document_xml = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
-         <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\\
+         <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\\
          <w:body>{body}<w:sectPr/></w:body></w:document>"
     );
-    const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
-        <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
-        <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
-        <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
-        <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
+    const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\\
+        <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\\
+        <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\\
+        <Default Extension=\"xml\" ContentType=\"application/xml\"/>\\
+        <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\\
         </Types>";
-    const ROOT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
-        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-        <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
+    const ROOT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\\
+        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\\
+        <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\\
         </Relationships>";
     let file = File::create(output_path)?;
     let mut writer = ZipWriter::new(file);
@@ -837,7 +856,6 @@ pub fn create_docx_from_text(output_path: &Path, text: &str) -> DocxResult<()> {
     writer.finish()?;
     Ok(())
 }
-
 /// Insert one plain semantic paragraph into the main Word story immediately
 /// before the first paragraph whose visible text starts with one of `markers`.
 /// The caller owns semantic policy; the original user file is never modified.

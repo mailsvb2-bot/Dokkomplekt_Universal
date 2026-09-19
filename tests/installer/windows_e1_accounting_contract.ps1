@@ -737,7 +737,7 @@ function Invoke-E1DomainScenario {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][System.Collections.IDictionary]$PromptValues,
-    [Parameter(Mandatory = $true)][string[]]$PluginRequiredFields,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields,
     [Parameter(Mandatory = $true)][string[]]$ExpectedOutputValues,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
     [Parameter(Mandatory = $true)][string]$ReceiptRoot

@@ -46,7 +46,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "'1'" in source
     assert "0x0111" in source
     assert "[IntPtr]1" in source
-    assert "OpenFileDialog exposes neither AutomationId=1 nor a native HWND." in source
+    assert "public static extern bool IsWindow" in source
+    assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
     assert "Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')" not in source
     assert "IsValuePatternAvailableProperty" in source
     assert "NativeWindowHandle" in source

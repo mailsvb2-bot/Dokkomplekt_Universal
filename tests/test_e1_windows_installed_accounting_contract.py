@@ -50,7 +50,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "function Set-OpenFileDialogPath" in source
     assert "Set-Clipboard -Value $Path -ErrorAction Stop" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
-    assert "Native OpenFileDialog rejected the typed file path after Enter and cleared the filename field." in source
+    assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
     assert "$diaryTextEdit = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText" in source
     assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source

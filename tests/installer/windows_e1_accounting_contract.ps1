@@ -411,7 +411,10 @@ function Set-OpenFileDialogPath {
 }
 
 function Submit-OpenFileDialog {
-  param([Parameter(Mandatory = $true)]$Dialog)
+  param(
+    [Parameter(Mandatory = $true)]$Dialog,
+    [string]$ExpectedPath = ''
+  )
 
   # A successful UIA InvokePattern call is not evidence that the hosted Windows
   # common dialog actually accepted the selection. Drive the real native dialog,
@@ -475,8 +478,13 @@ function Submit-OpenFileDialog {
   if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
 
   # UIA can acknowledge InvokePattern while the hosted common dialog remains
-  # open. WM_COMMAND/IDOK reaches the same real dialog command handler and is
-  # bounded by an exact HWND liveness check.
+  # open and can also clear the filename field. For callers that supply an exact
+  # expected path, restore and re-prove that value before the native IDOK fallback.
+  # This keeps the fallback user-equivalent instead of submitting an empty dialog.
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedPath)) {
+    Write-Host "OpenFileDialog remained open after primary submit; restoring exact path before IDOK fallback."
+    $null = Set-OpenFileDialogPath -Dialog $Dialog -Path $ExpectedPath
+  }
   [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
   $null = [DokkomplektE1NativeMouse]::SendMessagePtr(
     $dialogHandle,
@@ -490,10 +498,25 @@ function Submit-OpenFileDialog {
   }
   if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
 
-  # Final user-equivalent fallback: foreground the same dialog and press Enter.
-  # If it still survives, fail closed with the filename visible to the dialog.
+  # Final user-equivalent fallback: a failed IDOK can clear the edit again.
+  # Restore the exact path once more, focus the real Open button, and press Space
+  # (native button activation) before the last Enter fallback.
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedPath)) {
+    Write-Host "OpenFileDialog remained open after IDOK; restoring exact path before keyboard submit."
+    $null = Set-OpenFileDialogPath -Dialog $Dialog -Path $ExpectedPath
+  }
   [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  if ($null -ne $openButton) {
+    try {
+      $openButton.SetFocus()
+      Start-Sleep -Milliseconds 50
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+    } catch {
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    }
+  } else {
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  }
   $keyDeadline = [DateTime]::UtcNow.AddSeconds(2)
   while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $keyDeadline) {
     Start-Sleep -Milliseconds 100
@@ -1661,7 +1684,7 @@ $diaryTextDialog = Invoke-UiActionWithObservedTransition `
   } `
   -TransitionProbe { Find-FileDialog }
 $diaryTextEdit = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText
-Submit-OpenFileDialog -Dialog $diaryTextDialog
+Submit-OpenFileDialog -Dialog $diaryTextDialog -ExpectedPath $fpr02DiaryText
 $dialogCloseDeadline = [DateTime]::UtcNow.AddSeconds(10)
 do {
   if ($null -eq (Find-FileDialog)) { break }

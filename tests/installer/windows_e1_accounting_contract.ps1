@@ -424,9 +424,10 @@ function Submit-OpenFileDialog {
   [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
   Start-Sleep -Milliseconds 100
 
-  # First submit from the filename edit itself. This is the closest equivalent
-  # to a user pasting a full path and pressing Enter, and avoids stale UIA button
-  # activation semantics on the hosted common dialog.
+  # Set-OpenFileDialogPath has already proved the exact filename field value.
+  # Submit through the dialog's real Open button first. Pressing Enter while the
+  # filename edit itself owns focus can make the common dialog treat a full path
+  # as navigation and clear the field instead of accepting the file.
   $filenameEdit = $Dialog.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.PropertyCondition]::new(
@@ -434,22 +435,6 @@ function Submit-OpenFileDialog {
       '1148'
     )
   )
-  if ($null -ne $filenameEdit) {
-    $filenameEdit.SetFocus()
-    Start-Sleep -Milliseconds 75
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    $enterDeadline = [DateTime]::UtcNow.AddSeconds(3)
-    while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $enterDeadline) {
-      Start-Sleep -Milliseconds 100
-    }
-    if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
-
-    $afterEnter = ''
-    try { $afterEnter = Normalize-UiValue -Value (Get-UiValue -Element $filenameEdit) } catch { }
-    if ([string]::IsNullOrWhiteSpace($afterEnter)) {
-      throw 'Native OpenFileDialog rejected the typed file path after Enter and cleared the filename field.'
-    }
-  }
 
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,

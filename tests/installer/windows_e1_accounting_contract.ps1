@@ -72,6 +72,8 @@ public static class DokkomplektE1NativeMouse {
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool IsWindow(IntPtr hWnd);
 }
 "@
 
@@ -349,9 +351,17 @@ function Normalize-UiValue {
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
 
-  # Common OpenFileDialog uses stable IDOK=1 independent of locale. Prefer the
-  # exact AutomationId contract used by the main installed smoke instead of
-  # depending on the localized button name or transient UIA IsEnabled state.
+  # A successful UIA InvokePattern call is not evidence that the hosted Windows
+  # common dialog actually accepted the selection. Drive the real native dialog,
+  # then prove that the exact HWND disappeared before the installed test proceeds.
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog does not expose a native HWND.'
+  }
+  [void][DokkomplektE1NativeMouse]::ShowWindow($dialogHandle, 5)
+  [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+  Start-Sleep -Milliseconds 100
+
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
     '1'
@@ -364,27 +374,71 @@ function Submit-OpenFileDialog {
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.AndCondition]::new($automationId, $kind)
   )
+
   if ($null -ne $openButton) {
-    Invoke-UiElement -Element $openButton -Description 'native Open button'
-    return
+    try {
+      $openButton.SetFocus()
+      Start-Sleep -Milliseconds 50
+      if ($openButton.Current.IsInvokePatternAvailable) {
+        $openButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      } elseif ($openButton.Current.IsLegacyIAccessiblePatternAvailable) {
+        $openButton.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
+      } else {
+        $point = $openButton.GetClickablePoint()
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+      }
+    } catch {
+      Write-Host "Native Open button UIA submit did not complete cleanly; falling back to IDOK: $($_.Exception.Message)"
+    }
   }
 
-  # Hosted Windows runners can omit the localized Open button from UIA entirely.
-  # WM_COMMAND/IDOK confirms the same native common dialog without bypassing the
-  # application's real file-picker path.
-  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
-  if ($dialogHandle -eq [IntPtr]::Zero) {
-    throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+  $uiaDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $uiaDeadline) {
+    Start-Sleep -Milliseconds 100
   }
+  if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
+
+  # UIA can acknowledge InvokePattern while the hosted common dialog remains
+  # open. WM_COMMAND/IDOK reaches the same real dialog command handler and is
+  # bounded by an exact HWND liveness check.
+  [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
   $null = [DokkomplektE1NativeMouse]::SendMessagePtr(
     $dialogHandle,
     0x0111,
     [IntPtr]1,
     [IntPtr]::Zero
   )
-  Start-Sleep -Milliseconds 500
-}
+  $nativeDeadline = [DateTime]::UtcNow.AddSeconds(3)
+  while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $nativeDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
 
+  # Final user-equivalent fallback: foreground the same dialog and press Enter.
+  # If it still survives, fail closed with the filename visible to the dialog.
+  [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  $keyDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $keyDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
+
+  $filename = ''
+  try {
+    $filenameEdit = $Dialog.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        '1148'
+      )
+    )
+    if ($null -ne $filenameEdit) { $filename = [string](Get-UiValue -Element $filenameEdit) }
+  } catch { }
+  throw "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter. Filename='$filename'."
+}
 function New-AccountingSourceDocx {
   param([Parameter(Mandatory = $true)][string]$Path)
   Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue

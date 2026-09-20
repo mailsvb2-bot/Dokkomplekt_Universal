@@ -125,8 +125,11 @@ def test_e1_custom_domain_value_commits_through_react_input_event() -> None:
         "custom domain override did not persist",
     ):
         assert marker in source
-    assert source.index("Set-UiValue -Element $custom -Value $CustomProfile") < source.index("SendWait(' ')")
-    assert source.index("SendWait('{BACKSPACE}')") < source.index("persisted custom domain value for $FileName")
+    custom_start = source.index("Set-UiValue -Element $custom -Value $CustomProfile")
+    custom_space = source.index("SendWait(' ')", custom_start)
+    custom_backspace = source.index("SendWait('{BACKSPACE}')", custom_space)
+    custom_persist = source.index("persisted custom domain value for $FileName", custom_backspace)
+    assert custom_start < custom_space < custom_backspace < custom_persist
 
 
 

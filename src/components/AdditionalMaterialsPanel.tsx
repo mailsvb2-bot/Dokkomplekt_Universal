@@ -560,6 +560,7 @@ export function AdditionalMaterialsPanel(props: {
 
       {status && (
         <p
+          id="additional-materials-status"
           className="additionalMaterialsStatus"
           role="status"
           aria-live="polite"

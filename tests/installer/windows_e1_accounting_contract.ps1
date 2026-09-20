@@ -372,29 +372,42 @@ function Set-OpenFileDialogPath {
     throw "OpenFileDialog filename edit AutomationId=1148 is missing for '$Path'."
   }
 
-  Set-UiValue -Element $edit -Value $Path
-  Start-Sleep -Milliseconds 150
+  # Drive the filename field as a real user would. On hosted Windows the
+  # accessibility ValuePattern can echo SetValue while the common dialog's real
+  # edit remains empty. Keyboard paste updates the actual focused control.
+  $edit.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  try {
+    Set-Clipboard -Value $Path -ErrorAction Stop
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+  } catch {
+    # Keep a native/UIA fallback for environments where the clipboard service is
+    # unavailable, but never accept it without the same visible read-back below.
+    Set-UiValue -Element $edit -Value $Path
+  }
+  Start-Sleep -Milliseconds 250
+
   $expected = Normalize-UiValue -Value $Path
   $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
-  if ($actual -eq $expected) { return $edit }
-
-  # Some hosted common dialogs expose a writable UIA ValuePattern but silently
-  # discard SetValue until the real Win32 edit receives WM_SETTEXT. Treat the
-  # read-back as the authority instead of the method's return value.
-  $editHandle = [IntPtr]$edit.Current.NativeWindowHandle
-  if ($editHandle -ne [IntPtr]::Zero) {
-    $null = [DokkomplektE1NativeMouse]::SendMessage(
-      $editHandle,
-      0x000C,
-      [IntPtr]::Zero,
-      $Path
-    )
-    Start-Sleep -Milliseconds 200
-    $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
-    if ($actual -eq $expected) { return $edit }
+  if ($actual -ne $expected) {
+    $editHandle = [IntPtr]$edit.Current.NativeWindowHandle
+    if ($editHandle -ne [IntPtr]::Zero) {
+      $null = [DokkomplektE1NativeMouse]::SendMessage(
+        $editHandle,
+        0x000C,
+        [IntPtr]::Zero,
+        $Path
+      )
+      Start-Sleep -Milliseconds 200
+      $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+    }
   }
 
-  throw "OpenFileDialog path did not commit. Expected='$Path' Actual='$actual'."
+  if ($actual -ne $expected) {
+    throw "OpenFileDialog path did not commit. Expected='$Path' Actual='$actual'."
+  }
+  return $edit
 }
 
 function Submit-OpenFileDialog {
@@ -410,6 +423,33 @@ function Submit-OpenFileDialog {
   [void][DokkomplektE1NativeMouse]::ShowWindow($dialogHandle, 5)
   [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
   Start-Sleep -Milliseconds 100
+
+  # First submit from the filename edit itself. This is the closest equivalent
+  # to a user pasting a full path and pressing Enter, and avoids stale UIA button
+  # activation semantics on the hosted common dialog.
+  $filenameEdit = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+  )
+  if ($null -ne $filenameEdit) {
+    $filenameEdit.SetFocus()
+    Start-Sleep -Milliseconds 75
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    $enterDeadline = [DateTime]::UtcNow.AddSeconds(3)
+    while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $enterDeadline) {
+      Start-Sleep -Milliseconds 100
+    }
+    if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
+
+    $afterEnter = ''
+    try { $afterEnter = Normalize-UiValue -Value (Get-UiValue -Element $filenameEdit) } catch { }
+    if ([string]::IsNullOrWhiteSpace($afterEnter)) {
+      throw 'Native OpenFileDialog rejected the typed file path after Enter and cleared the filename field.'
+    }
+  }
 
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,

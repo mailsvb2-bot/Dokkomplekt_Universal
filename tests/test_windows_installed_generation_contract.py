@@ -125,6 +125,9 @@ def test_e2_installed_learning_observes_pair_selections_and_final_blank_acceptan
     assert 'Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)"' in picker
     assert "$actionButtonName = if ($selectionIndex -eq 0 -or $ExpectedUiNames.Count -eq 0)" in picker
     assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)" in picker
+    assert "Invoke-UiActionPhysicallyFromProbe" in picker
+    assert 'Wait-FileDialog -Description "$Label file dialog"' in picker
+    assert "Invoke-UiActionWithObservedTransition" not in picker
     assert "Find-ButtonByNames -Root $currentAppWindow -Names @($expectedUiName)" in picker
     assert "Start-Sleep -Milliseconds 150" not in picker
     assert "Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)" in source

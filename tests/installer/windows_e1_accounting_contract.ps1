@@ -1650,9 +1650,9 @@ $null = Wait-UiElement -Description 'medical diary additional sources panel' -Ti
   Find-E1NamedElement -Name 'Медицинские дневники'
 }
 
-$fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.txt'
+$fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.docx'
 $fpr02DoctorText = 'FPR02 профессиональный текст дневника, подтверждённый врачом.'
-[System.IO.File]::WriteAllText($fpr02DiaryText, $fpr02DoctorText, [System.Text.UTF8Encoding]::new($false))
+New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)
 $diaryTextDialog = Invoke-UiActionWithObservedTransition `
   -Description 'FPR-02 Тексты' `
   -TransitionDescription 'native diary Texts picker' `

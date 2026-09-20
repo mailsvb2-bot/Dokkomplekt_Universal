@@ -1849,30 +1849,24 @@ Open-E2FileSelection -Label '4–10 правильных результатов'
 Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
 
 try {
-  # Hosted WebView2 can report a successful InvokePattern/mouse action without
-  # dispatching the DOM click. Exercise the actual focused button with a real
-  # foreground Enter key exactly once, then require the product transition.
-  $e2AnalyzeAction = Wait-UiElement -Description 'Проверить пары и предложить карту button' -TimeoutSeconds 30 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
-  }
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { throw 'Installed application window disappeared before E2 analysis.' }
-  Activate-LiveAppWindow -Window $currentAppWindow
-  if ($e2AnalyzeAction.Current.IsOffscreen -and $e2AnalyzeAction.Current.IsScrollItemPatternAvailable) {
-    $scroll = $e2AnalyzeAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-    $scroll.ScrollIntoView()
-    Start-Sleep -Milliseconds 100
-  }
-  $e2AnalyzeAction.SetFocus()
-  Start-Sleep -Milliseconds 100
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-  Wait-UiElement -Description 'publishable held-out learning result after real keyboard action' -TimeoutSeconds 60 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
-  } | Out-Null
+  # The learning action is a one-shot transition, not a toggle. Use the shared
+  # observed-transition driver: if WebView2 acknowledges UIA without dispatching
+  # the DOM click, it resolves a fresh live button and performs exactly one
+  # foreground physical retry. A real in-flight analysis is never double-fired.
+  Invoke-UiActionWithObservedTransition `
+    -Description 'Проверить пары и предложить карту' `
+    -TransitionDescription 'publishable held-out learning result' `
+    -TransitionSeconds 8 `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+    } | Out-Null
 } catch {
   $learningFailure = $_
   $currentAppWindow = Find-LiveAppWindow

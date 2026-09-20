@@ -1849,24 +1849,48 @@ Open-E2FileSelection -Label '4–10 правильных результатов'
 Open-E2FileSelection -Label '4–10 исходных документов Source' -Paths $e2Sources -ExpectedUiNames $e2SourceReadiness
 
 try {
-  # The learning action is a one-shot transition, not a toggle. Use the shared
-  # observed-transition driver: if WebView2 acknowledges UIA without dispatching
-  # the DOM click, it resolves a fresh live button and performs exactly one
-  # foreground physical retry. A real in-flight analysis is never double-fired.
-  Invoke-UiActionWithObservedTransition `
-    -Description 'Проверить пары и предложить карту' `
-    -TransitionDescription 'publishable held-out learning result' `
-    -TransitionSeconds 8 `
-    -ActionProbe {
-      $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
-      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
-    } `
-    -TransitionProbe {
-      $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
-      Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+  # The learning action is a one-shot transition, not a toggle. Start with the
+  # shared observed-transition driver. On hosted WebView2 both UIA InvokePattern
+  # and a coordinate mouse click can be acknowledged without dispatching the DOM
+  # click. Only after the shared driver proves there was still no transition do
+  # we re-resolve the live HTML button, focus it in the foreground WebView and
+  # use Space — the browser-native keyboard activation for a focused button.
+  try {
+    Invoke-UiActionWithObservedTransition `
+      -Description 'Проверить пары и предложить карту' `
+      -TransitionDescription 'publishable held-out learning result' `
+      -TransitionSeconds 8 `
+      -ActionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+      } `
+      -TransitionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ButtonByNames -Root $currentAppWindow -Names @('Подтвердить проверенную карту и создать копию')
+      } | Out-Null
+  } catch {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw }
+    $e2KeyboardAction = Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить пары и предложить карту')
+    if ($null -eq $e2KeyboardAction) { throw }
+    Write-Host 'E2 learning action remained idle after UIA and physical retry; using one focused WebView keyboard Space fallback.'
+    Activate-LiveAppWindow -Window $currentAppWindow
+    if ($e2KeyboardAction.Current.IsOffscreen -and $e2KeyboardAction.Current.IsScrollItemPatternAvailable) {
+      $scroll = $e2KeyboardAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+      $scroll.ScrollIntoView()
+      Start-Sleep -Milliseconds 150
+    }
+    $e2KeyboardAction.SetFocus()
+    Start-Sleep -Milliseconds 150
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    Wait-UiElement -Description 'publishable held-out learning result after focused Space fallback' -TimeoutSeconds 60 -Probe {
+      $windowAfterSpace = Find-LiveAppWindow
+      if ($null -eq $windowAfterSpace) { return $null }
+      Find-ButtonByNames -Root $windowAfterSpace -Names @('Подтвердить проверенную карту и создать копию')
     } | Out-Null
+  }
 } catch {
   $learningFailure = $_
   $currentAppWindow = Find-LiveAppWindow

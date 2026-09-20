@@ -86,6 +86,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "ошибок\\s+0" in source
     assert "FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt." in source
     assert "$fpr02DoctorText" in source
+    assert "$fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.docx'" in source
+    assert "New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)" in source
     assert "FPR-02 canonical diary output regressed to a Word table." in source
     assert "FPR-02 diary date is not centered in paragraph text" in source
     assert "FPR-02 incorrectly emitted an ordinary diary on admission day D0." in source

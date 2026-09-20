@@ -164,6 +164,7 @@ describe('AdditionalMaterialsPanel', () => {
     await waitFor(() => expect(within(selection).getAllByText('Сохранён')).toHaveLength(2));
     const status = screen.getByRole('status');
     expect(status.textContent).toContain('сохранено 2 из 2');
+    expect(status.id).toBe('additional-materials-status');
     expect(status.getAttribute('aria-live')).toBe('polite');
     expect(status.getAttribute('aria-label')).toContain('сохранено 2 из 2');
   });

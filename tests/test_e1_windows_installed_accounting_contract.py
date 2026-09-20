@@ -71,7 +71,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "one batch did not add exactly" in source
     assert "FPR-02 Texts import PASS:" in source
-    assert "FPR-02 diary text terminal import status" in source
+    assert "additional-materials-status" in source
+    assert "FPR-02 native Texts picker did not close after confirming the selected file." in source
+    assert "FPR-02 diary text import did not reach terminal success. Last status=" in source
+    assert "Get-E1UiSnapshot" in source
     assert "сохранено\\s+1\\s+из\\s+1" in source
     assert "ошибок\\s+0" in source
     assert "FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt." in source

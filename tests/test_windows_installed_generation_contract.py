@@ -148,4 +148,7 @@ def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
     assert "Write-E2LearningUiDiagnostic -Root $currentAppWindow" in source
     assert "throw $learningFailure" in source
     assert "publishable held-out learning result" in source
+    assert "-Description 'Проверить пары и предложить карту'" in source
+    assert "-TransitionDescription 'publishable held-out learning result'" in source
+    assert "-TransitionSeconds 8" in source
 

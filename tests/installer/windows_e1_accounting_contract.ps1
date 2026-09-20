@@ -475,6 +475,19 @@ function Find-E1NamedElementContaining {
   return $null
 }
 
+function Find-E1ElementByAutomationId {
+  param([Parameter(Mandatory = $true)][string]$AutomationId)
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  return $window.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $AutomationId
+    )
+  )
+}
+
 function Get-E1DomainSelection {
   param([Parameter(Mandatory = $true)][string]$FileName)
 
@@ -1528,12 +1541,39 @@ $diaryTextEdit = $diaryTextDialog.FindFirst(
 )
 Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText
 Submit-OpenFileDialog -Dialog $diaryTextDialog
-$fpr02ImportStatus = Wait-UiElement -Description 'FPR-02 diary text terminal import status' -TimeoutSeconds 40 -Probe {
-  Find-E1NamedElementContaining -Text '«Тексты»:'
+$dialogCloseDeadline = [DateTime]::UtcNow.AddSeconds(10)
+do {
+  if ($null -eq (Find-FileDialog)) { break }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $dialogCloseDeadline)
+if ($null -ne (Find-FileDialog)) {
+  throw 'FPR-02 native Texts picker did not close after confirming the selected file.'
 }
-$fpr02ImportStatusText = [string]$fpr02ImportStatus.Current.Name
-if ($fpr02ImportStatusText -notmatch 'сохранено\s+1\s+из\s+1' -or $fpr02ImportStatusText -notmatch 'ошибок\s+0') {
-  throw "FPR-02 diary text import did not complete cleanly: $fpr02ImportStatusText"
+
+$fpr02ImportDeadline = [DateTime]::UtcNow.AddSeconds(40)
+$fpr02ImportStatusText = ''
+$fpr02ImportPassed = $false
+do {
+  $fpr02ImportStatus = Find-E1ElementByAutomationId -AutomationId 'additional-materials-status'
+  if ($null -eq $fpr02ImportStatus) {
+    $fpr02ImportStatus = Find-E1NamedElementContaining -Text 'Тексты'
+  }
+  if ($null -ne $fpr02ImportStatus) {
+    try { $fpr02ImportStatusText = [string]$fpr02ImportStatus.Current.Name } catch { $fpr02ImportStatusText = '' }
+    if ($fpr02ImportStatusText -match 'сохранено\s+1\s+из\s+1' -and $fpr02ImportStatusText -match 'ошибок\s+0') {
+      $fpr02ImportPassed = $true
+      break
+    }
+    if ($fpr02ImportStatusText -match 'Не удалось|Ошибка|ошибок\s+[1-9]') {
+      throw "FPR-02 diary text import failed: $fpr02ImportStatusText"
+    }
+  }
+  Start-Sleep -Milliseconds 150
+} while ([DateTime]::UtcNow -lt $fpr02ImportDeadline)
+
+if (-not $fpr02ImportPassed) {
+  $snapshot = Get-E1UiSnapshot
+  throw "FPR-02 diary text import did not reach terminal success. Last status='$fpr02ImportStatusText'. UI=$snapshot"
 }
 Write-Host "FPR-02 Texts import PASS: $fpr02ImportStatusText"
 

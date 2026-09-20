@@ -1711,15 +1711,19 @@ function Open-E2FileSelection {
     } else {
       $ExpectedUiNames[$selectionIndex - 1]
     }
-    $dialog = Invoke-UiActionWithObservedTransition `
-      -Description $Label `
-      -TransitionDescription "$Label file dialog" `
+    # These controls start a native Windows file chooser. Hosted WebView2 can
+    # acknowledge InvokePattern without dispatching the DOM click, while a React
+    # rerender can briefly make the button look non-ready and fool the generic
+    # in-flight heuristic. Use one foreground physical click on a fresh live
+    # control and prove success only by observing the real OpenFileDialog.
+    Invoke-UiActionPhysicallyFromProbe `
+      -Description "$Label native picker" `
       -ActionProbe {
         $currentAppWindow = Find-LiveAppWindow
         if ($null -eq $currentAppWindow) { return $null }
         Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)
-      } `
-      -TransitionProbe { Find-FileDialog }
+      }
+    $dialog = Wait-FileDialog -Description "$Label file dialog"
     $edit = Wait-UiElement -Description "$Label filename field" -Probe {
       $condition = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::AutomationIdProperty,

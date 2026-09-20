@@ -348,6 +348,55 @@ function Normalize-UiValue {
   return ([regex]::Replace($normalized.Trim(), '\s+', ' '))
 }
 
+function Set-OpenFileDialogPath {
+  param(
+    [Parameter(Mandatory = $true)]$Dialog,
+    [Parameter(Mandatory = $true)][string]$Path
+  )
+
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektE1NativeMouse]::ShowWindow($dialogHandle, 5)
+    [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+    Start-Sleep -Milliseconds 100
+  }
+
+  $edit = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+  )
+  if ($null -eq $edit) {
+    throw "OpenFileDialog filename edit AutomationId=1148 is missing for '$Path'."
+  }
+
+  Set-UiValue -Element $edit -Value $Path
+  Start-Sleep -Milliseconds 150
+  $expected = Normalize-UiValue -Value $Path
+  $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+  if ($actual -eq $expected) { return $edit }
+
+  # Some hosted common dialogs expose a writable UIA ValuePattern but silently
+  # discard SetValue until the real Win32 edit receives WM_SETTEXT. Treat the
+  # read-back as the authority instead of the method's return value.
+  $editHandle = [IntPtr]$edit.Current.NativeWindowHandle
+  if ($editHandle -ne [IntPtr]::Zero) {
+    $null = [DokkomplektE1NativeMouse]::SendMessage(
+      $editHandle,
+      0x000C,
+      [IntPtr]::Zero,
+      $Path
+    )
+    Start-Sleep -Milliseconds 200
+    $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+    if ($actual -eq $expected) { return $edit }
+  }
+
+  throw "OpenFileDialog path did not commit. Expected='$Path' Actual='$actual'."
+}
+
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
 
@@ -1586,14 +1635,7 @@ $diaryTextDialog = Invoke-UiActionWithObservedTransition `
     Find-E1NamedElement -Name 'Тексты'
   } `
   -TransitionProbe { Find-FileDialog }
-$diaryTextEdit = $diaryTextDialog.FindFirst(
-  [System.Windows.Automation.TreeScope]::Descendants,
-  [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-    '1148'
-  )
-)
-Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText
+$diaryTextEdit = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText
 Submit-OpenFileDialog -Dialog $diaryTextDialog
 $dialogCloseDeadline = [DateTime]::UtcNow.AddSeconds(10)
 do {

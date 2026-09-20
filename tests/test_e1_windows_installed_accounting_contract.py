@@ -53,6 +53,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
     assert "$diaryTextEdit = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText" in source
+    assert "Submit-OpenFileDialog -Dialog $diaryTextDialog -ExpectedPath $fpr02DiaryText" in source
+    assert 'OpenFileDialog remained open after primary submit; restoring exact path before IDOK fallback.' in source
+    assert 'OpenFileDialog remained open after IDOK; restoring exact path before keyboard submit.' in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
     assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
     assert "Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')" not in source
     assert "IsValuePatternAvailableProperty" in source

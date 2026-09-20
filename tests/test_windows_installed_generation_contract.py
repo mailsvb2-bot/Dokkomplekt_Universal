@@ -151,4 +151,7 @@ def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
     assert "-Description 'Проверить пары и предложить карту'" in source
     assert "-TransitionDescription 'publishable held-out learning result'" in source
     assert "-TransitionSeconds 8" in source
+    assert "E2 learning action remained idle after UIA and physical retry; using one focused WebView keyboard Space fallback." in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
+    assert "publishable held-out learning result after focused Space fallback" in source
 

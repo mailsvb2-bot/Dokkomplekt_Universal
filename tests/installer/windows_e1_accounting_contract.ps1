@@ -1868,7 +1868,7 @@ try {
 if ($fpr02Xml -match '<w:tbl') { throw 'FPR-02 canonical diary output regressed to a Word table.' }
 foreach ($date in @('11.05.2026', '12.05.2026', '13.05.2026')) {
   if ($fpr02Xml -notmatch [regex]::Escape($date)) { throw "FPR-02 diary schedule is missing $date" }
-  $datePattern = '<w:p(?:\s[^>]*)?>.*?' + [regex]::Escape($date) + '.*?</w:p>'
+  $datePattern = '<w:p(?:\s[^>]*)?>(?:(?!</w:p>).)*?' + [regex]::Escape($date) + '(?:(?!</w:p>).)*?</w:p>'
   $dateParagraph = [regex]::Match($fpr02Xml, $datePattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
   if (-not $dateParagraph.Success -or $dateParagraph.Value -notmatch '<w:jc\s+w:val="center"\s*/>') {
     throw "FPR-02 diary date is not centered in paragraph text: $date"

@@ -12,6 +12,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     source = SCRIPT.read_text(encoding="utf-8-sig")
     workflow = WORKFLOW.read_text(encoding="utf-8")
     app_source = (ROOT / "src" / "App.tsx").read_text(encoding="utf-8")
+    advanced_tools = (ROOT / "src" / "components" / "AdvancedToolsPanel.tsx").read_text(encoding="utf-8")
+    api_source = (ROOT / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    learning_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_learning_commands.rs").read_text(encoding="utf-8")
+    picker_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_picker.rs").read_text(encoding="utf-8")
     assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
     assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
 
@@ -52,11 +56,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
     assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
-    assert "$diaryTextEdit = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText" in source
-    assert "Submit-OpenFileDialog -Dialog $diaryTextDialog -ExpectedPath $fpr02DiaryText" in source
-    assert 'OpenFileDialog remained open after primary submit; restoring exact path before IDOK fallback.' in source
-    assert 'OpenFileDialog remained open after IDOK; restoring exact path before keyboard submit.' in source
-    assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
+    assert "-Description 'FPR-02 native Тексты picker'" in source
+    assert "Find-E1NamedElement -Name 'Импортировать «Тексты» (TXT/DOCX/DOCM)'" in source
+    assert "Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText" in source
+    assert "$diaryOpenButton = $diaryTextDialog.FindFirst(" in source
+    assert "Invoke-UiElement -Element $diaryOpenButton -Description 'confirm FPR-02 native Texts picker'" in source
     assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
     assert "Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')" not in source
     assert "IsValuePatternAvailableProperty" in source
@@ -82,6 +86,19 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "one batch did not add exactly" in source
     assert "FPR-02 Texts import PASS:" in source
+    assert "pickLearningFiles('medical_diary')" in advanced_tools
+    diary_ui = advanced_tools[
+        advanced_tools.index("<strong>Медицина · источники дневников</strong>"):
+        advanced_tools.index('placeholder="диагноз для итогового дневника')
+    ]
+    assert 'type="file"' not in diary_ui, "medical diary Texts must not regress to the hosted WebView file input"
+    assert "Импортировать «Тексты» (TXT/DOCX/DOCM)" in diary_ui
+    assert "'medical_diary'" in api_source
+    assert "extracted_text?: string | null;" in api_source
+    assert '"medical_diary" => pick_medical_diary_files_blocking(req.initial_path)' in learning_backend
+    assert "extracted_text: Option<String>" in learning_backend
+    assert "Тексты дневников (*.txt;*.docx;*.docm)|*.txt;*.docx;*.docm" in picker_backend
+    assert "DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL" in picker_backend
     assert "additional-materials-status" in source
     assert "FPR-02 native Texts picker did not close after confirming the selected file." in source
     assert "FPR-02 diary text import did not reach terminal success. Last status=" in source

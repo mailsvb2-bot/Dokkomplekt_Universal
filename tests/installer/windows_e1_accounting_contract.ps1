@@ -1669,39 +1669,8 @@ $diaryTextDialog = Invoke-UiActionWithObservedTransition `
     Find-E1NamedElement -Name 'Тексты'
   } `
   -TransitionProbe { Find-FileDialog }
-$diaryTextEdit = Wait-UiElement -Description 'FPR-02 native Texts filename field' -Probe {
-  $diaryTextDialog.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-      '1148'
-    )
-  )
-}
-Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText
-$diaryOpenButton = $diaryTextDialog.FindFirst(
-  [System.Windows.Automation.TreeScope]::Descendants,
-  [System.Windows.Automation.AndCondition]::new(
-    [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-      '1'
-    ),
-    [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-      [System.Windows.Automation.ControlType]::Button
-    )
-  )
-)
-if ($null -eq $diaryOpenButton) { throw 'FPR-02 native Texts picker did not expose the Open button.' }
-Invoke-UiElement -Element $diaryOpenButton -Description 'confirm FPR-02 native Texts picker'
-$dialogCloseDeadline = [DateTime]::UtcNow.AddSeconds(10)
-do {
-  if ($null -eq (Find-FileDialog)) { break }
-  Start-Sleep -Milliseconds 100
-} while ([DateTime]::UtcNow -lt $dialogCloseDeadline)
-if ($null -ne (Find-FileDialog)) {
-  throw 'FPR-02 native Texts picker did not close after confirming the selected file.'
-}
+$null = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText
+Submit-OpenFileDialog -Dialog $diaryTextDialog
 
 $fpr02ImportDeadline = [DateTime]::UtcNow.AddSeconds(40)
 $fpr02ImportStatusText = ''

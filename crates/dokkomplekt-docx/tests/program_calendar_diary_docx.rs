@@ -21,13 +21,17 @@ fn unique_dir() -> PathBuf {
     ))
 }
 
-fn read_document_xml(path: &Path) -> String {
+fn read_zip_text(path: &Path, entry_name: &str) -> String {
     let file = File::open(path).expect("docx");
     let mut archive = ZipArchive::new(file).expect("zip");
-    let mut entry = archive.by_name("word/document.xml").expect("document.xml");
+    let mut entry = archive.by_name(entry_name).expect("package entry");
     let mut xml = String::new();
-    entry.read_to_string(&mut xml).expect("read document.xml");
+    entry.read_to_string(&mut xml).expect("read package entry");
     xml
+}
+
+fn read_document_xml(path: &Path) -> String {
+    read_zip_text(path, "word/document.xml")
 }
 
 fn diary_row(datetime: &str, text: Option<&str>, is_final: bool) -> SemanticRecord {
@@ -57,6 +61,14 @@ fn program_calendar_template_becomes_a_real_text_diary_docx() {
 
     create_docx_from_text_with_centered_exact_lines(&template, TEMPLATE, &["{{diary.datetime}}"])
         .expect("program template");
+
+    for entry_name in ["word/document.xml", "[Content_Types].xml", "_rels/.rels"] {
+        let xml = read_zip_text(&template, entry_name);
+        assert!(
+            !xml.contains('\\'),
+            "minimal DOCX helper emitted a literal backslash into {entry_name}: {xml}"
+        );
+    }
 
     let mut case = SemanticCase::default();
     case.set_collection(

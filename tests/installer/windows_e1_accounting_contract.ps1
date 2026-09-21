@@ -382,9 +382,11 @@ function Set-OpenFileDialogPath {
     Set-Clipboard -Value $Path -ErrorAction Stop
     [System.Windows.Forms.SendKeys]::SendWait('^v')
   } catch {
-    # Keep a native/UIA fallback for environments where the clipboard service is
-    # unavailable, but never accept it without the same visible read-back below.
-    Set-UiValue -Element $edit -Value $Path
+    # Do not fall back to ValuePattern.SetValue here. Hosted common dialogs can
+    # echo that UIA value while leaving the native filename edit empty. Leave the
+    # field untouched and continue to the independent native/user-equivalent
+    # fallbacks below, which are verified separately before submission.
+    Write-Host "OpenFileDialog clipboard paste unavailable; continuing with native/user fallback for '$Path'."
   }
   Start-Sleep -Milliseconds 250
 

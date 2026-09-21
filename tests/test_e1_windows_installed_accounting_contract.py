@@ -75,6 +75,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source
     assert "function Invoke-UiActionWithObservedTransition" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
+    assert '$null = Invoke-UiActionWithObservedTransition `\n    -Description "reset case before $($scenario.Label)"' in source
+    assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-01 main-document batch'" in source
+    assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-02 diary proof'" in source
     assert '-Description "open advanced template settings for $FileName"' in source
     assert "after failed advanced settings transition" in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source

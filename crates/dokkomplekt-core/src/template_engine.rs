@@ -154,6 +154,44 @@ pub fn template_collection_references(t: &str) -> Vec<String> {
     out.into_iter().collect()
 }
 
+/// Fields that are actually evaluated inside a specific repeated collection.
+///
+/// This is intentionally parser-backed rather than substring-based. Callers use
+/// it at publication boundaries to prove that a collection owns the fields that
+/// justify derived-output exemptions; fields merely present elsewhere in the
+/// template do not count.
+pub fn template_collection_field_references(t: &str, collection: &str) -> Vec<String> {
+    let parsed = parse(t);
+    if !parsed.errors.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    collect_refs_for_collection(&parsed.nodes, collection.trim(), &mut out);
+    out
+}
+
+fn collect_refs_for_collection(nodes: &[Node], collection: &str, out: &mut Vec<String>) {
+    for node in nodes {
+        match node {
+            Node::Each {
+                collection: candidate,
+                body,
+            } => {
+                if candidate.trim() == collection {
+                    collect_refs(body, out);
+                } else {
+                    collect_refs_for_collection(body, collection, out);
+                }
+            }
+            Node::If { yes, no, .. } => {
+                collect_refs_for_collection(yes, collection, out);
+                collect_refs_for_collection(no, collection, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Named clause blocks whose contents can affect the rendered template.
 pub fn template_block_references(t: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
@@ -1699,6 +1737,40 @@ mod tests {
     #[test]
     fn strict_unclosed() {
         assert!(!inspect_template_syntax("{{#if x}}x").is_empty());
+    }
+    #[test]
+    fn collection_field_references_are_scoped_to_the_real_loop() {
+        let template = concat!(
+            "{{diary.text}}\n",
+            "{{#each diaries}}",
+            "{{diary.datetime}}",
+            "{{#if diary.is_final}}{{diary.text}}{{/if}}",
+            "{{diary.treating_physician_signature}}",
+            "{{diary.department_head_signature}}",
+            "{{/each}}"
+        );
+        let refs = template_collection_field_references(template, "diaries");
+        for expected in [
+            "diary.datetime",
+            "diary.is_final",
+            "diary.text",
+            "diary.treating_physician_signature",
+            "diary.department_head_signature",
+        ] {
+            assert!(refs.contains(&expected.to_string()), "{refs:?}");
+        }
+        assert_eq!(
+            refs.iter().filter(|field| field.as_str() == "diary.text").count(),
+            1,
+            "the field outside the loop must not be counted as collection-owned"
+        );
+    }
+
+    #[test]
+    fn malformed_collection_has_no_trusted_scoped_fields() {
+        let template = "{{#each diaries}}{{diary.datetime}}{{diary.text}}";
+        assert!(!inspect_template_syntax(template).is_empty());
+        assert!(template_collection_field_references(template, "diaries").is_empty());
     }
     #[test]
     fn working_days() {

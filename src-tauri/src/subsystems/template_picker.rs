@@ -274,6 +274,121 @@ return outputText
 }
 
 
+fn pick_medical_diary_files_blocking(initial_path: Option<String>) -> Result<Vec<PathBuf>, String> {
+    #[cfg(target_os = "macos")]
+    let _ = initial_path;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Выберите тексты медицинских дневников'
+$dialog.Filter = 'Тексты дневников (*.txt;*.docx;*.docm)|*.txt;*.docx;*.docm'
+$dialog.Multiselect = $true
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$dialog.RestoreDirectory = $true
+if ($env:DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL -and (Test-Path -LiteralPath $env:DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL -PathType Container)) {
+  $dialog.InitialDirectory = $env:DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  foreach ($path in $dialog.FileNames) { [Console]::Out.WriteLine($path) }
+}
+"#;
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-STA", "-Command", script])
+            .env(
+                "DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL",
+                initial_path.as_deref().unwrap_or_default(),
+            )
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| format!("Не удалось запустить системный выбор текстов дневников: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор текстов дневников завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_picker_paths(&output.stdout)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+try
+  set chosenFiles to choose file with prompt "Выберите тексты медицинских дневников" with multiple selections allowed
+  set outputText to ""
+  repeat with chosenFile in chosenFiles
+    set outputText to outputText & (POSIX path of chosenFile) & linefeed
+  end repeat
+  return outputText
+on error number -128
+  return ""
+end try
+"#;
+        let output = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|error| format!("Не удалось открыть системный выбор текстов дневников: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Системный выбор текстов дневников завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_picker_paths(&output.stdout)
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let initial = initial_path.filter(|value| Path::new(value).is_dir());
+        let output = if picker_command_exists("zenity") {
+            let mut command = std::process::Command::new("zenity");
+            command.args([
+                "--file-selection",
+                "--multiple",
+                "--separator=\n",
+                "--title=Выберите тексты медицинских дневников",
+                "--file-filter=Тексты дневников | *.txt *.docx *.docm",
+            ]);
+            if let Some(path) = initial.as_deref() {
+                command.arg(format!("--filename={}/", path.trim_end_matches('/')));
+            }
+            command.output()
+        } else if picker_command_exists("kdialog") {
+            let mut command = std::process::Command::new("kdialog");
+            command.args([
+                "--getopenfilename",
+                initial.as_deref().unwrap_or("."),
+                "*.txt *.docx *.docm|Тексты дневников",
+                "--multiple",
+                "--separate-output",
+            ]);
+            command.output()
+        } else {
+            return Err(
+                "Системный выбор текстов дневников недоступен: установите zenity или kdialog.".into(),
+            );
+        }
+        .map_err(|error| format!("Не удалось открыть системный выбор текстов дневников: {error}"))?;
+        if !output.status.success() {
+            if output.status.code() == Some(1) {
+                return Ok(Vec::new());
+            }
+            return Err(format!(
+                "Системный выбор текстов дневников завершился с ошибкой: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        parse_picker_paths(&output.stdout)
+    }
+}
+
+
 fn pick_source_file_blocking(initial_path: Option<String>) -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     let _ = initial_path;

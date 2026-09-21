@@ -57,7 +57,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
     assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
-    assert "Set-UiValue -Element $edit -Value $Path" in source
+    assert "Set-UiValue -Element $edit -Value $Path" not in source
+    assert "Never \"verify\" a failed paste by setting and immediately rereading" in source
     assert "OpenFileDialog multi-select fallback committed leaf" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('^l')" in source
     assert "GetDirectoryName($Path)" in source
@@ -97,10 +98,14 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "FPR-02 Texts import PASS:" in source
     assert "FPR-02 diary Texts were not bound to the source-owned diagnosis F20.0" in source
     assert "FPR-02 diary role unexpectedly re-prompted a source/non-diary field" in source
-    assert "FPR-02 folder identity PASS:" in source
-    assert "'document.number' = 'FPR02-42'" in source
-    assert "'document.date' = '10.05.2026'" in source
-    assert "FPR-02 missing default output-folder identity prompt" in source
+    assert "FPR-02 folder identity preflight PASS:" in source
+    assert "workflow-document-number" in source
+    assert "Set-UiValue -Element $fpr02NumberControl -Value 'FPR02-42'" in source
+    assert "workflow-document-date" in source
+    assert "FPR-02 re-prompted source-owned document.date instead of reusing 10.05.2026." in source
+    assert "$fpr02ExpectedFolder = 'FPR02-42 10.05.2026'" in source
+    assert "FPR-02 output folder did not preserve missing-number + source-date identity." in source
+    assert 'Write-Host "FPR-02 folder identity PASS: $fpr02ExpectedFolder"' in source
     assert "medical.admission_date" in source
     assert "medical.discharge_date" in source
     assert "medical.diagnosis" in source

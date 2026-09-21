@@ -1738,7 +1738,7 @@ $null = Invoke-UiActionWithObservedTransition `
 # Workflow PromptAskMode::IfMissing suppresses a question when SemanticCase already
 # contains the source value. Re-prompting these fields would regress the donor UX
 # and would let the test overwrite the very recognition result it is meant to prove.
-foreach ($fieldId in @('medical.admission_date', 'medical.discharge_date', 'medical.diagnosis')) {
+foreach ($fieldId in @('medical.admission_date', 'medical.discharge_date', 'medical.diagnosis', 'medical.case_number')) {
   $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
   $control = (Find-LiveAppWindow).FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
@@ -1748,9 +1748,32 @@ foreach ($fieldId in @('medical.admission_date', 'medical.discharge_date', 'medi
     )
   )
   if ($null -ne $control) {
-    throw "FPR-02 source-owned field was redundantly re-prompted: $fieldId"
+    throw "FPR-02 diary role unexpectedly re-prompted a source/non-diary field: $fieldId"
   }
 }
+
+# A fresh universal install has no saved folder naming preference yet, so the
+# canonical empty-folder rule is DocumentNumber + DocumentDate. Those prompts
+# belong to the "Папка результата" requirement document, not to Medical/Diary.
+# Satisfy them explicitly so FPR-02 proves the diary contract rather than
+# accidentally depending on state left by another installed test.
+$fpr02FolderValues = [ordered]@{
+  'document.number' = 'FPR02-42'
+  'document.date' = '10.05.2026'
+}
+foreach ($fieldId in $fpr02FolderValues.Keys) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+  )
+  if ($null -eq $control) { throw "FPR-02 missing default output-folder identity prompt: $fieldId" }
+  Set-UiValue -Element $control -Value $fpr02FolderValues[$fieldId]
+}
+Write-Host 'FPR-02 folder identity PASS: default universal output naming satisfied independently from diary semantics.'
 
 $fpr02PromptValues = [ordered]@{
   'medical.diary_schedule_style' = 'Каждый день'

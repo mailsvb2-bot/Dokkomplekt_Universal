@@ -286,7 +286,7 @@ Add-Type -AssemblyName System.Windows.Forms
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'Выберите тексты медицинских дневников'
-$dialog.Filter = 'Тексты дневников (*.txt;*.docx;*.docm)|*.txt;*.docx;*.docm'
+$dialog.Filter = 'Тексты дневников (*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf)|*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf'
 $dialog.Multiselect = $true
 $dialog.CheckFileExists = $true
 $dialog.CheckPathExists = $true
@@ -353,7 +353,7 @@ end try
                 "--multiple",
                 "--separator=\n",
                 "--title=Выберите тексты медицинских дневников",
-                "--file-filter=Тексты дневников | *.txt *.docx *.docm",
+                "--file-filter=Тексты дневников | *.docx *.docm *.doc *.txt *.rtf *.odt *.pdf",
             ]);
             if let Some(path) = initial.as_deref() {
                 command.arg(format!("--filename={}/", path.trim_end_matches('/')));
@@ -364,7 +364,7 @@ end try
             command.args([
                 "--getopenfilename",
                 initial.as_deref().unwrap_or("."),
-                "*.txt *.docx *.docm|Тексты дневников",
+                "*.docx *.docm *.doc *.txt *.rtf *.odt *.pdf|Тексты дневников",
                 "--multiple",
                 "--separate-output",
             ]);

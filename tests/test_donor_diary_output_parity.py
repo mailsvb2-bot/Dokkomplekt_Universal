@@ -63,16 +63,18 @@ def test_normal_diary_route_uses_program_calendar_and_doctor_owned_texts():
     assert "return program_calendar_diary_template(app);" in profile_sources
     assert "select_diary_template_for_admission" not in profile_sources
     assert "MEDICAL_DIARY_DATE_TEMPLATES_BLOCK_ID" not in profile_sources
-    assert "{{#each diaries}}" in profile_sources
-    assert "{{diary.datetime}}" in profile_sources
+    assert "MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT" in profile_sources
     assert 'MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v6"' in profile_sources
     assert "create_docx_from_text_with_centered_exact_lines" in profile_sources
     assert '&["{{diary.datetime}}"]' in profile_sources
+    assert '"{{#each diaries}}\\n"' in records
     assert '"{{diary.datetime}}\\n"' in records
     assert '"{{diary.datetime}} {{#if diary.is_final}}"' not in records
-    assert "{{else}}{{diary.text}}{{/if}}" in profile_sources
-    assert "{{diary.treating_physician_signature}}" in profile_sources
-    assert "{{diary.department_head_signature}}" in profile_sources
+    assert '"{{else}}{{diary.text}}{{/if}}\\n"' in records
+    assert '"{{diary.treating_physician_signature}}\\n"' in records
+    assert '"{{diary.department_head_signature}}\\n"' in records
+    assert 'template_collection_field_references(text, "diaries")' in profile_sources
+    assert "inspect_template_syntax(text)" in profile_sources
     assert "психотических расстройств" not in profile_sources.lower()
     assert "критика к состоянию" not in profile_sources.lower()
     assert "NEUTRAL_FINAL_DIARY_TEXT" in records

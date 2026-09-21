@@ -508,10 +508,7 @@ mod tests {
                 "professional.medical.diary.regular.f200".into(),
                 regular_text.into(),
             );
-            prepare_professional_collections(
-                MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
-                &case,
-            )
+            prepare_professional_collections(MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT, &case)
         }
 
         let dir = test_directory("prepared-diary");

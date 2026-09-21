@@ -13,6 +13,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     app_source = (ROOT / "src" / "App.tsx").read_text(encoding="utf-8")
     advanced_tools = (ROOT / "src" / "components" / "AdvancedToolsPanel.tsx").read_text(encoding="utf-8")
+    additional_materials = (ROOT / "src" / "components" / "AdditionalMaterialsPanel.tsx").read_text(encoding="utf-8")
     api_source = (ROOT / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
     learning_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_learning_commands.rs").read_text(encoding="utf-8")
     picker_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_picker.rs").read_text(encoding="utf-8")
@@ -56,8 +57,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
     assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
-    assert "-Description 'FPR-02 native Тексты picker'" in source
-    assert "Find-E1NamedElement -Name 'Импортировать «Тексты» (TXT/DOCX/DOCM)'" in source
+    assert "-Description 'FPR-02 Тексты'" in source
+    assert "Find-E1NamedElement -Name 'Тексты'" in source
     assert "Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText" in source
     assert "$diaryOpenButton = $diaryTextDialog.FindFirst(" in source
     assert "Invoke-UiElement -Element $diaryOpenButton -Description 'confirm FPR-02 native Texts picker'" in source
@@ -86,18 +87,19 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "one batch did not add exactly" in source
     assert "FPR-02 Texts import PASS:" in source
+    assert "pickLearningFiles('medical_diary')" in additional_materials
+    assert "chooseDiaryTextsForCurrentDiagnosis" in additional_materials
+    assert 'id="medical-diary-text-files"' not in additional_materials, (
+        "normal diary Texts must not regress to the hosted WebView file input"
+    )
     assert "pickLearningFiles('medical_diary')" in advanced_tools
-    diary_ui = advanced_tools[
-        advanced_tools.index("<strong>Медицина · источники дневников</strong>"):
-        advanced_tools.index('placeholder="диагноз для итогового дневника')
-    ]
-    assert 'type="file"' not in diary_ui, "medical diary Texts must not regress to the hosted WebView file input"
-    assert "Импортировать «Тексты» (TXT/DOCX/DOCM)" in diary_ui
     assert "'medical_diary'" in api_source
     assert "extracted_text?: string | null;" in api_source
+    assert "import_error?: string | null;" in api_source
     assert '"medical_diary" => pick_medical_diary_files_blocking(req.initial_path)' in learning_backend
     assert "extracted_text: Option<String>" in learning_backend
-    assert "Тексты дневников (*.txt;*.docx;*.docm)|*.txt;*.docx;*.docm" in picker_backend
+    assert "import_error: Option<String>" in learning_backend
+    assert "Тексты дневников (*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf)|*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf" in picker_backend
     assert "DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL" in picker_backend
     assert "additional-materials-status" in source
     assert "FPR-02 native Texts picker did not close after confirming the selected file." in source

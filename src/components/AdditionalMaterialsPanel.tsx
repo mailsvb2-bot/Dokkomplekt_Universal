@@ -284,7 +284,10 @@ export function AdditionalMaterialsPanel(props: {
       picked.map(file => ({
         name: file.file_name,
         displayPath: file.file_name,
-        extractText: async () => file.extracted_text?.trim() ?? '',
+        extractText: async () => {
+          if (file.import_error) throw new Error(file.import_error);
+          return file.extracted_text?.trim() ?? '';
+        },
       })),
       true,
     );

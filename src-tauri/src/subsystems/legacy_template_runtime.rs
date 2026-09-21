@@ -515,6 +515,36 @@ fn validate_medical_template_output_contract(
     ))
 }
 
+fn validate_registered_medical_template_output_contract(
+    app: &tauri::AppHandle,
+    document: &DocumentTemplateSpec,
+) -> Result<(), String> {
+    if !is_medical_diary_document(document) {
+        return validate_medical_template_output_contract(document);
+    }
+
+    // Diary buttons use the role-owned program-calendar renderer rather than the
+    // user-selected registration DOCX. Validate the exact generated template
+    // that generation will snapshot, and never grant the diary source-field
+    // exemption from role_id alone.
+    let path = program_calendar_diary_template(app)?;
+    if !medical_diary_template_is_usable(&path) {
+        return Err(
+            "Канонический шаблон дневников не содержит обязательную повторяемую коллекцию."
+                .into(),
+        );
+    }
+    let template_text = extract_docx_text(&path)
+        .map_err(|error| format!("Не удалось проверить канонический шаблон дневников: {error}"))?;
+    let analysis =
+        analyze_template_text_with_domain_hint(&template_text, Some(&DomainKind::Medical));
+    let mut effective_document = document.clone();
+    effective_document.placeholders = analysis.placeholders;
+    effective_document.is_static_copy = false;
+    synchronize_compiled_required_fields(&mut effective_document);
+    validate_medical_template_output_contract(&effective_document)
+}
+
 fn merge_compiler_fields_into_analysis(
     analysis: &mut dokkomplekt_core::TemplateAnalysis,
     compiled_text: &str,

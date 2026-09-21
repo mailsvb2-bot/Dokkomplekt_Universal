@@ -391,16 +391,10 @@ function Set-OpenFileDialogPath {
   $expected = Normalize-UiValue -Value $Path
   $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
 
-  # Clipboard paste can report success while the hosted Explorer-style dialog
-  # silently leaves the real file-name edit unchanged. Retry through the same
-  # UIA/native setter used by the already-proven template/source pickers, then
-  # verify again instead of trusting the setter call itself.
-  if ($actual -ne $expected) {
-    Set-UiValue -Element $edit -Value $Path
-    Start-Sleep -Milliseconds 200
-    $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
-  }
-
+  # Never "verify" a failed paste by setting and immediately rereading the
+  # same UIA ValuePattern: hosted Explorer-style dialogs can echo that value while
+  # their native filename edit remains empty. If the real user-equivalent paste
+  # did not read back, continue to an independent native/user path instead.
   # In multi-select common dialogs AutomationId=1148 may be a wrapper while the
   # live editable child owns the native HWND. Target the first ValuePattern child
   # before falling back to the wrapper handle.
@@ -1794,28 +1788,33 @@ foreach ($fieldId in @('medical.admission_date', 'medical.discharge_date', 'medi
   }
 }
 
-# A fresh universal install has no saved folder naming preference yet, so the
-# canonical empty-folder rule is DocumentNumber + DocumentDate. Those prompts
-# belong to the "Папка результата" requirement document, not to Medical/Diary.
-# Satisfy them explicitly so FPR-02 proves the diary contract rather than
-# accidentally depending on state left by another installed test.
-$fpr02FolderValues = [ordered]@{
-  'document.number' = 'FPR02-42'
-  'document.date' = '10.05.2026'
-}
-foreach ($fieldId in $fpr02FolderValues.Keys) {
-  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
-  $control = (Find-LiveAppWindow).FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-      $automationId
-    )
+# A fresh universal install uses the canonical default output identity
+# DocumentNumber + DocumentDate. Only still-missing values may be prompted:
+# this source has no document number, but its admitted primary-inspection date is
+# already recognized as document.date=10.05.2026 and must not be re-asked.
+$fpr02NumberControl = (Find-LiveAppWindow).FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-number'
   )
-  if ($null -eq $control) { throw "FPR-02 missing default output-folder identity prompt: $fieldId" }
-  Set-UiValue -Element $control -Value $fpr02FolderValues[$fieldId]
+)
+if ($null -eq $fpr02NumberControl) {
+  throw 'FPR-02 missing the still-required default output-folder document.number prompt.'
 }
-Write-Host 'FPR-02 folder identity PASS: default universal output naming satisfied independently from diary semantics.'
+Set-UiValue -Element $fpr02NumberControl -Value 'FPR02-42'
+
+$fpr02DateControl = (Find-LiveAppWindow).FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-date'
+  )
+)
+if ($null -ne $fpr02DateControl) {
+  throw 'FPR-02 re-prompted source-owned document.date instead of reusing 10.05.2026.'
+}
+Write-Host 'FPR-02 folder identity preflight PASS: missing number requested; source-owned document date not re-prompted.'
 
 $fpr02PromptValues = [ordered]@{
   'medical.diary_schedule_style' = 'Каждый день'
@@ -1889,6 +1888,11 @@ do {
   Start-Sleep -Milliseconds 250
 } while ([DateTime]::UtcNow -lt $fpr02Deadline)
 if ($null -eq $fpr02Doc) { throw 'FPR-02 did not publish a physical diary DOCX.' }
+$fpr02ExpectedFolder = 'FPR02-42 10.05.2026'
+if ($fpr02Doc.Directory.Name -ne $fpr02ExpectedFolder) {
+  throw "FPR-02 output folder did not preserve missing-number + source-date identity. Expected='$fpr02ExpectedFolder' Actual='$($fpr02Doc.Directory.Name)'."
+}
+Write-Host "FPR-02 folder identity PASS: $fpr02ExpectedFolder"
 
 $archive = [System.IO.Compression.ZipFile]::OpenRead($fpr02Doc.FullName)
 try {

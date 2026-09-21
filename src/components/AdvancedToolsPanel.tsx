@@ -347,6 +347,10 @@ export function AdvancedToolsPanel({
       const buckets = new Map<string, { regular: string[]; final: string[] }>();
       let imported = 0;
       for (const file of files) {
+        const importError = file.import_error?.trim();
+        if (importError) {
+          throw new Error(`Не удалось прочитать файл «${file.file_name}»: ${importError}; набор дневников не изменён.`);
+        }
         const key = medicalDiaryFileKey(file.file_name);
         const content = file.extracted_text?.trim() ?? '';
         if (!key) continue;

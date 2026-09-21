@@ -59,9 +59,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "OpenFileDialog path did not commit. Expected=" in source
     assert "-Description 'FPR-02 Тексты'" in source
     assert "Find-E1NamedElement -Name 'Тексты'" in source
-    assert "Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText" in source
-    assert "$diaryOpenButton = $diaryTextDialog.FindFirst(" in source
-    assert "Invoke-UiElement -Element $diaryOpenButton -Description 'confirm FPR-02 native Texts picker'" in source
+    assert "Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText" in source
+    assert "Submit-OpenFileDialog -Dialog $diaryTextDialog" in source
+    assert "Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText" not in source
     assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
     assert "Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')" not in source
     assert "IsValuePatternAvailableProperty" in source
@@ -114,7 +114,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "Тексты дневников (*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf)|*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf" in picker_backend
     assert "DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL" in picker_backend
     assert "additional-materials-status" in source
-    assert "FPR-02 native Texts picker did not close after confirming the selected file." in source
+    assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
     assert "FPR-02 diary text import did not reach terminal success. Last status=" in source
     assert "Get-E1UiSnapshot" in source
     assert "сохранено\\s+1\\s+из\\s+1" in source

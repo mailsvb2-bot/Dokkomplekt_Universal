@@ -237,16 +237,39 @@ pub fn synchronize_document_required_fields(spec: &mut DocumentTemplateSpec) {
     spec.required_fields = required.into_iter().collect();
 }
 
-fn role_inputs_rendered_through_derived_output(role: &MedicalDocumentRole) -> BTreeSet<String> {
+const DIARY_COLLECTION_RENDER_FIELDS: &[&str] = &[
+    "diary.datetime",
+    "diary.text",
+    "diary.treating_physician_signature",
+    "diary.department_head_signature",
+];
+
+fn role_inputs_rendered_through_derived_output(
+    spec: &DocumentTemplateSpec,
+    role: &MedicalDocumentRole,
+) -> BTreeSet<String> {
     if !matches!(role, MedicalDocumentRole::Diary) {
         return BTreeSet::new();
     }
 
-    // The canonical diary output is a generated repeated-record collection. These
-    // values remain hard workflow inputs, but they shape the diaries collection
-    // rather than appearing as one-to-one visible placeholders. Requiring their
-    // literal values in the Word body would reject the program-calendar template
-    // that owns normal diary generation.
+    // A Diary role alone is not evidence that the template renders the generated
+    // collection. Exempt source fields only after the spec proves every canonical
+    // repeated-record render slot. The runtime additionally validates the actual
+    // program-calendar template, including its {{#each diaries}} loop.
+    let placeholders = spec
+        .placeholders
+        .iter()
+        .map(|field| canonical_storage_field_id(field))
+        .collect::<BTreeSet<_>>();
+    if !DIARY_COLLECTION_RENDER_FIELDS
+        .iter()
+        .all(|field| placeholders.contains(*field))
+    {
+        return BTreeSet::new();
+    }
+
+    // These values remain hard workflow inputs, but they shape the diaries
+    // collection rather than appearing as one-to-one visible placeholders.
     let mut inputs = build_medical_render_plan(role.clone(), false, false)
         .required_fields
         .into_iter()
@@ -266,7 +289,7 @@ pub fn required_blocks_for(
     }
 
     let role = MedicalDocumentRole::from_role_id(&spec.role_id);
-    let derived_inputs = role_inputs_rendered_through_derived_output(&role);
+    let derived_inputs = role_inputs_rendered_through_derived_output(spec, &role);
     let mut blocks = Vec::new();
     if !derived_inputs.contains("subject.name") {
         blocks.push(RequiredBlock::any_rendered(
@@ -316,7 +339,7 @@ pub fn missing_medical_template_render_paths(spec: &DocumentTemplateSpec) -> Vec
     }
 
     let role = MedicalDocumentRole::from_role_id(&spec.role_id);
-    let derived_inputs = role_inputs_rendered_through_derived_output(&role);
+    let derived_inputs = role_inputs_rendered_through_derived_output(spec, &role);
     let mut required = build_medical_render_plan(role, false, false)
         .required_fields
         .into_iter()
@@ -657,8 +680,15 @@ mod tests {
             "reception",
         ] {
             let role = MedicalDocumentRole::from_role_id(role_id);
-            let derived_inputs = role_inputs_rendered_through_derived_output(&role);
-            let blocks = required_blocks_for(&spec(role_id, DomainKind::Medical), "");
+            let mut document = spec(role_id, DomainKind::Medical);
+            if matches!(role, MedicalDocumentRole::Diary) {
+                document.placeholders = DIARY_COLLECTION_RENDER_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_string())
+                    .collect();
+            }
+            let derived_inputs = role_inputs_rendered_through_derived_output(&document, &role);
+            let blocks = required_blocks_for(&document, "");
             let plan = build_medical_render_plan(role, false, false);
             for field_id in plan.required_fields {
                 let has_direct_render_block = blocks.iter().any(|block| {
@@ -845,7 +875,12 @@ mod tests {
 
     #[test]
     fn diaries_require_signatures_without_requiring_source_inputs_as_literal_output() {
-        let blocks = required_blocks_for(&spec("diaries", DomainKind::Medical), "");
+        let mut document = spec("diaries", DomainKind::Medical);
+        document.placeholders = DIARY_COLLECTION_RENDER_FIELDS
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect();
+        let blocks = required_blocks_for(&document, "");
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
             ("medical.diagnosis", "F20.0"),
@@ -858,6 +893,32 @@ mod tests {
 
         let both = format!("{values}\nЗаведующий отделением __________");
         assert!(unmet_blocks(&blocks, &case, &both).is_empty());
+    }
+
+    #[test]
+    fn diary_role_without_collection_placeholders_does_not_exempt_source_fields() {
+        let document = spec("diaries", DomainKind::Medical);
+        let missing = missing_medical_template_render_paths(&document);
+        for field_id in [
+            "subject.name",
+            "medical.admission_date",
+            "medical.discharge_date",
+            "medical.diagnosis",
+        ] {
+            assert!(
+                missing.contains(&field_id.to_string()),
+                "diary role without canonical collection must still require {field_id}: {missing:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_diary_collection_does_not_exempt_source_fields() {
+        let mut document = spec("diaries", DomainKind::Medical);
+        document.placeholders = vec!["diary.datetime".into(), "diary.text".into()];
+        let missing = missing_medical_template_render_paths(&document);
+        assert!(missing.contains(&"subject.name".to_string()));
+        assert!(missing.contains(&"medical.admission_date".to_string()));
     }
 
     #[test]

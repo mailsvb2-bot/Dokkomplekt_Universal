@@ -390,8 +390,31 @@ function Set-OpenFileDialogPath {
 
   $expected = Normalize-UiValue -Value $Path
   $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+
+  # Clipboard paste can report success while the hosted Explorer-style dialog
+  # silently leaves the real file-name edit unchanged. Retry through the same
+  # UIA/native setter used by the already-proven template/source pickers, then
+  # verify again instead of trusting the setter call itself.
   if ($actual -ne $expected) {
-    $editHandle = [IntPtr]$edit.Current.NativeWindowHandle
+    Set-UiValue -Element $edit -Value $Path
+    Start-Sleep -Milliseconds 200
+    $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+  }
+
+  # In multi-select common dialogs AutomationId=1148 may be a wrapper while the
+  # live editable child owns the native HWND. Target the first ValuePattern child
+  # before falling back to the wrapper handle.
+  if ($actual -ne $expected) {
+    $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+      $true
+    )
+    $nativeTarget = $edit.FindFirst(
+      [System.Windows.Automation.TreeScope]::Subtree,
+      $supportsValue
+    )
+    if ($null -eq $nativeTarget) { $nativeTarget = $edit }
+    $editHandle = [IntPtr]$nativeTarget.Current.NativeWindowHandle
     if ($editHandle -ne [IntPtr]::Zero) {
       $null = [DokkomplektE1NativeMouse]::SendMessage(
         $editHandle,
@@ -401,6 +424,47 @@ function Set-OpenFileDialogPath {
       )
       Start-Sleep -Milliseconds 200
       $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+    }
+  }
+
+  # Last bounded user-equivalent fallback for Explorer-style multi-select
+  # dialogs: navigate to the parent directory through the address bar, then type
+  # only the leaf file name into the real file-name field. This avoids the
+  # full-path paste quirk while still proving the visible filename before submit.
+  if ($actual -ne $expected) {
+    $parent = [System.IO.Path]::GetDirectoryName($Path)
+    $leaf = [System.IO.Path]::GetFileName($Path)
+    if (-not [string]::IsNullOrWhiteSpace($parent) -and -not [string]::IsNullOrWhiteSpace($leaf)) {
+      [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+      [System.Windows.Forms.SendKeys]::SendWait('^l')
+      Start-Sleep -Milliseconds 100
+      Set-Clipboard -Value $parent -ErrorAction Stop
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      Start-Sleep -Milliseconds 500
+
+      $edit = $Dialog.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+          '1148'
+        )
+      )
+      if ($null -eq $edit) {
+        throw "OpenFileDialog filename edit disappeared while navigating to '$parent'."
+      }
+      $edit.SetFocus()
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait('^a')
+      Set-Clipboard -Value $leaf -ErrorAction Stop
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+      Start-Sleep -Milliseconds 250
+      $leafActual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+      if ($leafActual -eq (Normalize-UiValue -Value $leaf)) {
+        Write-Host "OpenFileDialog multi-select fallback committed leaf '$leaf' in '$parent'."
+        return $edit
+      }
+      $actual = $leafActual
     }
   }
 

@@ -1654,10 +1654,10 @@ $fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.docx'
 $fpr02DoctorText = 'FPR02 профессиональный текст дневника, подтверждённый врачом.'
 New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)
 $diaryTextDialog = Invoke-UiActionWithObservedTransition `
-  -Description 'FPR-02 native Тексты picker' `
+  -Description 'FPR-02 Тексты' `
   -TransitionDescription 'native diary Texts picker' `
   -ActionProbe {
-    Find-E1NamedElement -Name 'Импортировать «Тексты» (TXT/DOCX/DOCM)'
+    Find-E1NamedElement -Name 'Тексты'
   } `
   -TransitionProbe { Find-FileDialog }
 $diaryTextEdit = Wait-UiElement -Description 'FPR-02 native Texts filename field' -Probe {

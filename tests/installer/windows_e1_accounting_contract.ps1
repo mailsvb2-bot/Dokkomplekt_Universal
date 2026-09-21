@@ -1810,7 +1810,17 @@ do {
     Select-Object -First 1
   if ($null -ne $fpr02Doc) { break }
   $failure = Find-E1NamedElement -Name 'Документы не созданы'
-  if ($null -ne $failure) { throw 'FPR-02 installed backend rejected the completed diary preflight.' }
+  if ($null -ne $failure) {
+    $failureDetail = Find-E1NamedElementContaining -Text 'Документы не созданы:'
+    $failureText = ''
+    if ($null -ne $failureDetail) {
+      try { $failureText = [string]$failureDetail.Current.Name } catch { $failureText = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($failureText)) {
+      $failureText = Get-E1UiSnapshot
+    }
+    throw "FPR-02 generation failed after accepted preflight: $failureText"
+  }
   Start-Sleep -Milliseconds 250
 } while ([DateTime]::UtcNow -lt $fpr02Deadline)
 if ($null -eq $fpr02Doc) { throw 'FPR-02 did not publish a physical diary DOCX.' }

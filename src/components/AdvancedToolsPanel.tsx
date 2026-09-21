@@ -18,7 +18,6 @@ import {
   confirmTemplateSetup,
   getProcessBlueprints,
   deleteClauseBlock,
-  importLearningExampleFile,
   importTemplateFile,
   pickLearningFiles,
   type PickedLearningFile,
@@ -340,29 +339,27 @@ export function AdvancedToolsPanel({
     if (result) setBlocks(result);
   }
 
-  async function importMedicalDiaryTexts(files: File[]) {
-    if (!files.length) return;
+  async function importMedicalDiaryTexts() {
     const result = await execute('импорт текстов дневников', async () => {
+      const files = await pickLearningFiles('medical_diary');
+      if (!files.length) return { current: blocks, imported: 0, cancelled: true };
+
       const buckets = new Map<string, { regular: string[]; final: string[] }>();
       let imported = 0;
       for (const file of files) {
-        const supported = /\.(txt|docx|docm)$/i.test(file.name);
-        if (!supported) continue;
-        const key = medicalDiaryFileKey(file.name);
-        const content = /\.txt$/i.test(file.name)
-          ? (await file.text()).trim()
-          : (await importLearningExampleFile(file.name, toBase64(await readBytes(file)))).extracted_text.trim();
+        const key = medicalDiaryFileKey(file.file_name);
+        const content = file.extracted_text?.trim() ?? '';
         if (!key) continue;
         if (!content) {
-          throw new Error(`Файл «${file.name}» прочитан, но не содержит текста; набор дневников не изменён.`);
+          throw new Error(`Файл «${file.file_name}» прочитан, но не содержит текста; набор дневников не изменён.`);
         }
         const bucket = buckets.get(key) ?? { regular: [], final: [] };
-        const role = isFinalMedicalDiaryText(file.name) ? bucket.final : bucket.regular;
+        const role = isFinalMedicalDiaryText(file.file_name) ? bucket.final : bucket.regular;
         role.push(content);
         buckets.set(key, bucket);
         imported += 1;
       }
-      if (!buckets.size) return { current: blocks, imported };
+      if (!buckets.size) return { current: blocks, imported, cancelled: false };
 
       const deleteBlockIds: string[] = [];
       const replacements: Array<{ blockId: string; title: string; content: string }> = [];
@@ -385,9 +382,9 @@ export function AdvancedToolsPanel({
         );
       }
       await replaceClauseBlocks(deleteBlockIds, replacements);
-      return { current: await listClauseBlocks(), imported };
+      return { current: await listClauseBlocks(), imported, cancelled: false };
     });
-    if (!result) return;
+    if (!result || result.cancelled) return;
     setBlocks(result.current);
     onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; данные сохранены локально атомарным набором.`);
   }
@@ -660,16 +657,14 @@ export function AdvancedToolsPanel({
         <section className="utilityCard advancedCard">
           <strong>Медицина · источники дневников</strong>
           <small>Совместимость с diary-filler: выберите TXT, DOCX или DOCM с пользовательскими текстами дневников. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; чужой диагноз не подмешивается.</small>
-          <label className="utilBtn fileButton">
+          <button
+            type="button"
+            className="utilBtn"
+            disabled={busy}
+            onClick={() => void importMedicalDiaryTexts()}
+          >
             Импортировать «Тексты» (TXT/DOCX/DOCM)
-            <input
-              type="file"
-              accept=".txt,.docx,.docm,text/plain"
-              multiple
-              hidden
-              onChange={(event) => { void importMedicalDiaryTexts(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ''; }}
-            />
-          </label>
+          </button>
           <input value={diaryFinalDiagnosis} onChange={(event) => setDiaryFinalDiagnosis(event.target.value)} placeholder="диагноз для итогового дневника, например F20.0" />
           <textarea value={diaryFinalText} onChange={(event) => setDiaryFinalText(event.target.value)} placeholder="подтверждённый специалистом итоговый дневник" />
           <button disabled={busy || !diaryFinalDiagnosis.trim() || !diaryFinalText.trim()} className="utilBtn" onClick={saveMedicalFinalDiary}>Сохранить итоговый дневник</button>

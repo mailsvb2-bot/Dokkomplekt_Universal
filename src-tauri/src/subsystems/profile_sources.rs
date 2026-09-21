@@ -337,6 +337,7 @@ mod profile_sources_tests {
         medical_diary_template_is_usable, medical_diary_template_text_is_usable,
         parse_profile_quick_options,
     };
+    use dokkomplekt_core::{DocumentTemplateSpec, DomainKind};
     use dokkomplekt_docx::inspect_docx_structure;
     use uuid::Uuid;
 

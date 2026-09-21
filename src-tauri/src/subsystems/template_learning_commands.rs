@@ -11,6 +11,8 @@ struct PickedLearningFile {
     file_name: String,
     staged_path: String,
     content_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extracted_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +32,7 @@ async fn pick_learning_files(
     let picker_kind = kind.clone();
     let selected_paths = tauri::async_runtime::spawn_blocking(move || match picker_kind.as_str() {
         "blank" | "correct_output" => pick_template_files_blocking(req.initial_path),
+        "medical_diary" => pick_medical_diary_files_blocking(req.initial_path),
         "source" => pick_source_file_blocking(req.initial_path)
             .map(|selected| selected.into_iter().collect::<Vec<_>>()),
         _ => Err(format!("Неизвестная роль файла обучения: {picker_kind}")),
@@ -68,33 +71,68 @@ async fn pick_learning_files(
             .ok_or_else(|| "Имя выбранного файла обучения не поддерживается системой.".to_string())?
             .to_string();
 
-        if kind == "blank" || kind == "correct_output" {
+        let extension_name = canonical
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let extracted_text = if kind == "blank" || kind == "correct_output" {
             if metadata.len() > MAX_PICKED_TEMPLATE_BYTES {
                 return Err("DOCX/DOCM для обучения слишком большой: максимум 50 МБ.".into());
             }
-            let extension = canonical
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(str::to_ascii_lowercase)
-                .unwrap_or_default();
-            if extension != "docx" && extension != "docm" {
+            if extension_name != "docx" && extension_name != "docm" {
                 return Err(format!("Для {kind} поддерживаются только DOCX и DOCM: {}", canonical.display()));
             }
             validate_safe_template_file(&canonical).map_err(|error| {
                 format!("Файл обучения «{}» содержит активное содержимое или внешние связи и заблокирован: {error}", canonical.display())
             })?;
-        } else if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
-            return Err(format!(
-                "Source-файл слишком большой: максимум {} МБ.",
-                universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
-            ));
-        }
+            None
+        } else if kind == "medical_diary" {
+            if metadata.len() > MAX_PICKED_TEMPLATE_BYTES {
+                return Err("Файл текстов дневников слишком большой: максимум 50 МБ.".into());
+            }
+            if !matches!(extension_name.as_str(), "txt" | "docx" | "docm") {
+                return Err(format!(
+                    "Для текстов дневников поддерживаются только TXT, DOCX и DOCM: {}",
+                    canonical.display()
+                ));
+            }
+            let text = if extension_name == "txt" {
+                let bytes = std::fs::read(&canonical).map_err(|error| {
+                    format!("Не удалось прочитать TXT текстов дневников «{}»: {error}", canonical.display())
+                })?;
+                String::from_utf8_lossy(&bytes).trim().to_string()
+            } else {
+                validate_safe_template_file(&canonical).map_err(|error| {
+                    format!("Файл текстов дневников «{}» содержит активное содержимое или внешние связи и заблокирован: {error}", canonical.display())
+                })?;
+                extract_docx_text(&canonical)
+                    .map_err(|error| format!("Не удалось извлечь текст дневников из «{}»: {error}", canonical.display()))?
+                    .trim()
+                    .to_string()
+            };
+            if text.is_empty() {
+                return Err(format!(
+                    "Файл текстов дневников «{}» прочитан, но не содержит текста.",
+                    canonical.display()
+                ));
+            }
+            Some(text)
+        } else {
+            if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
+                return Err(format!(
+                    "Source-файл слишком большой: максимум {} МБ.",
+                    universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
+                ));
+            }
+            None
+        };
 
-        let extension = canonical
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| format!(".{value}"))
-            .unwrap_or_default();
+        let extension = if extension_name.is_empty() {
+            String::new()
+        } else {
+            format!(".{extension_name}")
+        };
         let (_, _, content_sha256) = file_content_signature(&canonical)?;
         let target = session_root.join(format!("{}{}", Uuid::new_v4(), extension));
         std::fs::copy(&canonical, &target).map_err(|error| {
@@ -104,6 +142,7 @@ async fn pick_learning_files(
             file_name,
             staged_path: target.display().to_string(),
             content_sha256,
+            extracted_text,
         });
     }
     Ok(PickLearningFilesResponse { files })

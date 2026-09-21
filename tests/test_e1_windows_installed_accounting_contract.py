@@ -57,7 +57,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
     assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
-    assert "Set-UiValue -Element $edit -Value $Path" not in source
+    assert source.count("Set-UiValue -Element $edit -Value $Path") == 1
     assert "Never \"verify\" a failed paste by setting and immediately rereading" in source
     assert "OpenFileDialog multi-select fallback committed leaf" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('^l')" in source

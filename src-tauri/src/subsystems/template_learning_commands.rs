@@ -13,6 +13,8 @@ struct PickedLearningFile {
     content_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     extracted_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,20 +106,17 @@ async fn pick_learning_files(
                 ));
             }
             let work = session_root.join(format!("medical-diary-normalized-{}", Uuid::new_v4()));
-            let normalized = universal_intake::normalize_path(&canonical, &work, 0).map_err(|error| {
-                format!(
-                    "Не удалось прочитать файл текстов дневников «{}»: {error}",
-                    canonical.display()
-                )
-            })?;
-            let text = normalized.text.trim().to_string();
-            if text.is_empty() {
-                return Err(format!(
-                    "Файл текстов дневников «{}» прочитан, но не содержит текста.",
-                    canonical.display()
-                ));
+            match universal_intake::normalize_path(&canonical, &work, 0) {
+                Ok(normalized) => {
+                    let text = normalized.text.trim().to_string();
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    }
+                }
+                Err(_) => None,
             }
-            Some(text)
         } else {
             if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
                 return Err(format!(
@@ -125,6 +124,19 @@ async fn pick_learning_files(
                     universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
                 ));
             }
+            None
+        };
+        let import_error = if kind == "medical_diary" && extracted_text.is_none() {
+            let work = session_root.join(format!("medical-diary-error-check-{}", Uuid::new_v4()));
+            match universal_intake::normalize_path(&canonical, &work, 0) {
+                Ok(normalized) if normalized.text.trim().is_empty() => Some(format!(
+                    "Файл «{}» прочитан, но текст не найден.",
+                    file_name
+                )),
+                Ok(_) => None,
+                Err(error) => Some(format!("Не удалось прочитать «{}»: {error}", file_name)),
+            }
+        } else {
             None
         };
 
@@ -143,6 +155,7 @@ async fn pick_learning_files(
             staged_path: target.display().to_string(),
             content_sha256,
             extracted_text,
+            import_error,
         });
     }
     Ok(PickLearningFilesResponse { files })

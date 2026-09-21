@@ -237,9 +237,7 @@ pub fn synchronize_document_required_fields(spec: &mut DocumentTemplateSpec) {
     spec.required_fields = required.into_iter().collect();
 }
 
-fn role_inputs_rendered_through_derived_output(
-    role: &MedicalDocumentRole,
-) -> BTreeSet<String> {
+fn role_inputs_rendered_through_derived_output(role: &MedicalDocumentRole) -> BTreeSet<String> {
     if !matches!(role, MedicalDocumentRole::Diary) {
         return BTreeSet::new();
     }

@@ -137,6 +137,11 @@ def test_generation_routes_share_diary_template_without_mutating_generic_candida
     assert "super::effective_generation_template_path(app, document)?" in snapshots
     assert manual.count("TemplateSnapshot::capture_generation(") >= 2
     assert "TemplateSnapshot::capture_generation(app, document)" in automation
+    assert "effective_generation_document_spec(doc, &template_text)?" in automation
+    assert "let effective_doc = &configured_document.spec;" in automation
+    assert "document_required_input_fields(effective_doc, &flags)" in automation
+    assert "ensure_rendered_document_complete(" in automation
+    assert "effective_doc," in automation
     assert "TemplateSnapshot::capture_generation(app, document)" in mail_merge
 
 

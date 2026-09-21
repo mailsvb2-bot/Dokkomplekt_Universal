@@ -87,6 +87,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "one batch did not add exactly" in source
     assert "FPR-02 Texts import PASS:" in source
+    assert "FPR-02 diary Texts were not bound to the source-owned diagnosis F20.0" in source
+    assert "FPR-02 source-owned field was redundantly re-prompted" in source
+    assert "medical.admission_date" in source
+    assert "medical.discharge_date" in source
+    assert "medical.diagnosis" in source
     assert "pickLearningFiles('medical_diary')" in additional_materials
     assert "chooseDiaryTextsForCurrentDiagnosis" in additional_materials
     assert 'id="medical-diary-text-files"' not in additional_materials, (

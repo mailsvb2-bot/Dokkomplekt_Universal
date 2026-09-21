@@ -57,6 +57,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
     assert "Submit through the dialog's real Open button first." in source
     assert "OpenFileDialog path did not commit. Expected=" in source
+    assert "Set-UiValue -Element $edit -Value $Path" in source
+    assert "OpenFileDialog multi-select fallback committed leaf" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('^l')" in source
+    assert "GetDirectoryName($Path)" in source
+    assert "GetFileName($Path)" in source
     assert "-Description 'FPR-02 Тексты'" in source
     assert "Find-E1NamedElement -Name 'Тексты'" in source
     assert "Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText" in source

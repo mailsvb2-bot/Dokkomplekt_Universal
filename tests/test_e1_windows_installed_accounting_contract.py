@@ -88,7 +88,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "one batch did not add exactly" in source
     assert "FPR-02 Texts import PASS:" in source
     assert "FPR-02 diary Texts were not bound to the source-owned diagnosis F20.0" in source
-    assert "FPR-02 source-owned field was redundantly re-prompted" in source
+    assert "FPR-02 diary role unexpectedly re-prompted a source/non-diary field" in source
+    assert "FPR-02 folder identity PASS:" in source
+    assert "'document.number' = 'FPR02-42'" in source
+    assert "'document.date' = '10.05.2026'" in source
+    assert "FPR-02 missing default output-folder identity prompt" in source
     assert "medical.admission_date" in source
     assert "medical.discharge_date" in source
     assert "medical.diagnosis" in source

@@ -90,6 +90,7 @@ export interface PickedLearningFile {
   staged_path: string;
   content_sha256: string;
   extracted_text?: string | null;
+  import_error?: string | null;
 }
 
 export async function pickLearningFiles(kind: LearningFileKind, initialPath?: string | null): Promise<PickedLearningFile[]> {

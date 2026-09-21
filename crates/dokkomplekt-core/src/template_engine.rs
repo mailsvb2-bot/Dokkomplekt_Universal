@@ -1760,7 +1760,9 @@ mod tests {
             assert!(refs.contains(&expected.to_string()), "{refs:?}");
         }
         assert_eq!(
-            refs.iter().filter(|field| field.as_str() == "diary.text").count(),
+            refs.iter()
+                .filter(|field| field.as_str() == "diary.text")
+                .count(),
             1,
             "the field outside the loop must not be counted as collection-owned"
         );

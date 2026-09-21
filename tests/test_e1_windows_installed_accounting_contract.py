@@ -60,6 +60,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "Set-UiValue -Element $edit -Value $Path" not in source
     assert "OpenFileDialog clipboard paste unavailable; continuing with native/user fallback" in source
     assert "Never \"verify\" a failed paste by setting and immediately rereading" in source
+    assert "$edit.FindAll(" in source
+    assert "$candidateHandle -ne [IntPtr]::Zero" in source
+    assert "[System.Windows.Automation.ControlType]::Edit" in source
+    assert "GetWindowTextLength($editHandle)" in source
+    assert "OpenFileDialog address-bar clipboard fallback unavailable" in source
     assert "OpenFileDialog multi-select fallback committed leaf" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('^l')" in source
     assert "GetDirectoryName($Path)" in source

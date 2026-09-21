@@ -119,6 +119,24 @@ fn is_medical_diary_document(document: &DocumentTemplateSpec) -> bool {
         || role.ends_with(".diaries")
 }
 
+fn medical_diary_template_text_is_usable(text: &str) -> bool {
+    if !dokkomplekt_core::inspect_template_syntax(text).is_empty() {
+        return false;
+    }
+    let scoped = dokkomplekt_core::template_collection_field_references(text, "diaries")
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    [
+        "diary.datetime",
+        "diary.is_final",
+        "diary.text",
+        "diary.treating_physician_signature",
+        "diary.department_head_signature",
+    ]
+    .iter()
+    .all(|field| scoped.contains(*field))
+}
+
 fn medical_diary_template_is_usable(path: &Path) -> bool {
     path.is_file()
         && validate_safe_template_file(path).is_ok()
@@ -126,14 +144,7 @@ fn medical_diary_template_is_usable(path: &Path) -> bool {
             .map(|structure| structure.table_count == 0)
             .unwrap_or(false)
         && extract_docx_text(path)
-            .map(|text| {
-                text.contains("{{#each diaries}}")
-                    && text.contains("{{diary.datetime}}")
-                    && text.contains("{{#if diary.is_final}}")
-                    && text.contains("{{else}}{{diary.text}}{{/if}}")
-                    && text.contains("{{diary.treating_physician_signature}}")
-                    && text.contains("{{diary.department_head_signature}}")
-            })
+            .map(|text| medical_diary_template_text_is_usable(&text))
             .unwrap_or(false)
 }
 
@@ -291,7 +302,7 @@ fn effective_generation_template_path(
 mod profile_sources_tests {
     use super::{
         ensure_program_calendar_diary_template, medical_diary_template_is_usable,
-        parse_profile_quick_options,
+        medical_diary_template_text_is_usable, parse_profile_quick_options,
     };
     use dokkomplekt_docx::inspect_docx_structure;
     use uuid::Uuid;
@@ -299,6 +310,35 @@ mod profile_sources_tests {
     #[test]
     fn corrupted_optional_quick_options_do_not_block_the_profile() {
         assert!(parse_profile_quick_options("{broken json").is_empty());
+    }
+
+    #[test]
+    fn diary_template_rejects_malformed_or_mis_scoped_collection_fields() {
+        let malformed = concat!(
+            "{{#each diaries}}",
+            "{{diary.datetime}}{{diary.text}}",
+            "{{diary.treating_physician_signature}}",
+            "{{diary.department_head_signature}}"
+        );
+        assert!(!medical_diary_template_text_is_usable(malformed));
+
+        let outside = concat!(
+            "{{diary.text}}",
+            "{{#each diaries}}",
+            "{{diary.datetime}}",
+            "{{#if diary.is_final}}final{{/if}}",
+            "{{diary.treating_physician_signature}}",
+            "{{diary.department_head_signature}}",
+            "{{/each}}"
+        );
+        assert!(
+            !medical_diary_template_text_is_usable(outside),
+            "diary.text outside the collection must not satisfy the canonical diary contract"
+        );
+
+        assert!(medical_diary_template_text_is_usable(
+            super::MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT
+        ));
     }
 
     #[test]

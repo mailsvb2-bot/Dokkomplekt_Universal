@@ -125,6 +125,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)" in source
     assert "FPR-02 canonical diary output regressed to a Word table." in source
     assert "FPR-02 diary date is not centered in paragraph text" in source
+    assert "(?:(?!</w:p>).)*?" in source
     assert "FPR-02 incorrectly emitted an ordinary diary on admission day D0." in source
     assert "FPR-02 emitted a diary after the discharge boundary." in source
     assert "FPR-02 diary output has no matching committed GenerationReceipt." in source

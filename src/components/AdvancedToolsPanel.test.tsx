@@ -103,7 +103,7 @@ describe('medical diary donor parity', () => {
     vi.restoreAllMocks();
   });
 
-  it('imports DOCX diary sources through universal intake and binds an ICD code from the file name', async () => {
+  it('imports DOCX diary sources through the native picker and binds an ICD code from the file name', async () => {
     const commands: string[] = [];
     const replaceRequests: ReplaceRequest[] = [];
     __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
@@ -112,14 +112,15 @@ describe('medical diary donor parity', () => {
       if (command === 'get_process_blueprints') {
         return { selected_process_id: null, processes: [], notice: '' } as T;
       }
-      if (command === 'import_learning_example_file') {
-        const req = payload as { req?: { file_name?: string } };
-        expect(req.req?.file_name).toBe('Дневники F20.0 с датами.docx');
+      if (command === 'pick_learning_files') {
+        expect((payload as { req?: { kind?: string } })?.req?.kind).toBe('medical_diary');
         return {
-          source_path: '/app-data/diary-source.docx',
-          source_kind: 'docx',
-          extracted_text: 'Статус из таблицы DOCX',
-          warnings: [],
+          files: [{
+            file_name: 'Дневники F20.0 с датами.docx',
+            staged_path: '/app-data/diary-source.docx',
+            content_sha256: 'diary-source-sha',
+            extracted_text: 'Статус из таблицы DOCX',
+          }],
         } as T;
       }
       if (command === 'replace_clause_blocks') {
@@ -149,21 +150,12 @@ describe('medical diary donor parity', () => {
       />,
     );
 
-    const label = screen.getByText('Импортировать «Тексты» (TXT/DOCX/DOCM)').closest('label');
-    const input = label?.querySelector('input[type="file"]') as HTMLInputElement | null;
-    expect(input).toBeTruthy();
-    expect(input?.getAttribute('accept')).toContain('.docx');
-    expect(input?.getAttribute('accept')).toContain('.docm');
-
-    const file = new File(
-      [new Uint8Array([0x50, 0x4b, 0x03, 0x04])],
-      'Дневники F20.0 с датами.docx',
-      { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
-    );
-    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    const button = screen.getByRole('button', { name: 'Импортировать «Тексты» (TXT/DOCX/DOCM)' });
+    fireEvent.click(button);
 
     await waitFor(() => expect(replaceRequests).toHaveLength(1));
-    expect(commands).toContain('import_learning_example_file');
+    expect(commands).toContain('pick_learning_files');
+    expect(commands).not.toContain('import_learning_example_file');
     expect(commands).toContain('replace_clause_blocks');
     const [request] = replaceRequests;
     expect(request.delete_block_ids).toEqual([
@@ -183,24 +175,31 @@ describe('medical diary donor parity', () => {
   });
 
 
-  it('does not publish a partial snapshot when one supported diary file is empty', async () => {
+  it('does not publish a partial snapshot when one native-picked supported diary file is empty', async () => {
     const replaceRequests: ReplaceRequest[] = [];
-    const importedFiles: string[] = [];
     const onStatus = vi.fn();
     __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
       if (command === 'list_clause_blocks') return [] as T;
       if (command === 'get_process_blueprints') {
         return { selected_process_id: null, processes: [], notice: '' } as T;
       }
-      if (command === 'import_learning_example_file') {
-        const req = payload as { req?: { file_name?: string } };
-        const fileName = req.req?.file_name ?? '';
-        importedFiles.push(fileName);
+      if (command === 'pick_learning_files') {
+        expect((payload as { req?: { kind?: string } })?.req?.kind).toBe('medical_diary');
         return {
-          source_path: `/app-data/${fileName}`,
-          source_kind: 'docx',
-          extracted_text: fileName.includes('пустой') ? '   ' : 'Корректный статус',
-          warnings: [],
+          files: [
+            {
+              file_name: 'Дневники F20.0.docx',
+              staged_path: '/app-data/regular.docx',
+              content_sha256: 'regular-sha',
+              extracted_text: 'Корректный статус',
+            },
+            {
+              file_name: 'Итоговый F20.0 пустой.docx',
+              staged_path: '/app-data/final-empty.docx',
+              content_sha256: 'final-empty-sha',
+              extracted_text: '   ',
+            },
+          ],
         } as T;
       }
       if (command === 'replace_clause_blocks') {
@@ -215,33 +214,36 @@ describe('medical diary donor parity', () => {
       category: 'Medical', role_id: 'diaries', required_fields: [], placeholders: ['diary.text'], is_static_copy: false,
     };
     render(<AdvancedToolsPanel documents={[medicalDocument]} selectedDocumentIds={[]} outputRoot="output" onStatus={onStatus} onDocumentsChanged={vi.fn()} />);
-    const input = screen.getByText('Импортировать «Тексты» (TXT/DOCX/DOCM)')
-      .closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [
-      new File(['a'], 'Дневники F20.0.docx'),
-      new File(['b'], 'Итоговый F20.0 пустой.docx'),
-    ] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Импортировать «Тексты» (TXT/DOCX/DOCM)' }));
 
-    await waitFor(() => expect(importedFiles).toHaveLength(2));
     await waitFor(() => expect(onStatus).toHaveBeenCalled());
     expect(replaceRequests).toHaveLength(0);
   });
 
-  it('publishes regular and final files for one diagnosis as one atomic canonical snapshot', async () => {
+  it('publishes native-picked regular and final files for one diagnosis as one atomic canonical snapshot', async () => {
     const replaceRequests: ReplaceRequest[] = [];
     __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
       if (command === 'list_clause_blocks') return [] as T;
       if (command === 'get_process_blueprints') {
         return { selected_process_id: null, processes: [], notice: '' } as T;
       }
-      if (command === 'import_learning_example_file') {
-        const req = payload as { req?: { file_name?: string } };
-        const fileName = req.req?.file_name ?? '';
+      if (command === 'pick_learning_files') {
+        expect((payload as { req?: { kind?: string } })?.req?.kind).toBe('medical_diary');
         return {
-          source_path: `/app-data/${fileName}`,
-          source_kind: 'docx',
-          extracted_text: fileName.includes('Итоговый') ? 'Подтверждённый итоговый статус' : 'Подтверждённый обычный статус',
-          warnings: [],
+          files: [
+            {
+              file_name: 'Дневники F20 . 0.docx',
+              staged_path: '/app-data/regular.docx',
+              content_sha256: 'regular-sha',
+              extracted_text: 'Подтверждённый обычный статус',
+            },
+            {
+              file_name: 'Итоговый F20.0.docx',
+              staged_path: '/app-data/final.docx',
+              content_sha256: 'final-sha',
+              extracted_text: 'Подтверждённый итоговый статус',
+            },
+          ],
         } as T;
       }
       if (command === 'replace_clause_blocks') {
@@ -271,12 +273,7 @@ describe('medical diary donor parity', () => {
       />,
     );
 
-    const input = screen.getByText('Импортировать «Тексты» (TXT/DOCX/DOCM)')
-      .closest('label')?.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [
-      new File(['regular'], 'Дневники F20 . 0.docx'),
-      new File(['final'], 'Итоговый F20.0.docx'),
-    ] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Импортировать «Тексты» (TXT/DOCX/DOCM)' }));
 
     await waitFor(() => expect(replaceRequests).toHaveLength(1));
     const [request] = replaceRequests;

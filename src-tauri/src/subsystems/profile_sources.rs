@@ -148,6 +148,38 @@ fn medical_diary_template_is_usable(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+fn effective_generation_document_spec(
+    document: &DocumentTemplateSpec,
+    template_text: &str,
+) -> Result<DocumentTemplateSpec, String> {
+    if !is_medical_diary_document(document) {
+        return Ok(document.clone());
+    }
+    if !medical_diary_template_text_is_usable(template_text) {
+        return Err(
+            "Канонический шаблон дневников не содержит корректную повторяемую коллекцию."
+                .into(),
+        );
+    }
+
+    let analysis = dokkomplekt_core::analyze_template_text_with_domain_hint(
+        template_text,
+        Some(&DomainKind::Medical),
+    );
+    if !analysis.template_errors.is_empty() {
+        return Err(format!(
+            "Канонический шаблон дневников содержит ошибки синтаксиса: {}",
+            analysis.template_errors.join("; ")
+        ));
+    }
+
+    let mut effective = document.clone();
+    effective.placeholders = analysis.placeholders;
+    effective.is_static_copy = false;
+    dokkomplekt_core::synchronize_document_required_fields(&mut effective);
+    Ok(effective)
+}
+
 #[cfg(not(windows))]
 fn replace_file_atomically(source: &Path, destination: &Path) -> std::io::Result<()> {
     // POSIX rename replaces an existing destination atomically on the same filesystem.
@@ -301,8 +333,9 @@ fn effective_generation_template_path(
 #[cfg(test)]
 mod profile_sources_tests {
     use super::{
-        ensure_program_calendar_diary_template, medical_diary_template_is_usable,
-        medical_diary_template_text_is_usable, parse_profile_quick_options,
+        effective_generation_document_spec, ensure_program_calendar_diary_template,
+        medical_diary_template_is_usable, medical_diary_template_text_is_usable,
+        parse_profile_quick_options,
     };
     use dokkomplekt_docx::inspect_docx_structure;
     use uuid::Uuid;
@@ -310,6 +343,40 @@ mod profile_sources_tests {
     #[test]
     fn corrupted_optional_quick_options_do_not_block_the_profile() {
         assert!(parse_profile_quick_options("{broken json").is_empty());
+    }
+
+    #[test]
+    fn effective_diary_spec_uses_the_canonical_collection_contract() {
+        let document = DocumentTemplateSpec {
+            id: "diaries".into(),
+            button_label: "Дневники".into(),
+            template_path: "user-static.docx".into(),
+            category: DomainKind::Medical,
+            role_id: "diaries".into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: true,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        let effective = effective_generation_document_spec(
+            &document,
+            super::MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT,
+        )
+        .expect("canonical diary template must produce an effective spec");
+        assert!(!effective.is_static_copy);
+        for field_id in [
+            "diary.datetime",
+            "diary.text",
+            "diary.treating_physician_signature",
+            "diary.department_head_signature",
+        ] {
+            assert!(
+                effective.placeholders.contains(&field_id.to_string()),
+                "missing canonical diary placeholder {field_id}: {:?}",
+                effective.placeholders
+            );
+        }
     }
 
     #[test]

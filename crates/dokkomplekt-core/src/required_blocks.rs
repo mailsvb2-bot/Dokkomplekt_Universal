@@ -237,6 +237,27 @@ pub fn synchronize_document_required_fields(spec: &mut DocumentTemplateSpec) {
     spec.required_fields = required.into_iter().collect();
 }
 
+fn role_inputs_rendered_through_derived_output(
+    role: &MedicalDocumentRole,
+) -> BTreeSet<String> {
+    if !matches!(role, MedicalDocumentRole::Diary) {
+        return BTreeSet::new();
+    }
+
+    // The canonical diary output is a generated repeated-record collection. These
+    // values remain hard workflow inputs, but they shape the diaries collection
+    // rather than appearing as one-to-one visible placeholders. Requiring their
+    // literal values in the Word body would reject the program-calendar template
+    // that owns normal diary generation.
+    let mut inputs = build_medical_render_plan(role.clone(), false, false)
+        .required_fields
+        .into_iter()
+        .map(|field| canonical_storage_field_id(&field))
+        .collect::<BTreeSet<_>>();
+    inputs.insert("subject.name".to_string());
+    inputs
+}
+
 /// Mandatory composite blocks for a configured document.
 pub fn required_blocks_for(
     spec: &DocumentTemplateSpec,
@@ -246,13 +267,17 @@ pub fn required_blocks_for(
         return Vec::new();
     }
 
-    let mut blocks = vec![RequiredBlock::any_rendered(
-        "patient_identity",
-        "Данные пациента (ФИО)",
-        PATIENT_NAME_FIELDS,
-    )];
-
     let role = MedicalDocumentRole::from_role_id(&spec.role_id);
+    let derived_inputs = role_inputs_rendered_through_derived_output(&role);
+    let mut blocks = Vec::new();
+    if !derived_inputs.contains("subject.name") {
+        blocks.push(RequiredBlock::any_rendered(
+            "patient_identity",
+            "Данные пациента (ФИО)",
+            PATIENT_NAME_FIELDS,
+        ));
+    }
+
     let plan = build_medical_render_plan(role.clone(), false, false);
     let signatures_required = plan
         .output_sections
@@ -261,13 +286,16 @@ pub fn required_blocks_for(
     let mut required = plan.required_fields.into_iter().collect::<BTreeSet<_>>();
 
     // A template or a configured popup may legitimately add stricter fields than
-    // the built-in role profile (including a conditional sick-leave number).  Those
-    // requirements must also reach the post-render gate.
+    // the built-in role profile (including a conditional sick-leave number). Those
+    // requirements must also reach the post-render gate. Canonical diary source
+    // inputs are the only exception: they are already consumed by the repeated-
+    // record builder and must not be required as literal output text.
     required.extend(
         spec.required_fields
             .iter()
             .map(|field| crate::canonical_storage_field_id(field)),
     );
+    required.retain(|field| !derived_inputs.contains(field));
 
     for field_id in required {
         blocks.push(RequiredBlock::rendered_field(&field_id));
@@ -290,6 +318,7 @@ pub fn missing_medical_template_render_paths(spec: &DocumentTemplateSpec) -> Vec
     }
 
     let role = MedicalDocumentRole::from_role_id(&spec.role_id);
+    let derived_inputs = role_inputs_rendered_through_derived_output(&role);
     let mut required = build_medical_render_plan(role, false, false)
         .required_fields
         .into_iter()
@@ -301,6 +330,7 @@ pub fn missing_medical_template_render_paths(spec: &DocumentTemplateSpec) -> Vec
             .iter()
             .map(|field| canonical_storage_field_id(field)),
     );
+    required.retain(|field| !derived_inputs.contains(field));
 
     let placeholders = spec
         .placeholders
@@ -807,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn diaries_require_both_signature_lines() {
+    fn diaries_require_signatures_without_requiring_source_inputs_as_literal_output() {
         let blocks = required_blocks_for(&spec("diaries", DomainKind::Medical), "");
         let case = case_with(&[
             ("subject.name", "Иванов Иван"),
@@ -815,15 +845,47 @@ mod tests {
             ("medical.admission_date", "01.06.2026"),
             ("medical.discharge_date", "12.06.2026"),
         ]);
-        let values = concat!(
-            "Иванов Иван\nF20.0\n01.06.2026\n12.06.2026\n",
-            "Лечащий врач __________________"
-        );
+        let values = "02.06.2026\nСостояние стабильное.\nЛечащий врач __________________";
         let unmet = unmet_blocks(&blocks, &case, values);
         assert_eq!(unmet, vec!["Подпись заведующего отделением".to_string()]);
 
         let both = format!("{values}\nЗаведующий отделением __________");
         assert!(unmet_blocks(&blocks, &case, &both).is_empty());
+    }
+
+    #[test]
+    fn diary_program_calendar_collection_is_a_valid_render_path_for_role_inputs() {
+        let mut document = spec("diaries", DomainKind::Medical);
+        document.placeholders = vec![
+            "diary.datetime".into(),
+            "diary.text".into(),
+            "diary.treating_physician_signature".into(),
+            "diary.department_head_signature".into(),
+        ];
+
+        assert!(
+            missing_medical_template_render_paths(&document).is_empty(),
+            "canonical diary inputs feed the derived collection and are not direct Word placeholders"
+        );
+    }
+
+    #[test]
+    fn diary_custom_required_output_still_fails_closed_without_a_render_path() {
+        let mut document = spec("diaries", DomainKind::Medical);
+        document.placeholders = vec![
+            "diary.datetime".into(),
+            "diary.text".into(),
+            "diary.treating_physician_signature".into(),
+            "diary.department_head_signature".into(),
+        ];
+        document.required_fields.push("medical.treatment".into());
+
+        assert_eq!(
+            missing_medical_template_render_paths(&document),
+            vec!["medical.treatment".to_string()]
+        );
+        document.placeholders.push("medical.treatment".into());
+        assert!(missing_medical_template_render_paths(&document).is_empty());
     }
 
     #[test]

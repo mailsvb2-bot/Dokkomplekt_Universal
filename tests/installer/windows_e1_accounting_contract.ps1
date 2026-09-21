@@ -411,10 +411,7 @@ function Set-OpenFileDialogPath {
 }
 
 function Submit-OpenFileDialog {
-  param(
-    [Parameter(Mandatory = $true)]$Dialog,
-    [string]$ExpectedPath = ''
-  )
+  param([Parameter(Mandatory = $true)]$Dialog)
 
   # A successful UIA InvokePattern call is not evidence that the hosted Windows
   # common dialog actually accepted the selection. Drive the real native dialog,
@@ -478,13 +475,8 @@ function Submit-OpenFileDialog {
   if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
 
   # UIA can acknowledge InvokePattern while the hosted common dialog remains
-  # open and can also clear the filename field. For callers that supply an exact
-  # expected path, restore and re-prove that value before the native IDOK fallback.
-  # This keeps the fallback user-equivalent instead of submitting an empty dialog.
-  if (-not [string]::IsNullOrWhiteSpace($ExpectedPath)) {
-    Write-Host "OpenFileDialog remained open after primary submit; restoring exact path before IDOK fallback."
-    $null = Set-OpenFileDialogPath -Dialog $Dialog -Path $ExpectedPath
-  }
+  # open. WM_COMMAND/IDOK reaches the same real dialog command handler and is
+  # bounded by an exact HWND liveness check.
   [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
   $null = [DokkomplektE1NativeMouse]::SendMessagePtr(
     $dialogHandle,
@@ -498,25 +490,10 @@ function Submit-OpenFileDialog {
   }
   if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
 
-  # Final user-equivalent fallback: a failed IDOK can clear the edit again.
-  # Restore the exact path once more, focus the real Open button, and press Space
-  # (native button activation) before the last Enter fallback.
-  if (-not [string]::IsNullOrWhiteSpace($ExpectedPath)) {
-    Write-Host "OpenFileDialog remained open after IDOK; restoring exact path before keyboard submit."
-    $null = Set-OpenFileDialogPath -Dialog $Dialog -Path $ExpectedPath
-  }
+  # Final user-equivalent fallback: foreground the same dialog and press Enter.
+  # If it still survives, fail closed with the filename visible to the dialog.
   [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
-  if ($null -ne $openButton) {
-    try {
-      $openButton.SetFocus()
-      Start-Sleep -Milliseconds 50
-      [System.Windows.Forms.SendKeys]::SendWait(' ')
-    } catch {
-      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    }
-  } else {
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-  }
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   $keyDeadline = [DateTime]::UtcNow.AddSeconds(2)
   while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $keyDeadline) {
     Start-Sleep -Milliseconds 100
@@ -1677,14 +1654,37 @@ $fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.docx'
 $fpr02DoctorText = 'FPR02 профессиональный текст дневника, подтверждённый врачом.'
 New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)
 $diaryTextDialog = Invoke-UiActionWithObservedTransition `
-  -Description 'FPR-02 Тексты' `
+  -Description 'FPR-02 native Тексты picker' `
   -TransitionDescription 'native diary Texts picker' `
   -ActionProbe {
-    Find-E1NamedElement -Name 'Тексты'
+    Find-E1NamedElement -Name 'Импортировать «Тексты» (TXT/DOCX/DOCM)'
   } `
   -TransitionProbe { Find-FileDialog }
-$diaryTextEdit = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText
-Submit-OpenFileDialog -Dialog $diaryTextDialog -ExpectedPath $fpr02DiaryText
+$diaryTextEdit = Wait-UiElement -Description 'FPR-02 native Texts filename field' -Probe {
+  $diaryTextDialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+  )
+}
+Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText
+$diaryOpenButton = $diaryTextDialog.FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.AndCondition]::new(
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1'
+    ),
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+  )
+)
+if ($null -eq $diaryOpenButton) { throw 'FPR-02 native Texts picker did not expose the Open button.' }
+Invoke-UiElement -Element $diaryOpenButton -Description 'confirm FPR-02 native Texts picker'
 $dialogCloseDeadline = [DateTime]::UtcNow.AddSeconds(10)
 do {
   if ($null -eq (Find-FileDialog)) { break }

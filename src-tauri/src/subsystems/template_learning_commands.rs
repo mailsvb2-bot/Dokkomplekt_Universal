@@ -78,7 +78,7 @@ async fn pick_learning_files(
             .and_then(|value| value.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
-        let extracted_text = if kind == "blank" || kind == "correct_output" {
+        let (extracted_text, import_error) = if kind == "blank" || kind == "correct_output" {
             if metadata.len() > MAX_PICKED_TEMPLATE_BYTES {
                 return Err("DOCX/DOCM для обучения слишком большой: максимум 50 МБ.".into());
             }
@@ -88,7 +88,7 @@ async fn pick_learning_files(
             validate_safe_template_file(&canonical).map_err(|error| {
                 format!("Файл обучения «{}» содержит активное содержимое или внешние связи и заблокирован: {error}", canonical.display())
             })?;
-            None
+            (None, None)
         } else if kind == "medical_diary" {
             if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
                 return Err(format!(
@@ -110,12 +110,18 @@ async fn pick_learning_files(
                 Ok(normalized) => {
                     let text = normalized.text.trim().to_string();
                     if text.is_empty() {
-                        None
+                        (
+                            None,
+                            Some(format!("Файл «{}» прочитан, но текст не найден.", file_name)),
+                        )
                     } else {
-                        Some(text)
+                        (Some(text), None)
                     }
                 }
-                Err(_) => None,
+                Err(error) => (
+                    None,
+                    Some(format!("Не удалось прочитать «{}»: {error}", file_name)),
+                ),
             }
         } else {
             if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
@@ -124,20 +130,7 @@ async fn pick_learning_files(
                     universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
                 ));
             }
-            None
-        };
-        let import_error = if kind == "medical_diary" && extracted_text.is_none() {
-            let work = session_root.join(format!("medical-diary-error-check-{}", Uuid::new_v4()));
-            match universal_intake::normalize_path(&canonical, &work, 0) {
-                Ok(normalized) if normalized.text.trim().is_empty() => Some(format!(
-                    "Файл «{}» прочитан, но текст не найден.",
-                    file_name
-                )),
-                Ok(_) => None,
-                Err(error) => Some(format!("Не удалось прочитать «{}»: {error}", file_name)),
-            }
-        } else {
-            None
+            (None, None)
         };
 
         let extension = if extension_name.is_empty() {

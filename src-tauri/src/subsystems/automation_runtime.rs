@@ -912,9 +912,14 @@ fn perform_created_documents_intake(
                     // expert paragraph assembled from workplace/sick-leave inputs)
                     // part of checkpoint identity, so changed source inputs can never
                     // reuse a DOCX whose trust evidence was produced from old values.
+                    let fingerprint_professional_case =
+                        dokkomplekt_core::prepare_professional_collections(
+                            template_text,
+                            &fingerprint_case.case,
+                        );
                     let fingerprint_render_case =
                         dokkomplekt_core::domains::case_for_document_render(
-                            &fingerprint_case.case,
+                            &fingerprint_professional_case,
                             &effective_doc.category,
                             &effective_doc.role_id,
                         );

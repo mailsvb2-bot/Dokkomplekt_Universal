@@ -538,6 +538,28 @@ fn validate_registered_medical_template_output_contract(
         .map_err(|error| format!("Не удалось проверить канонический шаблон дневников: {error}"))?;
     let analysis =
         analyze_template_text_with_domain_hint(&template_text, Some(&DomainKind::Medical));
+    if !analysis.template_errors.is_empty() {
+        return Err(format!(
+            "Канонический шаблон дневников содержит ошибки синтаксиса: {}",
+            analysis.template_errors.join("; ")
+        ));
+    }
+    let scoped_diary_fields =
+        dokkomplekt_core::template_collection_field_references(&template_text, "diaries")
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    for field_id in [
+        "diary.datetime",
+        "diary.text",
+        "diary.treating_physician_signature",
+        "diary.department_head_signature",
+    ] {
+        if !scoped_diary_fields.contains(field_id) {
+            return Err(format!(
+                "Канонический шаблон дневников не выводит поле {field_id} внутри коллекции diaries."
+            ));
+        }
+    }
     let mut effective_document = document.clone();
     effective_document.placeholders = analysis.placeholders;
     effective_document.is_static_copy = false;

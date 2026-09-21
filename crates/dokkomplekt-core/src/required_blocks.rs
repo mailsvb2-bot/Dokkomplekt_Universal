@@ -647,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn every_known_medical_role_enforces_the_same_canonical_required_fields() {
+    fn canonical_required_fields_stay_visible_except_derived_diary_inputs() {
         for role_id in [
             "primary",
             "discharge",
@@ -658,20 +658,29 @@ mod tests {
             "vk_mse",
             "reception",
         ] {
+            let role = MedicalDocumentRole::from_role_id(role_id);
+            let derived_inputs = role_inputs_rendered_through_derived_output(&role);
             let blocks = required_blocks_for(&spec(role_id, DomainKind::Medical), "");
-            let plan =
-                build_medical_render_plan(MedicalDocumentRole::from_role_id(role_id), false, false);
+            let plan = build_medical_render_plan(role, false, false);
             for field_id in plan.required_fields {
-                assert!(
-                    blocks.iter().any(|block| {
-                        matches!(
-                            &block.requirement,
-                            BlockRequirement::AnyRenderedField(fields)
-                                if fields == &vec![field_id.clone()]
-                        )
-                    }),
-                    "{role_id}: completeness gate misses {field_id}"
-                );
+                let has_direct_render_block = blocks.iter().any(|block| {
+                    matches!(
+                        &block.requirement,
+                        BlockRequirement::AnyRenderedField(fields)
+                            if fields == &vec![field_id.clone()]
+                    )
+                });
+                if derived_inputs.contains(&canonical_storage_field_id(&field_id)) {
+                    assert!(
+                        !has_direct_render_block,
+                        "{role_id}: derived input must not be required as literal output: {field_id}"
+                    );
+                } else {
+                    assert!(
+                        has_direct_render_block,
+                        "{role_id}: completeness gate misses {field_id}"
+                    );
+                }
             }
         }
     }

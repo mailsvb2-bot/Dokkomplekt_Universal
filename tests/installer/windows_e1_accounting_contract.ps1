@@ -1377,16 +1377,19 @@ foreach ($scenario in $domainScenarios) {
   # Every profession scenario is a fresh case. Reusing the previous Accounting
   # semantic case would make source-owned values such as contract.date appear
   # already satisfied and would weaken the installed required-field proof.
-  Invoke-UiActionPhysicallyFromProbe -Description "reset case before $($scenario.Label)" -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
-  }
-  $null = Wait-UiElement -Description "empty case before $($scenario.Label)" -TimeoutSeconds 30 -Probe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
-  }
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description "reset case before $($scenario.Label)" `
+    -TransitionDescription "empty case before $($scenario.Label)" `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+    }
 
   $templatePath = Join-Path $fixtureDir $scenario.FileName
   New-E1TextDocx -Path $templatePath -Lines $scenario.TemplateLines
@@ -1408,16 +1411,19 @@ foreach ($scenario in $domainScenarios) {
 # sequence of single-document generations. Two ordinary Universal templates are
 # selected together, share one preflight, and must each produce a readable
 # physical DOCX plus its own committed GenerationReceipt.
-Invoke-UiActionPhysicallyFromProbe -Description 'reset case before FPR-01 main-document batch' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
-}
-$null = Wait-UiElement -Description 'empty case before FPR-01 main-document batch' -TimeoutSeconds 30 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
-}
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-01 main-document batch' `
+  -TransitionDescription 'empty case before FPR-01 main-document batch' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
 
 $fpr01Documents = @(
   [pscustomobject]@{
@@ -1595,16 +1601,19 @@ Write-Host 'FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main docum
 # Texts library and canonical preflight; the physical DOCX must remain paragraph
 # text (not the retired legacy table engine), start at D0+1, stop on discharge,
 # preserve the dedicated final row, both signature blocks and centered date paragraphs.
-Invoke-UiActionPhysicallyFromProbe -Description 'reset case before FPR-02 diary proof' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
-}
-$null = Wait-UiElement -Description 'empty case before FPR-02 diary proof' -TimeoutSeconds 30 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
-}
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-02 diary proof' `
+  -TransitionDescription 'empty case before FPR-02 diary proof' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
 
 $fpr02DiaryLabel = 'Дневники FPR02'
 $fpr02DiaryTemplate = Join-Path $fixtureDir 'fpr02-diaries.docx'

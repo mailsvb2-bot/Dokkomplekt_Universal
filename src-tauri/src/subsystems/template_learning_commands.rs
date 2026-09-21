@@ -88,29 +88,29 @@ async fn pick_learning_files(
             })?;
             None
         } else if kind == "medical_diary" {
-            if metadata.len() > MAX_PICKED_TEMPLATE_BYTES {
-                return Err("Файл текстов дневников слишком большой: максимум 50 МБ.".into());
-            }
-            if !matches!(extension_name.as_str(), "txt" | "docx" | "docm") {
+            if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
                 return Err(format!(
-                    "Для текстов дневников поддерживаются только TXT, DOCX и DOCM: {}",
+                    "Файл текстов дневников слишком большой: максимум {} МБ.",
+                    universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
+                ));
+            }
+            if !matches!(
+                extension_name.as_str(),
+                "docx" | "docm" | "doc" | "txt" | "rtf" | "odt" | "pdf"
+            ) {
+                return Err(format!(
+                    "Для текстов дневников поддерживаются DOCX, DOCM, DOC, TXT, RTF, ODT и PDF: {}",
                     canonical.display()
                 ));
             }
-            let text = if extension_name == "txt" {
-                let bytes = std::fs::read(&canonical).map_err(|error| {
-                    format!("Не удалось прочитать TXT текстов дневников «{}»: {error}", canonical.display())
-                })?;
-                String::from_utf8_lossy(&bytes).trim().to_string()
-            } else {
-                validate_safe_template_file(&canonical).map_err(|error| {
-                    format!("Файл текстов дневников «{}» содержит активное содержимое или внешние связи и заблокирован: {error}", canonical.display())
-                })?;
-                extract_docx_text(&canonical)
-                    .map_err(|error| format!("Не удалось извлечь текст дневников из «{}»: {error}", canonical.display()))?
-                    .trim()
-                    .to_string()
-            };
+            let work = session_root.join(format!("medical-diary-normalized-{}", Uuid::new_v4()));
+            let normalized = universal_intake::normalize_path(&canonical, &work, 0).map_err(|error| {
+                format!(
+                    "Не удалось прочитать файл текстов дневников «{}»: {error}",
+                    canonical.display()
+                )
+            })?;
+            let text = normalized.text.trim().to_string();
             if text.is_empty() {
                 return Err(format!(
                     "Файл текстов дневников «{}» прочитан, но не содержит текста.",

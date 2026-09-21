@@ -121,3 +121,5 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "FPR-02 incorrectly emitted an ordinary diary on admission day D0." in source
     assert "FPR-02 emitted a diary after the discharge boundary." in source
     assert "FPR-02 diary output has no matching committed GenerationReceipt." in source
+    assert "FPR-02 generation failed after accepted preflight:" in source
+    assert "Find-E1NamedElementContaining -Text 'Документы не созданы:'" in source

@@ -220,6 +220,49 @@ describe('medical diary donor parity', () => {
     expect(replaceRequests).toHaveLength(0);
   });
 
+  it('surfaces a native diary extraction error and does not replace the canonical snapshot', async () => {
+    const replaceRequests: ReplaceRequest[] = [];
+    const onStatus = vi.fn();
+    __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {
+      if (command === 'list_clause_blocks') return [] as T;
+      if (command === 'get_process_blueprints') {
+        return { selected_process_id: null, processes: [], notice: '' } as T;
+      }
+      if (command === 'pick_learning_files') {
+        expect((payload as { req?: { kind?: string } })?.req?.kind).toBe('medical_diary');
+        return {
+          files: [{
+            file_name: 'Дневники F20.0 повреждённый.docx',
+            staged_path: '/app-data/corrupt.docx',
+            content_sha256: 'corrupt-sha',
+            extracted_text: null,
+            import_error: 'DOCX package is corrupt',
+          }],
+        } as T;
+      }
+      if (command === 'replace_clause_blocks') {
+        replaceRequests.push((payload?.req ?? payload) as ReplaceRequest);
+        return true as T;
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const medicalDocument: DocumentTemplateSpec = {
+      id: 'medical.diaries', button_label: 'Дневники наблюдения', template_path: '/templates/diaries.docx',
+      category: 'Medical', role_id: 'diaries', required_fields: [], placeholders: ['diary.text'], is_static_copy: false,
+    };
+    render(<AdvancedToolsPanel documents={[medicalDocument]} selectedDocumentIds={[]} outputRoot="output" onStatus={onStatus} onDocumentsChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Импортировать «Тексты» (TXT/DOCX/DOCM)' }));
+
+    await waitFor(() => expect(onStatus).toHaveBeenCalledWith(
+      expect.stringContaining('DOCX package is corrupt'),
+    ));
+    expect(onStatus).toHaveBeenCalledWith(
+      expect.stringContaining('Дневники F20.0 повреждённый.docx'),
+    );
+    expect(replaceRequests).toHaveLength(0);
+  });
+
   it('publishes native-picked regular and final files for one diagnosis as one atomic canonical snapshot', async () => {
     const replaceRequests: ReplaceRequest[] = [];
     __setInvokeForTests(async <T,>(command: string, payload?: Record<string, unknown>) => {

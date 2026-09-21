@@ -4,6 +4,7 @@ import {
   deleteClauseBlock,
   importLearningExampleFile,
   listClauseBlocks,
+  pickLearningFiles,
   replaceClauseBlocks,
   saveClauseBlock,
 } from '../lib/api';
@@ -33,6 +34,12 @@ interface DiaryFileSelection {
   name: string;
   displayPath: string;
   status: string;
+}
+
+interface DiaryTextImportSource {
+  name: string;
+  displayPath: string;
+  extractText(): Promise<string>;
 }
 
 const MAX_DROPPED_FILES = 250;
@@ -137,7 +144,6 @@ export function AdditionalMaterialsPanel(props: {
   const [status, setStatus] = useState('');
   const [working, setWorking] = useState(false);
   const workingRef = useRef(false);
-  const diaryTextInputRef = useRef<HTMLInputElement>(null);
   const diaryFolderInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [customRvk, setCustomRvk] = useState('');
@@ -252,7 +258,39 @@ export function AdditionalMaterialsPanel(props: {
     });
   }
 
-  async function importDiaryTexts(files: File[], bindToCurrentDiagnosis = false) {
+  function diarySourcesFromFiles(files: File[]): DiaryTextImportSource[] {
+    return files.map(file => ({
+      name: file.name,
+      displayPath: (file as File & { webkitRelativePath?: string }).webkitRelativePath?.trim() || file.name,
+      extractText: async () => (await extractMaterial(file)).extracted_text.trim(),
+    }));
+  }
+
+  async function chooseDiaryTextsForCurrentDiagnosis() {
+    const currentDiagnosisKey = medicalDiagnosisKey(props.medicalDiagnosis ?? '');
+    if (!currentDiagnosisKey) {
+      setStatus('Сначала укажите или подтвердите диагноз текущего пациента, затем снова выберите «Тексты». Файл не сохранён, чтобы не привязать медицинский текст к неверному диагнозу.');
+      return;
+    }
+    const picked = await withWork(
+      'Открываем системный выбор файлов «Тексты»…',
+      () => pickLearningFiles('medical_diary'),
+    );
+    if (!picked?.length) {
+      if (picked) setStatus('Выбор «Текстов» отменён.');
+      return;
+    }
+    await importDiaryTexts(
+      picked.map(file => ({
+        name: file.file_name,
+        displayPath: file.file_name,
+        extractText: async () => file.extracted_text?.trim() ?? '',
+      })),
+      true,
+    );
+  }
+
+  async function importDiaryTexts(files: DiaryTextImportSource[], bindToCurrentDiagnosis = false) {
     if (!files.length) return;
     if (workingRef.current || props.busy) {
       setStatus('Дождитесь завершения текущей операции с дополнительными материалами.');
@@ -265,7 +303,7 @@ export function AdditionalMaterialsPanel(props: {
     }
     const selections: DiaryFileSelection[] = files.map(file => ({
       name: file.name,
-      displayPath: (file as File & { webkitRelativePath?: string }).webkitRelativePath?.trim() || file.name,
+      displayPath: file.displayPath,
       status: 'Импортируется',
     }));
     setDiaryFiles(selections);
@@ -283,16 +321,15 @@ export function AdditionalMaterialsPanel(props: {
         }
         const key = bindToCurrentDiagnosis ? currentDiagnosisKey : medicalDiaryFileKey(file.name);
         if (!key) { selections[index].status = 'Пропущен: имя/диагноз не распознан'; continue; }
-        let imported;
+        let content = '';
         try {
-          imported = await extractMaterial(file);
+          content = (await file.extractText()).trim();
         } catch (error) {
           const detail = shortImportError(error);
           selections[index].status = `Ошибка импорта: ${detail}`;
           blockedKeys.set(key, detail);
           continue;
         }
-        const content = imported.extracted_text.trim();
         if (!content) {
           selections[index].status = 'Ошибка импорта: текст не найден';
           blockedKeys.set(key, 'текст не найден');
@@ -484,22 +521,11 @@ export function AdditionalMaterialsPanel(props: {
               <button
                 type="button"
                 className="primaryBtn fileBtn"
-                onClick={() => diaryTextInputRef.current?.click()}
+                onClick={() => { void chooseDiaryTextsForCurrentDiagnosis(); }}
                 disabled={working || props.busy}
-                aria-controls="medical-diary-text-files"
               >
                 <i className="ti ti-notes" aria-hidden="true" /> Тексты
               </button>
-              <input
-                ref={diaryTextInputRef}
-                id="medical-diary-text-files"
-                type="file"
-                multiple
-                accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
-                onChange={(event) => { void importDiaryTexts(filesFrom(event), true); }}
-                disabled={working || props.busy}
-                style={{ display: 'none' }}
-              />
               <button
                 type="button"
                 className="textBtn fileBtn"
@@ -515,7 +541,7 @@ export function AdditionalMaterialsPanel(props: {
                 type="file"
                 multiple
                 accept=".docx,.docm,.doc,.txt,.rtf,.odt,.pdf"
-                onChange={(event) => { void importDiaryTexts(filesFrom(event), false); }}
+                onChange={(event) => { void importDiaryTexts(diarySourcesFromFiles(filesFrom(event)), false); }}
                 disabled={working || props.busy}
                 style={{ display: 'none' }}
                 {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}

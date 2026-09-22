@@ -21,6 +21,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     publication_backend = (ROOT / "src-tauri" / "src" / "generation_publication.rs").read_text(encoding="utf-8")
     source_intake_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "source_intake_commands.rs").read_text(encoding="utf-8")
     runtime_validation = (ROOT / "src" / "lib" / "runtimeValidation.ts").read_text(encoding="utf-8")
+    scanner_engine = (ROOT / "crates" / "dokkomplekt-core" / "src" / "scanner_engine.rs").read_text(encoding="utf-8")
     advanced_tools = (ROOT / "src" / "components" / "AdvancedToolsPanel.tsx").read_text(encoding="utf-8")
     assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
     assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
@@ -67,6 +68,18 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "icd10Suggest(query)" in advanced_tools
     assert "setField('medical.icd10', hit.code)" in advanced_tools
     assert "setField('medical.diagnosis', hit.title)" in advanced_tools
+    assert "FPR-06 Scanner UI PASS:" in source
+    assert "Find-E1NamedElement -Name 'Расширенные инструменты'" in source
+    assert "Find-E1NamedElement -Name 'Идентификатор поля'" in source
+    assert "Find-E1NamedElement -Name 'Выделенный текст'" in source
+    assert "Find-E1NamedElement -Name 'Назначить выделение полю'" in source
+    assert "custom.scanner_value" in source
+    assert "SCANNER-FPR06-VALUE" in source
+    assert "FPR-06 INSTALLED PASS: manual Scanner UI -> canonical apply_scanner -> SemanticCase -> physical DOCX -> committed receipt." in source
+    assert "const applied = await run('apply_scanner', () => applyScanner([{" in app_source
+    assert "ValueSource::Scanner" in scanner_engine
+    assert 'source_kind: "scanner_selection".into()' in scanner_engine
+    assert 'extractor: "guided_scanner".into()' in scanner_engine
 
     assert "struct RecognitionProofEntry" in source_intake_backend
     assert "recognition_proof_for_case" in source_intake_backend

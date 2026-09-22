@@ -2144,6 +2144,74 @@ if ($fpr05Xml -match 'F41\.1|Генерализованное тревожное
   throw 'FPR-05 physical output retained the source diagnosis instead of the selected ICD-10 value.'
 }
 Write-Host "FPR-05 INSTALLED PASS: bundled ICD-10 search -> F20.0 selection -> canonical SemanticCase -> physical DOCX code/title -> committed receipt."
+
+# FPR-06: prove the installed Scanner path through the same canonical SemanticCase.
+# The hosted Windows packaging runner is not allowed to depend on Microsoft Word,
+# so this exercises the product's installed manual Scanner entry. Guided Word
+# Scanner confirmation converges on the same apply_scanner command in App.tsx.
+$null = Invoke-UiActionWithObservedTransition \`
+  -Description 'reset case before FPR-06 Scanner proof' \`
+  -TransitionDescription 'empty case before FPR-06 Scanner proof' \`
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } \`
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
+
+$fpr06Label = 'Scanner FPR06'
+$fpr06FieldId = 'custom.scanner_value'
+$fpr06ScannerValue = 'SCANNER-FPR06-VALUE'
+$fpr06Template = Join-Path $fixtureDir 'fpr06-scanner.docx'
+New-E1TextDocx -Path $fpr06Template -Lines @(
+  'Проверка Scanner',
+  'Значение сканера: {{custom.scanner_value}}'
+)
+Add-E1DomainTemplate -TemplatePath $fpr06Template -Label $fpr06Label -DomainOption 'Универсальный документооборот'
+
+$fpr06Source = Join-Path $fixtureDir 'fpr06-scanner-source.docx'
+New-E1TextDocx -Path $fpr06Source -Lines @(
+  'Источник для проверки Scanner',
+  "Фрагмент для разметки: $fpr06ScannerValue"
+)
+Set-E1DomainSource -SourcePath $fpr06Source
+
+$fpr06FieldInput = Find-E1NamedElement -Name 'Идентификатор поля'
+if ($null -eq $fpr06FieldInput) {
+  $fpr06Advanced = Wait-UiElement -Description 'FPR-06 advanced tools toggle' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Расширенные инструменты'
+  }
+  Invoke-UiElementPhysically -Element $fpr06Advanced -Description 'open FPR-06 manual Scanner tools'
+  $fpr06FieldInput = Wait-UiElement -Description 'FPR-06 Scanner field input' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Идентификатор поля'
+  }
+}
+Set-UiValue -Element $fpr06FieldInput -Value $fpr06FieldId
+$fpr06TextInput = Wait-UiElement -Description 'FPR-06 Scanner text input' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Выделенный текст'
+}
+Set-UiValue -Element $fpr06TextInput -Value $fpr06ScannerValue
+Invoke-UiActionPhysicallyFromProbe -Description 'apply FPR-06 Scanner value' -ActionProbe {
+  Find-E1NamedElement -Name 'Назначить выделение полю'
+}
+$fpr06Applied = Wait-UiElement -Description 'FPR-06 Scanner accepted status' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElementContaining -Text 'Разметка сохранена: принято 1'
+}
+if ($null -eq $fpr06Applied) { throw 'FPR-06 Scanner UI did not confirm one applied value.' }
+Write-Host "FPR-06 Scanner UI PASS: $fpr06FieldId=$fpr06ScannerValue"
+
+Invoke-E1DomainScenario \`
+  -Label $fpr06Label \`
+  -PromptValues @{} \`
+  -PluginRequiredFields @() \`
+  -ExpectedOutputValues @($fpr06ScannerValue) \`
+  -OutputRoot $defaultOutputRoot \`
+  -ReceiptRoot $completionReceiptRoot
+Write-Host 'FPR-06 INSTALLED PASS: manual Scanner UI -> canonical apply_scanner -> SemanticCase -> physical DOCX -> committed receipt.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
 Stop-Process -Id $process.Id -Force

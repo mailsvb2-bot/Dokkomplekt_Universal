@@ -1358,6 +1358,25 @@ while ($null -eq $accountingDoc -and [DateTime]::UtcNow -lt $deadline) {
 }
 if ($null -eq $accountingDoc) { throw 'E1 Accounting did not publish a physical DOCX.' }
 
+# FPR-03: the source selected through the real native picker must survive the
+# installed publication boundary byte-for-byte. The production path already
+# copies the retained SourceSnapshot as "Исходный - <original name>"; prove the
+# physical user-visible copy is exactly the source bytes selected for this run.
+$publishedAccountingSource = Join-Path $accountingDoc.Directory.FullName ("Исходный - " + $sourceFileName)
+if (-not (Test-Path -LiteralPath $publishedAccountingSource -PathType Leaf)) {
+  throw "FPR-03 published source copy is missing: $publishedAccountingSource"
+}
+$publishedAccountingSourceInfo = Get-Item -LiteralPath $publishedAccountingSource -Force
+if ($publishedAccountingSourceInfo.Length -le 0) {
+  throw "FPR-03 published source copy is empty: $publishedAccountingSource"
+}
+$accountingSourceHash = (Get-FileHash -LiteralPath $accountingSource -Algorithm SHA256).Hash.ToLowerInvariant()
+$publishedAccountingSourceHash = (Get-FileHash -LiteralPath $publishedAccountingSource -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($publishedAccountingSourceHash -ne $accountingSourceHash) {
+  throw "FPR-03 published source SHA-256 mismatch. Expected=$accountingSourceHash Actual=$publishedAccountingSourceHash"
+}
+Write-Host "FPR-03 INSTALLED PASS: source picker -> retained snapshot -> published source copy SHA-256 exact."
+
 $archive = [System.IO.Compression.ZipFile]::OpenRead($accountingDoc.FullName)
 try {
   $entry = $archive.GetEntry('word/document.xml')

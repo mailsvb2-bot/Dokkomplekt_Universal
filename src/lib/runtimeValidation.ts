@@ -145,6 +145,18 @@ function validateParseSource(command: string, value: unknown): void {
   stringArray(command, report.warnings, 'report.warnings');
   validateRouting(command, root.routing);
   validateBundleDecision(command, root.bundle_decision);
+
+  if (root.recognition_proof !== undefined) {
+    objectArray(command, root.recognition_proof, 'recognition_proof').forEach((entry, index) => {
+      string(command, entry.field_id, `recognition_proof[${index}].field_id`);
+      string(command, entry.source, `recognition_proof[${index}].source`);
+      string(command, entry.source_kind, `recognition_proof[${index}].source_kind`);
+      string(command, entry.extractor, `recognition_proof[${index}].extractor`);
+      number(command, entry.confidence, `recognition_proof[${index}].confidence`);
+    });
+  } else if (command === 'parse_source_path' || command === 'parse_source_file') {
+    throw new BackendContractError(command, 'ответ файла не содержит recognition_proof');
+  }
 }
 
 function validateRender(command: string, value: unknown): void {

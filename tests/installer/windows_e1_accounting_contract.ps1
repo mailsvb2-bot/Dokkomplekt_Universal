@@ -1222,6 +1222,30 @@ $null = Wait-UiElement -Description 'E1 Accounting source accepted' -TimeoutSeco
   )
 }
 
+$fpr04SourceFields = @(
+  'document.number',
+  'document.date',
+  'org.name',
+  'counterparty.name',
+  'contract.number',
+  'contract.date',
+  'contract.subject',
+  'amount.total'
+)
+$fpr04Proof = Wait-UiElement -Description 'FPR-04 recognition provenance proof' -TimeoutSeconds 40 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-E1NamedElementContaining -Text 'Происхождение данных подтверждено:'
+}
+$fpr04ProofName = [string]$fpr04Proof.Current.Name
+foreach ($fieldId in $fpr04SourceFields) {
+  $expectedTrace = "${fieldId}:Scanner/document_text/deterministic_source_parser"
+  if (-not $fpr04ProofName.Contains($expectedTrace)) {
+    throw "FPR-04 installed recognition provenance missing exact parser trace: $expectedTrace. Actual=$fpr04ProofName"
+  }
+}
+Write-Host "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake."
+
 $window = Find-LiveAppWindow
 $clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
 if ($null -ne $clearSelection) { Invoke-UiElementPhysically -Element $clearSelection -Description 'clear previous document selection' }

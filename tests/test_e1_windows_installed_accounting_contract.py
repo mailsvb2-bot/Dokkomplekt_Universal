@@ -19,6 +19,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     picker_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_picker.rs").read_text(encoding="utf-8")
     document_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "document_commands.rs").read_text(encoding="utf-8")
     publication_backend = (ROOT / "src-tauri" / "src" / "generation_publication.rs").read_text(encoding="utf-8")
+    source_intake_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "source_intake_commands.rs").read_text(encoding="utf-8")
+    runtime_validation = (ROOT / "src" / "lib" / "runtimeValidation.ts").read_text(encoding="utf-8")
     assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
     assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
 
@@ -48,6 +50,20 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$publishedAccountingSourceHash = (Get-FileHash -LiteralPath $publishedAccountingSource -Algorithm SHA256).Hash.ToLowerInvariant()" in source
     assert "FPR-03 published source SHA-256 mismatch" in source
     assert "FPR-03 INSTALLED PASS: source picker -> retained snapshot -> published source copy SHA-256 exact." in source
+    assert "$fpr04SourceFields = @(" in source
+    assert "Find-E1NamedElementContaining -Text 'Происхождение данных подтверждено:'" in source
+    assert "Find-E1NamedElementContaining -Root" not in source
+    assert '"${fieldId}:Scanner/document_text/deterministic_source_parser"' in source
+    assert "FPR-04 installed recognition provenance missing exact parser trace" in source
+    assert "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake." in source
+    assert "struct RecognitionProofEntry" in source_intake_backend
+    assert "recognition_proof_for_case" in source_intake_backend
+    assert '"deterministic_source_parser"' in source_intake_backend
+    assert 'assert!(!json.contains("E1-17"))' in source_intake_backend
+    assert "recognition_proof" in runtime_validation
+    assert "ответ файла не содержит recognition_proof" in runtime_validation
+    assert "Происхождение данных подтверждено:" in app_source
+    assert "recognitionProof" in app_source
     assert "verify_source_copy_sha256(" in document_backend
     assert "staged_source" in document_backend
     assert "published_source" in document_backend

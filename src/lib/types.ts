@@ -276,11 +276,20 @@ export interface NormalizedLayoutItem {
   source_reference: string | null;
 }
 
+export interface RecognitionProofEntry {
+  field_id: string;
+  source: string;
+  source_kind: string;
+  extractor: string;
+  confidence: number;
+}
+
 export interface ParseSourceFileResponse extends ParseSourceResponse {
   source_text: string;
   source_path: string;
   source_kind: string;
   layout_items: NormalizedLayoutItem[];
+  recognition_proof: RecognitionProofEntry[];
 }
 
 

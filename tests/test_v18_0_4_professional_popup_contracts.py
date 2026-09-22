@@ -39,9 +39,10 @@ class ProfessionalPopupContracts(unittest.TestCase):
         self.assertIn("still_missing", popup)
         self.assertIn("if (!applied.accepted)", preflight)
         self.assertIn("Не заполнено обязательное поле", preflight)
+        confirm = preflight[preflight.index("async function confirmGenerationPreflight()") :]
         self.assertLess(
-            preflight.index("if (!applied.accepted)"),
-            preflight.index("setGenerationPreflightOpen(false)"),
+            confirm.index("if (!applied.accepted)"),
+            confirm.index("setGenerationPreflightOpen(false)"),
         )
         self.assertIn("clientFields", workspace)
 

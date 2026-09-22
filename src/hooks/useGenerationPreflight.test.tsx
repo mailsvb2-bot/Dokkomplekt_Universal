@@ -140,14 +140,35 @@ describe('useGenerationPreflight', () => {
     }));
 
     await act(async () => { await result.current.openGenerationPreflight(); });
-    await act(async () => { await result.current.confirmGenerationPreflight(); });
 
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(2);
     expect(setPreflightPlan).toHaveBeenLastCalledWith(freshPlan);
     expect(result.current.generationPreflightOpen).toBe(true);
     expect(result.current.generationError).toBeNull();
     expect(setStatus).toHaveBeenLastCalledWith('План создания обновился. Проверьте появившиеся поля и подтвердите создание ещё раз.');
     expect(applyAnswers).not.toHaveBeenCalled();
     expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('creates directly when the commit-boundary plan still has zero user questions', async () => {
+    const readyPlan: WorkflowPlan = { document_id: 'contract', prompts: [], blocked: false, block_reasons: [] };
+    const requestWorkflowPlan = vi.fn(async () => readyPlan);
+    const applyAnswers = vi.fn(async () => null as PopupApplyResult | null);
+    const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
+    const setStatus = vi.fn();
+    const { result } = renderHook(() => useGenerationPreflight({
+      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false,
+      answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
+      setStatus, requestWorkflowPlan, applyAnswers, onConfirmed,
+    }));
+
+    await act(async () => { await result.current.openGenerationPreflight(); });
+
+    expect(requestWorkflowPlan).toHaveBeenCalledTimes(2);
+    expect(result.current.generationPreflightOpen).toBe(false);
+    expect(applyAnswers).not.toHaveBeenCalled();
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith('Все обязательные данные уже найдены. Формируется комплект…');
   });
 
   it('binds popup and publication to the same immutable donor-style generation snapshot', async () => {
@@ -157,7 +178,7 @@ describe('useGenerationPreflight', () => {
     const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => null);
     const { result, rerender } = renderHook(() => useGenerationPreflight({
       selectedDocumentIds: ['contract'], sickLeaveEnabled, folderParts: ['DocumentNumber'], outputRoot,
-      documentRevisionTokens: { contract: 'revision-1' }, autoPrint: true, printCopies: { contract: 3 }, preflightPlan: readyPlan, preflightLoading: false,
+      documentRevisionTokens: { contract: 'revision-1' }, autoPrint: true, printCopies: { contract: 3 }, preflightPlan: readyPlan, preflightLoading: false, requiresExplicitReview: true,
       answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
       setStatus: vi.fn(), requestWorkflowPlan: vi.fn(async () => readyPlan), applyAnswers: vi.fn(async () => null), onConfirmed,
     }));
@@ -176,7 +197,7 @@ describe('useGenerationPreflight', () => {
     const failure = 'Не удалось создать документы: лимит или файловая публикация не прошли.';
     const setStatus = vi.fn();
     const { result } = renderHook(() => useGenerationPreflight({
-      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false,
+      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false, requiresExplicitReview: true,
       answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
       setStatus, requestWorkflowPlan: vi.fn(async () => readyPlan), applyAnswers: vi.fn(async () => null),
       onConfirmed: vi.fn(async () => failure),
@@ -228,7 +249,7 @@ describe('useGenerationPreflight', () => {
     const pending = new Promise<string | null>((resolve) => { release = () => resolve(null); });
     const onConfirmed = vi.fn(async (_snapshot: GenerationSnapshot) => pending);
     const { result } = renderHook(() => useGenerationPreflight({
-      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false,
+      selectedDocumentIds: ['contract'], ...context('contract'), preflightPlan: readyPlan, preflightLoading: false, requiresExplicitReview: true,
       answers: {}, skippedAnswers: {}, setPreflightPlan: vi.fn() as unknown as Dispatch<SetStateAction<WorkflowPlan | null>>,
       setStatus: vi.fn(), requestWorkflowPlan: vi.fn(async () => readyPlan), applyAnswers: vi.fn(async () => null), onConfirmed,
     }));
@@ -255,7 +276,7 @@ describe('useGenerationPreflight', () => {
       setStatus, requestWorkflowPlan: vi.fn(async () => runtimePlan), applyAnswers, onConfirmed,
     }));
     await act(async () => { await result.current.openGenerationPreflight(); });
-    await act(async () => { await result.current.confirmGenerationPreflight(); });
+    expect(result.current.generationPreflightOpen).toBe(false);
     expect(result.current.generationValidationFieldId).toBeNull();
     expect(result.current.generationError).toMatch(/Внутренние параметры серии дневников/);
     expect(applyAnswers).not.toHaveBeenCalled();

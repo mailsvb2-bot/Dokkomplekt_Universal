@@ -1009,7 +1009,8 @@ function Invoke-E1DomainScenario {
     [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields,
     [Parameter(Mandatory = $true)][string[]]$ExpectedOutputValues,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
-    [Parameter(Mandatory = $true)][string]$ReceiptRoot
+    [Parameter(Mandatory = $true)][string]$ReceiptRoot,
+    [bool]$ExpectPreflight = $true
   )
 
   $window = Find-LiveAppWindow
@@ -1031,48 +1032,6 @@ function Invoke-E1DomainScenario {
     )
   }
 
-  $generationAction = Wait-UiElement -Description "generation action for $Label" -Probe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
-  }
-  Invoke-UiElementPhysically -Element $generationAction -Description "open preflight for $Label"
-  $null = Wait-UiElement -Description "preflight for $Label" -Probe {
-    Find-E1NamedElement -Name 'Проверка перед созданием'
-  }
-
-  foreach ($fieldId in $PluginRequiredFields) {
-    $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
-    $control = (Find-LiveAppWindow).FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-        $automationId
-      )
-    )
-    if ($null -eq $control) {
-      throw "E1 $Label did not expose canonical domain-required field: $fieldId"
-    }
-  }
-
-  foreach ($fieldId in $PromptValues.Keys) {
-    $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
-    $control = (Find-LiveAppWindow).FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
-        $automationId
-      )
-    )
-    if ($null -eq $control) {
-      if ($PluginRequiredFields -contains $fieldId) {
-        throw "E1 $Label lost required prompt: $fieldId"
-      }
-      continue
-    }
-    Set-UiValue -Element $control -Value ([string]$PromptValues[$fieldId])
-  }
-
   $receiptCountBefore = if (Test-Path -LiteralPath $ReceiptRoot -PathType Container) {
     @(Get-ChildItem -LiteralPath $ReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
   } else { 0 }
@@ -1080,15 +1039,68 @@ function Invoke-E1DomainScenario {
   $existing = @(Get-ChildItem -LiteralPath $OutputRoot -Recurse -File -Filter $outputName -ErrorAction SilentlyContinue)
   foreach ($item in $existing) { Remove-Item -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue }
 
-  Invoke-UiActionPhysicallyFromProbe -Description "create $Label" -ActionProbe {
+  $generationAction = Wait-UiElement -Description "generation action for $Label" -Probe {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  }
+  Invoke-UiElementPhysically -Element $generationAction -Description "start canonical generation for $Label"
+
+  if ($ExpectPreflight) {
+    $null = Wait-UiElement -Description "preflight for $Label" -Probe {
+      Find-E1NamedElement -Name 'Проверка перед созданием'
+    }
+
+    foreach ($fieldId in $PluginRequiredFields) {
+      $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+      $control = (Find-LiveAppWindow).FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+          $automationId
+        )
+      )
+      if ($null -eq $control) {
+        throw "E1 $Label did not expose canonical domain-required field: $fieldId"
+      }
+    }
+
+    foreach ($fieldId in $PromptValues.Keys) {
+      $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+      $control = (Find-LiveAppWindow).FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+          $automationId
+        )
+      )
+      if ($null -eq $control) {
+        if ($PluginRequiredFields -contains $fieldId) {
+          throw "E1 $Label lost required prompt: $fieldId"
+        }
+        continue
+      }
+      Set-UiValue -Element $control -Value ([string]$PromptValues[$fieldId])
+    }
+
+    Invoke-UiActionPhysicallyFromProbe -Description "create $Label" -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+    }
+  } else {
+    Write-Host "FPR-07 zero-question path: $Label started directly from the canonical generation action."
   }
 
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
   $created = $null
   while ($null -eq $created -and [DateTime]::UtcNow -lt $deadline) {
+    if (-not $ExpectPreflight) {
+      $unexpectedPreflight = Find-E1NamedElement -Name 'Проверка перед созданием'
+      if ($null -ne $unexpectedPreflight) {
+        throw "FPR-07 zero-question regression: $Label opened a preflight form despite having no user questions."
+      }
+    }
     $created = Get-ChildItem -LiteralPath $OutputRoot -Recurse -File -Filter $outputName -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $created) {
       $failure = Find-E1NamedElement -Name 'Документы не созданы'
@@ -1904,6 +1916,7 @@ if ($null -ne $fpr02DateControl) {
   throw 'FPR-02 re-prompted source-owned document.date instead of reusing 10.05.2026.'
 }
 Write-Host 'FPR-02 folder identity preflight PASS: missing number requested; source-owned document date not re-prompted.'
+Write-Host 'FPR-07 PROMPT INSTALLED PASS: missing document.number produced a visible canonical preflight question.'
 
 $fpr02PromptValues = [ordered]@{
   'medical.diary_schedule_style' = 'Каждый день'
@@ -2135,7 +2148,8 @@ Invoke-E1DomainScenario `
   -PluginRequiredFields @() `
   -ExpectedOutputValues @('F20.0', $fpr05SelectedTitle) `
   -OutputRoot $defaultOutputRoot `
-  -ReceiptRoot $completionReceiptRoot
+  -ReceiptRoot $completionReceiptRoot `
+  -ExpectPreflight $false
 
 $fpr05Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter "$fpr05Label.docx" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -eq $fpr05Doc) { throw 'FPR-05 installed path did not publish its physical DOCX.' }
@@ -2218,8 +2232,11 @@ Invoke-E1DomainScenario `
   -PluginRequiredFields @() `
   -ExpectedOutputValues @($fpr06ScannerValue) `
   -OutputRoot $defaultOutputRoot `
-  -ReceiptRoot $completionReceiptRoot
+  -ReceiptRoot $completionReceiptRoot `
+  -ExpectPreflight $false
 Write-Host 'FPR-06 INSTALLED PASS: manual Scanner UI -> canonical apply_scanner -> SemanticCase -> physical DOCX -> committed receipt.'
+Write-Host 'FPR-07 ZERO-QUESTION INSTALLED PASS: fully resolved Scanner case skipped the form and published directly after commit-boundary recheck.'
+Write-Host 'FPR-07 INSTALLED PASS: missing-value case prompts; zero-question case has no form; both publish through the same canonical workflow.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
 Stop-Process -Id $process.Id -Force

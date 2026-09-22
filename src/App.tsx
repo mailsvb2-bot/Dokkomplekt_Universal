@@ -599,7 +599,7 @@ function AppContent() {
   const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds), autoPrint, printCopies,
-    preflightPlan, preflightLoading, answers, skippedAnswers, setPreflightPlan, setStatus,
+    preflightPlan, preflightLoading, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
       ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))

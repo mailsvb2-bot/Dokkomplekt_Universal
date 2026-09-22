@@ -22,6 +22,8 @@ interface UseGenerationPreflightOptions {
   printCopies: Record<string, number>;
   preflightPlan: WorkflowPlan | null;
   preflightLoading: boolean;
+  /** Keep the review surface when a non-prompt user option (for example sick leave) still needs an explicit choice. */
+  requiresExplicitReview?: boolean;
   answers: Record<string, string>;
   skippedAnswers: Record<string, boolean>;
   setPreflightPlan: Dispatch<SetStateAction<WorkflowPlan | null>>;
@@ -74,12 +76,88 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     }
     setGenerationSnapshot(snapshot);
     options.setPreflightPlan(workflow);
-    setGenerationPreflightOpen(true);
-    if (workflow.blocked) {
-      options.setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
+
+    const visiblePrompts = activeWorkflowPrompts(workflow.prompts, options.answers)
+      .filter((prompt) => !isInternalWorkflowPrompt(prompt.field_id));
+    if (workflow.blocked || options.requiresExplicitReview || visiblePrompts.length) {
+      setGenerationPreflightOpen(true);
+      if (workflow.blocked) {
+        options.setStatus(`Создание заблокировано: ${workflow.block_reasons.join('; ')}`);
+        return;
+      }
+      options.setStatus('Проверьте данные выбранного комплекта перед созданием.');
       return;
     }
-    options.setStatus('Проверьте данные выбранного комплекта перед созданием.');
+
+    // Canon v2: zero user questions means zero form. Still re-read the backend-owned
+    // plan at the real commit boundary so a newly introduced requirement cannot be
+    // skipped by a source/update race.
+    setGenerationPreflightOpen(false);
+    confirmationInFlight.current = true;
+    try {
+      options.setStatus('Все обязательные данные уже найдены. Формируется комплект…');
+      const freshWorkflow = await options.requestWorkflowPlan(snapshot);
+      if (!freshWorkflow) {
+        const message = 'Не удалось обновить план создания. Комплект не создан.';
+        setGenerationError(message);
+        options.setStatus(message);
+        return;
+      }
+      options.setPreflightPlan(freshWorkflow);
+      if (freshWorkflow.blocked) {
+        setGenerationPreflightOpen(true);
+        options.setStatus(`Создание заблокировано: ${freshWorkflow.block_reasons.join('; ')}`);
+        return;
+      }
+
+      const freshVisiblePrompts = activeWorkflowPrompts(freshWorkflow.prompts, options.answers)
+        .filter((prompt) => !isInternalWorkflowPrompt(prompt.field_id));
+      if (options.requiresExplicitReview || freshVisiblePrompts.length) {
+        setGenerationPreflightOpen(true);
+        options.setStatus('План создания обновился. Проверьте появившиеся поля и подтвердите создание ещё раз.');
+        return;
+      }
+
+      if (freshWorkflow.prompts.length) {
+        const activePrompts = activeWorkflowPrompts(freshWorkflow.prompts, options.answers);
+        const missing = activePrompts.filter((prompt) => prompt.required
+          && !options.skippedAnswers[prompt.field_id]
+          && !(options.answers[prompt.field_id] ?? prompt.current_value ?? '').trim());
+        const missingInternal = missing.find((prompt) => isInternalWorkflowPrompt(prompt.field_id));
+        if (missingInternal) {
+          const message = 'Внутренние параметры серии дневников не рассчитаны. Перепроверьте даты поступления/выписки и повторите создание.';
+          setGenerationError(message);
+          options.setStatus(message);
+          return;
+        }
+        const payload: PopupAnswerDto[] = activePrompts.map((prompt) => ({
+          field_id: prompt.field_id,
+          value: options.skippedAnswers[prompt.field_id] ? '' : options.answers[prompt.field_id] ?? prompt.current_value ?? '',
+          continue_without_value: Boolean(options.skippedAnswers[prompt.field_id]),
+        }));
+        const applied = await options.applyAnswers(snapshot, payload);
+        if (!applied) return;
+        if (!applied.accepted) {
+          const message = applied.message || `Не заполнено полей: ${applied.still_missing.length}`;
+          setGenerationError(message);
+          setGenerationValidationFieldId(applied.still_missing[0]?.field_id ?? null);
+          options.setStatus(message);
+          return;
+        }
+      }
+
+      setGenerationError(null);
+      setGenerationValidationFieldId(null);
+      const generationFailure = await options.onConfirmed(snapshot);
+      if (generationFailure) {
+        setGenerationError(generationFailure);
+        options.setStatus(generationFailure);
+        return;
+      }
+      setGenerationSnapshot(null);
+    } finally {
+      confirmationInFlight.current = false;
+    }
   }
 
   async function confirmGenerationPreflight() {

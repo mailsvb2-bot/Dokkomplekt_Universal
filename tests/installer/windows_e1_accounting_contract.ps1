@@ -2148,7 +2148,8 @@ Invoke-E1DomainScenario `
   -PluginRequiredFields @() `
   -ExpectedOutputValues @('F20.0', $fpr05SelectedTitle) `
   -OutputRoot $defaultOutputRoot `
-  -ReceiptRoot $completionReceiptRoot
+  -ReceiptRoot $completionReceiptRoot `
+  -ExpectPreflight $false
 
 $fpr05Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter "$fpr05Label.docx" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -eq $fpr05Doc) { throw 'FPR-05 installed path did not publish its physical DOCX.' }

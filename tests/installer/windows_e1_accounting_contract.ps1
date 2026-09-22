@@ -2038,6 +2038,111 @@ if ($fpr02ReceiptCountAfter -ne ($fpr02ReceiptCountBefore + 1)) {
   throw 'FPR-02 diary generation did not add exactly one committed GenerationReceipt.'
 }
 Write-Host 'FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt.'
+
+# FPR-05: prove the installed ICD-10 path end to end. The source deliberately
+# starts with a different diagnosis. The specialist must search the bundled
+# offline catalog, choose F20.0 through the live UI, and the selected code/title
+# must reach a physical generated DOCX through the same SemanticCase.
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-05 ICD-10 proof' `
+  -TransitionDescription 'empty case before FPR-05 ICD-10 proof' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
+
+$fpr05Label = 'МКБ-10 FPR05'
+$fpr05Template = Join-Path $fixtureDir 'fpr05-icd10.docx'
+New-E1TextDocx -Path $fpr05Template -Lines @(
+  'Проверка МКБ-10',
+  'Код МКБ-10: {{medical.icd10}}',
+  'Диагноз: {{medical.diagnosis}}'
+)
+Add-E1DomainTemplate -TemplatePath $fpr05Template -Label $fpr05Label -DomainOption 'Медицина'
+
+$fpr05Source = Join-Path $fixtureDir 'fpr05-медицинский-источник.docx'
+New-E1TextDocx -Path $fpr05Source -Lines @(
+  'Первичный осмотр',
+  'Номер документа: FPR05-77',
+  'Дата документа: 15.05.2026',
+  'Ф.И.О.: Смирнов Сергей Сергеевич',
+  'Дата рождения: 03.03.1983',
+  'Дата поступления: 15.05.2026',
+  'Дата выписки: 18.05.2026',
+  'Диагноз: F41.1 Генерализованное тревожное расстройство',
+  'Лечение: терапия по назначению врача'
+)
+Set-E1DomainSource -SourcePath $fpr05Source
+
+$settingsButton = Wait-UiElement -Description 'FPR-05 settings button' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Настройки'
+}
+Invoke-UiElementPhysically -Element $settingsButton -Description 'open settings for FPR-05'
+$expertButton = Wait-UiElement -Description 'FPR-05 expert tools toggle' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Экспертные и административные инструменты'
+}
+Invoke-UiElementPhysically -Element $expertButton -Description 'open expert tools for FPR-05'
+
+$fpr05Search = Wait-UiElement -Description 'FPR-05 ICD search input' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Поиск МКБ-10'
+}
+Set-UiValue -Element $fpr05Search -Value 'F20.0'
+Invoke-UiActionPhysicallyFromProbe -Description 'search FPR-05 ICD-10' -ActionProbe {
+  Find-E1NamedElement -Name 'Найти по МКБ-10'
+}
+$fpr05Hit = Wait-UiElement -Description 'FPR-05 ICD F20.0 result' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Выбрать МКБ-10 F20.0'
+}
+Invoke-UiElementPhysically -Element $fpr05Hit -Description 'choose FPR-05 ICD F20.0'
+
+$fpr05Search = Wait-UiElement -Description 'FPR-05 selected ICD input' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Поиск МКБ-10'
+}
+$fpr05Selected = Normalize-UiValue -Value (Get-UiValue -Element $fpr05Search)
+if (-not $fpr05Selected.StartsWith('F20.0 ')) {
+  throw "FPR-05 ICD selection did not commit to the live input: '$fpr05Selected'"
+}
+$fpr05SelectedTitle = $fpr05Selected.Substring(6).Trim()
+if ([string]::IsNullOrWhiteSpace($fpr05SelectedTitle)) {
+  throw "FPR-05 ICD selection returned an empty title: '$fpr05Selected'"
+}
+if ($fpr05Selected -match 'F41\.1|тревож') {
+  throw "FPR-05 ICD selection did not replace the source diagnosis: '$fpr05Selected'"
+}
+Write-Host "FPR-05 ICD selection PASS: $fpr05Selected"
+
+$settingsButton = Wait-UiElement -Description 'FPR-05 close settings button' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Настройки'
+}
+Invoke-UiElementPhysically -Element $settingsButton -Description 'close settings after FPR-05 ICD selection'
+
+Invoke-E1DomainScenario `
+  -Label $fpr05Label `
+  -PromptValues @{} `
+  -PluginRequiredFields @() `
+  -ExpectedOutputValues @('F20.0', $fpr05SelectedTitle) `
+  -OutputRoot $defaultOutputRoot `
+  -ReceiptRoot $completionReceiptRoot
+
+$fpr05Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter "$fpr05Label.docx" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $fpr05Doc) { throw 'FPR-05 installed path did not publish its physical DOCX.' }
+$fpr05Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr05Doc.FullName)
+try {
+  $fpr05Entry = $fpr05Archive.GetEntry('word/document.xml')
+  if ($null -eq $fpr05Entry) { throw 'FPR-05 output is not a readable DOCX package.' }
+  $fpr05Reader = [System.IO.StreamReader]::new($fpr05Entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr05Xml = $fpr05Reader.ReadToEnd() } finally { $fpr05Reader.Dispose() }
+} finally { $fpr05Archive.Dispose() }
+if ($fpr05Xml -match 'F41\.1|Генерализованное тревожное расстройство') {
+  throw 'FPR-05 physical output retained the source diagnosis instead of the selected ICD-10 value.'
+}
+Write-Host "FPR-05 INSTALLED PASS: bundled ICD-10 search -> F20.0 selection -> canonical SemanticCase -> physical DOCX code/title -> committed receipt."
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
 Stop-Process -Id $process.Id -Force

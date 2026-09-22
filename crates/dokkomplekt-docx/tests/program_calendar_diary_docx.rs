@@ -1,7 +1,12 @@
 use dokkomplekt_core::{SemanticAtom, SemanticCase, SemanticRecord};
-use dokkomplekt_docx::{create_docx_from_text, extract_docx_text, render_docx_file};
-use std::path::PathBuf;
+use dokkomplekt_docx::{
+    create_docx_from_text_with_centered_exact_lines, extract_docx_text, render_docx_file,
+};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zip::ZipArchive;
 
 const TEMPLATE: &str = dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
 
@@ -14,6 +19,19 @@ fn unique_dir() -> PathBuf {
         "dokkomplekt-diary-docx-{}-{nonce}",
         std::process::id()
     ))
+}
+
+fn read_zip_text(path: &Path, entry_name: &str) -> String {
+    let file = File::open(path).expect("docx");
+    let mut archive = ZipArchive::new(file).expect("zip");
+    let mut entry = archive.by_name(entry_name).expect("package entry");
+    let mut xml = String::new();
+    entry.read_to_string(&mut xml).expect("read package entry");
+    xml
+}
+
+fn read_document_xml(path: &Path) -> String {
+    read_zip_text(path, "word/document.xml")
 }
 
 fn diary_row(datetime: &str, text: Option<&str>, is_final: bool) -> SemanticRecord {
@@ -41,7 +59,16 @@ fn program_calendar_template_becomes_a_real_text_diary_docx() {
     let template = root.join("program-calendar.docx");
     let output = root.join("patient-diaries.docx");
 
-    create_docx_from_text(&template, TEMPLATE).expect("program template");
+    create_docx_from_text_with_centered_exact_lines(&template, TEMPLATE, &["{{diary.datetime}}"])
+        .expect("program template");
+
+    for entry_name in ["word/document.xml", "[Content_Types].xml", "_rels/.rels"] {
+        let xml = read_zip_text(&template, entry_name);
+        assert!(
+            !xml.contains('\\'),
+            "minimal DOCX helper emitted a literal backslash into {entry_name}: {xml}"
+        );
+    }
 
     let mut case = SemanticCase::default();
     case.set_collection(
@@ -69,11 +96,10 @@ fn program_calendar_template_becomes_a_real_text_diary_docx() {
     );
 
     let text = extract_docx_text(&output).expect("rendered text");
-    assert!(
-        text.contains("11.05.2026 Профессиональный текст дневника."),
-        "{text}"
-    );
-    assert!(text.contains("12.05.2026 Состояние улучшилось."), "{text}");
+    assert!(text.contains("11.05.2026"), "{text}");
+    assert!(text.contains("Профессиональный текст дневника."), "{text}");
+    assert!(text.contains("12.05.2026"), "{text}");
+    assert!(text.contains("Состояние улучшилось."), "{text}");
     assert!(
         text.contains("На текущую дату оформлена выписка из стационара."),
         "{text}"
@@ -81,6 +107,25 @@ fn program_calendar_template_becomes_a_real_text_diary_docx() {
     assert_eq!(text.matches("Лечащий врач").count(), 2, "{text}");
     assert_eq!(text.matches("Заведующий отделением").count(), 2, "{text}");
     assert!(!text.contains("{{"), "{text}");
+
+    let xml = read_document_xml(&output);
+    assert!(
+        !xml.contains("<w:tbl"),
+        "canonical diary output must remain paragraph text"
+    );
+    for date in ["11.05.2026", "12.05.2026"] {
+        let date_pos = xml.find(date).expect("rendered diary date");
+        let paragraph_start = xml[..date_pos].rfind("<w:p").expect("date paragraph start");
+        let paragraph_end = xml[date_pos..]
+            .find("</w:p>")
+            .map(|offset| date_pos + offset + "</w:p>".len())
+            .expect("date paragraph end");
+        let paragraph = &xml[paragraph_start..paragraph_end];
+        assert!(
+            paragraph.contains("<w:jc w:val=\"center\"/>"),
+            "diary date must remain centered: {paragraph}"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(root);
 }

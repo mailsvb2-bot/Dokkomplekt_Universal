@@ -125,6 +125,9 @@ def test_e2_installed_learning_observes_pair_selections_and_final_blank_acceptan
     assert 'Wait-UiElement -Description "$Label accepted selection $($selectionIndex + 1)"' in picker
     assert "$actionButtonName = if ($selectionIndex -eq 0 -or $ExpectedUiNames.Count -eq 0)" in picker
     assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @($actionButtonName)" in picker
+    assert "Invoke-UiActionPhysicallyFromProbe" in picker
+    assert 'Wait-FileDialog -Description "$Label file dialog"' in picker
+    assert "Invoke-UiActionWithObservedTransition" not in picker
     assert "Find-ButtonByNames -Root $currentAppWindow -Names @($expectedUiName)" in picker
     assert "Start-Sleep -Milliseconds 150" not in picker
     assert "Open-E2FileSelection -Label 'Пустой DOCX/DOCM' -Paths @($e2Blank)" in source
@@ -148,4 +151,10 @@ def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
     assert "Write-E2LearningUiDiagnostic -Root $currentAppWindow" in source
     assert "throw $learningFailure" in source
     assert "publishable held-out learning result" in source
+    assert "-Description 'Проверить пары и предложить карту'" in source
+    assert "-TransitionDescription 'publishable held-out learning result'" in source
+    assert "-TransitionSeconds 8" in source
+    assert "E2 learning action remained idle after UIA and physical retry; using one focused WebView keyboard Space fallback." in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
+    assert "publishable held-out learning result after focused Space fallback" in source
 

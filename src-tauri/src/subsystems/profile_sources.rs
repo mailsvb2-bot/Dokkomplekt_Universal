@@ -1,7 +1,7 @@
 // Profession-scoped source and prompt overrides. Universal orchestration remains in document_commands.
 
 const MEDICAL_RVK_OPTIONS_BLOCK_ID: &str = "professional.medical.rvk.quick_options";
-const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v5";
+const MEDICAL_DIARY_PROGRAM_TEMPLATE_VERSION: &str = "v6";
 const MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT: &str =
     dokkomplekt_core::MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT;
 
@@ -119,6 +119,24 @@ fn is_medical_diary_document(document: &DocumentTemplateSpec) -> bool {
         || role.ends_with(".diaries")
 }
 
+fn medical_diary_template_text_is_usable(text: &str) -> bool {
+    if !dokkomplekt_core::inspect_template_syntax(text).is_empty() {
+        return false;
+    }
+    let scoped = dokkomplekt_core::template_collection_field_references(text, "diaries")
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    [
+        "diary.datetime",
+        "diary.is_final",
+        "diary.text",
+        "diary.treating_physician_signature",
+        "diary.department_head_signature",
+    ]
+    .iter()
+    .all(|field| scoped.contains(*field))
+}
+
 fn medical_diary_template_is_usable(path: &Path) -> bool {
     path.is_file()
         && validate_safe_template_file(path).is_ok()
@@ -126,15 +144,40 @@ fn medical_diary_template_is_usable(path: &Path) -> bool {
             .map(|structure| structure.table_count == 0)
             .unwrap_or(false)
         && extract_docx_text(path)
-            .map(|text| {
-                text.contains("{{#each diaries}}")
-                    && text.contains("{{diary.datetime}}")
-                    && text.contains("{{#if diary.is_final}}")
-                    && text.contains("{{else}}{{diary.text}}{{/if}}")
-                    && text.contains("{{diary.treating_physician_signature}}")
-                    && text.contains("{{diary.department_head_signature}}")
-            })
+            .map(|text| medical_diary_template_text_is_usable(&text))
             .unwrap_or(false)
+}
+
+fn effective_generation_document_spec(
+    document: &DocumentTemplateSpec,
+    template_text: &str,
+) -> Result<DocumentTemplateSpec, String> {
+    if !is_medical_diary_document(document) {
+        return Ok(document.clone());
+    }
+    if !medical_diary_template_text_is_usable(template_text) {
+        return Err(
+            "Канонический шаблон дневников не содержит корректную повторяемую коллекцию."
+                .into(),
+        );
+    }
+
+    let analysis = dokkomplekt_core::analyze_template_text_with_domain_hint(
+        template_text,
+        Some(&DomainKind::Medical),
+    );
+    if !analysis.template_errors.is_empty() {
+        return Err(format!(
+            "Канонический шаблон дневников содержит ошибки синтаксиса: {}",
+            analysis.template_errors.join("; ")
+        ));
+    }
+
+    let mut effective = document.clone();
+    effective.placeholders = analysis.placeholders;
+    effective.is_static_copy = false;
+    dokkomplekt_core::synchronize_document_required_fields(&mut effective);
+    Ok(effective)
 }
 
 #[cfg(not(windows))]
@@ -203,8 +246,12 @@ fn ensure_program_calendar_diary_template(path: &Path) -> Result<(), String> {
     let temp_path = parent.join(format!(".{stem}-{}.tmp.docx", uuid::Uuid::new_v4()));
 
     let publish = (|| -> Result<(), String> {
-        create_docx_from_text(&temp_path, MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT)
-            .map_err(|error| format!("Не удалось создать временный шаблон текстовых дневников: {error}"))?;
+        dokkomplekt_docx::create_docx_from_text_with_centered_exact_lines(
+            &temp_path,
+            MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT,
+            &["{{diary.datetime}}"],
+        )
+        .map_err(|error| format!("Не удалось создать временный шаблон текстовых дневников: {error}"))?;
         validate_safe_template_file(&temp_path)
             .map_err(|error| format!("Временный шаблон дневников не прошёл проверку: {error}"))?;
         if !medical_diary_template_is_usable(&temp_path) {
@@ -286,15 +333,80 @@ fn effective_generation_template_path(
 #[cfg(test)]
 mod profile_sources_tests {
     use super::{
-        ensure_program_calendar_diary_template, medical_diary_template_is_usable,
+        effective_generation_document_spec, ensure_program_calendar_diary_template,
+        medical_diary_template_is_usable, medical_diary_template_text_is_usable,
         parse_profile_quick_options,
     };
+    use dokkomplekt_core::{DocumentTemplateSpec, DomainKind};
     use dokkomplekt_docx::inspect_docx_structure;
     use uuid::Uuid;
 
     #[test]
     fn corrupted_optional_quick_options_do_not_block_the_profile() {
         assert!(parse_profile_quick_options("{broken json").is_empty());
+    }
+
+    #[test]
+    fn effective_diary_spec_uses_the_canonical_collection_contract() {
+        let document = DocumentTemplateSpec {
+            id: "diaries".into(),
+            button_label: "Дневники".into(),
+            template_path: "user-static.docx".into(),
+            category: DomainKind::Medical,
+            role_id: "diaries".into(),
+            required_fields: Vec::new(),
+            placeholders: Vec::new(),
+            is_static_copy: true,
+            popup_fields: Vec::new(),
+            popup_configured: false,
+        };
+        let effective = effective_generation_document_spec(
+            &document,
+            super::MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT,
+        )
+        .expect("canonical diary template must produce an effective spec");
+        assert!(!effective.is_static_copy);
+        for field_id in [
+            "diary.datetime",
+            "diary.text",
+            "diary.treating_physician_signature",
+            "diary.department_head_signature",
+        ] {
+            assert!(
+                effective.placeholders.contains(&field_id.to_string()),
+                "missing canonical diary placeholder {field_id}: {:?}",
+                effective.placeholders
+            );
+        }
+    }
+
+    #[test]
+    fn diary_template_rejects_malformed_or_mis_scoped_collection_fields() {
+        let malformed = concat!(
+            "{{#each diaries}}",
+            "{{diary.datetime}}{{diary.text}}",
+            "{{diary.treating_physician_signature}}",
+            "{{diary.department_head_signature}}"
+        );
+        assert!(!medical_diary_template_text_is_usable(malformed));
+
+        let outside = concat!(
+            "{{diary.text}}",
+            "{{#each diaries}}",
+            "{{diary.datetime}}",
+            "{{#if diary.is_final}}final{{/if}}",
+            "{{diary.treating_physician_signature}}",
+            "{{diary.department_head_signature}}",
+            "{{/each}}"
+        );
+        assert!(
+            !medical_diary_template_text_is_usable(outside),
+            "diary.text outside the collection must not satisfy the canonical diary contract"
+        );
+
+        assert!(medical_diary_template_text_is_usable(
+            super::MEDICAL_DIARY_PROGRAM_TEMPLATE_TEXT
+        ));
     }
 
     #[test]

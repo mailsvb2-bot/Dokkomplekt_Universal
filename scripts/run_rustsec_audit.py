@@ -48,6 +48,14 @@ def checked(command: list[str], *, cwd: Path | None = None, capture: bool = Fals
     return completed
 
 
+def build_registry_prefetch_command() -> list[str]:
+    # cargo-audit --no-fetch intentionally prevents both advisory DB and
+    # crates.io index refreshes. Populate the registry metadata through Cargo
+    # first so yanked-package checks remain available, while --locked keeps the
+    # dependency graph byte-for-byte bound to the committed Cargo.lock.
+    return ["cargo", "fetch", "--locked"]
+
+
 def build_audit_command(db: Path, json_output: bool) -> list[str]:
     command = [
         "cargo",
@@ -110,6 +118,8 @@ def main() -> int:
     policy = validate_policy(args.policy.resolve())
     if args.pin_report:
         atomic_json(args.pin_report.resolve(), policy)
+
+    checked(build_registry_prefetch_command(), cwd=ROOT)
 
     with tempfile.TemporaryDirectory(prefix="dokkomplekt-rustsec-db-") as temporary:
         db = Path(temporary).resolve() / "advisory-db"

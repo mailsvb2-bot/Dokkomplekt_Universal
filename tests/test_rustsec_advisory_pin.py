@@ -62,6 +62,8 @@ def test_known_bad_commit_cannot_be_pinned() -> None:
 
 def test_cargo_audit_uses_exact_db_without_stale_bypass() -> None:
     runner = load_module(RUNNER, "run_rustsec_audit")
+    assert runner.build_registry_prefetch_command() == ["cargo", "fetch", "--locked"]
+
     db = Path("/tmp/pinned-rustsec-db")
     command = runner.build_audit_command(db, False)
     assert command[:2] == ["cargo", "audit"]

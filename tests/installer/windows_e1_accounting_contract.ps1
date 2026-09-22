@@ -72,6 +72,8 @@ public static class DokkomplektE1NativeMouse {
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool IsWindow(IntPtr hWnd);
 }
 "@
 
@@ -346,12 +348,198 @@ function Normalize-UiValue {
   return ([regex]::Replace($normalized.Trim(), '\s+', ' '))
 }
 
+function Set-OpenFileDialogPath {
+  param(
+    [Parameter(Mandatory = $true)]$Dialog,
+    [Parameter(Mandatory = $true)][string]$Path
+  )
+
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektE1NativeMouse]::ShowWindow($dialogHandle, 5)
+    [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+    Start-Sleep -Milliseconds 100
+  }
+
+  $edit = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+  )
+  if ($null -eq $edit) {
+    throw "OpenFileDialog filename edit AutomationId=1148 is missing for '$Path'."
+  }
+
+  # Drive the filename field as a real user would. On hosted Windows the
+  # accessibility ValuePattern can echo SetValue while the common dialog's real
+  # edit remains empty. Keyboard paste updates the actual focused control.
+  $edit.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  try {
+    Set-Clipboard -Value $Path -ErrorAction Stop
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+  } catch {
+    # Do not fall back to ValuePattern.SetValue here. Hosted common dialogs can
+    # echo that UIA value while leaving the native filename edit empty. Leave the
+    # field untouched and continue to the independent native/user-equivalent
+    # fallbacks below, which are verified separately before submission.
+    Write-Host "OpenFileDialog clipboard paste unavailable; continuing with native/user fallback for '$Path'."
+  }
+  Start-Sleep -Milliseconds 250
+
+  $expected = Normalize-UiValue -Value $Path
+  $actual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+
+  # Never "verify" a failed paste by setting and immediately rereading the
+  # same UIA ValuePattern: hosted Explorer-style dialogs can echo that value while
+  # their native filename edit remains empty. If the real user-equivalent paste
+  # did not read back, continue to an independent native/user path instead.
+  #
+  # In multi-select common dialogs AutomationId=1148 may itself be a zero-HWND
+  # wrapper that exposes ValuePattern while a descendant owns the real native
+  # edit. Enumerate all value candidates and select a nonzero HWND; never stop at
+  # the first accessibility wrapper.
+  if ($actual -ne $expected) {
+    $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+      $true
+    )
+    $editHandle = [IntPtr]::Zero
+    foreach ($nativeTarget in $edit.FindAll(
+      [System.Windows.Automation.TreeScope]::Subtree,
+      $supportsValue
+    )) {
+      $candidateHandle = [IntPtr]$nativeTarget.Current.NativeWindowHandle
+      if ($candidateHandle -ne [IntPtr]::Zero) {
+        $editHandle = $candidateHandle
+        break
+      }
+    }
+
+    # Some common-dialog implementations expose the native edit as an Edit
+    # control without ValuePattern. Keep the same nonzero-HWND requirement.
+    if ($editHandle -eq [IntPtr]::Zero) {
+      $editControlCondition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Edit
+      )
+      foreach ($nativeTarget in $edit.FindAll(
+        [System.Windows.Automation.TreeScope]::Subtree,
+        $editControlCondition
+      )) {
+        $candidateHandle = [IntPtr]$nativeTarget.Current.NativeWindowHandle
+        if ($candidateHandle -ne [IntPtr]::Zero) {
+          $editHandle = $candidateHandle
+          break
+        }
+      }
+    }
+
+    if ($editHandle -ne [IntPtr]::Zero) {
+      $null = [DokkomplektE1NativeMouse]::SendMessage(
+        $editHandle,
+        0x000C,
+        [IntPtr]::Zero,
+        $Path
+      )
+      Start-Sleep -Milliseconds 200
+
+      # Verify the exact native control that received WM_SETTEXT. Reading the
+      # wrapper's ValuePattern here would recreate the UIA-echo false positive.
+      $nativeLength = [DokkomplektE1NativeMouse]::GetWindowTextLength($editHandle)
+      $nativeBuilder = [System.Text.StringBuilder]::new([Math]::Max(1, $nativeLength + 1))
+      $null = [DokkomplektE1NativeMouse]::GetWindowText(
+        $editHandle,
+        $nativeBuilder,
+        $nativeBuilder.Capacity
+      )
+      $actual = Normalize-UiValue -Value $nativeBuilder.ToString()
+      if ($actual -eq $expected) {
+        return $edit
+      }
+    }
+  }
+
+  # Last bounded user-equivalent fallback for Explorer-style multi-select
+  # dialogs: navigate to the parent directory through the address bar, then type
+  # only the leaf file name into the real file-name field. This avoids the
+  # full-path paste quirk while still proving the visible filename before submit.
+  if ($actual -ne $expected) {
+    $parent = [System.IO.Path]::GetDirectoryName($Path)
+    $leaf = [System.IO.Path]::GetFileName($Path)
+    if (-not [string]::IsNullOrWhiteSpace($parent) -and -not [string]::IsNullOrWhiteSpace($leaf)) {
+      try {
+        [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+        [System.Windows.Forms.SendKeys]::SendWait('^l')
+        Start-Sleep -Milliseconds 100
+        Set-Clipboard -Value $parent -ErrorAction Stop
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+        Start-Sleep -Milliseconds 500
+
+        $edit = $Dialog.FindFirst(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+            '1148'
+          )
+        )
+        if ($null -eq $edit) {
+          throw "OpenFileDialog filename edit disappeared while navigating to '$parent'."
+        }
+        $edit.SetFocus()
+        Start-Sleep -Milliseconds 100
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        Set-Clipboard -Value $leaf -ErrorAction Stop
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        Start-Sleep -Milliseconds 250
+        $leafActual = Normalize-UiValue -Value (Get-UiValue -Element $edit)
+        if ($leafActual -eq (Normalize-UiValue -Value $leaf)) {
+          Write-Host "OpenFileDialog multi-select fallback committed leaf '$leaf' in '$parent'."
+          return $edit
+        }
+        $actual = $leafActual
+      } catch {
+        Write-Host "OpenFileDialog address-bar clipboard fallback unavailable for '$Path': $($_.Exception.Message)"
+      }
+    }
+  }
+
+  if ($actual -ne $expected) {
+    throw "OpenFileDialog path did not commit. Expected='$Path' Actual='$actual'."
+  }
+  return $edit
+}
+
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
 
-  # Common OpenFileDialog uses stable IDOK=1 independent of locale. Prefer the
-  # exact AutomationId contract used by the main installed smoke instead of
-  # depending on the localized button name or transient UIA IsEnabled state.
+  # A successful UIA InvokePattern call is not evidence that the hosted Windows
+  # common dialog actually accepted the selection. Drive the real native dialog,
+  # then prove that the exact HWND disappeared before the installed test proceeds.
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog does not expose a native HWND.'
+  }
+  [void][DokkomplektE1NativeMouse]::ShowWindow($dialogHandle, 5)
+  [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+  Start-Sleep -Milliseconds 100
+
+  # Set-OpenFileDialogPath has already proved the exact filename field value.
+  # Submit through the dialog's real Open button first. Pressing Enter while the
+  # filename edit itself owns focus can make the common dialog treat a full path
+  # as navigation and clear the field instead of accepting the file.
+  $filenameEdit = $Dialog.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+  )
+
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
     '1'
@@ -364,27 +552,71 @@ function Submit-OpenFileDialog {
     [System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.AndCondition]::new($automationId, $kind)
   )
+
   if ($null -ne $openButton) {
-    Invoke-UiElement -Element $openButton -Description 'native Open button'
-    return
+    try {
+      $openButton.SetFocus()
+      Start-Sleep -Milliseconds 50
+      if ($openButton.Current.IsInvokePatternAvailable) {
+        $openButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      } elseif ($openButton.Current.IsLegacyIAccessiblePatternAvailable) {
+        $openButton.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
+      } else {
+        $point = $openButton.GetClickablePoint()
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+      }
+    } catch {
+      Write-Host "Native Open button UIA submit did not complete cleanly; falling back to IDOK: $($_.Exception.Message)"
+    }
   }
 
-  # Hosted Windows runners can omit the localized Open button from UIA entirely.
-  # WM_COMMAND/IDOK confirms the same native common dialog without bypassing the
-  # application's real file-picker path.
-  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
-  if ($dialogHandle -eq [IntPtr]::Zero) {
-    throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+  $uiaDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $uiaDeadline) {
+    Start-Sleep -Milliseconds 100
   }
+  if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
+
+  # UIA can acknowledge InvokePattern while the hosted common dialog remains
+  # open. WM_COMMAND/IDOK reaches the same real dialog command handler and is
+  # bounded by an exact HWND liveness check.
+  [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
   $null = [DokkomplektE1NativeMouse]::SendMessagePtr(
     $dialogHandle,
     0x0111,
     [IntPtr]1,
     [IntPtr]::Zero
   )
-  Start-Sleep -Milliseconds 500
-}
+  $nativeDeadline = [DateTime]::UtcNow.AddSeconds(3)
+  while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $nativeDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
 
+  # Final user-equivalent fallback: foreground the same dialog and press Enter.
+  # If it still survives, fail closed with the filename visible to the dialog.
+  [void][DokkomplektE1NativeMouse]::SetForegroundWindow($dialogHandle)
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  $keyDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  while ([DokkomplektE1NativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $keyDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not [DokkomplektE1NativeMouse]::IsWindow($dialogHandle)) { return }
+
+  $filename = ''
+  try {
+    $filenameEdit = $Dialog.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        '1148'
+      )
+    )
+    if ($null -ne $filenameEdit) { $filename = [string](Get-UiValue -Element $filenameEdit) }
+  } catch { }
+  throw "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter. Filename='$filename'."
+}
 function New-AccountingSourceDocx {
   param([Parameter(Mandatory = $true)][string]$Path)
   Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
@@ -455,6 +687,35 @@ function Find-E1NamedElement {
     [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::NameProperty,
       $Name
+    )
+  )
+}
+
+function Find-E1NamedElementContaining {
+  param([Parameter(Mandatory = $true)][string]$Text)
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  foreach ($element in $window.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+  )) {
+    try { $name = [string]$element.Current.Name } catch { continue }
+    if (-not [string]::IsNullOrWhiteSpace($name) -and $name.Contains($Text)) {
+      return $element
+    }
+  }
+  return $null
+}
+
+function Find-E1ElementByAutomationId {
+  param([Parameter(Mandatory = $true)][string]$AutomationId)
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  return $window.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $AutomationId
     )
   )
 }
@@ -1220,16 +1481,19 @@ foreach ($scenario in $domainScenarios) {
   # Every profession scenario is a fresh case. Reusing the previous Accounting
   # semantic case would make source-owned values such as contract.date appear
   # already satisfied and would weaken the installed required-field proof.
-  Invoke-UiActionPhysicallyFromProbe -Description "reset case before $($scenario.Label)" -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
-  }
-  $null = Wait-UiElement -Description "empty case before $($scenario.Label)" -TimeoutSeconds 30 -Probe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
-  }
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description "reset case before $($scenario.Label)" `
+    -TransitionDescription "empty case before $($scenario.Label)" `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+    }
 
   $templatePath = Join-Path $fixtureDir $scenario.FileName
   New-E1TextDocx -Path $templatePath -Lines $scenario.TemplateLines
@@ -1251,16 +1515,19 @@ foreach ($scenario in $domainScenarios) {
 # sequence of single-document generations. Two ordinary Universal templates are
 # selected together, share one preflight, and must each produce a readable
 # physical DOCX plus its own committed GenerationReceipt.
-Invoke-UiActionPhysicallyFromProbe -Description 'reset case before FPR-01 main-document batch' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
-}
-$null = Wait-UiElement -Description 'empty case before FPR-01 main-document batch' -TimeoutSeconds 30 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
-}
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-01 main-document batch' `
+  -TransitionDescription 'empty case before FPR-01 main-document batch' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
 
 $fpr01Documents = @(
   [pscustomobject]@{
@@ -1433,6 +1700,301 @@ if ($fpr01ReceiptCountAfter -ne ($fpr01ReceiptCountBefore + $fpr01Documents.Coun
 }
 Write-Host 'FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts.'
 
+# FPR-02: prove the real installed medical diary path. The registered diary
+# button must route through the single program-calendar template, doctor-owned
+# Texts library and canonical preflight; the physical DOCX must remain paragraph
+# text (not the retired legacy table engine), start at D0+1, stop on discharge,
+# preserve the dedicated final row, both signature blocks and centered date paragraphs.
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-02 diary proof' `
+  -TransitionDescription 'empty case before FPR-02 diary proof' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
+
+$fpr02DiaryLabel = 'Дневники FPR02'
+$fpr02DiaryTemplate = Join-Path $fixtureDir 'fpr02-diaries.docx'
+New-E1TextDocx -Path $fpr02DiaryTemplate -Lines @(
+  'Дневники',
+  'Календарные дневниковые записи пациента'
+)
+Add-E1DomainTemplate `
+  -TemplatePath $fpr02DiaryTemplate `
+  -Label $fpr02DiaryLabel `
+  -DomainOption 'Медицина'
+
+$fpr02Source = Join-Path $fixtureDir 'fpr02-медицинский-источник.docx'
+New-E1TextDocx -Path $fpr02Source -Lines @(
+  'Первичный осмотр',
+  'Ф.И.О.: Петров Пётр Петрович',
+  'Дата рождения: 02.02.1982',
+  'Дата поступления: 10.05.2026',
+  'Дата выписки: 13.05.2026',
+  'Диагноз: F20.0 Параноидная шизофрения',
+  'Лечение: рисперидон 4 мг/сут'
+)
+Set-E1DomainSource -SourcePath $fpr02Source
+
+$window = Find-LiveAppWindow
+$clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
+if ($null -ne $clearSelection) {
+  Invoke-UiElementPhysically -Element $clearSelection -Description 'clear selection before FPR-02 diary'
+}
+Start-Sleep -Milliseconds 200
+Invoke-UiActionPhysicallyFromProbe -Description 'select FPR-02 diary document' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  $window.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      "Добавить $fpr02DiaryLabel в комплект"
+    )
+  )
+}
+$null = Wait-UiElement -Description 'medical diary additional sources panel' -TimeoutSeconds 30 -Probe {
+  Find-E1NamedElement -Name 'Медицинские дневники'
+}
+
+$fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.docx'
+$fpr02DoctorText = 'FPR02 профессиональный текст дневника, подтверждённый врачом.'
+New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)
+$diaryTextDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-02 Тексты' `
+  -TransitionDescription 'native diary Texts picker' `
+  -ActionProbe {
+    Find-E1NamedElement -Name 'Тексты'
+  } `
+  -TransitionProbe { Find-FileDialog }
+$null = Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText
+Submit-OpenFileDialog -Dialog $diaryTextDialog
+
+$fpr02ImportDeadline = [DateTime]::UtcNow.AddSeconds(40)
+$fpr02ImportStatusText = ''
+$fpr02ImportPassed = $false
+do {
+  $fpr02ImportStatus = Find-E1ElementByAutomationId -AutomationId 'additional-materials-status'
+  if ($null -eq $fpr02ImportStatus) {
+    $fpr02ImportStatus = Find-E1NamedElementContaining -Text 'Тексты'
+  }
+  if ($null -ne $fpr02ImportStatus) {
+    try { $fpr02ImportStatusText = [string]$fpr02ImportStatus.Current.Name } catch { $fpr02ImportStatusText = '' }
+    if ($fpr02ImportStatusText -match 'сохранено\s+1\s+из\s+1' -and $fpr02ImportStatusText -match 'ошибок\s+0') {
+      $fpr02ImportPassed = $true
+      break
+    }
+    if ($fpr02ImportStatusText -match 'Не удалось|Ошибка|ошибок\s+[1-9]') {
+      throw "FPR-02 diary text import failed: $fpr02ImportStatusText"
+    }
+  }
+  Start-Sleep -Milliseconds 150
+} while ([DateTime]::UtcNow -lt $fpr02ImportDeadline)
+
+if (-not $fpr02ImportPassed) {
+  $snapshot = Get-E1UiSnapshot
+  throw "FPR-02 diary text import did not reach terminal success. Last status='$fpr02ImportStatusText'. UI=$snapshot"
+}
+if ($fpr02ImportStatusText -notmatch 'F20\.0') {
+  throw "FPR-02 diary Texts were not bound to the source-owned diagnosis F20.0: $fpr02ImportStatusText"
+}
+Write-Host "FPR-02 Texts import PASS: $fpr02ImportStatusText"
+
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-02 diary generation action' `
+  -TransitionDescription 'FPR-02 diary preflight' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe { Find-E1NamedElement -Name 'Проверка перед созданием' }
+
+# Source-owned values are intentionally absent from the preflight prompt list.
+# Workflow PromptAskMode::IfMissing suppresses a question when SemanticCase already
+# contains the source value. Re-prompting these fields would regress the donor UX
+# and would let the test overwrite the very recognition result it is meant to prove.
+foreach ($fieldId in @('medical.admission_date', 'medical.discharge_date', 'medical.diagnosis', 'medical.case_number')) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+  )
+  if ($null -ne $control) {
+    throw "FPR-02 diary role unexpectedly re-prompted a source/non-diary field: $fieldId"
+  }
+}
+
+# A fresh universal install uses the canonical default output identity
+# DocumentNumber + DocumentDate. Only still-missing values may be prompted:
+# this source has no document number, but its admitted primary-inspection date is
+# already recognized as document.date=10.05.2026 and must not be re-asked.
+$fpr02NumberControl = (Find-LiveAppWindow).FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-number'
+  )
+)
+if ($null -eq $fpr02NumberControl) {
+  throw 'FPR-02 missing the still-required default output-folder document.number prompt.'
+}
+Set-UiValue -Element $fpr02NumberControl -Value 'FPR02-42'
+
+$fpr02DateControl = (Find-LiveAppWindow).FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-date'
+  )
+)
+if ($null -ne $fpr02DateControl) {
+  throw 'FPR-02 re-prompted source-owned document.date instead of reusing 10.05.2026.'
+}
+Write-Host 'FPR-02 folder identity preflight PASS: missing number requested; source-owned document date not re-prompted.'
+
+$fpr02PromptValues = [ordered]@{
+  'medical.diary_schedule_style' = 'Каждый день'
+  'medical.diary_intraday_rhythm' = 'Один раз в день'
+}
+foreach ($fieldId in $fpr02PromptValues.Keys) {
+  $automationId = 'workflow-' + ($fieldId -replace '[^a-zA-Z0-9_-]', '-')
+  $control = (Find-LiveAppWindow).FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+  )
+  if ($null -eq $control) { throw "FPR-02 missing required diary decision: $fieldId" }
+  Set-UiValue -Element $control -Value $fpr02PromptValues[$fieldId]
+}
+
+$fpr02SickLeaveId = 'workflow-medical-diary_sick_leave_epicrisis'
+$fpr02SickLeave = (Find-LiveAppWindow).FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    $fpr02SickLeaveId
+  )
+)
+if ($null -eq $fpr02SickLeave) { throw 'FPR-02 preflight did not expose the donor sick-leave decision.' }
+$fpr02SickLeave.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{HOME}')
+[System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
+[System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+Start-Sleep -Milliseconds 250
+$fpr02SickLeaveValue = Normalize-UiValue -Value (Get-UiValue -Element $fpr02SickLeave)
+if ($fpr02SickLeaveValue -ne 'Нет') {
+  throw "FPR-02 sick-leave decision did not commit as 'Нет': '$fpr02SickLeaveValue'"
+}
+
+$fpr02OutputName = "$fpr02DiaryLabel.docx"
+foreach ($existing in @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr02OutputName -ErrorAction SilentlyContinue)) {
+  Remove-Item -LiteralPath $existing.FullName -Force -ErrorAction SilentlyContinue
+}
+$fpr02ReceiptCountBefore = if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
+  @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
+} else { 0 }
+
+Invoke-UiActionPhysicallyFromProbe -Description 'create FPR-02 diary DOCX' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+}
+$fpr02Deadline = [DateTime]::UtcNow.AddSeconds(75)
+$fpr02Doc = $null
+do {
+  if ($process.HasExited) { throw 'Installed application exited during FPR-02 diary generation.' }
+  $fpr02Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr02OutputName -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -ne $fpr02Doc) { break }
+  $failure = Find-E1NamedElement -Name 'Документы не созданы'
+  if ($null -ne $failure) {
+    $failureDetail = Find-E1NamedElementContaining -Text 'Документы не созданы:'
+    $failureText = ''
+    if ($null -ne $failureDetail) {
+      try { $failureText = [string]$failureDetail.Current.Name } catch { $failureText = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($failureText)) {
+      $failureText = Get-E1UiSnapshot
+    }
+    throw "FPR-02 generation failed after accepted preflight: $failureText"
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr02Deadline)
+if ($null -eq $fpr02Doc) { throw 'FPR-02 did not publish a physical diary DOCX.' }
+$fpr02ExpectedFolder = 'FPR02-42 10.05.2026'
+if ($fpr02Doc.Directory.Name -ne $fpr02ExpectedFolder) {
+  throw "FPR-02 output folder did not preserve missing-number + source-date identity. Expected='$fpr02ExpectedFolder' Actual='$($fpr02Doc.Directory.Name)'."
+}
+Write-Host "FPR-02 folder identity PASS: $fpr02ExpectedFolder"
+
+$archive = [System.IO.Compression.ZipFile]::OpenRead($fpr02Doc.FullName)
+try {
+  $entry = $archive.GetEntry('word/document.xml')
+  if ($null -eq $entry) { throw 'FPR-02 output is not a readable DOCX package.' }
+  $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr02Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+} finally { $archive.Dispose() }
+
+if ($fpr02Xml -match '<w:tbl') { throw 'FPR-02 canonical diary output regressed to a Word table.' }
+foreach ($date in @('11.05.2026', '12.05.2026', '13.05.2026')) {
+  if ($fpr02Xml -notmatch [regex]::Escape($date)) { throw "FPR-02 diary schedule is missing $date" }
+  $datePattern = '<w:p(?:\s[^>]*)?>(?:(?!</w:p>).)*?' + [regex]::Escape($date) + '(?:(?!</w:p>).)*?</w:p>'
+  $dateParagraph = [regex]::Match($fpr02Xml, $datePattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  if (-not $dateParagraph.Success -or $dateParagraph.Value -notmatch '<w:jc\s+w:val="center"\s*/>') {
+    throw "FPR-02 diary date is not centered in paragraph text: $date"
+  }
+}
+if ($fpr02Xml -match [regex]::Escape('10.05.2026')) { throw 'FPR-02 incorrectly emitted an ordinary diary on admission day D0.' }
+if ($fpr02Xml -match [regex]::Escape('14.05.2026')) { throw 'FPR-02 emitted a diary after the discharge boundary.' }
+$doctorTextCount = [regex]::Matches($fpr02Xml, [regex]::Escape($fpr02DoctorText)).Count
+if ($doctorTextCount -ne 2) { throw "FPR-02 expected doctor-owned regular text on exactly two ordinary rows, got $doctorTextCount." }
+if ($fpr02Xml -notmatch [regex]::Escape('На текущую дату оформлена выписка из стационара.')) {
+  throw 'FPR-02 final discharge diary text is missing.'
+}
+if ([regex]::Matches($fpr02Xml, 'Лечащий врач').Count -ne 3) {
+  throw 'FPR-02 did not retain the treating-physician signature on every diary row.'
+}
+if ([regex]::Matches($fpr02Xml, 'Заведующий отделением').Count -ne 3) {
+  throw 'FPR-02 did not retain the department-head signature on every diary row.'
+}
+if ($fpr02Xml -match '\{\{') { throw 'FPR-02 physical diary DOCX contains unresolved placeholders.' }
+
+$fpr02Hash = (Get-FileHash -LiteralPath $fpr02Doc.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+$fpr02ReceiptDeadline = [DateTime]::UtcNow.AddSeconds(30)
+$fpr02ReceiptMatched = $false
+do {
+  if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
+    foreach ($file in @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
+      try {
+        $data = (Get-Content -LiteralPath $file.FullName -Raw) | ConvertFrom-Json
+        if ($data.status -eq 'committed' -and $data.output_sha256 -eq $fpr02Hash) {
+          $fpr02ReceiptMatched = $true
+          break
+        }
+      } catch { }
+    }
+  }
+  if (-not $fpr02ReceiptMatched) { Start-Sleep -Milliseconds 250 }
+} while (-not $fpr02ReceiptMatched -and [DateTime]::UtcNow -lt $fpr02ReceiptDeadline)
+if (-not $fpr02ReceiptMatched) { throw 'FPR-02 diary output has no matching committed GenerationReceipt.' }
+$fpr02ReceiptCountAfter = @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
+if ($fpr02ReceiptCountAfter -ne ($fpr02ReceiptCountBefore + 1)) {
+  throw 'FPR-02 diary generation did not add exactly one committed GenerationReceipt.'
+}
+Write-Host 'FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
 Stop-Process -Id $process.Id -Force

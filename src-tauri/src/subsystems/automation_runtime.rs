@@ -667,8 +667,9 @@ fn perform_created_documents_intake(
             .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", doc.button_label))?;
         let template_text = extract_docx_text(template_snapshot.path())
             .map_err(|e| format!("Шаблон «{}» не читается: {e}", doc.button_label))?;
+        let effective_spec = effective_generation_document_spec(doc, &template_text)?;
         configured.push(ConfiguredDocument {
-            spec: doc.clone(),
+            spec: effective_spec,
             template_text,
         });
     }
@@ -889,19 +890,21 @@ fn perform_created_documents_intake(
                     let template_snapshot = template_snapshots
                         .get(&doc.id)
                         .ok_or_else(|| format!("Не найден snapshot шаблона «{}».", doc.button_label))?;
-                    let template_text = configured
+                    let configured_document = configured
                         .iter()
                         .find(|configured| configured.spec.id == out.document_id)
-                        .map(|configured| configured.template_text.clone())
                         .ok_or_else(|| "configured document not found".to_string())?;
-                    let trust_field_ids = dokkomplekt_core::document_required_input_fields(doc, &flags)
-                        .into_iter()
-                        .chain(doc.placeholders.iter().cloned())
-                        .collect::<BTreeSet<_>>();
+                    let effective_doc = &configured_document.spec;
+                    let template_text = &configured_document.template_text;
+                    let trust_field_ids =
+                        dokkomplekt_core::document_required_input_fields(effective_doc, &flags)
+                            .into_iter()
+                            .chain(effective_doc.placeholders.iter().cloned())
+                            .collect::<BTreeSet<_>>();
                     let fingerprint_case = hydrate_case_with_persistent_template_data(
                         app,
                         &case,
-                        std::slice::from_ref(&template_text),
+                        std::slice::from_ref(template_text),
                         false,
                     )?;
                     // Fingerprint the same profession-scoped case that would be
@@ -909,23 +912,28 @@ fn perform_created_documents_intake(
                     // expert paragraph assembled from workplace/sick-leave inputs)
                     // part of checkpoint identity, so changed source inputs can never
                     // reuse a DOCX whose trust evidence was produced from old values.
+                    let fingerprint_professional_case =
+                        dokkomplekt_core::prepare_professional_collections(
+                            template_text,
+                            &fingerprint_case.case,
+                        );
                     let fingerprint_render_case =
                         dokkomplekt_core::domains::case_for_document_render(
-                            &fingerprint_case.case,
-                            &doc.category,
-                            &doc.role_id,
+                            &fingerprint_professional_case,
+                            &effective_doc.category,
+                            &effective_doc.role_id,
                         );
                     let input_fingerprint =
                         resume_engine::document_input_fingerprint_with_additional_fields(
                             &out.document_id,
                             template_snapshot.path(),
-                            &template_text,
+                            template_text,
                             &fingerprint_render_case,
                             &trust_field_ids,
                             permit.watermark.as_deref(),
                         )?;
                     let reusable = resume_engine::template_is_resume_safe(
-                        &template_text,
+                        template_text,
                         &fingerprint_render_case,
                     )
                     .then(|| {
@@ -948,14 +956,14 @@ fn perform_created_documents_intake(
                         let hydrated = hydrate_case_with_persistent_template_data(
                             app,
                             &case,
-                            std::slice::from_ref(&template_text),
+                            std::slice::from_ref(template_text),
                             true,
                         )?;
                         counter_reservations.extend(hydrated.counter_reservations);
                         let render_case = dokkomplekt_core::domains::case_for_document_render(
                             &hydrated.case,
-                            &doc.category,
-                            &doc.role_id,
+                            &effective_doc.category,
+                            &effective_doc.role_id,
                         );
                         let proof = render_docx_with_assets(
                             app,
@@ -967,8 +975,8 @@ fn perform_created_documents_intake(
                         )
                         .map_err(|e| format!("Не создан «{}»: {e}", doc.button_label))?;
                         ensure_rendered_document_complete(
-                            doc,
-                            &template_text,
+                            effective_doc,
+                            template_text,
                             &render_case,
                             &proof.visible_text,
                             &out_path,

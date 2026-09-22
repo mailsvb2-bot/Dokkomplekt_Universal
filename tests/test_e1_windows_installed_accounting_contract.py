@@ -12,6 +12,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     source = SCRIPT.read_text(encoding="utf-8-sig")
     workflow = WORKFLOW.read_text(encoding="utf-8")
     app_source = (ROOT / "src" / "App.tsx").read_text(encoding="utf-8")
+    advanced_tools = (ROOT / "src" / "components" / "AdvancedToolsPanel.tsx").read_text(encoding="utf-8")
+    additional_materials = (ROOT / "src" / "components" / "AdditionalMaterialsPanel.tsx").read_text(encoding="utf-8")
+    api_source = (ROOT / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    learning_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_learning_commands.rs").read_text(encoding="utf-8")
+    picker_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_picker.rs").read_text(encoding="utf-8")
     assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
     assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
 
@@ -46,7 +51,30 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "'1'" in source
     assert "0x0111" in source
     assert "[IntPtr]1" in source
-    assert "OpenFileDialog exposes neither AutomationId=1 nor a native HWND." in source
+    assert "public static extern bool IsWindow" in source
+    assert "function Set-OpenFileDialogPath" in source
+    assert "Set-Clipboard -Value $Path -ErrorAction Stop" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('^v')" in source
+    assert "Submit through the dialog's real Open button first." in source
+    assert "OpenFileDialog path did not commit. Expected=" in source
+    assert "Set-UiValue -Element $edit -Value $Path" not in source
+    assert "OpenFileDialog clipboard paste unavailable; continuing with native/user fallback" in source
+    assert "Never \"verify\" a failed paste by setting and immediately rereading" in source
+    assert "$edit.FindAll(" in source
+    assert "$candidateHandle -ne [IntPtr]::Zero" in source
+    assert "[System.Windows.Automation.ControlType]::Edit" in source
+    assert "GetWindowTextLength($editHandle)" in source
+    assert "OpenFileDialog address-bar clipboard fallback unavailable" in source
+    assert "OpenFileDialog multi-select fallback committed leaf" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('^l')" in source
+    assert "GetDirectoryName($Path)" in source
+    assert "GetFileName($Path)" in source
+    assert "-Description 'FPR-02 Тексты'" in source
+    assert "Find-E1NamedElement -Name 'Тексты'" in source
+    assert "Set-OpenFileDialogPath -Dialog $diaryTextDialog -Path $fpr02DiaryText" in source
+    assert "Submit-OpenFileDialog -Dialog $diaryTextDialog" in source
+    assert "Set-UiValue -Element $diaryTextEdit -Value $fpr02DiaryText" not in source
+    assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
     assert "Find-ReadyButtonByNames -Root $Dialog -Names @('Открыть', 'Open')" not in source
     assert "IsValuePatternAvailableProperty" in source
     assert "NativeWindowHandle" in source
@@ -59,6 +87,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source
     assert "function Invoke-UiActionWithObservedTransition" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
+    assert '$null = Invoke-UiActionWithObservedTransition `\n    -Description "reset case before $($scenario.Label)"' in source
+    assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-01 main-document batch'" in source
+    assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-02 diary proof'" in source
     assert '-Description "open advanced template settings for $FileName"' in source
     assert "after failed advanced settings transition" in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source
@@ -70,3 +101,49 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "$fpr01OutputHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "$fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]" in source
     assert "one batch did not add exactly" in source
+    assert "FPR-02 Texts import PASS:" in source
+    assert "FPR-02 diary Texts were not bound to the source-owned diagnosis F20.0" in source
+    assert "FPR-02 diary role unexpectedly re-prompted a source/non-diary field" in source
+    assert "FPR-02 folder identity preflight PASS:" in source
+    assert "workflow-document-number" in source
+    assert "Set-UiValue -Element $fpr02NumberControl -Value 'FPR02-42'" in source
+    assert "workflow-document-date" in source
+    assert "FPR-02 re-prompted source-owned document.date instead of reusing 10.05.2026." in source
+    assert "$fpr02ExpectedFolder = 'FPR02-42 10.05.2026'" in source
+    assert "FPR-02 output folder did not preserve missing-number + source-date identity." in source
+    assert 'Write-Host "FPR-02 folder identity PASS: $fpr02ExpectedFolder"' in source
+    assert "medical.admission_date" in source
+    assert "medical.discharge_date" in source
+    assert "medical.diagnosis" in source
+    assert "pickLearningFiles('medical_diary')" in additional_materials
+    assert "chooseDiaryTextsForCurrentDiagnosis" in additional_materials
+    assert 'id="medical-diary-text-files"' not in additional_materials, (
+        "normal diary Texts must not regress to the hosted WebView file input"
+    )
+    assert "pickLearningFiles('medical_diary')" in advanced_tools
+    assert "'medical_diary'" in api_source
+    assert "extracted_text?: string | null;" in api_source
+    assert "import_error?: string | null;" in api_source
+    assert '"medical_diary" => pick_medical_diary_files_blocking(req.initial_path)' in learning_backend
+    assert "extracted_text: Option<String>" in learning_backend
+    assert "import_error: Option<String>" in learning_backend
+    assert "Тексты дневников (*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf)|*.docx;*.docm;*.doc;*.txt;*.rtf;*.odt;*.pdf" in picker_backend
+    assert "DOKKOMPLEKT_PICK_MEDICAL_DIARY_INITIAL" in picker_backend
+    assert "additional-materials-status" in source
+    assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
+    assert "FPR-02 diary text import did not reach terminal success. Last status=" in source
+    assert "Get-E1UiSnapshot" in source
+    assert "сохранено\\s+1\\s+из\\s+1" in source
+    assert "ошибок\\s+0" in source
+    assert "FPR-02 INSTALLED PASS: Texts -> D0+1..discharge paragraph diary -> centered dates -> doctor text/final row -> 2 signatures per row -> committed receipt." in source
+    assert "$fpr02DoctorText" in source
+    assert "$fpr02DiaryText = Join-Path $fixtureDir 'fpr02-regular-diary.docx'" in source
+    assert "New-E1TextDocx -Path $fpr02DiaryText -Lines @($fpr02DoctorText)" in source
+    assert "FPR-02 canonical diary output regressed to a Word table." in source
+    assert "FPR-02 diary date is not centered in paragraph text" in source
+    assert "(?:(?!</w:p>).)*?" in source
+    assert "FPR-02 incorrectly emitted an ordinary diary on admission day D0." in source
+    assert "FPR-02 emitted a diary after the discharge boundary." in source
+    assert "FPR-02 diary output has no matching committed GenerationReceipt." in source
+    assert "FPR-02 generation failed after accepted preflight:" in source
+    assert "Find-E1NamedElementContaining -Text 'Документы не созданы:'" in source

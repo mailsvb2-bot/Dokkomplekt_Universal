@@ -83,12 +83,14 @@ export async function importLearningExampleFile(fileName: string, bytesBase64: s
   return callRust('import_learning_example_file', { req: { file_name: fileName, bytes_base64: bytesBase64 } });
 }
 
-export type LearningFileKind = 'blank' | 'correct_output' | 'source';
+export type LearningFileKind = 'blank' | 'correct_output' | 'source' | 'medical_diary';
 
 export interface PickedLearningFile {
   file_name: string;
   staged_path: string;
   content_sha256: string;
+  extracted_text?: string | null;
+  import_error?: string | null;
 }
 
 export async function pickLearningFiles(kind: LearningFileKind, initialPath?: string | null): Promise<PickedLearningFile[]> {

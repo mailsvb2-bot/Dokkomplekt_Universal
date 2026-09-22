@@ -480,7 +480,7 @@ fn confirm_template_setup(
 
     let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
     for document in &incoming.documents {
-        validate_medical_template_output_contract(document)?;
+        validate_registered_medical_template_output_contract(&app, document)?;
     }
     let mut drafts = Vec::with_capacity(rows.len());
     for row in &rows {

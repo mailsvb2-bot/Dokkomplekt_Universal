@@ -306,7 +306,10 @@ fn safe_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dokkomplekt_core::{SemanticValue, ValueSource};
+    use dokkomplekt_core::{
+        prepare_professional_collections, set_user_value, DomainKind, SemanticValue, ValueSource,
+        MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+    };
 
     fn test_directory(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -484,6 +487,78 @@ mod tests {
             second_case.get("medical.expert_anamnesis")
         );
         assert_ne!(first, second);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prepared_diary_collection_invalidates_checkpoint_when_schedule_or_text_changes() {
+        fn diary_case(schedule: &str, regular_text: &str) -> SemanticCase {
+            let mut case = SemanticCase::default();
+            case.active_domains.push(DomainKind::Medical);
+            for (field_id, value) in [
+                ("medical.admission_date", "10.05.2026"),
+                ("medical.discharge_date", "30.05.2026"),
+                ("medical.diagnosis", "F20.0 Шизофрения параноидная"),
+                ("medical.diary_schedule_style", schedule),
+                ("medical.diary_intraday_rhythm", "Один раз в день"),
+            ] {
+                set_user_value(&mut case, field_id, value);
+            }
+            case.blocks.insert(
+                "professional.medical.diary.regular.f200".into(),
+                regular_text.into(),
+            );
+            prepare_professional_collections(MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT, &case)
+        }
+
+        let dir = test_directory("prepared-diary");
+        let template = dir.join("template.docx");
+        std::fs::write(&template, MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT).unwrap();
+
+        let daily = diary_case(
+            "Каждый день",
+            "Состояние стабильное, контакт продуктивный, назначения выполняет.",
+        );
+        let sparse = diary_case(
+            "1, 3, 5",
+            "Состояние стабильное, контакт продуктивный, назначения выполняет.",
+        );
+        let changed_text = diary_case(
+            "Каждый день",
+            "Состояние улучшилось, контакт продуктивный, назначения выполняет регулярно.",
+        );
+
+        assert!(daily.collection("diaries").is_some());
+        assert!(sparse.collection("diaries").is_some());
+        assert!(changed_text.collection("diaries").is_some());
+
+        let daily_fingerprint = document_input_fingerprint(
+            "diaries",
+            &template,
+            MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+            &daily,
+            None,
+        )
+        .unwrap();
+        let sparse_fingerprint = document_input_fingerprint(
+            "diaries",
+            &template,
+            MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+            &sparse,
+            None,
+        )
+        .unwrap();
+        let changed_text_fingerprint = document_input_fingerprint(
+            "diaries",
+            &template,
+            MEDICAL_PROGRAM_CALENDAR_DIARY_TEMPLATE_TEXT,
+            &changed_text,
+            None,
+        )
+        .unwrap();
+
+        assert_ne!(daily_fingerprint, sparse_fingerprint);
+        assert_ne!(daily_fingerprint, changed_text_fingerprint);
         let _ = std::fs::remove_dir_all(dir);
     }
 

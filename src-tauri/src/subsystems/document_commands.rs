@@ -1382,6 +1382,17 @@ fn render_docx_batch(
             return Err(error);
         }
     };
+    if let Some(staged_source) = staged_source_copy.as_ref() {
+        if let Err(error) = generation_publication::verify_source_copy_sha256(
+            staged_source,
+            &publication_binding.source_sha256,
+        ) {
+            let _ = std::fs::remove_dir_all(&stage);
+            rollback_counter_reservations(&app, &counter_reservations);
+            rollback_generation_access(&app, &state, &permit);
+            return Err(error);
+        }
+    }
     if let Err(error) = generation_publication::prepare_publication(
         &app,
         &permit,
@@ -1462,18 +1473,15 @@ fn render_docx_batch(
                     .to_string()
             })?;
             let published_source = output_folder.join(source_name);
-            let metadata = std::fs::metadata(&published_source).map_err(|error| {
+            generation_publication::verify_source_copy_sha256(
+                &published_source,
+                &publication_binding.source_sha256,
+            )
+            .map_err(|error| {
                 format!(
-                    "Публикация комплекта не подтверждена: исходный документ отсутствует {}: {error}",
-                    published_source.display()
+                    "Публикация комплекта не подтверждена: source snapshot read-back failed: {error}"
                 )
             })?;
-            if !metadata.is_file() || metadata.len() == 0 {
-                return Err(format!(
-                    "Публикация комплекта не подтверждена: копия исходного документа пуста или отсутствует: {}",
-                    published_source.display()
-                ));
-            }
         }
         Ok(created_files)
     })();

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
-  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
+  getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
@@ -88,9 +88,6 @@ function AppContent() {
   const [autoInferStaticTemplates, setAutoInferStaticTemplates] = useState(false);
   const [popupDesignerDocument, setPopupDesignerDocument] = useState<DocumentTemplateSpec | null>(null);
   const [popupDesignerFields, setPopupDesignerFields] = useState<PopupFieldConfig[]>([]);
-  const [icdQuery, setIcdQuery] = useState('');
-  const [icdHits, setIcdHits] = useState<Icd10Suggestion[]>([]);
-
   const [licenseText, setLicenseText] = useState('');
   const [utilityOpen, setUtilityOpen] = useState(false);
 
@@ -1132,22 +1129,6 @@ function AppContent() {
     setAutoInferStaticTemplates(false);
     setSetupOpen(false);
     setStatus(templateSetupCompletionMessage(confirmedRows.length, createdCount));
-  }
-
-  async function chooseIcd(hit: Icd10Suggestion) {
-    await run('set_field', async () => {
-      await setField('medical.icd10', hit.code);
-      return setField('medical.diagnosis', hit.title);
-    });
-    setIcdQuery(`${hit.code} ${hit.title}`);
-    setStatus(`Значение выбрано: ${hit.code} — ${hit.title}. Оно будет использовано во всех выбранных документах.`);
-  }
-
-  async function searchIcd() {
-    const res = await run('icd10_suggest', () => icd10Suggest(icdQuery));
-    if (!res) return;
-    setIcdHits(res.slice(0, 6));
-    setStatus(`Найдено вариантов: ${res.length} по запросу «${icdQuery}».`);
   }
 
   async function seriesPlan() {

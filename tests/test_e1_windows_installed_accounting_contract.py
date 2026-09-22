@@ -51,6 +51,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "FPR-03 published source SHA-256 mismatch" in source
     assert "FPR-03 INSTALLED PASS: source picker -> retained snapshot -> published source copy SHA-256 exact." in source
     assert "$fpr04SourceFields = @(" in source
+    assert "Find-E1NamedElementContaining -Text 'Происхождение данных подтверждено:'" in source
+    assert "Find-E1NamedElementContaining -Root" not in source
     assert '"${fieldId}:Scanner/document_text/deterministic_source_parser"' in source
     assert "FPR-04 installed recognition provenance missing exact parser trace" in source
     assert "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake." in source

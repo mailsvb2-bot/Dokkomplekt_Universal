@@ -17,6 +17,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     api_source = (ROOT / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
     learning_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_learning_commands.rs").read_text(encoding="utf-8")
     picker_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "template_picker.rs").read_text(encoding="utf-8")
+    document_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "document_commands.rs").read_text(encoding="utf-8")
+    publication_backend = (ROOT / "src-tauri" / "src" / "generation_publication.rs").read_text(encoding="utf-8")
     assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
     assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
 
@@ -41,6 +43,16 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "physical-output-sha256-v1" in source
     assert "published-readback-v1" in source
     assert "E1 INSTALLED PASS: Accounting source -> UI -> physical DOCX -> committed receipt" in source
+    assert '$publishedAccountingSource = Join-Path $accountingDoc.Directory.FullName ("Исходный - " + $sourceFileName)' in source
+    assert "$accountingSourceHash = (Get-FileHash -LiteralPath $accountingSource -Algorithm SHA256).Hash.ToLowerInvariant()" in source
+    assert "$publishedAccountingSourceHash = (Get-FileHash -LiteralPath $publishedAccountingSource -Algorithm SHA256).Hash.ToLowerInvariant()" in source
+    assert "FPR-03 published source SHA-256 mismatch" in source
+    assert "FPR-03 INSTALLED PASS: source picker -> retained snapshot -> published source copy SHA-256 exact." in source
+    assert "verify_source_copy_sha256(" in document_backend
+    assert "staged_source" in document_backend
+    assert "published_source" in document_backend
+    assert "verify_source_copy_sha256(" in publication_backend
+    assert "не совпала с frozen SourceSnapshot" in publication_backend
     assert "Windows installer smoke" in workflow
     assert "Windows E1 cross-domain installed path" in workflow
     assert workflow.index("Windows installer smoke") < workflow.index("Windows E1 cross-domain installed path")

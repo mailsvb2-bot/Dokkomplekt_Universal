@@ -1239,7 +1239,7 @@ $fpr04Proof = Wait-UiElement -Description 'FPR-04 recognition provenance proof' 
 }
 $fpr04ProofName = [string]$fpr04Proof.Current.Name
 foreach ($fieldId in $fpr04SourceFields) {
-  $expectedTrace = "$fieldId:Scanner/document_text/deterministic_source_parser"
+  $expectedTrace = "${fieldId}:Scanner/document_text/deterministic_source_parser"
   if (-not $fpr04ProofName.Contains($expectedTrace)) {
     throw "FPR-04 installed recognition provenance missing exact parser trace: $expectedTrace. Actual=$fpr04ProofName"
   }

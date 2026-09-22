@@ -2061,6 +2061,7 @@ $fpr05Label = 'МКБ-10 FPR05'
 $fpr05Template = Join-Path $fixtureDir 'fpr05-icd10.docx'
 New-E1TextDocx -Path $fpr05Template -Lines @(
   'Проверка МКБ-10',
+  'Пациент: {{subject.name}}',
   'Код МКБ-10: {{medical.icd10}}',
   'Диагноз: {{medical.diagnosis}}'
 )

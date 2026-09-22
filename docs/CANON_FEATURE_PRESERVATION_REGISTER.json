@@ -136,8 +136,8 @@
     {
       "id": "FPR-04",
       "group": "Распознавание",
-      "status": "needs-runtime-proof",
-      "actual_state": "canonical parser is present; installed provenance proof pending",
+      "status": "verified",
+      "actual_state": "canonical parser provenance is preserved through real file intake and exposed as a non-PII installed recognition proof on candidate",
       "entry": [
         "src/App.tsx"
       ],
@@ -154,10 +154,15 @@
       "after": "installed_baseline",
       "evidence_paths": [
         "src/App.tsx",
+        "src-tauri/src/subsystems/source_intake_commands.rs",
         "crates/dokkomplekt-core/src/source_parser.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Runtime value/provenance evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-04 installed recognition provenance proof",
+        "tests/test_e1_windows_installed_accounting_contract.py#FPR-04 regression lock",
+        "src-tauri/src/subsystems/source_intake_commands.rs#non-PII recognition proof"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-05",

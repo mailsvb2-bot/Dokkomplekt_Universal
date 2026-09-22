@@ -200,10 +200,11 @@
     {
       "id": "FPR-06",
       "group": "Scanner",
-      "status": "needs-runtime-proof",
-      "actual_state": "guided scanner UI and canonical scanner engine are present; installed proof pending",
+      "status": "verified",
+      "actual_state": "installed manual Scanner UI and guided Word Scanner converge on the canonical apply_scanner SemanticCase path; a Scanner-owned value is proven through physical output on candidate",
       "entry": [
-        "src/components/GuidedScannerModal.tsx"
+        "src/components/Workspace.tsx#manual Scanner UI",
+        "src/components/GuidedScannerModal.tsx#guided Word Scanner UI"
       ],
       "backend": [
         "crates/dokkomplekt-core/src/scanner_engine.rs",
@@ -218,12 +219,18 @@
       "before": "source_baseline",
       "after": "installed_baseline",
       "evidence_paths": [
+        "src/components/Workspace.tsx",
         "src/components/GuidedScannerModal.tsx",
+        "src/App.tsx",
         "crates/dokkomplekt-core/src/scanner_engine.rs",
         "src-tauri/src/subsystems/document_commands.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Scanner-to-output installed evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-06 installed Scanner-to-output proof",
+        "tests/test_e1_windows_installed_accounting_contract.py#FPR-06 regression lock",
+        "src/App.tsx#manual and guided Scanner canonical apply_scanner bridge"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-07",

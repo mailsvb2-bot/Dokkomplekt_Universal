@@ -76,6 +76,13 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "custom.scanner_value" in source
     assert "SCANNER-FPR06-VALUE" in source
     assert "FPR-06 INSTALLED PASS: manual Scanner UI -> canonical apply_scanner -> SemanticCase -> physical DOCX -> committed receipt." in source
+    assert "[bool]$ExpectPreflight = $true" in source
+    assert "FPR-07 PROMPT INSTALLED PASS: missing document.number produced a visible canonical preflight question." in source
+    assert "FPR-07 zero-question regression:" in source
+    assert "-ExpectPreflight $false" in source
+    assert "FPR-07 ZERO-QUESTION INSTALLED PASS: fully resolved Scanner case skipped the form and published directly after commit-boundary recheck." in source
+    assert "FPR-07 INSTALLED PASS: missing-value case prompts; zero-question case has no form; both publish through the same canonical workflow." in source
+    assert "requiresExplicitReview: showSickLeaveOption" in app_source
     assert "const applied = await run('apply_scanner', () => applyScanner([{" in app_source
     assert "ValueSource::Scanner" in scanner_engine
     assert 'source_kind: "scanner_selection".into()' in scanner_engine

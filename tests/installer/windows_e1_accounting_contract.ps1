@@ -2149,14 +2149,14 @@ Write-Host "FPR-05 INSTALLED PASS: bundled ICD-10 search -> F20.0 selection -> c
 # The hosted Windows packaging runner is not allowed to depend on Microsoft Word,
 # so this exercises the product's installed manual Scanner entry. Guided Word
 # Scanner confirmation converges on the same apply_scanner command in App.tsx.
-$null = Invoke-UiActionWithObservedTransition \`
-  -Description 'reset case before FPR-06 Scanner proof' \`
-  -TransitionDescription 'empty case before FPR-06 Scanner proof' \`
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-06 Scanner proof' `
+  -TransitionDescription 'empty case before FPR-06 Scanner proof' `
   -ActionProbe {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
     Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
-  } \`
+  } `
   -TransitionProbe {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
@@ -2204,12 +2204,12 @@ $fpr06Applied = Wait-UiElement -Description 'FPR-06 Scanner accepted status' -Ti
 if ($null -eq $fpr06Applied) { throw 'FPR-06 Scanner UI did not confirm one applied value.' }
 Write-Host "FPR-06 Scanner UI PASS: $fpr06FieldId=$fpr06ScannerValue"
 
-Invoke-E1DomainScenario \`
-  -Label $fpr06Label \`
-  -PromptValues @{} \`
-  -PluginRequiredFields @() \`
-  -ExpectedOutputValues @($fpr06ScannerValue) \`
-  -OutputRoot $defaultOutputRoot \`
+Invoke-E1DomainScenario `
+  -Label $fpr06Label `
+  -PromptValues @{} `
+  -PluginRequiredFields @() `
+  -ExpectedOutputValues @($fpr06ScannerValue) `
+  -OutputRoot $defaultOutputRoot `
   -ReceiptRoot $completionReceiptRoot
 Write-Host 'FPR-06 INSTALLED PASS: manual Scanner UI -> canonical apply_scanner -> SemanticCase -> physical DOCX -> committed receipt.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'

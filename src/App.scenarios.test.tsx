@@ -40,7 +40,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
         return { file_name: 'Источник.docx', selected_path: 'C:/fixtures/Источник.docx' } as never;
       case 'parse_source_path':
       case 'parse_source_file':
-        return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', source_kind: 'docx', layout_items: [], semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
+        return { source_text: 'Счёт № 148', source_path: '/app-data/scanner-sources/source.docx', source_kind: 'docx', layout_items: [], recognition_proof: [], semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'get_intake_capabilities':
         return [{ format: 'PDF', extensions: ['pdf'], available: true, built_in: true, engine: 'pdftotext/OCR', details: 'готово' }] as never;
       case 'get_reference_data_status': return { installed: false, cached: false, restart_required: false, source: 'bundled', published_at: null, complete_years: [2025, 2026], listed_years: [2025, 2026, 2027], message: 'bundled' } as never;

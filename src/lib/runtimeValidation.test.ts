@@ -76,6 +76,42 @@ describe('runtime backend contracts', () => {
     })).toThrow(/bundle_decision\.source/);
   });
 
+  it('requires and validates non-PII recognition proof for file intake', () => {
+    const response = {
+      source_text: 'source',
+      source_path: 'dokkomplekt-upload://current/source.docx',
+      source_kind: 'docx',
+      layout_items: [],
+      semantic_case: { values: {} },
+      recognition_proof: [{
+        field_id: 'document.number',
+        source: 'Scanner',
+        source_kind: 'document_text',
+        extractor: 'deterministic_source_parser',
+        confidence: 0.94,
+      }],
+      report: { warnings: [] },
+      routing: { recommended_document_ids: [], matches: [], reasons: [], auto_select: false, review_required: true },
+      bundle_decision: {
+        document_ids: [],
+        source: 'no_safe_proposal',
+        confidence: 1,
+        auto_apply: false,
+        review_required: true,
+        reasons: [],
+      },
+    };
+    expect(validateRustResponse('parse_source_path', response)).toBe(response);
+    expect(() => validateRustResponse('parse_source_path', {
+      ...response,
+      recognition_proof: undefined,
+    })).toThrow(/recognition_proof/);
+    expect(() => validateRustResponse('parse_source_file', {
+      ...response,
+      recognition_proof: [{ ...response.recognition_proof[0], confidence: 'high' }],
+    })).toThrow(/confidence/);
+  });
+
   it('rejects a malformed workflow before React reads .length', () => {
     expect(() => validateRustResponse('get_workflow_plan', {
       document_id: 'x',

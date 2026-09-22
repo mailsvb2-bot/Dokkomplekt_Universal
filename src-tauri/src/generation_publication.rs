@@ -434,6 +434,47 @@ fn raw_file_sha256(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+pub(crate) fn verify_source_copy_sha256(
+    path: &Path,
+    expected_sha256: &str,
+) -> Result<(), String> {
+    let expected = expected_sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64
+        || !expected
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Source provenance не содержит корректный SHA-256; публикация исходника заблокирована.".into());
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Не удалось проверить копию исходного документа {}: {error}",
+            path.display()
+        )
+    })?;
+    if crate::publication_metadata_is_link_or_reparse(&metadata)
+        || !metadata.is_file()
+        || metadata.len() == 0
+    {
+        return Err(format!(
+            "Копия исходного документа имеет небезопасный тип, отсутствует или пуста: {}",
+            path.display()
+        ));
+    }
+    let actual = raw_file_sha256(path).map_err(|error| {
+        format!(
+            "Не удалось доказать SHA-256 копии исходного документа {}: {error}",
+            path.display()
+        )
+    })?;
+    if actual != expected {
+        return Err(format!(
+            "Копия исходного документа не совпала с frozen SourceSnapshot: ожидался SHA-256 {expected}, получен {actual}."
+        ));
+    }
+    Ok(())
+}
+
 fn completion_output_proofs(paths: &[PathBuf]) -> Result<Vec<CompletionOutputProof>, String> {
     if paths.is_empty() {
         return Err(
@@ -1249,6 +1290,25 @@ mod tests {
         assert_eq!(proofs.len(), 1);
         assert_eq!(proofs[0].ordinal, 0);
         assert_eq!(proofs[0].output_sha256, expected_raw);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_copy_proof_requires_exact_raw_sha256() {
+        let root = temp_root("source-copy-proof");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("Исходный - source.docx");
+        std::fs::write(&source, b"exact captured source bytes").unwrap();
+        let expected = format!("{:x}", Sha256::digest(b"exact captured source bytes"));
+
+        verify_source_copy_sha256(&source, &expected)
+            .expect("exact published source bytes must verify");
+
+        std::fs::write(&source, b"changed source bytes").unwrap();
+        let error = verify_source_copy_sha256(&source, &expected)
+            .expect_err("changed source copy must fail closed");
+        assert!(error.contains("не совпала с frozen SourceSnapshot"), "{error}");
+
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -1235,7 +1235,7 @@ $fpr04SourceFields = @(
 $fpr04Proof = Wait-UiElement -Description 'FPR-04 recognition provenance proof' -TimeoutSeconds 40 -Probe {
   $window = Find-LiveAppWindow
   if ($null -eq $window) { return $null }
-  Find-E1NamedElementContaining -Root $window -Text 'Происхождение данных подтверждено:'
+  Find-E1NamedElementContaining -Text 'Происхождение данных подтверждено:'
 }
 $fpr04ProofName = [string]$fpr04Proof.Current.Name
 foreach ($fieldId in $fpr04SourceFields) {

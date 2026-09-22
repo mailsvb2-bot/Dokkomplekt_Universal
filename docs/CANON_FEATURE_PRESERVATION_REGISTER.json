@@ -235,8 +235,8 @@
     {
       "id": "FPR-07",
       "group": "Preflight",
-      "status": "needs-runtime-proof",
-      "actual_state": "single frontend preflight hook and canonical workflow engine are present; installed proof pending",
+      "status": "verified",
+      "actual_state": "single frontend preflight hook rechecks the backend-owned plan at commit boundary; visible missing values open one canonical form while a fully resolved plan publishes without a form",
       "entry": [
         "src/hooks/useGenerationPreflight.ts"
       ],
@@ -257,8 +257,12 @@
         "crates/dokkomplekt-core/src/workflow_engine.rs",
         "src-tauri/src/subsystems/document_commands.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Installed prompt/zero-question matrix evidence is required for final register closure."
+      "runtime_evidence": [
+        "src/hooks/useGenerationPreflight.test.tsx#zero-question and commit-boundary prompt regression tests",
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-07 installed prompt/zero-question matrix",
+        "tests/test_e1_windows_installed_accounting_contract.py#FPR-07 regression lock"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-08",

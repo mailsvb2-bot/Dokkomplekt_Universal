@@ -167,8 +167,8 @@
     {
       "id": "FPR-05",
       "group": "МКБ-10",
-      "status": "needs-runtime-proof",
-      "actual_state": "medical-profile suggestion command and catalog implementation are present; installed proof pending",
+      "status": "verified",
+      "actual_state": "bundled offline ICD-10 search and live selection are connected to the canonical SemanticCase and proven through installed physical output on candidate",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#icd10_suggest"
       ],
@@ -185,12 +185,17 @@
       "before": "source_baseline",
       "after": "installed_baseline",
       "evidence_paths": [
+        "src/components/AdvancedToolsPanel.tsx",
         "src-tauri/src/subsystems/document_commands.rs",
         "crates/dokkomplekt-core/src/medical_profile.rs",
         "crates/dokkomplekt-core/src/icd10_catalog.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Medical-profile installed selection/output evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-05 installed ICD-10 search/selection/output proof",
+        "tests/test_e1_windows_installed_accounting_contract.py#FPR-05 regression lock",
+        "src/components/AdvancedToolsPanel.tsx#canonical ICD-10 UI"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-06",

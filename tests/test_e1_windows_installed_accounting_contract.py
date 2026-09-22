@@ -21,6 +21,7 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     publication_backend = (ROOT / "src-tauri" / "src" / "generation_publication.rs").read_text(encoding="utf-8")
     source_intake_backend = (ROOT / "src-tauri" / "src" / "subsystems" / "source_intake_commands.rs").read_text(encoding="utf-8")
     runtime_validation = (ROOT / "src" / "lib" / "runtimeValidation.ts").read_text(encoding="utf-8")
+    advanced_tools = (ROOT / "src" / "components" / "AdvancedToolsPanel.tsx").read_text(encoding="utf-8")
     assert app_source.count("semanticExtract(") == 1, "automatic source intake must not run a second state-owning semantic extraction"
     assert app_source.count("semanticPreviewFromParsedSource(res)") == 3
 
@@ -56,6 +57,17 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert '"${fieldId}:Scanner/document_text/deterministic_source_parser"' in source
     assert "FPR-04 installed recognition provenance missing exact parser trace" in source
     assert "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake." in source
+    assert "FPR-05 ICD selection PASS:" in source
+    assert "Find-E1NamedElement -Name 'Поиск МКБ-10'" in source
+    assert "Find-E1NamedElement -Name 'Найти по МКБ-10'" in source
+    assert "Find-E1NamedElement -Name 'Выбрать МКБ-10 F20.0'" in source
+    assert "FPR-05 physical output retained the source diagnosis instead of the selected ICD-10 value." in source
+    assert "FPR-05 INSTALLED PASS: bundled ICD-10 search -> F20.0 selection -> canonical SemanticCase -> physical DOCX code/title -> committed receipt." in source
+    assert "Медицина · МКБ-10" in advanced_tools
+    assert "icd10Suggest(query)" in advanced_tools
+    assert "setField('medical.icd10', hit.code)" in advanced_tools
+    assert "setField('medical.diagnosis', hit.title)" in advanced_tools
+
     assert "struct RecognitionProofEntry" in source_intake_backend
     assert "recognition_proof_for_case" in source_intake_backend
     assert '"deterministic_source_parser"' in source_intake_backend

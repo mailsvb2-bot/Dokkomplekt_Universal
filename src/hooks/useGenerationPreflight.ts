@@ -114,7 +114,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
         .filter((prompt) => !isInternalWorkflowPrompt(prompt.field_id));
       if (options.requiresExplicitReview || freshVisiblePrompts.length) {
         setGenerationPreflightOpen(true);
-        options.setStatus('План создания обновился. Проверьте появившиеся поля и подтвердите создание.');
+        options.setStatus('План создания обновился. Проверьте появившиеся поля и подтвердите создание ещё раз.');
         return;
       }
 

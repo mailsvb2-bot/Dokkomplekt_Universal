@@ -103,8 +103,8 @@
     {
       "id": "FPR-03",
       "group": "Входные файлы",
-      "status": "needs-runtime-proof",
-      "actual_state": "UI intake and canonical intake agent are present; installed proof pending",
+      "status": "verified",
+      "actual_state": "real UI source picker, retained source snapshot, fail-closed SHA-256 publication read-back and installed byte-for-byte proof implemented on candidate",
       "entry": [
         "src/App.tsx"
       ],
@@ -123,10 +123,15 @@
       "evidence_paths": [
         "src/App.tsx",
         "src-tauri/src/subsystems/document_commands.rs",
+        "src-tauri/src/generation_publication.rs",
         "crates/dokkomplekt-core/src/intake_agent.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Actual UI source-loading evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-03 installed source SHA-256 proof",
+        "tests/test_e1_windows_installed_accounting_contract.py#FPR-03 regression lock",
+        "src-tauri/src/generation_publication.rs#source-copy raw SHA-256 fail-closed proof"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-04",

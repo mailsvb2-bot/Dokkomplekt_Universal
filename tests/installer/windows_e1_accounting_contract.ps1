@@ -2102,12 +2102,18 @@ $fpr05Hit = Wait-UiElement -Description 'FPR-05 ICD F20.0 result' -TimeoutSecond
 }
 Invoke-UiElementPhysically -Element $fpr05Hit -Description 'choose FPR-05 ICD F20.0'
 
-$fpr05Search = Wait-UiElement -Description 'FPR-05 selected ICD input' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Поиск МКБ-10'
-}
-$fpr05Selected = Normalize-UiValue -Value (Get-UiValue -Element $fpr05Search)
-if (-not $fpr05Selected.StartsWith('F20.0 ')) {
-  throw "FPR-05 ICD selection did not commit to the live input: '$fpr05Selected'"
+$fpr05Selected = ''
+$fpr05CommitDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+  $fpr05Search = Find-E1NamedElement -Name 'Поиск МКБ-10'
+  if ($null -ne $fpr05Search) {
+    $fpr05Selected = Normalize-UiValue -Value (Get-UiValue -Element $fpr05Search)
+    if ($fpr05Selected.StartsWith('F20.0 ') -and $fpr05Selected.Length -gt 6) { break }
+  }
+  Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $fpr05CommitDeadline)
+if (-not $fpr05Selected.StartsWith('F20.0 ') -or $fpr05Selected.Length -le 6) {
+  throw "FPR-05 ICD selection did not commit code + title to the live input: '$fpr05Selected'"
 }
 $fpr05SelectedTitle = $fpr05Selected.Substring(6).Trim()
 if ([string]::IsNullOrWhiteSpace($fpr05SelectedTitle)) {

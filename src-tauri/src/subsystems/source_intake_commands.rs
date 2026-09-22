@@ -394,6 +394,38 @@ struct ParseSourcePathRequest {
     default_year: i32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct RecognitionProofEntry {
+    field_id: String,
+    source: String,
+    source_kind: String,
+    extractor: String,
+    confidence: f32,
+}
+
+fn recognition_proof_for_case(case: &SemanticCase) -> Vec<RecognitionProofEntry> {
+    let mut proof = case
+        .values
+        .values()
+        .filter_map(|value| {
+            let evidence = value
+                .evidence
+                .iter()
+                .find(|item| item.extractor == "deterministic_source_parser")
+                .or_else(|| value.evidence.first())?;
+            Some(RecognitionProofEntry {
+                field_id: value.field_id.clone(),
+                source: format!("{:?}", value.source),
+                source_kind: evidence.source_kind.clone(),
+                extractor: evidence.extractor.clone(),
+                confidence: value.confidence.min(evidence.confidence),
+            })
+        })
+        .collect::<Vec<_>>();
+    proof.sort_by(|left, right| left.field_id.cmp(&right.field_id));
+    proof
+}
+
 #[derive(Debug, Serialize)]
 struct ParseSourceFileResponse {
     source_text: String,
@@ -401,6 +433,7 @@ struct ParseSourceFileResponse {
     source_kind: String,
     layout_items: Vec<universal_intake::NormalizedLayoutItem>,
     semantic_case: SemanticCase,
+    recognition_proof: Vec<RecognitionProofEntry>,
     report: ParsedSourceReport,
     routing: DocumentRoutingRecommendation,
     bundle_decision: BundleDecision,
@@ -536,6 +569,7 @@ fn parse_source_file_bytes(
                 source_path,
                 source_kind,
                 layout_items,
+                recognition_proof: recognition_proof_for_case(&semantic_case),
                 semantic_case,
                 report,
                 routing,
@@ -786,6 +820,32 @@ mod specialist_rule_persistence_tests {
         assert_eq!(persisted[0].key, key);
         drop(repo);
         let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod recognition_proof_tests {
+    use super::recognition_proof_for_case;
+    use dokkomplekt_core::{parse_source_text, ValueSource};
+
+    #[test]
+    fn recognition_proof_is_non_pii_and_bound_to_parser_evidence() {
+        let (case, _) = parse_source_text(
+            "Номер документа: E1-17\nДата документа: 13.09.2026\nОрганизация: ООО Альфа",
+            2026,
+        );
+        let proof = recognition_proof_for_case(&case);
+        let number = proof
+            .iter()
+            .find(|item| item.field_id == "document.number")
+            .expect("document number proof");
+        assert_eq!(number.source, format!("{:?}", ValueSource::Scanner));
+        assert_eq!(number.source_kind, "document_text");
+        assert_eq!(number.extractor, "deterministic_source_parser");
+        let json = serde_json::to_string(&proof).unwrap();
+        assert!(!json.contains("E1-17"));
+        assert!(!json.contains("ООО Альфа"));
+        assert!(!json.contains("13.09.2026"));
     }
 }
 

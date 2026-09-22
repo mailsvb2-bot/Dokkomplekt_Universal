@@ -2176,6 +2176,8 @@ Add-E1DomainTemplate -TemplatePath $fpr06Template -Label $fpr06Label -DomainOpti
 $fpr06Source = Join-Path $fixtureDir 'fpr06-scanner-source.docx'
 New-E1TextDocx -Path $fpr06Source -Lines @(
   'Источник для проверки Scanner',
+  'Номер документа: FPR06-1',
+  'Дата документа: 16.05.2026',
   "Фрагмент для разметки: $fpr06ScannerValue"
 )
 Set-E1DomainSource -SourcePath $fpr06Source

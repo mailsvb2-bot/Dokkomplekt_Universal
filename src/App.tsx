@@ -1443,18 +1443,8 @@ function AppContent() {
 
         {backgroundNotice && <div className="backgroundNotice" role="status"><span>{backgroundNotice}</span><button type="button" className="textBtn" onClick={dismissBackgroundNotice}>Скрыть</button></div>}
         <footer className="statusBar">
-          <span className={busy ? 'dot busy' : 'dot'} aria-hidden="true" />
-          <span>{status}</span>
-          {recognitionProof.length > 0 && (
-            <span
-              aria-label={`Происхождение данных подтверждено: ${recognitionProof
-                .map((item) => `${item.field_id}:${item.source}/${item.source_kind}/${item.extractor}`)
-                .join(', ')}`}
-              title="Приложение сохранило техническую трассу происхождения распознанных полей без вывода значений."
-            >
-              Происхождение данных подтверждено: {recognitionProof.length}.
-            </span>
-          )}
+          <span className={busy ? 'dot busy' : 'dot'} aria-hidden="true" /><span>{status}</span>
+          {recognitionProof.length > 0 && <span aria-label={`Происхождение данных подтверждено: ${recognitionProof.map((item) => `${item.field_id}:${item.source}/${item.source_kind}/${item.extractor}`).join(', ')}`} title="Приложение сохранило техническую трассу происхождения распознанных полей без вывода значений.">Происхождение данных подтверждено: {recognitionProof.length}.</span>}
         </footer>
       </div>
 

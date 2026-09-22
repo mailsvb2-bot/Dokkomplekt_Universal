@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
+import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem, IntakeCapability, ParseSourceFileResponse, RecognitionProofEntry, SidecarToolStatus, PrintJobDto, PrintTriageReport, SemanticExtractResult, BundleDecision, DocumentRoutingRecommendation, DocumentTemplateSpec, DomainKind, Icd10Suggestion, LearnedScannerRule, PopupFieldConfig, WorkflowPlan } from './lib/types';
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, icd10Suggest, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
@@ -56,6 +56,7 @@ function AppContent() {
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
   const [sourceFilePath, setSourceFilePath] = useState<string | null>(null);
+  const [recognitionProof, setRecognitionProof] = useState<RecognitionProofEntry[]>([]);
   const [webSourceUrl, setWebSourceUrl] = useState('');
   const [intakeCapabilities, setIntakeCapabilities] = useState<IntakeCapability[]>([]);
   const [sidecarStatuses, setSidecarStatuses] = useState<SidecarToolStatus[]>([]);
@@ -279,6 +280,7 @@ function AppContent() {
   }
 
   function clearSourceScopedUiState() {
+    setRecognitionProof([]);
     setSemantic(null);
     setAnswers({});
     setSkippedAnswers({});
@@ -360,6 +362,7 @@ function AppContent() {
     setSourceFilePath(res.source_path);
     setSourceText(res.source_text);
     setWebSourceUrl('');
+    setRecognitionProof(res.recognition_proof ?? []);
     setSemantic(semanticPreviewFromParsedSource(res));
     const count = Object.keys(res.semantic_case?.values ?? {}).length;
     const layoutItems = res.layout_items ?? [];
@@ -1441,7 +1444,17 @@ function AppContent() {
         {backgroundNotice && <div className="backgroundNotice" role="status"><span>{backgroundNotice}</span><button type="button" className="textBtn" onClick={dismissBackgroundNotice}>Скрыть</button></div>}
         <footer className="statusBar">
           <span className={busy ? 'dot busy' : 'dot'} aria-hidden="true" />
-          {status}
+          <span>{status}</span>
+          {recognitionProof.length > 0 && (
+            <span
+              aria-label={`Происхождение данных подтверждено: ${recognitionProof
+                .map((item) => `${item.field_id}:${item.source}/${item.source_kind}/${item.extractor}`)
+                .join(', ')}`}
+              title="Приложение сохранило техническую трассу происхождения распознанных полей без вывода значений."
+            >
+              Происхождение данных подтверждено: {recognitionProof.length}.
+            </span>
+          )}
         </footer>
       </div>
 

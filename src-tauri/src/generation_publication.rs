@@ -434,17 +434,17 @@ fn raw_file_sha256(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-pub(crate) fn verify_source_copy_sha256(
-    path: &Path,
-    expected_sha256: &str,
-) -> Result<(), String> {
+pub(crate) fn verify_source_copy_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
     let expected = expected_sha256.trim().to_ascii_lowercase();
     if expected.len() != 64
         || !expected
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err("Source provenance не содержит корректный SHA-256; публикация исходника заблокирована.".into());
+        return Err(
+            "Source provenance не содержит корректный SHA-256; публикация исходника заблокирована."
+                .into(),
+        );
     }
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
@@ -1307,7 +1307,10 @@ mod tests {
         std::fs::write(&source, b"changed source bytes").unwrap();
         let error = verify_source_copy_sha256(&source, &expected)
             .expect_err("changed source copy must fail closed");
-        assert!(error.contains("не совпала с frozen SourceSnapshot"), "{error}");
+        assert!(
+            error.contains("не совпала с frozen SourceSnapshot"),
+            "{error}"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

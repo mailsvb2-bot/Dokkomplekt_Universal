@@ -9,6 +9,7 @@ import type {
   TemplateMarkupCandidate,
   TemplateRegressionReport,
   TemplateVersionRecord,
+  Icd10Suggestion,
 } from '../lib/types';
 import {
   analyzeTemplateFile,
@@ -19,6 +20,7 @@ import {
   getProcessBlueprints,
   deleteClauseBlock,
   importTemplateFile,
+  icd10Suggest,
   pickLearningFiles,
   type PickedLearningFile,
   learnTemplateFromExamples,
@@ -33,6 +35,7 @@ import {
   rollbackTemplateVersion,
   saveClauseBlock,
   selectProcessBlueprint,
+  setField,
   suggestTemplateMarkup,
   updateDocumentTemplate,
 } from '../lib/api';
@@ -85,6 +88,8 @@ export function AdvancedToolsPanel({
   const [blockContent, setBlockContent] = useState('');
   const [diaryFinalDiagnosis, setDiaryFinalDiagnosis] = useState('');
   const [diaryFinalText, setDiaryFinalText] = useState('');
+  const [icdQuery, setIcdQuery] = useState('');
+  const [icdHits, setIcdHits] = useState<Icd10Suggestion[]>([]);
   const [tableText, setTableText] = useState('');
   const [table, setTable] = useState<MailMergeTable | null>(null);
   const [markupPath, setMarkupPath] = useState('');
@@ -393,6 +398,29 @@ export function AdvancedToolsPanel({
     onStatus(`Импортировано источников текстов дневников: ${result.imported}. Имя файла или код МКБ-10 в имени используется для привязки к диагнозу; данные сохранены локально атомарным набором.`);
   }
 
+  async function searchIcd10() {
+    const query = icdQuery.trim();
+    if (!query) {
+      onStatus('Введите код или название диагноза для поиска по МКБ-10.');
+      return;
+    }
+    const result = await execute('поиск МКБ-10', () => icd10Suggest(query));
+    if (!result) return;
+    setIcdHits(result.slice(0, 6));
+    onStatus(`МКБ-10: найдено вариантов — ${result.length}.`);
+  }
+
+  async function chooseIcd10(hit: Icd10Suggestion) {
+    const updated = await execute('выбор МКБ-10', async () => {
+      await setField('medical.icd10', hit.code);
+      return setField('medical.diagnosis', hit.title);
+    });
+    if (!updated) return;
+    setIcdQuery(`${hit.code} ${hit.title}`);
+    setIcdHits([]);
+    onStatus(`МКБ-10 выбран: ${hit.code} — ${hit.title}. Значение будет использовано в выбранных медицинских документах.`);
+  }
+
   async function saveMedicalFinalDiary() {
     const diagnosis = diaryFinalDiagnosis.trim();
     const key = medicalDiagnosisKey(diagnosis);
@@ -656,6 +684,39 @@ export function AdvancedToolsPanel({
           ))}
         </div>
       </section>
+
+      {medicalAvailable && (
+        <section className="utilityCard advancedCard">
+          <strong>Медицина · МКБ-10</strong>
+          <small>Найдите диагноз по коду или названию. Выбранные код и диагноз записываются в единый SemanticCase и используются всеми выбранными медицинскими документами.</small>
+          <div className="inlineInput">
+            <input
+              value={icdQuery}
+              onChange={(event) => setIcdQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void searchIcd10(); }}
+              aria-label="Поиск МКБ-10"
+              placeholder="Например: F20.0 или параноидная шизофрения"
+            />
+            <button type="button" className="utilBtn" disabled={busy || !icdQuery.trim()} onClick={() => void searchIcd10()}>Найти по МКБ-10</button>
+          </div>
+          {icdHits.length > 0 && (
+            <div className="advancedList" aria-label="Результаты МКБ-10">
+              {icdHits.map((hit) => (
+                <button
+                  key={hit.code}
+                  type="button"
+                  className="utilBtn"
+                  disabled={busy}
+                  aria-label={`Выбрать МКБ-10 ${hit.code}`}
+                  onClick={() => void chooseIcd10(hit)}
+                >
+                  <b>{hit.code}</b> · {hit.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {medicalAvailable && (
         <section className="utilityCard advancedCard">

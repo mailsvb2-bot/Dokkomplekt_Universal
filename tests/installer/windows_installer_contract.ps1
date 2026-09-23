@@ -1707,14 +1707,10 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
   }
   Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
   Submit-OpenFileDialog -Dialog $restartSourceDialog
-  Wait-UiElement -Description 'FPR-08 restart source accepted' -TimeoutSeconds 40 -Probe {
+  Wait-UiElement -Description 'FPR-08 restart source committed' -TimeoutSeconds 40 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty,
-      'Источник принят'
-    )
-    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
   } | Out-Null
 
   $restartGenerationAction = $null

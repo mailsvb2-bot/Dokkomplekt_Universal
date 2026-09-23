@@ -3,14 +3,12 @@ import {
   analyzeTemplateFile,
   applyTemplateLearningMap,
   applyTemplateMarkup,
-  importLearningExampleFile,
   learnTemplateFromExamples,
 } from './api';
+import type { PickedLearningFile } from './api';
 import {
   currentDefaultYear,
-  arrayBufferToBase64,
   cursorMarkedTemplatePath,
-  readFileBytes,
   replaceAllLiteral,
   type PendingTemplate,
 } from './appSupport';
@@ -31,8 +29,8 @@ interface PendingTemplateIntelligenceContext {
 }
 
 export interface TemplateLearningPair {
-  source: File;
-  completed: File;
+  source: PickedLearningFile;
+  completed: PickedLearningFile;
 }
 
 export function sourceEvidencedLearningFields<T extends { source_matches: string[] }>(fields: T[]): T[] {
@@ -100,21 +98,17 @@ export function createPendingTemplateIntelligenceHandlers(context: PendingTempla
       return;
     }
 
-    const sourceExamplePaths: string[] = [];
-    const completedExamplePaths: string[] = [];
-    for (const pair of pairs) {
-      const sourceBuffer = await readFileBytes(pair.source);
-      const importedSource = await context.run('import_learning_example_file', () =>
-        importLearningExampleFile(pair.source.name, arrayBufferToBase64(sourceBuffer)));
-      if (!importedSource) return;
-      sourceExamplePaths.push(importedSource.source_path);
-
-      const completedBuffer = await readFileBytes(pair.completed);
-      const importedCompleted = await context.run('import_learning_example_file', () =>
-        importLearningExampleFile(pair.completed.name, arrayBufferToBase64(completedBuffer)));
-      if (!importedCompleted) return;
-      completedExamplePaths.push(importedCompleted.source_path);
+    const invalidPicked = pairs.find((pair) =>
+      pair.source.import_error || pair.completed.import_error
+      || !pair.source.staged_path.trim() || !pair.completed.staged_path.trim());
+    if (invalidPicked) {
+      context.setStatus(invalidPicked.source.import_error
+        || invalidPicked.completed.import_error
+        || 'Один из выбранных файлов обучения не был надёжно сохранён в защищённой рабочей области.');
+      return;
     }
+    const sourceExamplePaths = pairs.map((pair) => pair.source.staged_path);
+    const completedExamplePaths = pairs.map((pair) => pair.completed.staged_path);
 
     const learned = await context.run('learn_template_from_examples_command', () => learnTemplateFromExamples({
       blankTemplatePath: current.template_path,

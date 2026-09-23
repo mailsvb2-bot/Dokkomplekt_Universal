@@ -19,7 +19,8 @@ function installTemplateMock(staticCopy: boolean, includeRejected = false, rejec
   const confirmRequests: Array<Record<string, unknown> | undefined> = [];
   __setInvokeForTests(async (name: string, payload?: Record<string, unknown>) => {
     calls.push(name);
-    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
+    if (name === 'first_run_state') return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, selected_document_ids: [], message: 'Создайте свои кнопки' } as never;
+    if (name === 'set_document_selection') return ((payload as { req?: { document_ids?: string[] } } | undefined)?.req?.document_ids ?? []) as never;
     if (name === 'get_intake_capabilities') return [] as never;
     if (name === 'pick_template_files') return { files: [
       { file_name: 'Акт выполненных работ.docx', template_path: 'x.docx', extracted_text: staticCopy ? 'Акт выполненных работ' : 'Акт № {{document.number}}' },
@@ -82,7 +83,7 @@ describe('App', () => {
     expect(await screen.findByRole('status', { name: 'Загрузка рабочего набора' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Создать свои кнопки' })).toBeNull();
 
-    resolveFirstRun?.({ pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' });
+    resolveFirstRun?.({ pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, selected_document_ids: [], message: 'Создайте свои кнопки' });
     expect(await screen.findByRole('button', { name: 'Создать свои кнопки' })).toBeTruthy();
   });
 
@@ -91,7 +92,7 @@ describe('App', () => {
     const pendingPreferences = new Promise((resolve) => { resolvePreferences = resolve; });
     __setInvokeForTests(async (name: string) => {
       if (name === 'first_run_state') {
-        return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, message: 'Создайте свои кнопки' } as never;
+        return { pack: { pack_id: 'default', name: 'Набор', documents: [] }, has_user_buttons: false, selected_document_ids: [], message: 'Создайте свои кнопки' } as never;
       }
       if (name === 'get_output_preferences') return await pendingPreferences as never;
       if (name === 'ensure_output_root') return 'C:/Users/Test/Desktop/Выписанные пациенты' as never;

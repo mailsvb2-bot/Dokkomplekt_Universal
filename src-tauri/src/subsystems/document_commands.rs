@@ -49,6 +49,10 @@ fn first_run_state(
             "Восстановление состояния заблокировано для защиты данных: {reason}. Загрузите исправную резервную базу; текущие данные не будут перезаписаны."
         ));
     }
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
     let selected_document_ids = load_document_selection(&app, &pack)?;
     let has_user_buttons = !pack.documents.is_empty();

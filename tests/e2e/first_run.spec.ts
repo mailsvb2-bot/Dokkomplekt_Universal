@@ -30,7 +30,9 @@ async function installTauriMock(page: Page) {
         calls.push({ command, payload });
         switch (command) {
           case 'first_run_state':
-            return { pack: pack([]), has_user_buttons: false, message: 'Встроенных кнопок нет.' };
+            return { pack: pack([]), has_user_buttons: false, selected_document_ids: [], message: 'Встроенных кнопок нет.' };
+          case 'set_document_selection':
+            return ((payload as { req?: { document_ids?: string[] } })?.req?.document_ids ?? []);
           case 'get_intake_capabilities':
             return [];
           case 'get_output_preferences':

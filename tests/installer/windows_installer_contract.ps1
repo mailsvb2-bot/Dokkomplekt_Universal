@@ -1027,14 +1027,23 @@ $selectionCheckbox = Wait-UiElement -Description "selection checkbox for $expect
   )
   $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
+$selectionBefore = Get-AppStateCipherFingerprint -DatabasePath $stateDatabase -StateKey $selectionStateKey
 $togglePattern = $selectionCheckbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
 if ($togglePattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) {
   $togglePattern.Toggle()
 }
-$selectionFingerprint = Wait-AppStateCipherFingerprint `
-  -DatabasePath $stateDatabase `
-  -StateKey $selectionStateKey `
-  -TimeoutSeconds 20
+if ($null -eq $selectionBefore) {
+  $selectionFingerprint = Wait-AppStateCipherFingerprint `
+    -DatabasePath $stateDatabase `
+    -StateKey $selectionStateKey `
+    -TimeoutSeconds 20
+} else {
+  $selectionFingerprint = Wait-AppStateCipherFingerprint `
+    -DatabasePath $stateDatabase `
+    -StateKey $selectionStateKey `
+    -DifferentFrom $selectionBefore `
+    -TimeoutSeconds 20
+}
 Write-Host "FPR-08 selection persisted before restart: $selectionFingerprint"
 
 

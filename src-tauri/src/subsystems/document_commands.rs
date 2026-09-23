@@ -1,7 +1,34 @@
+const DOCUMENT_SELECTION_STATE_KEY: &str = "document_selection_v1";
+
+fn canonical_document_selection(pack: &DocumentPack, requested: &[String]) -> Vec<String> {
+    let requested = requested
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+    pack.documents
+        .iter()
+        .filter(|document| requested.contains(document.id.as_str()))
+        .map(|document| document.id.clone())
+        .collect()
+}
+
+fn load_document_selection(
+    app: &tauri::AppHandle,
+    pack: &DocumentPack,
+) -> Result<Vec<String>, String> {
+    let stored = repository_for(&default_state_db_path(app)?)?
+        .load_state_value::<Vec<String>>(DOCUMENT_SELECTION_STATE_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    Ok(canonical_document_selection(pack, &stored))
+}
+
 #[derive(Debug, Serialize)]
 struct FirstRunStateResponse {
     pack: DocumentPack,
     has_user_buttons: bool,
+    selected_document_ids: Vec<String>,
     message: String,
 }
 
@@ -23,6 +50,7 @@ fn first_run_state(
         ));
     }
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    let selected_document_ids = load_document_selection(&app, &pack)?;
     let has_user_buttons = !pack.documents.is_empty();
     let message = if has_user_buttons {
         "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
@@ -31,9 +59,50 @@ fn first_run_state(
     };
     Ok(FirstRunStateResponse {
         has_user_buttons,
+        selected_document_ids,
         pack,
         message,
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct SetDocumentSelectionRequest {
+    document_ids: Vec<String>,
+}
+
+#[tauri::command]
+fn set_document_selection(
+    req: SetDocumentSelectionRequest,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Vec<String>, String> {
+    ensure_default_state_loaded(&app, &state)?;
+    ensure_persistence_available(&state)?;
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "persistence gate lock failed")?;
+    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    let requested = req
+        .document_ids
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let existing = pack
+        .documents
+        .iter()
+        .map(|document| document.id.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(missing) = requested.iter().find(|document_id| !existing.contains(*document_id)) {
+        return Err(format!("Не найдена кнопка документа для сохранения выбора: {missing}"));
+    }
+    let selected = canonical_document_selection(&pack, &req.document_ids);
+    repository_for(&default_state_db_path(&app)?)?
+        .save_state_value(DOCUMENT_SELECTION_STATE_KEY, &selected)
+        .map_err(|error| error.to_string())?;
+    Ok(selected)
 }
 
 #[derive(Debug, Deserialize)]

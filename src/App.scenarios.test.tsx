@@ -242,6 +242,8 @@ describe('Полный прогон пользовательских сцена�
     await screen.findByRole('button', { name: 'Счёт на оплату' });
     expect(screen.getByRole('button', { name: 'Сопроводительное письмо' })).toBeTruthy();
     expect(screen.queryByText('Медицина')).toBeNull();
+    expect((screen.getByLabelText('Добавить Счёт на оплату в комплект') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('Добавить Сопроводительное письмо в комплект') as HTMLInputElement).checked).toBe(false);
 
     // A new set must explicitly clear case-specific values before another person/contract.
     await click(/Новый комплект/);

@@ -21,6 +21,9 @@ def test_rust_backend_accepts_plain_word_templates_as_static_buttons() -> None:
     assert "create_pack_from_confirmations" in command
     assert "publish_pack_with_template_versions" in command
     assert "save_desktop_snapshot_with_template_versions" in storage
+    assert 'DOCUMENT_SELECTION_STATE_KEY: &str = "document_selection_v1"' in runtime
+    assert "fn set_document_selection(" in runtime
+    assert "selected_document_ids" in runtime
 
 
 def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart() -> None:
@@ -51,6 +54,9 @@ def test_windows_installer_exercises_real_plain_docx_button_creation_and_restart
     assert "ADVERSARIAL OK: output-root collision stayed fail-closed and visible" in smoke
     assert "ADVERSARIAL OK: Desktop output root recovered on clean restart" in smoke
     assert "Persisted template button survived application restart" in smoke
+    assert "document_selection_v1" in smoke
+    assert "FPR-08 selection persisted before restart:" in smoke
+    assert "FPR-08 INSTALLED PASS: button name, selected state, and published template binding survived restart." in smoke
     assert "E2 INSTALLED PASS: learn -> publish -> offline restart -> physical DOCX" in smoke
     assert "New-E2LearningDocxFixture" in smoke
     assert "[AllowEmptyString()][string]$Inn" in smoke

@@ -17,7 +17,10 @@ export function useWorkspaceBootstrap(options: WorkspaceBootstrapOptions) {
   function applyLoadedState(res: Awaited<ReturnType<typeof firstRunState>>) {
     if (res?.pack?.documents?.length) {
       options.setDocuments(res.pack.documents);
-      options.setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
+      const validIds = new Set(res.pack.documents.map((document) => document.id));
+      const restoredSelection = (res.selected_document_ids ?? defaultSelectedDocumentIds(res.pack.documents))
+        .filter((id) => validIds.has(id));
+      options.setSelectedDocIds(restoredSelection);
       options.setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
     } else if (res?.has_user_buttons === false) {
       options.setDocuments([]);

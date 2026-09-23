@@ -509,7 +509,10 @@ function New-MedicalStoryDocxFixture {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][ValidateSet('template','source')][string]$Variant,
-    [ValidateSet('primary','sick_leave_vk')][string]$Role = 'primary'
+    [ValidateSet('primary','sick_leave_vk')][string]$Role = 'primary',
+    [string]$SourcePatient = 'Петров Пётр Петрович',
+    [string]$SourceCaseNumber = '2222',
+    [string]$SourceAdmission = '26.08.2026'
   )
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -528,9 +531,9 @@ function New-MedicalStoryDocxFixture {
         $workplace = 'Старый завод'
         $position = 'старый инженер'
       } else {
-        $patient = 'Петров Пётр Петрович'
-        $caseNumber = '2222'
-        $admission = '26.08.2026'
+        $patient = $SourcePatient
+        $caseNumber = $SourceCaseNumber
+        $admission = $SourceAdmission
         $diagnosis = 'F20.0 Параноидная шизофрения'
         $treatment = 'рисперидон 4 мг/сут'
         $profileStatus = 'Контактен, ориентирован, эмоционально напряжён'
@@ -949,6 +952,8 @@ if ($adversarial) {
     New-BlankDischargeDocxFixture -Path $plainTemplate
     $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
     New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'primary'
+    $restartMedicalSource = Join-Path $fixtureDir 'второй первичный пациент после перезапуска.docx'
+    New-MedicalStoryDocxFixture -Path $restartMedicalSource -Variant 'source' -Role 'primary' -SourcePatient 'Сидоров Сергей Сергеевич' -SourceCaseNumber '3333' -SourceAdmission '27.08.2026'
   } else {
     New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template' -Role 'sick_leave_vk'
     $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
@@ -1164,6 +1169,16 @@ $generationAction = Invoke-UiActionWithObservedTransition `
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
   }
 if ($null -eq $generationAction) { throw 'Selecting all documents did not expose the one-document generation action.' }
+
+$documentSelectionStateKey = 'document_selection_v1'
+$documentSelectionCipher = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $documentSelectionStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($documentSelectionCipher)) {
+  throw 'Document selection did not reach durable native SQLite state.'
+}
+Write-Host 'FPR-08 durable selection PASS: selected document ids reached encrypted native state before restart.'
 
 $preflightTitle = Invoke-UiActionWithObservedTransition `
   -Description 'generation action for one selected document' `
@@ -1655,6 +1670,288 @@ if ($restartState.Kind -eq 'empty') {
   throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
 }
 Write-Host 'Persisted template button survived application restart.'
+
+$restoredClearSelection = Wait-UiElement -Description 'restored selected document state after restart' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Снять выбор')
+}
+if ($null -eq $restoredClearSelection) {
+  throw 'FPR-08 restart lost the selected document checkbox state.'
+}
+Write-Host 'FPR-08 selection restart PASS: persisted button is still selected after installed application restart.'
+
+# Quality Gate uses the blank discharge donor. Re-open a real source after restart
+# and publish the same button once more from the restored pack. The output root was
+# deliberately removed/recreated by the preceding collision proof, so a physical
+# DOCX here proves that the restored button still resolves its published template
+# version rather than merely preserving a label in the UI.
+if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
+  $restartSourceDialog = Invoke-UiActionWithObservedTransition `
+    -Description 'FPR-08 restart source picker' `
+    -TransitionDescription 'FPR-08 restart source file dialog' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать исходный файл', 'Заменить исходный файл')
+    } `
+    -TransitionProbe { Find-FileDialog }
+  $restartSourceEdit = Wait-UiElement -Description 'FPR-08 restart source filename field' -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $restartSourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
+  Submit-OpenFileDialog -Dialog $restartSourceDialog
+  Wait-UiElement -Description 'FPR-08 restart source accepted' -TimeoutSeconds 40 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Источник принят'
+    )
+    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  } | Out-Null
+
+  $restartGenerationAction = $null
+  try {
+    $restartGenerationAction = Wait-UiElement -Description 'FPR-08 restored one-document generation action' -TimeoutSeconds 8 -Probe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    }
+  } catch {
+    # Routing for a newly loaded source is allowed to propose a different bundle.
+    # FPR-08 already proved restart selection above; restore the persisted button
+    # explicitly here only so template-binding publication can be exercised.
+    $restartCheckbox = Wait-UiElement -Description 'FPR-08 persisted document checkbox' -TimeoutSeconds 30 -Probe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        "Добавить $expectedTemplateButtonName в комплект"
+      )
+      $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    }
+    Invoke-UiElementPhysically -Element $restartCheckbox -Description 'FPR-08 persisted document checkbox'
+    $restartGenerationAction = Wait-UiElement -Description 'FPR-08 one-document generation after explicit restore' -TimeoutSeconds 30 -Probe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    }
+  }
+
+  Invoke-UiElementPhysically -Element $restartGenerationAction -Description 'FPR-08 generation from restored button'
+  $null = Wait-UiElement -Description 'FPR-08 restored button preflight' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      'Проверка перед созданием'
+    )
+    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+
+  $restartPromptValues = [ordered]@{
+    'workflow-document-number' = "FPR08-$PID"
+    'workflow-document-date' = '23.09.2026'
+    'workflow-medical-discharge_date' = '09.09.2026'
+    'workflow-medical-somatic_status' = 'Соматически стабилен, кожные покровы обычной окраски.'
+  }
+  foreach ($automationId in $restartPromptValues.Keys) {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed window disappeared during FPR-08 restart preflight.' }
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $automationId
+    )
+    $control = $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($null -ne $control) {
+      Set-UiValue -Element $control -Value $restartPromptValues[$automationId]
+    }
+  }
+
+  Invoke-UiActionPhysicallyFromProbe -Description 'FPR-08 create from restored template binding' -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+  }
+
+  # The same case was already published before restart. Publication history is
+  # intentionally durable even when the user later removes the physical output
+  # directory, so the canonical UI may require the explicit existing-kit path.
+  # Follow that real user flow instead of treating the durable receipt as a
+  # failed generation.
+  $restartExistingKitDeadline = [DateTime]::UtcNow.AddSeconds(15)
+  $restartOtherVariants = $null
+  do {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed window disappeared while resolving FPR-08 restart publication.' }
+    $restartOtherVariants = Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
+    if ($null -ne $restartOtherVariants) { break }
+    $restartFailureMarker = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'Документы не созданы'
+      )
+    )
+    if ($null -ne $restartFailureMarker) { break }
+    $restartBusy = Find-ButtonByNames -Root $currentAppWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
+    if ($null -ne $restartBusy) { break }
+    Start-Sleep -Milliseconds 150
+  } while ([DateTime]::UtcNow -lt $restartExistingKitDeadline)
+
+  if ($null -ne $restartOtherVariants) {
+    $null = Invoke-UiActionWithObservedTransition `
+      -Description 'FPR-08 existing-kit Другие варианты' `
+      -TransitionDescription 'FPR-08 Создать новую версию' `
+      -ActionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
+      } `
+      -TransitionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+      }
+    Invoke-UiActionPhysicallyFromProbe -Description 'FPR-08 existing-kit Создать новую версию' -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+    }
+    Write-Host 'FPR-08 existing publication PASS: restart followed the canonical new-version path.'
+  }
+
+  $restartExpectedFile = "$expectedTemplateButtonName.docx"
+
+  # FPR-07 deliberately re-reads the backend-owned plan at the commit boundary.
+  # If that refresh introduces a newly visible question, the canonical behavior is
+  # to keep the preflight open and require one explicit second confirmation. Treat
+  # that as product behavior, not as a failed click, while still failing closed on
+  # a real backend rejection.
+  $restartTransitionDeadline = [DateTime]::UtcNow.AddSeconds(5)
+  $restartGenerationStarted = $false
+  do {
+    if ($process.HasExited) { throw 'Installed application exited while starting FPR-08 restart generation.' }
+    $restartCreatedDuringTransition = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $restartExpectedFile -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($null -ne $restartCreatedDuringTransition) { $restartGenerationStarted = $true; break }
+
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed window disappeared while starting FPR-08 restart generation.' }
+    $failureDuringTransition = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'Документы не созданы'
+      )
+    )
+    if ($null -ne $failureDuringTransition) { $restartGenerationStarted = $true; break }
+
+    $busyGenerationButton = Find-ButtonByNames -Root $currentAppWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
+    if ($null -ne $busyGenerationButton) { $restartGenerationStarted = $true; break }
+
+    $preflightStillOpen = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'Проверка перед созданием'
+      )
+    )
+    if ($null -eq $preflightStillOpen) { $restartGenerationStarted = $true; break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $restartTransitionDeadline)
+
+  if (-not $restartGenerationStarted) {
+    Write-Host 'FPR-08 commit-boundary refresh kept preflight open; confirming the refreshed canonical plan once more.'
+    foreach ($automationId in $restartPromptValues.Keys) {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { throw 'Installed window disappeared during FPR-08 refreshed preflight.' }
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        $automationId
+      )
+      $control = $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+      if ($null -ne $control) {
+        Set-UiValue -Element $control -Value $restartPromptValues[$automationId]
+      }
+    }
+    Invoke-UiActionPhysicallyFromProbe -Description 'FPR-08 second confirmation after commit-boundary refresh' -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+    }
+  }
+
+  $restartDeadline = [DateTime]::UtcNow.AddSeconds(60)
+  $restartCreated = $null
+  $restartGenerationFailure = $null
+  do {
+    if ($process.HasExited) { throw 'Installed application exited during FPR-08 restart generation.' }
+    $restartCreated = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $restartExpectedFile -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($null -ne $restartCreated) { break }
+
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed window disappeared during FPR-08 restart generation.' }
+    $failureMarker = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'Документы не созданы'
+      )
+    )
+    if ($null -ne $failureMarker) {
+      $textCondition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Text
+      )
+      $visibleText = @($currentAppWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCondition) |
+        ForEach-Object { $_.Current.Name } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+      $markerIndex = [Array]::IndexOf($visibleText, 'Документы не созданы')
+      if ($markerIndex -ge 0 -and ($markerIndex + 1) -lt $visibleText.Count) {
+        $restartGenerationFailure = $visibleText[$markerIndex + 1]
+      } else {
+        $restartGenerationFailure = ($visibleText -join ' | ')
+      }
+      break
+    }
+    Start-Sleep -Milliseconds 250
+  } while ($null -eq $restartCreated -and [DateTime]::UtcNow -lt $restartDeadline)
+  if ($null -ne $restartGenerationFailure) {
+    Write-AppLaunchDiagnostics
+    throw "FPR-08 restored template generation was rejected: $restartGenerationFailure"
+  }
+  if ($null -eq $restartCreated) {
+    Write-AppLaunchDiagnostics
+    throw 'FPR-08 restored button did not publish a physical DOCX from its persisted template binding.'
+  }
+
+  $restartArchive = [System.IO.Compression.ZipFile]::OpenRead($restartCreated.FullName)
+  try {
+    $entry = $restartArchive.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw 'FPR-08 restart output is not a readable DOCX.' }
+    $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+    try { $restartXml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    if ($restartXml -notmatch 'Выписной эпикриз') {
+      throw 'FPR-08 restart output lost the persisted discharge template identity.'
+    }
+    if ($restartXml -notmatch 'Сидоров Сергей Сергеевич') {
+      throw 'FPR-08 restart output did not bind the restored template to the second source loaded after restart.'
+    }
+    if ($restartXml -match 'Петров Пётр Петрович') {
+      throw 'FPR-08 restart output carried patient data from the pre-restart case into the second case.'
+    }
+  } finally {
+    $restartArchive.Dispose()
+  }
+  Write-Host "FPR-08 INSTALLED PASS: selection + button name + published template binding survived restart -> physical DOCX: $($restartCreated.FullName)"
+}
 
 # Canon v2 E2 installed proof. Reuse this already-installed process and the same
 # UI Automation helpers: learn from real Source -> Correct Output pairs, publish

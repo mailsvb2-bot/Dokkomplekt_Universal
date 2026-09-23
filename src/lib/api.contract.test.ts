@@ -22,6 +22,7 @@ import {
   applyBusinessRegistryRecord,
   exportOneCCounterparties,
   firstRunState,
+  setDocumentSelection,
   getDefaultOutputRoot,
   ensureOutputRoot,
   getOutputPreferences,
@@ -108,6 +109,7 @@ type Call = { command: string; payload?: Record<string, unknown> };
 
 export const registeredBackendCommands = [
   'first_run_state',
+  'set_document_selection',
   'get_default_output_root',
   'ensure_output_root',
   'get_output_preferences',
@@ -276,7 +278,9 @@ function installContractMock(calls: Call[]) {
         return ((payload as { req?: unknown } | undefined)?.req ?? { output_root: '', folder_parts: ['DocumentNumber', 'DocumentDate'], naming_confirmed: false }) as never;
       case 'first_run_state':
       case 'load_state':
-        return { pack, has_user_buttons: true, message: 'ok' } as never;
+        return { pack, has_user_buttons: true, selected_document_ids: ['doc_1'], message: 'ok' } as never;
+      case 'set_document_selection':
+        return ((payload as { req?: { document_ids?: string[] } } | undefined)?.req?.document_ids ?? []) as never;
       case 'analyze_template':
       case 'analyze_template_file':
         return { document, analysis_json: { from: 'rust' }, core_pipeline_json: { from: 'rust-core' } } as never;
@@ -465,6 +469,7 @@ describe('Tauri command DTO contracts', () => {
     const calls: Call[] = [];
     installContractMock(calls);
     await firstRunState();
+    await setDocumentSelection(['doc_1']);
     await getDefaultOutputRoot();
     await ensureOutputRoot('C:/Users/Test/Desktop/Выписанные пациенты');
     await resetCase();
@@ -501,6 +506,7 @@ describe('Tauri command DTO contracts', () => {
     await rollbackTemplateVersion('tpl-v1');
     expect(calls).toMatchObject([
       { command: 'first_run_state', payload: undefined },
+      { command: 'set_document_selection', payload: { req: { document_ids: ['doc_1'] } } },
       { command: 'get_default_output_root', payload: undefined },
       { command: 'ensure_output_root', payload: { req: { output_root: 'C:/Users/Test/Desktop/Выписанные пациенты' } } },
       { command: 'reset_case', payload: undefined },

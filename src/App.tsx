@@ -23,6 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { useDocumentSelectionPersistence } from './hooks/useDocumentSelectionPersistence';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { watcherForegroundCaseActive, useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
 import { applyWorkspaceDomainToPending, pendingTemplateCandidates, useWorkspaceProfileInference } from './hooks/useWorkspaceProfileInference';
@@ -52,6 +53,13 @@ function AppContent() {
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
+
+  useDocumentSelectionPersistence({
+    ready: workspaceStateReady,
+    selectedDocumentIds: selectedDocIds,
+    setSelectedDocumentIds: setSelectedDocIds,
+    setStatus,
+  });
 
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);

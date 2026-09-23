@@ -85,6 +85,7 @@ function validateFirstRun(command: string, value: unknown): void {
   const root = record(command, value);
   validateDocumentPack(command, root.pack);
   boolean(command, root.has_user_buttons, 'has_user_buttons');
+  if (root.selected_document_ids !== undefined) stringArray(command, root.selected_document_ids, 'selected_document_ids');
   string(command, root.message, 'message');
 }
 
@@ -353,7 +354,7 @@ export function normalizeCreatedDocumentsIntakeResult(
   };
 }
 
-type ResponseKind = 'array' | 'boolean' | 'string' | 'void' | 'nullable-object' | 'object';
+type ResponseKind = 'array' | 'string-array' | 'boolean' | 'string' | 'void' | 'nullable-object' | 'object';
 
 export const COMMAND_RESPONSE_KIND = {
   'activate_word_scanner': 'boolean',
@@ -467,6 +468,7 @@ export const COMMAND_RESPONSE_KIND = {
   'save_state': 'void',
   'select_process_blueprint': 'object',
   'semantic_extract': 'object',
+  'set_document_selection': 'string-array',
   'set_field': 'object',
   'start_word_scanner': 'object',
   'suggest_template_markup_command': 'array',
@@ -504,6 +506,8 @@ export function validateRustResponse<T>(command: string, value: unknown): T {
 
   if (kind === 'array') {
     objectArray(command, value, 'ответ');
+  } else if (kind === 'string-array') {
+    stringArray(command, value, 'ответ');
   } else if (kind === 'boolean') {
     boolean(command, value, 'ответ');
   } else if (kind === 'string') {

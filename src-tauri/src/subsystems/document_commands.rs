@@ -1,40 +1,4 @@
-#[derive(Debug, Serialize)]
-struct FirstRunStateResponse {
-    pack: DocumentPack,
-    has_user_buttons: bool,
-    message: String,
-}
-
-#[tauri::command]
-fn first_run_state(
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<FirstRunStateResponse, String> {
-    ensure_default_state_loaded(&app, &state)?;
-    if state.persistence_blocked.load(Ordering::SeqCst) {
-        let reason = state
-            .persistence_error
-            .lock()
-            .ok()
-            .and_then(|value| value.clone())
-            .unwrap_or_else(|| "неизвестная ошибка базы состояния".into());
-        return Err(format!(
-            "Восстановление состояния заблокировано для защиты данных: {reason}. Загрузите исправную резервную базу; текущие данные не будут перезаписаны."
-        ));
-    }
-    let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let has_user_buttons = !pack.documents.is_empty();
-    let message = if has_user_buttons {
-        "Рабочий комплект загружен. Можно положить первичный документ в папку автоматизации.".into()
-    } else {
-        "Первоначальная настройка: нажмите «Создать свои кнопки» и выберите реальные рабочие шаблоны. Программа сама определит рабочий профиль по всему набору; профессию выбирать не нужно.".into()
-    };
-    Ok(FirstRunStateResponse {
-        has_user_buttons,
-        pack,
-        message,
-    })
-}
+include!("document_selection.rs");
 
 #[derive(Debug, Deserialize)]
 struct AnalyzeTemplateRequest {
@@ -2754,6 +2718,32 @@ mod loaded_pack_role_canonicalization_tests {
             canonicalize_loaded_pack_roles(&mut pack),
             0,
             "migration must be idempotent"
+        );
+    }
+
+    #[test]
+    fn persisted_selection_is_canonicalized_to_current_pack_order() {
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "buttons".into(),
+            documents: vec![
+                document("alpha", DomainKind::Generic, "generic"),
+                document("beta", DomainKind::Generic, "generic"),
+                document("gamma", DomainKind::Generic, "generic"),
+            ],
+        };
+
+        assert_eq!(
+            normalize_document_selection(
+                &pack,
+                &[
+                    "gamma".into(),
+                    "unknown".into(),
+                    "alpha".into(),
+                    "gamma".into(),
+                ],
+            ),
+            vec!["alpha".to_string(), "gamma".to_string()]
         );
     }
 }

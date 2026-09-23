@@ -4,7 +4,7 @@ import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  checkForUpdates, pickSourceFile, pickTemplateFiles, setDocumentSelection, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -48,10 +48,31 @@ function AppContent() {
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const manualSelectionTouched = useRef(false);
+  const selectionPersistenceHydrated = useRef(false);
+  const selectionPersistenceChain = useRef<Promise<void>>(Promise.resolve());
   const documentLoadRevision = useRef(0);
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
+
+  useEffect(() => {
+    if (!workspaceStateReady) return;
+    if (!selectionPersistenceHydrated.current) {
+      selectionPersistenceHydrated.current = true;
+      return;
+    }
+    const requested = [...selectedDocIds];
+    selectionPersistenceChain.current = selectionPersistenceChain.current
+      .then(async () => {
+        const persisted = await setDocumentSelection(requested);
+        if (persisted.length !== requested.length || persisted.some((id, index) => id !== requested[index])) {
+          setSelectedDocIds(persisted);
+        }
+      })
+      .catch((reason) => {
+        setStatus(`Не удалось сохранить выбор документов: ${errorMessage(reason)}.`);
+      });
+  }, [selectedDocIds, workspaceStateReady]);
 
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);

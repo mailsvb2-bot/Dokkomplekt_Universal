@@ -85,6 +85,7 @@ function validateFirstRun(command: string, value: unknown): void {
   const root = record(command, value);
   validateDocumentPack(command, root.pack);
   boolean(command, root.has_user_buttons, 'has_user_buttons');
+  if (root.selected_document_ids !== undefined) stringArray(command, root.selected_document_ids, 'selected_document_ids');
   string(command, root.message, 'message');
 }
 

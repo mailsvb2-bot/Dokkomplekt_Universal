@@ -509,7 +509,10 @@ function New-MedicalStoryDocxFixture {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][ValidateSet('template','source')][string]$Variant,
-    [ValidateSet('primary','sick_leave_vk')][string]$Role = 'primary'
+    [ValidateSet('primary','sick_leave_vk')][string]$Role = 'primary',
+    [string]$SourcePatient = 'Петров Пётр Петрович',
+    [string]$SourceCaseNumber = '2222',
+    [string]$SourceAdmission = '26.08.2026'
   )
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -528,9 +531,9 @@ function New-MedicalStoryDocxFixture {
         $workplace = 'Старый завод'
         $position = 'старый инженер'
       } else {
-        $patient = 'Петров Пётр Петрович'
-        $caseNumber = '2222'
-        $admission = '26.08.2026'
+        $patient = $SourcePatient
+        $caseNumber = $SourceCaseNumber
+        $admission = $SourceAdmission
         $diagnosis = 'F20.0 Параноидная шизофрения'
         $treatment = 'рисперидон 4 мг/сут'
         $profileStatus = 'Контактен, ориентирован, эмоционально напряжён'
@@ -949,6 +952,8 @@ if ($adversarial) {
     New-BlankDischargeDocxFixture -Path $plainTemplate
     $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
     New-MedicalStoryDocxFixture -Path $medicalSource -Variant 'source' -Role 'primary'
+    $restartMedicalSource = Join-Path $fixtureDir 'второй первичный пациент после перезапуска.docx'
+    New-MedicalStoryDocxFixture -Path $restartMedicalSource -Variant 'source' -Role 'primary' -SourcePatient 'Сидоров Сергей Сергеевич' -SourceCaseNumber '3333' -SourceAdmission '27.08.2026'
   } else {
     New-MedicalStoryDocxFixture -Path $plainTemplate -Variant 'template' -Role 'sick_leave_vk'
     $medicalSource = Join-Path $fixtureDir 'новый первичный пациент.docx'
@@ -1698,7 +1703,7 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     )
     $restartSourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
   }
-  Set-UiValue -Element $restartSourceEdit -Value $activeSourcePath
+  Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
   Submit-OpenFileDialog -Dialog $restartSourceDialog
   Wait-UiElement -Description 'FPR-08 restart source accepted' -TimeoutSeconds 40 -Probe {
     $currentAppWindow = Find-LiveAppWindow
@@ -1936,8 +1941,11 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     if ($restartXml -notmatch 'Выписной эпикриз') {
       throw 'FPR-08 restart output lost the persisted discharge template identity.'
     }
-    if ($restartXml -notmatch 'Петров Пётр Петрович') {
-      throw 'FPR-08 restart output did not bind the restored template to the newly loaded source.'
+    if ($restartXml -notmatch 'Сидоров Сергей Сергеевич') {
+      throw 'FPR-08 restart output did not bind the restored template to the second source loaded after restart.'
+    }
+    if ($restartXml -match 'Петров Пётр Петрович') {
+      throw 'FPR-08 restart output carried patient data from the pre-restart case into the second case.'
     }
   } finally {
     $restartArchive.Dispose()

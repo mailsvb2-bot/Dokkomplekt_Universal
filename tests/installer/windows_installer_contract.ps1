@@ -2082,32 +2082,15 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  $fileLabel = Wait-UiElement -Description "FPR-09 visible file label $Label" -TimeoutSeconds 30 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name $Label
-  }
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { throw "FPR-09 app window disappeared before $Label picker." }
-  Activate-LiveAppWindow -Window $currentAppWindow
-  if ($fileLabel.Current.IsOffscreen -and $fileLabel.Current.IsScrollItemPatternAvailable) {
-    $scroll = $fileLabel.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-    $scroll.ScrollIntoView()
-    Start-Sleep -Milliseconds 150
-    $currentAppWindow = Find-LiveAppWindow
-    $fileLabel = Find-E2NamedElement -Root $currentAppWindow -Name $Label
-  }
-  $rect = $fileLabel.Current.BoundingRectangle
-  if ($rect.Width -le 1 -or $rect.Height -le 1) {
-    throw "FPR-09 visible file label has no clickable rectangle: $Label"
-  }
-  [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(
-    [int]($rect.X + ($rect.Width / 2)),
-    [int]($rect.Y + ($rect.Height / 2))
-  )
-  [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-  [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog"
+  $dialog = Invoke-UiActionWithObservedTransition `
+    -Description "FPR-09 $Label" `
+    -TransitionDescription "FPR-09 $Label file dialog" `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+    } `
+    -TransitionProbe { Find-FileDialog }
   $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::AutomationIdProperty,

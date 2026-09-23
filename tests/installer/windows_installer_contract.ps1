@@ -1753,6 +1753,7 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     'workflow-document-number' = "FPR08-$PID"
     'workflow-document-date' = '23.09.2026'
     'workflow-medical-discharge_date' = '09.09.2026'
+    'workflow-medical-somatic_status' = 'Соматически стабилен, кожные покровы обычной окраски.'
   }
   foreach ($automationId in $restartPromptValues.Keys) {
     $currentAppWindow = Find-LiveAppWindow

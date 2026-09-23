@@ -9,9 +9,13 @@ from source_helpers import project_text
 class Fpr09PrimaryLearningContracts(unittest.TestCase):
     def test_primary_create_buttons_surface_owns_placeholder_free_learning(self) -> None:
         modal = project_text("src/components/TemplateSetupModal.tsx")
+        rail = project_text("src/components/DocumentRail.tsx")
         handlers = project_text("src/lib/pendingTemplateIntelligence.ts")
         app = project_text("src/App.tsx")
 
+        self.assertIn(">Создать свои кнопки</button>", rail)
+        self.assertIn(">Добавить шаблоны</button>", rail)
+        self.assertGreaterEqual(rail.count("onClick={props.onAdd}"), 2)
         self.assertIn("<h2>Создать свои кнопки</h2>", modal)
         self.assertIn("1. Источники (4–10)", modal)
         self.assertIn("2. Правильные результаты (4–10)", modal)

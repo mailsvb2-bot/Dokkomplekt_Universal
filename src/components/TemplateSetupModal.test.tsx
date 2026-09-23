@@ -15,6 +15,7 @@ const base = {
   onPendingTemplateLabelChange: vi.fn(),
   onPendingPopupFieldsChange: vi.fn(),
   onMarkupPendingTemplate: vi.fn(async () => undefined),
+  onPickLearningFiles: vi.fn(async () => []),
   onLearnPendingTemplate: vi.fn(async () => undefined),
   onStartGuidedPendingScanner: vi.fn(),
   onAnalyze: vi.fn(),
@@ -64,8 +65,20 @@ describe('TemplateSetupModal', () => {
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
-  it('exposes template-learning file pickers as real keyboard-actionable buttons', () => {
-    render(<TemplateSetupModal {...base} pendingTemplates={[{
+  it('uses the native staged learning picker and enables held-out learning after four pairs', async () => {
+    const sources = [1, 2, 3, 4].map(index => ({
+      file_name: `source-${index}.txt`,
+      staged_path: `C:/learning/source-${index}.txt`,
+      content_sha256: `source-${index}`,
+    }));
+    const outputs = [1, 2, 3, 4].map(index => ({
+      file_name: `output-${index}.docx`,
+      staged_path: `C:/learning/output-${index}.docx`,
+      content_sha256: `output-${index}`,
+    }));
+    const onPickLearningFiles = vi.fn(async (kind: 'source' | 'correct_output') => kind === 'source' ? sources : outputs);
+
+    render(<TemplateSetupModal {...base} onPickLearningFiles={onPickLearningFiles} pendingTemplates={[{
       document_id: 'd1',
       file_name: 'Карточка.docx',
       button_label: 'Карточка',
@@ -74,19 +87,13 @@ describe('TemplateSetupModal', () => {
     }]} />);
 
     fireEvent.click(screen.getByText('Необязательно: настроить автоматическое заполнение'));
+    fireEvent.click(screen.getByRole('button', { name: '1. Источники (4–10)' }));
+    await waitFor(() => expect(screen.getByText(/Выбрано: источников 4, правильных результатов 0/)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '2. Правильные результаты (4–10)' }));
+    await waitFor(() => expect(screen.getByText(/Выбрано: источников 4, правильных результатов 4/)).toBeTruthy());
 
-    const sourceButton = screen.getByRole('button', { name: '1. Источники (4–10)' }) as HTMLLabelElement;
-    const outputButton = screen.getByRole('button', { name: '2. Правильные результаты (4–10)' }) as HTMLLabelElement;
-    expect(sourceButton.tagName).toBe('LABEL');
-    expect(outputButton.tagName).toBe('LABEL');
-    expect(sourceButton.tabIndex).toBe(0);
-    expect(outputButton.tabIndex).toBe(0);
-
-    const sources = [1, 2, 3, 4].map(index => new File([`source-${index}`], `source-${index}.txt`, { type: 'text/plain' }));
-    const outputs = [1, 2, 3, 4].map(index => new File([`output-${index}`], `output-${index}.docx`, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
-    fireEvent.change(screen.getByLabelText('Файлы источников для обучения'), { target: { files: sources } });
-    fireEvent.change(screen.getByLabelText('Файлы правильных результатов для обучения'), { target: { files: outputs } });
-
+    expect(onPickLearningFiles).toHaveBeenCalledWith('source');
+    expect(onPickLearningFiles).toHaveBeenCalledWith('correct_output');
     expect((screen.getByRole('button', { name: 'Обучить на 4 паре(ах)' }) as HTMLButtonElement).disabled).toBe(false);
   });
 

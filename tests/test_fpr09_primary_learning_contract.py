@@ -47,8 +47,11 @@ class Fpr09PrimaryLearningContracts(unittest.TestCase):
         self.assertIn("New-E2LearningDocxFixture -Path $fpr09Blank -Inn '' -Blank", smoke)
         self.assertIn("Применить подтверждённую карту", smoke)
         self.assertIn("$fpr09Sources[3]", smoke)
+        self.assertIn("$fpr09Subjects[3]", smoke)
+        self.assertIn("-SubjectSlot", smoke)
         self.assertIn("FPR-09 learned button after restart", smoke)
-        self.assertIn("FPR-09 held-out Source value did not reach the learned output.", smoke)
+        self.assertIn("FPR-09 held-out Source INN did not reach the learned output.", smoke)
+        self.assertIn("FPR-09 held-out Source subject did not reach the learned output.", smoke)
         self.assertIn("FPR-09 learned output retained the blank training zone.", smoke)
 
     def test_feature_register_closes_fpr09_with_installed_evidence(self) -> None:

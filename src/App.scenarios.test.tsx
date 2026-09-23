@@ -31,9 +31,11 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
           firstRunFailures -= 1;
           throw new Error('state database unavailable');
         }
-        return { pack, has_user_buttons: true, message: 'ok' } as never;
+        return { pack, has_user_buttons: true, selected_document_ids: ['acc_1'], message: 'ok' } as never;
       case 'load_state':
-        return { pack, has_user_buttons: true, message: 'ok' } as never;
+        return { pack, has_user_buttons: true, selected_document_ids: ['acc_1'], message: 'ok' } as never;
+      case 'set_document_selection':
+        return (((payload as { req?: { document_ids?: string[] } } | undefined)?.req?.document_ids) ?? []) as never;
       case 'parse_source':
         return { semantic_case: caseDto, report: { recognized_title: 'Счёт на оплату', warnings: [] }, routing, bundle_decision: bundleDecision } as never;
       case 'pick_source_file':

@@ -2082,15 +2082,14 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  $dialog = Invoke-UiActionWithObservedTransition `
-    -Description "FPR-09 $Label" `
-    -TransitionDescription "FPR-09 $Label file dialog" `
+  Invoke-UiActionPhysicallyFromProbe `
+    -Description "FPR-09 $Label native picker" `
     -ActionProbe {
       $currentAppWindow = Find-LiveAppWindow
       if ($null -eq $currentAppWindow) { return $null }
       Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
-    } `
-    -TransitionProbe { Find-FileDialog }
+    }
+  $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog"
   $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::AutomationIdProperty,

@@ -18,7 +18,7 @@ def test_every_tauri_call_has_exactly_one_fail_closed_response_contract() -> Non
     )
     assert registry_match is not None, "COMMAND_RESPONSE_KIND registry is missing"
     registry_commands = re.findall(
-        r"^\s*'([^']+)'\s*:\s*'(?:array|boolean|string|void|nullable-object|object)'",
+        r"^\s*'([^']+)'\s*:\s*'(?:array|string-array|boolean|string|void|nullable-object|object)'",
         registry_match.group("body"),
         re.MULTILINE,
     )

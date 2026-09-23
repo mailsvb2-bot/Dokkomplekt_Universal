@@ -2823,6 +2823,7 @@ mod loaded_pack_role_canonicalization_tests {
             0,
             "migration must be idempotent"
         );
+    }
 
     #[test]
     fn persisted_selection_is_canonicalized_to_current_pack_order() {
@@ -2848,7 +2849,6 @@ mod loaded_pack_role_canonicalization_tests {
             ),
             vec!["alpha".to_string(), "gamma".to_string()]
         );
-    }
     }
 }
 

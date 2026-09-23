@@ -1773,6 +1773,53 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
   }
 
+  # The same case was already published before restart. Publication history is
+  # intentionally durable even when the user later removes the physical output
+  # directory, so the canonical UI may require the explicit existing-kit path.
+  # Follow that real user flow instead of treating the durable receipt as a
+  # failed generation.
+  $restartExistingKitDeadline = [DateTime]::UtcNow.AddSeconds(15)
+  $restartOtherVariants = $null
+  do {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { throw 'Installed window disappeared while resolving FPR-08 restart publication.' }
+    $restartOtherVariants = Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
+    if ($null -ne $restartOtherVariants) { break }
+    $restartFailureMarker = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'Документы не созданы'
+      )
+    )
+    if ($null -ne $restartFailureMarker) { break }
+    $restartBusy = Find-ButtonByNames -Root $currentAppWindow -Names @('Создаём документы…', 'Проверяем сценарий…')
+    if ($null -ne $restartBusy) { break }
+    Start-Sleep -Milliseconds 150
+  } while ([DateTime]::UtcNow -lt $restartExistingKitDeadline)
+
+  if ($null -ne $restartOtherVariants) {
+    $null = Invoke-UiActionWithObservedTransition `
+      -Description 'FPR-08 existing-kit Другие варианты' `
+      -TransitionDescription 'FPR-08 Создать новую версию' `
+      -ActionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Другие варианты')
+      } `
+      -TransitionProbe {
+        $currentAppWindow = Find-LiveAppWindow
+        if ($null -eq $currentAppWindow) { return $null }
+        Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+      }
+    Invoke-UiActionPhysicallyFromProbe -Description 'FPR-08 existing-kit Создать новую версию' -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать новую версию')
+    }
+    Write-Host 'FPR-08 existing publication PASS: restart followed the canonical new-version path.'
+  }
+
   $restartExpectedFile = "$expectedTemplateButtonName.docx"
 
   # FPR-07 deliberately re-reads the backend-owned plan at the commit boundary.

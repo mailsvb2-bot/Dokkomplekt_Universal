@@ -2231,19 +2231,33 @@ Wait-UiElement -Description 'FPR-09 learned map applied in primary setup' -Timeo
   return $null
 } | Out-Null
 
-$null = Invoke-UiActionWithObservedTransition `
-  -Description 'FPR-09 primary Создать кнопки (1)' `
-  -TransitionDescription 'FPR-09 learned document button' `
-  -ActionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
-  } `
-  -TransitionProbe {
+$fpr09PublishButton = Wait-UiElement -Description 'FPR-09 primary Создать кнопки (1)' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
+}
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before final button publication.' }
+Activate-LiveAppWindow -Window $currentAppWindow
+if ($fpr09PublishButton.Current.IsOffscreen -and $fpr09PublishButton.Current.IsScrollItemPatternAvailable) {
+  $scroll = $fpr09PublishButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 100
+}
+$fpr09PublishButton.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+try {
+  Wait-UiElement -Description 'FPR-09 learned document button' -TimeoutSeconds 60 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
     Find-ButtonByNames -Root $currentAppWindow -Names @($fpr09ButtonLabel)
-  }
+  } | Out-Null
+} catch {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw
+}
 Write-Host 'FPR-09 primary learning PASS: placeholder-free Source → Correct Output map published through the canonical template-add flow («Создать свои кнопки» / «Добавить шаблоны»).'
 
 # A real restart must reload the learned button from native persistence.

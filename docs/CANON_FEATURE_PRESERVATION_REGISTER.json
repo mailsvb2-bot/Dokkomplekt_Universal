@@ -267,8 +267,8 @@
     {
       "id": "FPR-08",
       "group": "Кнопки",
-      "status": "needs-runtime-proof",
-      "actual_state": "document rail and document commands are present; restart proof pending",
+      "status": "verified",
+      "actual_state": "document rail selection is persisted through backend-owned encrypted SQLite state; button name, selected state, and published template binding are restored after restart",
       "entry": [
         "src/components/DocumentRail.tsx"
       ],
@@ -288,8 +288,13 @@
         "src-tauri/src/subsystems/document_commands.rs",
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Restart persistence evidence is required for final register closure."
+      "runtime_evidence": [
+        "src-tauri/src/subsystems/document_commands.rs#document_selection_v1",
+        "src/hooks/useWorkspaceBootstrap.ts#selected_document_ids restore",
+        "tests/installer/windows_installer_contract.ps1#FPR-08 installed restart selection proof",
+        "src/lib/api.contract.test.ts#set_document_selection DTO contract"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-09",

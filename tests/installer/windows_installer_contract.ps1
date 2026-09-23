@@ -2162,26 +2162,39 @@ Wait-UiElement -Description 'FPR-09 primary learning source control' -TimeoutSec
 Open-Fpr09MultiFileSelection -Label '1. Источники (4–10)' -Paths $fpr09Sources
 Open-Fpr09MultiFileSelection -Label '2. Правильные результаты (4–10)' -Paths $fpr09Outputs
 
-$null = Invoke-UiActionWithObservedTransition `
-  -Description 'FPR-09 Обучить на 4 парах' `
-  -TransitionDescription 'FPR-09 explicit learned-map confirmation' `
-  -TransitionSeconds 90 `
-  -ActionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Обучить на 4 паре(ах)')
-  } `
-  -TransitionProbe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
-  }
+$fpr09LearnButton = Wait-UiElement -Description 'FPR-09 Обучить на 4 парах button' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Обучить на 4 паре(ах)')
+}
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before learning action.' }
+Activate-LiveAppWindow -Window $currentAppWindow
+if ($fpr09LearnButton.Current.IsOffscreen -and $fpr09LearnButton.Current.IsScrollItemPatternAvailable) {
+  $scroll = $fpr09LearnButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 100
+}
+$fpr09LearnButton.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
-Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 explicit map confirmation' -ActionProbe {
+$fpr09MapButton = Wait-UiElement -Description 'FPR-09 explicit learned-map confirmation' -TimeoutSeconds 90 -Probe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
   Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
 }
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before map confirmation.' }
+Activate-LiveAppWindow -Window $currentAppWindow
+if ($fpr09MapButton.Current.IsOffscreen -and $fpr09MapButton.Current.IsScrollItemPatternAvailable) {
+  $scroll = $fpr09MapButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 100
+}
+$fpr09MapButton.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
 Wait-UiElement -Description 'FPR-09 learned map applied in primary setup' -TimeoutSeconds 90 -Probe {
   $currentAppWindow = Find-LiveAppWindow

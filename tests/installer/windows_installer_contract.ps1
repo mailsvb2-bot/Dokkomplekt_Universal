@@ -2078,14 +2078,34 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  Invoke-UiActionPhysicallyFromProbe `
-    -Description "FPR-09 $Label native picker" `
-    -ActionProbe {
-      $currentAppWindow = Find-LiveAppWindow
-      if ($null -eq $currentAppWindow) { return $null }
-      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+  $pickerButton = Wait-UiElement -Description "FPR-09 $Label native picker button" -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+  }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw "FPR-09 $Label installed window disappeared before native picker." }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($pickerButton.Current.IsOffscreen -and $pickerButton.Current.IsScrollItemPatternAvailable) {
+    $scroll = $pickerButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $pickerButton.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  $dialog = $null
+  try {
+    $dialog = Wait-UiElement -Description "FPR-09 $Label file dialog after Enter" -TimeoutSeconds 5 -Probe {
+      Find-FileDialog
     }
-  $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog"
+  } catch {
+    # Hosted WebView2 occasionally focuses the button but does not synthesize the
+    # HTML button activation from Enter. Space is the other native keyboard
+    # activation for a focused button; use it once before declaring the picker broken.
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog after Space fallback"
+  }
   $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::AutomationIdProperty,

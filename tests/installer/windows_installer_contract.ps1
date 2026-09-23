@@ -2103,12 +2103,14 @@ function Open-Fpr09MultiFileSelection {
 # FPR-09 — primary placeholder-free learning path.
 $fpr09ButtonLabel = 'FPR-09 обученная кнопка'
 $fpr09TemplateDialog = Invoke-UiActionWithObservedTransition `
-  -Description 'FPR-09 Создать свои кнопки' `
+  -Description 'FPR-09 primary template add action' `
   -TransitionDescription 'FPR-09 native template picker' `
   -ActionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать свои кнопки')
+    # The same primary onAdd path is labelled «Создать свои кнопки» for an empty
+    # pack and «Добавить шаблоны» after FPR-08 has already created one button.
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Добавить шаблоны', 'Создать свои кнопки')
   } `
   -TransitionProbe { Find-FileDialog }
 $fpr09TemplateEdit = Wait-UiElement -Description 'FPR-09 blank template filename' -Probe {
@@ -2194,7 +2196,7 @@ $null = Invoke-UiActionWithObservedTransition `
     if ($null -eq $currentAppWindow) { return $null }
     Find-ButtonByNames -Root $currentAppWindow -Names @($fpr09ButtonLabel)
   }
-Write-Host 'FPR-09 primary learning PASS: placeholder-free Source → Correct Output map published through «Создать свои кнопки».'
+Write-Host 'FPR-09 primary learning PASS: placeholder-free Source → Correct Output map published through the canonical template-add flow («Создать свои кнопки» / «Добавить шаблоны»).'
 
 # A real restart must reload the learned button from native persistence.
 Stop-Process -Id $process.Id -Force

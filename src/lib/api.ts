@@ -37,6 +37,10 @@ export async function firstRunState(): Promise<FirstRunStateResponse> {
   return callRust('first_run_state');
 }
 
+export async function setDocumentSelection(documentIds: string[]): Promise<string[]> {
+  return callRust('set_document_selection', { req: { document_ids: documentIds } });
+}
+
 export async function getDefaultOutputRoot(): Promise<string> {
   return callRust('get_default_output_root');
 }
@@ -728,6 +732,7 @@ export async function renderMailMerge(documentIds: string[], delimitedText: stri
 
 export const rustCommandNames = [
   'first_run_state',
+  'set_document_selection',
   'get_default_output_root',
   'ensure_output_root',
   'get_output_preferences',

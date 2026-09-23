@@ -429,7 +429,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        parse_picker_paths(&output.stdout)
+        parse_source_picker_paths(&output.stdout)
     }
 
     #[cfg(target_os = "macos")]
@@ -456,7 +456,7 @@ end try
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        parse_picker_paths(&output.stdout)
+        parse_source_picker_paths(&output.stdout)
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -500,7 +500,7 @@ end try
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        parse_picker_paths(&output.stdout)
+        parse_source_picker_paths(&output.stdout)
     }
 }
 
@@ -717,16 +717,7 @@ end try
     }
 }
 
-fn parse_source_picker_path(output: &[u8]) -> Result<Option<PathBuf>, String> {
-    let text = String::from_utf8(output.to_vec())
-        .map_err(|_| "Системный выбор исходника вернул некорректный UTF-8.".to_string())?;
-    let raw = text.lines().find(|line| !line.trim().is_empty());
-    let Some(raw) = raw else { return Ok(None); };
-    let value = raw.trim().trim_matches('\u{feff}').trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let path = PathBuf::from(value);
+fn source_picker_path_is_supported(path: &Path) -> bool {
     let extension = path
         .extension()
         .and_then(|part| part.to_str())
@@ -737,13 +728,32 @@ fn parse_source_picker_path(output: &[u8]) -> Result<Option<PathBuf>, String> {
         "tiff", "bmp", "webp", "xlsx", "xls", "ods", "odt", "rtf", "txt", "md", "csv",
         "tsv", "json", "xml", "html", "htm", "eml", "msg", "zip", "7z", "rar",
     ];
-    if !SUPPORTED.contains(&extension.as_str()) {
-        return Err(format!(
-            "Системный выбор вернул неподдерживаемый исходник: {}",
-            path.display()
-        ));
+    SUPPORTED.contains(&extension.as_str())
+}
+
+fn parse_source_picker_paths(output: &[u8]) -> Result<Vec<PathBuf>, String> {
+    let text = String::from_utf8(output.to_vec())
+        .map_err(|_| "Системный выбор исходников вернул некорректный UTF-8.".to_string())?;
+    let mut paths = Vec::new();
+    for raw in text.lines() {
+        let value = raw.trim().trim_matches('\u{feff}').trim();
+        if value.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(value);
+        if !source_picker_path_is_supported(&path) {
+            return Err(format!(
+                "Системный выбор вернул неподдерживаемый исходник: {}",
+                path.display()
+            ));
+        }
+        paths.push(path);
     }
-    Ok(Some(path))
+    Ok(paths)
+}
+
+fn parse_source_picker_path(output: &[u8]) -> Result<Option<PathBuf>, String> {
+    Ok(parse_source_picker_paths(output)?.into_iter().next())
 }
 
 fn parse_picker_paths(output: &[u8]) -> Result<Vec<PathBuf>, String> {
@@ -797,6 +807,26 @@ mod template_picker_tests {
     fn rejects_non_word_picker_output() {
         let result = parse_picker_paths(b"C:/tmp/template.pdf\n");
         assert!(result.as_ref().is_err_and(|error| error.contains("неподдерживаемый")));
+    }
+
+    #[test]
+    fn parses_multiple_source_picker_paths_across_supported_formats() {
+        let paths = parse_source_picker_paths(
+            "\u{feff}C:/Работа/source one.txt\r\nC:/Работа/source-two.pdf\r\nC:/Работа/source-three.docx\r\n".as_bytes(),
+        )
+        .expect("multi-source picker output must parse");
+        assert_eq!(paths.len(), 3);
+        assert!(paths[0].ends_with("source one.txt"));
+        assert!(paths[1].ends_with("source-two.pdf"));
+        assert!(paths[2].ends_with("source-three.docx"));
+    }
+
+    #[test]
+    fn multi_source_picker_rejects_unsupported_extension() {
+        let result = parse_source_picker_paths(b"C:/tmp/source.exe\n");
+        assert!(result
+            .as_ref()
+            .is_err_and(|error| error.contains("неподдерживаемый исходник")));
     }
 
     #[test]

@@ -3,7 +3,7 @@ import type { CreatedDocumentsIntakeResult, GeneratedOutput, GeneratedPrintItem,
 import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
-  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importLearningExampleFile, importTemplateFile, learnTemplateFromExamples, listLearnedScannerRules, openInFileManager, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
+  approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, pickLearningFiles, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
   checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
@@ -765,6 +765,11 @@ function AppContent() {
     if (files.length) await processTemplateFiles(files);
   }
 
+  async function pickPendingLearningFiles(kind: 'source' | 'correct_output') {
+    const picked = await run('pick_learning_files', () => pickLearningFiles(kind));
+    return picked ?? [];
+  }
+
   async function openTemplateSetup() {
     setAutoInferStaticTemplates(false);
     setTemplateText(''); setButtonLabel(''); setImportedTemplatePath(null);
@@ -1467,6 +1472,7 @@ function AppContent() {
           onApplyWorkspaceDomain={(domain) => { setPendingTemplates((previous) => applyWorkspaceDomainToPending(previous, domain)); setStatus('Предложенный рабочий профиль применён ко всем подготовленным кнопкам.'); }}
           onPendingPopupFieldsChange={updatePendingPopupFields}
           onMarkupPendingTemplate={markupPendingTemplate}
+          onPickLearningFiles={pickPendingLearningFiles}
           onLearnPendingTemplate={learnPendingTemplateFromExamples}
           onStartGuidedPendingScanner={startGuidedPendingTemplateScanner}
           onAnalyze={analyzeInDialog}

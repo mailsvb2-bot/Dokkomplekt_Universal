@@ -2161,10 +2161,10 @@ Wait-UiElement -Description 'FPR-09 primary learning source control' -TimeoutSec
 
 Open-Fpr09MultiFileSelection -Label '1. Источники (4–10)' -Paths $fpr09Sources
 try {
-  Wait-UiElement -Description 'FPR-09 staged source count 4/0' -TimeoutSeconds 60 -Probe {
+  Wait-UiElement -Description 'FPR-09 staged source count 4' -TimeoutSeconds 60 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'Выбрано: источников 4, правильных результатов 0.'
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Обучить на 4 паре(ах)'
   } | Out-Null
 } catch {
   $currentAppWindow = Find-LiveAppWindow
@@ -2174,21 +2174,15 @@ try {
 
 Open-Fpr09MultiFileSelection -Label '2. Правильные результаты (4–10)' -Paths $fpr09Outputs
 try {
-  Wait-UiElement -Description 'FPR-09 staged pair count 4/4' -TimeoutSeconds 60 -Probe {
+  $fpr09LearnButton = Wait-UiElement -Description 'FPR-09 staged pair count 4/4 and enabled learning' -TimeoutSeconds 60 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'Выбрано: источников 4, правильных результатов 4.'
-  } | Out-Null
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Обучить на 4 паре(ах)')
+  }
 } catch {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
   throw
-}
-
-$fpr09LearnButton = Wait-UiElement -Description 'FPR-09 Обучить на 4 парах button' -TimeoutSeconds 30 -Probe {
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Обучить на 4 паре(ах)')
 }
 $currentAppWindow = Find-LiveAppWindow
 if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before learning action.' }

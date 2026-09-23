@@ -1,6 +1,6 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { firstRunState } from '../lib/api';
-import { defaultSelectedDocumentIds, errorMessage } from '../lib/appSupport';
+import { errorMessage } from '../lib/appSupport';
 import type { DocumentTemplateSpec } from '../lib/types';
 
 interface WorkspaceBootstrapOptions {
@@ -17,7 +17,8 @@ export function useWorkspaceBootstrap(options: WorkspaceBootstrapOptions) {
   function applyLoadedState(res: Awaited<ReturnType<typeof firstRunState>>) {
     if (res?.pack?.documents?.length) {
       options.setDocuments(res.pack.documents);
-      options.setSelectedDocIds(defaultSelectedDocumentIds(res.pack.documents));
+      const existing = new Set(res.pack.documents.map((document) => document.id));
+      options.setSelectedDocIds((res.selected_document_ids ?? []).filter((id) => existing.has(id)));
       options.setStatus(`Рабочий набор готов: ${res.pack.documents.length} документ(ов). Добавьте исходный файл.`);
     } else if (res?.has_user_buttons === false) {
       options.setDocuments([]);

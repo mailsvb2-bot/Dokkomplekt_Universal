@@ -2310,6 +2310,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             first_run_state,
+            set_document_selection,
             get_default_output_root,
             ensure_output_root,
             get_output_preferences,

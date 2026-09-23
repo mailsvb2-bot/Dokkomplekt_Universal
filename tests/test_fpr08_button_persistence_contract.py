@@ -12,6 +12,7 @@ class Fpr08ButtonPersistenceContracts(unittest.TestCase):
         api = project_text("src/lib/api.ts")
         bootstrap = project_text("src/hooks/useWorkspaceBootstrap.ts")
         app = project_text("src/App.tsx")
+        selection_hook = project_text("src/hooks/useDocumentSelectionPersistence.ts")
 
         self.assertIn('DOCUMENT_SELECTION_STATE_KEY: &str = "document_selection_v1"', backend)
         self.assertIn("selected_document_ids: Vec<String>", backend)
@@ -20,7 +21,9 @@ class Fpr08ButtonPersistenceContracts(unittest.TestCase):
         self.assertIn("set_document_selection,", main)
         self.assertIn("setDocumentSelection(documentIds: string[])", api)
         self.assertIn("res.selected_document_ids", bootstrap)
-        self.assertIn("selectionPersistenceChain", app)
+        self.assertIn("useDocumentSelectionPersistence", app)
+        self.assertIn("persistenceChain", selection_hook)
+        self.assertIn("setDocumentSelection(requested)", selection_hook)
 
     def test_installed_restart_proof_covers_selection_name_and_binding(self) -> None:
         smoke = project_text("tests/installer/windows_installer_contract.ps1")

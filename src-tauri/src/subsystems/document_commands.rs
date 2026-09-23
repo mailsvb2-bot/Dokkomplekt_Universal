@@ -2823,6 +2823,32 @@ mod loaded_pack_role_canonicalization_tests {
             0,
             "migration must be idempotent"
         );
+
+    #[test]
+    fn persisted_selection_is_canonicalized_to_current_pack_order() {
+        let pack = DocumentPack {
+            pack_id: "default".into(),
+            name: "buttons".into(),
+            documents: vec![
+                document("alpha", DomainKind::Generic, "generic"),
+                document("beta", DomainKind::Generic, "generic"),
+                document("gamma", DomainKind::Generic, "generic"),
+            ],
+        };
+
+        assert_eq!(
+            normalize_document_selection(
+                &pack,
+                &[
+                    "gamma".into(),
+                    "unknown".into(),
+                    "alpha".into(),
+                    "gamma".into(),
+                ],
+            ),
+            vec!["alpha".to_string(), "gamma".to_string()]
+        );
+    }
     }
 }
 

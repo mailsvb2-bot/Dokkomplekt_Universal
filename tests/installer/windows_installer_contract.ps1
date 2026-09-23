@@ -1986,7 +1986,7 @@ for ($index = 0; $index -lt $e2Inns.Count; $index++) {
 # evidence and explicitly confirmed before the button can be published.
 $fpr09Blank = Join-Path $e2FixtureDir 'fpr09-blank.docx'
 New-E2LearningDocxFixture -Path $fpr09Blank -Inn '' -Blank -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
-$fpr09Inns = @('5401000101', '5401000202', '5401000303', '5401000404')
+$fpr09Inns = @('5401000102', '5401000208', '5401000303', '5401000409')
 $fpr09Outputs = @()
 $fpr09Sources = @()
 for ($index = 0; $index -lt $fpr09Inns.Count; $index++) {

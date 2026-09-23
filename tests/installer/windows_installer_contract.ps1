@@ -433,11 +433,16 @@ function New-E2LearningDocxFixture {
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Inn,
     [switch]$Blank,
+    [switch]$SubjectSlot,
+    [AllowEmptyString()][string]$Subject = '',
     [string]$DocumentTitle = 'Карточка',
     [string]$ModeLine = 'Режим: стандарт'
   )
   if (-not $Blank -and [string]::IsNullOrWhiteSpace($Inn)) {
     throw 'E2 correct-output fixture requires a non-empty Inn.'
+  }
+  if ($SubjectSlot -and -not $Blank -and [string]::IsNullOrWhiteSpace($Subject)) {
+    throw 'E2 subject-slot correct-output fixture requires a non-empty Subject.'
   }
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -447,9 +452,15 @@ function New-E2LearningDocxFixture {
     $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
     try {
       $innValue = if ($Blank) { '__________' } else { $Inn }
+      $subjectParagraph = ''
+      if ($SubjectSlot) {
+        $subjectValue = if ($Blank) { '____________________' } else { $Subject }
+        $subjectParagraph = '<w:p><w:r><w:t>Субъект: ' + $subjectValue + '</w:t></w:r></w:p>'
+      }
       $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
         '<w:p><w:r><w:t>' + $DocumentTitle + '</w:t></w:r></w:p>' +
         '<w:p><w:r><w:t>' + $ModeLine + '</w:t></w:r></w:p>' +
+        $subjectParagraph +
         '<w:p><w:r><w:t>ИНН: ' + $innValue + '</w:t></w:r></w:p>' +
         '<w:sectPr/></w:body></w:document>'
       $parts = @{
@@ -1981,18 +1992,19 @@ for ($index = 0; $index -lt $e2Inns.Count; $index++) {
 # placeholders; the mapping must therefore be learned from Source → Correct Output
 # evidence and explicitly confirmed before the button can be published.
 $fpr09Blank = Join-Path $e2FixtureDir 'fpr09-blank.docx'
-New-E2LearningDocxFixture -Path $fpr09Blank -Inn '' -Blank -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
+New-E2LearningDocxFixture -Path $fpr09Blank -Inn '' -Blank -SubjectSlot -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
 $fpr09Inns = @('5401000102', '5401000208', '5401000303', '5401000409')
+$fpr09Subjects = @('Иванов Иван Иванович', 'Петров Пётр Петрович', 'Сидорова Анна Сергеевна', 'Орлова Мария Ивановна')
 $fpr09Outputs = @()
 $fpr09Sources = @()
 for ($index = 0; $index -lt $fpr09Inns.Count; $index++) {
   $ordinal = $index + 1
   $output = Join-Path $e2FixtureDir "fpr09-correct-$ordinal.docx"
   $source = Join-Path $e2FixtureDir "fpr09-source-$ordinal.txt"
-  New-E2LearningDocxFixture -Path $output -Inn $fpr09Inns[$index] -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
+  New-E2LearningDocxFixture -Path $output -Inn $fpr09Inns[$index] -SubjectSlot -Subject $fpr09Subjects[$index] -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
   [System.IO.File]::WriteAllText(
     $source,
-    "Организация FPR-09`r`nИНН: $($fpr09Inns[$index])",
+    "Субъект: $($fpr09Subjects[$index])`r`nИНН организации: $($fpr09Inns[$index])",
     [System.Text.UTF8Encoding]::new($false)
   )
   $fpr09Outputs += $output
@@ -2388,7 +2400,8 @@ try {
   if ($null -eq $entry) { throw 'FPR-09 learned output is not a readable DOCX.' }
   $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
   try { $fpr09Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
-  if ($fpr09Xml -notmatch $fpr09Inns[3]) { throw 'FPR-09 held-out Source value did not reach the learned output.' }
+  if ($fpr09Xml -notmatch $fpr09Inns[3]) { throw 'FPR-09 held-out Source INN did not reach the learned output.' }
+  if ($fpr09Xml -notmatch [regex]::Escape($fpr09Subjects[3])) { throw 'FPR-09 held-out Source subject did not reach the learned output.' }
   if ($fpr09Xml -match '__________') { throw 'FPR-09 learned output retained the blank training zone.' }
   if ($fpr09Xml -notmatch 'Карточка FPR-09') { throw 'FPR-09 learned output lost immutable template content.' }
   if ($fpr09Xml -notmatch 'Режим: основной') { throw 'FPR-09 learned output changed an immutable template line.' }

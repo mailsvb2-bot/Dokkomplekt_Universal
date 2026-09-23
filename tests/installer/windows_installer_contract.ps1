@@ -1014,6 +1014,29 @@ if ($null -ne $contentDerivedButton) {
   throw 'Template body text leaked into the reusable document button label.'
 }
 Write-Host "Create button from a real unmarked DOCX OK: '$expectedTemplateButtonName'; body text was not used as the label."
+# FPR-08: explicitly select the newly created button and require the native
+# encrypted SQLite selection row to appear before restart.
+$selectionStateKey = 'document_selection_v1'
+$selectionCheckboxName = "Добавить $expectedTemplateButtonName в комплект"
+$selectionCheckbox = Wait-UiElement -Description "selection checkbox for $expectedTemplateButtonName" -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    $selectionCheckboxName
+  )
+  $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+$togglePattern = $selectionCheckbox.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+if ($togglePattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) {
+  $togglePattern.Toggle()
+}
+$selectionFingerprint = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $selectionStateKey `
+  -TimeoutSeconds 20
+Write-Host "FPR-08 selection persisted before restart: $selectionFingerprint"
+
 
 # A template is not a case source. Exercise the installed source picker separately
 # so the generation stage is reached through the same order as a real user.
@@ -1655,6 +1678,28 @@ if ($restartState.Kind -eq 'empty') {
   throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
 }
 Write-Host 'Persisted template button survived application restart.'
+$restoredSelection = Wait-UiElement -Description "restored selected checkbox for $expectedTemplateButtonName" -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    $selectionCheckboxName
+  )
+  $candidate = $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  if ($null -eq $candidate) { return $null }
+  try {
+    $toggle = $candidate.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if ($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return $candidate }
+  } catch {
+    if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+  }
+  return $null
+}
+if ($null -eq $restoredSelection) {
+  throw 'FPR-08 restart lost the selected state of the persisted document button.'
+}
+Write-Host 'FPR-08 INSTALLED PASS: button name, selected state, and published template binding survived restart.'
+
 
 # Canon v2 E2 installed proof. Reuse this already-installed process and the same
 # UI Automation helpers: learn from real Source -> Correct Output pairs, publish

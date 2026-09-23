@@ -2243,28 +2243,36 @@ Wait-UiElement -Description 'FPR-09 learned map applied in primary setup' -Timeo
   return $null
 } | Out-Null
 
-$fpr09PublishButton = Wait-UiElement -Description 'FPR-09 primary Создать кнопки (1)' -TimeoutSeconds 30 -Probe {
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
-}
-$currentAppWindow = Find-LiveAppWindow
-if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before final button publication.' }
-Activate-LiveAppWindow -Window $currentAppWindow
-if ($fpr09PublishButton.Current.IsOffscreen -and $fpr09PublishButton.Current.IsScrollItemPatternAvailable) {
-  $scroll = $fpr09PublishButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-  $scroll.ScrollIntoView()
-  Start-Sleep -Milliseconds 100
-}
-$fpr09PublishButton.SetFocus()
-Start-Sleep -Milliseconds 100
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 try {
-  Wait-UiElement -Description 'FPR-09 learned document button' -TimeoutSeconds 60 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @($fpr09ButtonLabel)
-  } | Out-Null
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description 'FPR-09 primary Создать кнопки (1)' `
+    -TransitionDescription 'FPR-09 learned document button' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      $learned = Find-ButtonByNames -Root $currentAppWindow -Names @($fpr09ButtonLabel)
+      if ($null -ne $learned) { return $learned }
+      $all = $currentAppWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )
+      foreach ($node in $all) {
+        try {
+          $name = [string]$node.Current.Name
+          if ($name.StartsWith('Не удалось выполнить действие:')) {
+            throw "FPR-09 final publication was rejected by the product: $name"
+          }
+        } catch {
+          if ($_.Exception.Message.StartsWith('FPR-09 final publication was rejected by the product:')) { throw }
+        }
+      }
+      return $null
+    }
 } catch {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }

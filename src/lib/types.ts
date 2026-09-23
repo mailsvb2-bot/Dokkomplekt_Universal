@@ -145,6 +145,8 @@ export interface ProcessBlueprintState {
 export interface FirstRunStateResponse {
   pack: DocumentPack;
   has_user_buttons: boolean;
+  /** Native restart-persistent checkbox state. Optional only for old dev/test mocks. */
+  selected_document_ids?: string[];
   message: string;
 }
 

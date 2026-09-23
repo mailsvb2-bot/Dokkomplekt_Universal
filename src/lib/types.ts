@@ -145,6 +145,7 @@ export interface ProcessBlueprintState {
 export interface FirstRunStateResponse {
   pack: DocumentPack;
   has_user_buttons: boolean;
+  selected_document_ids: string[];
   message: string;
 }
 

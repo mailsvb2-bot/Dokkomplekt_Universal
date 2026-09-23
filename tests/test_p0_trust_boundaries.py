@@ -61,8 +61,8 @@ def test_main_window_cannot_start_before_durable_workspace_restore() -> None:
     window = main.index("WebviewWindowBuilder::from_config", restore)
     assert restore < window
 
-    commands = text("src-tauri/src/subsystems/document_commands.rs")
-    first_run = commands[commands.index("fn first_run_state(") : commands.index("struct AnalyzeTemplateRequest")]
+    selection = text("src-tauri/src/subsystems/document_selection.rs")
+    first_run = selection[selection.index("fn first_run_state(") : selection.index("struct SetDocumentSelectionRequest")]
     assert first_run.index("ensure_default_state_loaded") < first_run.index("state.pack.lock")
 
     startup = text("src-tauri/src/subsystems/startup_state.rs")
@@ -71,8 +71,8 @@ def test_main_window_cannot_start_before_durable_workspace_restore() -> None:
     assert gate < durable_load
 
 def test_first_run_fails_closed_when_persisted_state_cannot_be_restored() -> None:
-    commands = text("src-tauri/src/subsystems/document_commands.rs")
-    first_run = commands[commands.index("fn first_run_state(") : commands.index("struct AnalyzeTemplateRequest") ]
+    selection = text("src-tauri/src/subsystems/document_selection.rs")
+    first_run = selection[selection.index("fn first_run_state(") : selection.index("struct SetDocumentSelectionRequest")]
     blocked = first_run.index("persistence_blocked.load")
     returned_error = first_run.index("return Err(format!", blocked)
     pack_read = first_run.index("state.pack.lock", returned_error)

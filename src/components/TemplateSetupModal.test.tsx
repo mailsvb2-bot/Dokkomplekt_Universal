@@ -64,6 +64,30 @@ describe('TemplateSetupModal', () => {
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
+  it('exposes template-learning file pickers as real keyboard-actionable buttons', () => {
+    render(<TemplateSetupModal {...base} pendingTemplates={[{
+      document_id: 'd1',
+      file_name: 'Карточка.docx',
+      button_label: 'Карточка',
+      extracted_text: 'Карточка ИНН',
+      popup_fields: [],
+    }]} />);
+
+    fireEvent.click(screen.getByText('Необязательно: настроить автоматическое заполнение'));
+
+    const sourceButton = screen.getByRole('button', { name: '1. Источники (4–10)' }) as HTMLButtonElement;
+    const outputButton = screen.getByRole('button', { name: '2. Правильные результаты (4–10)' }) as HTMLButtonElement;
+    expect(sourceButton.type).toBe('button');
+    expect(outputButton.type).toBe('button');
+
+    const sources = [1, 2, 3, 4].map(index => new File([`source-${index}`], `source-${index}.txt`, { type: 'text/plain' }));
+    const outputs = [1, 2, 3, 4].map(index => new File([`output-${index}`], `output-${index}.docx`, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+    fireEvent.change(screen.getByLabelText('Файлы источников для обучения'), { target: { files: sources } });
+    fireEvent.change(screen.getByLabelText('Файлы правильных результатов для обучения'), { target: { files: outputs } });
+
+    expect((screen.getByRole('button', { name: 'Обучить на 4 паре(ах)' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('allows an unmarked DOCX as an immediately usable static-copy button', () => {
     const onConfirm = vi.fn();
     render(<TemplateSetupModal {...base} onConfirm={onConfirm} pendingTemplates={[{

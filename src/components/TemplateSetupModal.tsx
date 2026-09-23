@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
 import { canonicalStorageFieldId } from '../lib/fieldAliases';
@@ -52,6 +52,8 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const [marking, setMarking] = useState(false);
   const [learningSources, setLearningSources] = useState<File[]>([]);
   const [learningOutputs, setLearningOutputs] = useState<File[]>([]);
+  const learningSourcesInputRef = useRef<HTMLInputElement>(null);
+  const learningOutputsInputRef = useRef<HTMLInputElement>(null);
   const activePending = useMemo(
     () => props.pendingTemplates.find((item) => item.document_id === activePendingId) ?? props.pendingTemplates[0] ?? null,
     [activePendingId, props.pendingTemplates],
@@ -240,32 +242,46 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}><i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место</button>
 
                     <div className="templateLearningPairs">
-                      <label className="softBtn fileBtn">
+                      <button
+                        className="softBtn fileBtn"
+                        type="button"
+                        aria-label="1. Источники (4–10)"
+                        onClick={() => learningSourcesInputRef.current?.click()}
+                      >
                         <i className="ti ti-file-input" aria-hidden="true" /> 1. Источники (4–10)
-                        <input
-                          type="file"
-                          multiple
-                          accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                          onChange={(event) => {
-                            setLearningSources(Array.from(event.currentTarget.files ?? []));
-                            event.currentTarget.value = '';
-                          }}
-                          style={{ display: 'none' }}
-                        />
-                      </label>
-                      <label className="softBtn fileBtn">
+                      </button>
+                      <input
+                        ref={learningSourcesInputRef}
+                        aria-label="Файлы источников для обучения"
+                        type="file"
+                        multiple
+                        accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                        onChange={(event) => {
+                          setLearningSources(Array.from(event.currentTarget.files ?? []));
+                          event.currentTarget.value = '';
+                        }}
+                        style={{ display: 'none' }}
+                      />
+                      <button
+                        className="softBtn fileBtn"
+                        type="button"
+                        aria-label="2. Правильные результаты (4–10)"
+                        onClick={() => learningOutputsInputRef.current?.click()}
+                      >
                         <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные результаты (4–10)
-                        <input
-                          type="file"
-                          multiple
-                          accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                          onChange={(event) => {
-                            setLearningOutputs(Array.from(event.currentTarget.files ?? []));
-                            event.currentTarget.value = '';
-                          }}
-                          style={{ display: 'none' }}
-                        />
-                      </label>
+                      </button>
+                      <input
+                        ref={learningOutputsInputRef}
+                        aria-label="Файлы правильных результатов для обучения"
+                        type="file"
+                        multiple
+                        accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                        onChange={(event) => {
+                          setLearningOutputs(Array.from(event.currentTarget.files ?? []));
+                          event.currentTarget.value = '';
+                        }}
+                        style={{ display: 'none' }}
+                      />
                       <button
                         className="softBtn"
                         type="button"

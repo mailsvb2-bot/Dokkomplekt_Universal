@@ -289,7 +289,7 @@
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [
-        "src-tauri/src/subsystems/document_commands.rs#document_selection_v1/set_document_selection/first_run_state",
+        "src-tauri/src/subsystems/document_selection.rs#document_selection_v1/set_document_selection/first_run_state",
         "src/hooks/useWorkspaceBootstrap.ts#restored selected_document_ids",
         "src/hooks/useDocumentSelectionPersistence.ts#serialized native selection persistence",
         "tests/test_fpr08_button_persistence_contract.py",

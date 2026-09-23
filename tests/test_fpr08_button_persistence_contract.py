@@ -7,7 +7,8 @@ from source_helpers import project_text
 
 class Fpr08ButtonPersistenceContracts(unittest.TestCase):
     def test_native_selection_state_is_loaded_and_persisted(self) -> None:
-        backend = project_text("src-tauri/src/subsystems/document_commands.rs")
+        commands = project_text("src-tauri/src/subsystems/document_commands.rs")
+        backend = project_text("src-tauri/src/subsystems/document_selection.rs")
         main = project_text("src-tauri/src/main.rs")
         api = project_text("src/lib/api.ts")
         bootstrap = project_text("src/hooks/useWorkspaceBootstrap.ts")
@@ -16,6 +17,7 @@ class Fpr08ButtonPersistenceContracts(unittest.TestCase):
 
         self.assertIn('DOCUMENT_SELECTION_STATE_KEY: &str = "document_selection_v1"', backend)
         self.assertIn("selected_document_ids: Vec<String>", backend)
+        self.assertIn('include!("document_selection.rs")', commands)
         self.assertIn("fn set_document_selection(", backend)
         self.assertIn(".save_state_value(DOCUMENT_SELECTION_STATE_KEY, &normalized)", backend)
         self.assertIn("set_document_selection,", main)

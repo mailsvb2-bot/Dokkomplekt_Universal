@@ -2082,7 +2082,7 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  Invoke-UiElementPhysicallyFromProbe -Description "FPR-09 $Label" -ActionProbe {
+  Invoke-UiActionPhysicallyFromProbe -Description "FPR-09 $Label" -ActionProbe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
     Find-E2NamedElement -Root $currentAppWindow -Name $Label
@@ -2130,7 +2130,7 @@ $fpr09LabelInput = Wait-UiElement -Description 'FPR-09 primary setup modal' -Tim
 }
 Set-UiValue -Element $fpr09LabelInput -Value $fpr09ButtonLabel
 
-Invoke-UiElementPhysicallyFromProbe -Description 'FPR-09 expand primary automatic filling setup' -ActionProbe {
+Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 expand primary automatic filling setup' -ActionProbe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
@@ -2159,7 +2159,7 @@ $null = Invoke-UiActionWithObservedTransition `
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
   }
 
-Invoke-UiElementPhysicallyFromProbe -Description 'FPR-09 explicit map confirmation' -ActionProbe {
+Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 explicit map confirmation' -ActionProbe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
   Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
@@ -2301,7 +2301,7 @@ $fpr09DocumentDate = Wait-UiElement -Description 'FPR-09 refreshed document date
 }
 Set-UiValue -Element $fpr09DocumentDate -Value '23.09.2026'
 
-Invoke-UiElementPhysicallyFromProbe -Description 'FPR-09 final Create documents' -ActionProbe {
+Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 final Create documents' -ActionProbe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
   Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')

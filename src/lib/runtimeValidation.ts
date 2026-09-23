@@ -85,6 +85,7 @@ function validateFirstRun(command: string, value: unknown): void {
   const root = record(command, value);
   validateDocumentPack(command, root.pack);
   boolean(command, root.has_user_buttons, 'has_user_buttons');
+  stringArray(command, root.selected_document_ids, 'selected_document_ids');
   string(command, root.message, 'message');
 }
 
@@ -383,6 +384,7 @@ export const COMMAND_RESPONSE_KIND = {
   'export_files_to_pdf': 'object',
   'export_one_c_counterparties': 'string',
   'first_run_state': 'object',
+  'set_document_selection': 'array',
   'get_default_output_root': 'string',
   'ensure_output_root': 'string',
   'get_output_preferences': 'object',

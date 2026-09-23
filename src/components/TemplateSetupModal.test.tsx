@@ -75,10 +75,12 @@ describe('TemplateSetupModal', () => {
 
     fireEvent.click(screen.getByText('Необязательно: настроить автоматическое заполнение'));
 
-    const sourceButton = screen.getByRole('button', { name: '1. Источники (4–10)' }) as HTMLButtonElement;
-    const outputButton = screen.getByRole('button', { name: '2. Правильные результаты (4–10)' }) as HTMLButtonElement;
-    expect(sourceButton.type).toBe('button');
-    expect(outputButton.type).toBe('button');
+    const sourceButton = screen.getByRole('button', { name: '1. Источники (4–10)' }) as HTMLLabelElement;
+    const outputButton = screen.getByRole('button', { name: '2. Правильные результаты (4–10)' }) as HTMLLabelElement;
+    expect(sourceButton.tagName).toBe('LABEL');
+    expect(outputButton.tagName).toBe('LABEL');
+    expect(sourceButton.tabIndex).toBe(0);
+    expect(outputButton.tabIndex).toBe(0);
 
     const sources = [1, 2, 3, 4].map(index => new File([`source-${index}`], `source-${index}.txt`, { type: 'text/plain' }));
     const outputs = [1, 2, 3, 4].map(index => new File([`output-${index}`], `output-${index}.docx`, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));

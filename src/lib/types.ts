@@ -547,6 +547,7 @@ export interface BackgroundWatcherPlan {
   auto_print?: boolean;
   print_copies_by_document?: Record<string, number>;
   max_parallel_cases?: number;
+  open_ui_on_drop?: boolean;
   migration_required?: boolean;
   executable?: string;
   args?: string[];

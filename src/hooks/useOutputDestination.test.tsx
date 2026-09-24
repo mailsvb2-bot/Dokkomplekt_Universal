@@ -33,6 +33,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
     const { result } = renderHook(() => useOutputDestination(runAction, status));
     await waitFor(() => expect(result.current.outputRoot).toBe('D:/Ready'));
     await waitFor(() => expect(result.current.watchFolder).toBe('C:/Inbox'));
+    expect(result.current.watcherOpenUiOnDrop).toBe(false);
     expect(result.current.outputPreferencesReady).toBe(true);
     expect(result.current.folderNamingConfirmed).toBe(true);
     expect(localStorage.getItem(OUTPUT_ROOT_KEY)).toBe('D:/Ready');
@@ -194,6 +195,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
     await waitFor(() => expect(result.current.outputRoot).toBe('D:/Ready'));
     await act(async () => { await result.current.chooseWatchFolder(); });
     const revisionBeforeInstall = result.current.watcherRefreshRevision;
+    act(() => result.current.setWatcherOpenUiOnDrop(true));
     await act(async () => { await result.current.installWatcher(false, false, {}); });
     expect(result.current.watcherRefreshRevision).toBe(revisionBeforeInstall + 1);
     const install = calls.find((call) => call.command === 'install_background_watcher');
@@ -203,6 +205,7 @@ describe('useOutputDestination durable output/watcher contract', () => {
         output_root: 'D:/Ready',
         folder_parts: ['DocumentNumber', 'DocumentDate'],
         default_year: new Date().getFullYear(),
+        open_ui_on_drop: true,
       },
     });
   });

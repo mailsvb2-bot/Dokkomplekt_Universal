@@ -2492,6 +2492,7 @@ if ($fpr10Watcher.HasExited) {
 # Therefore IsWindowVisible alone is not evidence of a user-visible window.
 # Permit only that exact Tao helper shape; every other visible native HWND fails.
 $fpr10NativeHandle = [IntPtr]$fpr10Watcher.MainWindowHandle
+$fpr10SafeTaoEventTarget = $false
 if ($fpr10NativeHandle -ne [IntPtr]::Zero -and [DokkomplektNativeMouse]::IsWindowVisible($fpr10NativeHandle)) {
   $fpr10WindowTitle = [System.Text.StringBuilder]::new(512)
   $fpr10WindowClass = [System.Text.StringBuilder]::new(512)
@@ -2528,12 +2529,26 @@ $fpr10WindowCondition = [System.Windows.Automation.PropertyCondition]::new(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
   [int]$fpr10Watcher.Id
 )
-$fpr10UnexpectedWindow = $desktop.FindFirst(
+$fpr10TopLevelElements = $desktop.FindAll(
   [System.Windows.Automation.TreeScope]::Children,
   $fpr10WindowCondition
 )
-if ($null -ne $fpr10UnexpectedWindow) {
-  throw "FPR-10 background watcher exposed a top-level UI Automation window: $($fpr10UnexpectedWindow.Current.Name)."
+foreach ($fpr10TopLevelElement in $fpr10TopLevelElements) {
+  $fpr10UiaHandle = [int64]$fpr10TopLevelElement.Current.NativeWindowHandle
+  $fpr10UiaName = [string]$fpr10TopLevelElement.Current.Name
+  $fpr10UiaClass = [string]$fpr10TopLevelElement.Current.ClassName
+  $fpr10UiaSafeTaoEventTarget = (
+    $fpr10SafeTaoEventTarget -and
+    $fpr10UiaHandle -eq $fpr10NativeHandle.ToInt64() -and
+    $fpr10UiaClass -eq 'Tao Thread Event Target' -and
+    [string]::IsNullOrEmpty($fpr10UiaName)
+  )
+  if (-not $fpr10UiaSafeTaoEventTarget) {
+    throw "FPR-10 background watcher exposed a top-level UI Automation window: HWND=$fpr10UiaHandle; class='$fpr10UiaClass'; name='$fpr10UiaName'."
+  }
+}
+if ($fpr10TopLevelElements.Count -gt 0) {
+  Write-Host "FPR-10 UIA EVENT TARGET OK: UI Automation exposes only the already-validated Tao helper HWND."
 }
 
 $fpr10Subject = 'Кузнецова Елена Андреевна'

@@ -2418,6 +2418,167 @@ try {
 }
 Write-Host "FPR-09 INSTALLED PASS: «Создать свои кнопки» -> placeholder-free learning -> restart -> held-out Source -> physical DOCX: $($fpr09Created.FullName)"
 
+# FPR-10 — the installed watcher must work with the foreground UI fully closed,
+# must not create/flash a WebView window, and repeated delivery of identical
+# source bytes under the same plan must not publish a second output set.
+if (-not $process.HasExited) {
+  Stop-Process -Id $process.Id -Force
+  $process.WaitForExit()
+}
+Start-Sleep -Milliseconds 500
+
+$fpr10WatchFolder = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr10-watch-$PID"
+$fpr10InstallEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr10-install-$PID.json"
+$fpr10UninstallEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr10-uninstall-$PID.json"
+Remove-Item -LiteralPath $fpr10WatchFolder -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $fpr10InstallEvidence, $fpr10UninstallEvidence -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $fpr10WatchFolder | Out-Null
+
+$env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
+try {
+  $watcherInstall = Start-Process -FilePath $app.FullName -ArgumentList @(
+    "--e2e-install-watcher=$fpr10WatchFolder",
+    "--e2e-evidence=$fpr10InstallEvidence"
+  ) -Wait -PassThru
+  if ($watcherInstall.ExitCode -ne 0) {
+    throw "FPR-10 watcher configuration command failed with exit code $($watcherInstall.ExitCode)."
+  }
+  if (-not (Test-Path -LiteralPath $fpr10InstallEvidence -PathType Leaf)) {
+    throw 'FPR-10 watcher configuration did not publish its evidence file.'
+  }
+  $watcherInstallJson = Get-Content -LiteralPath $fpr10InstallEvidence -Raw | ConvertFrom-Json
+  if (-not $watcherInstallJson.install_result.installed) {
+    throw 'FPR-10 watcher configuration did not report installed=true.'
+  }
+  if ($watcherInstallJson.install_result.open_ui_on_drop -ne $false) {
+    throw 'FPR-10 installed watcher must default to open_ui_on_drop=false.'
+  }
+} finally {
+  Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
+}
+
+$fpr10Watcher = Start-Process -FilePath $app.FullName -ArgumentList @('--background-watch') -PassThru
+Start-Sleep -Seconds 2
+$fpr10Watcher.Refresh()
+if ($fpr10Watcher.HasExited) {
+  throw "FPR-10 background watcher exited before accepting input with code $($fpr10Watcher.ExitCode)."
+}
+if ($fpr10Watcher.MainWindowHandle -ne [IntPtr]::Zero) {
+  throw "FPR-10 background watcher created a native main window: $($fpr10Watcher.MainWindowHandle)."
+}
+$fpr10WindowCondition = [System.Windows.Automation.PropertyCondition]::new(
+  [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+  [int]$fpr10Watcher.Id
+)
+$fpr10UnexpectedWindow = $desktop.FindFirst(
+  [System.Windows.Automation.TreeScope]::Children,
+  $fpr10WindowCondition
+)
+if ($null -ne $fpr10UnexpectedWindow) {
+  throw "FPR-10 background watcher exposed a top-level UI Automation window: $($fpr10UnexpectedWindow.Current.Name)."
+}
+
+$fpr10Subject = 'Кузнецова Елена Андреевна'
+$fpr10Inn = '500100732259'
+$fpr10Source = Join-Path $fpr10WatchFolder 'fpr10-source.txt'
+$fpr10SourceText = "Карточка FPR-09`r`nСубъект: $fpr10Subject`r`nИНН организации: $fpr10Inn`r`nНомер документа: FPR10-5505`r`nДата документа: 24.09.2026"
+$fpr10StartedUtc = [DateTime]::UtcNow
+[System.IO.File]::WriteAllText(
+  $fpr10Source,
+  $fpr10SourceText,
+  [System.Text.UTF8Encoding]::new($false)
+)
+
+$fpr10ExpectedFile = "$fpr09ButtonLabel.docx"
+$fpr10Deadline = [DateTime]::UtcNow.AddSeconds(90)
+$fpr10Created = $null
+do {
+  $fpr10Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr10ExpectedFile -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTimeUtc -ge $fpr10StartedUtc } |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+  if ($null -ne $fpr10Created) { break }
+  if ($fpr10Watcher.HasExited) {
+    throw "FPR-10 background watcher exited during closed-UI processing with code $($fpr10Watcher.ExitCode)."
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr10Deadline)
+if ($null -eq $fpr10Created) {
+  $fpr10Notes = Get-ChildItem -LiteralPath $fpr10WatchFolder -File -Filter '*.txt' -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $fpr10Source } |
+    ForEach-Object { "$($_.Name): $((Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue))" }
+  throw "FPR-10 closed-UI watcher did not publish $fpr10ExpectedFile. Service notes: $($fpr10Notes -join ' | ')"
+}
+
+$fpr10Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr10Created.FullName)
+try {
+  $entry = $fpr10Archive.GetEntry('word/document.xml')
+  if ($null -eq $entry) { throw 'FPR-10 watcher output is not a readable DOCX.' }
+  $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr10Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+  if ($fpr10Xml -notmatch [regex]::Escape($fpr10Subject)) { throw 'FPR-10 watcher output lost the new subject.' }
+  if ($fpr10Xml -notmatch $fpr10Inn) { throw 'FPR-10 watcher output lost the new INN.' }
+  if ($fpr10Xml -notmatch 'Карточка FPR-09') { throw 'FPR-10 watcher output lost immutable template content.' }
+} finally {
+  $fpr10Archive.Dispose()
+}
+Write-Host "FPR-10 CLOSED-UI PASS: windowless installed watcher published a physical DOCX: $($fpr10Created.FullName)"
+
+$fpr10FirstOutputPath = $fpr10Created.FullName
+$fpr10FirstOutputWriteUtc = $fpr10Created.LastWriteTimeUtc
+# Successful processing can archive/remove the inbox copy. Recreate exactly the
+# same source bytes at the same watched path to generate a genuine repeated event.
+[System.IO.File]::WriteAllText(
+  $fpr10Source,
+  $fpr10SourceText,
+  [System.Text.UTF8Encoding]::new($false)
+)
+$fpr10DuplicateDeadline = [DateTime]::UtcNow.AddSeconds(12)
+do {
+  if ($fpr10Watcher.HasExited) {
+    throw "FPR-10 background watcher exited during idempotency proof with code $($fpr10Watcher.ExitCode)."
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr10DuplicateDeadline)
+
+$fpr10Outputs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr10ExpectedFile -ErrorAction SilentlyContinue |
+  Where-Object { $_.LastWriteTimeUtc -ge $fpr10StartedUtc })
+if ($fpr10Outputs.Count -ne 1) {
+  throw "FPR-10 duplicate event published $($fpr10Outputs.Count) output files; expected exactly one."
+}
+if ($fpr10Outputs[0].FullName -ne $fpr10FirstOutputPath -or $fpr10Outputs[0].LastWriteTimeUtc -ne $fpr10FirstOutputWriteUtc) {
+  throw 'FPR-10 duplicate event rewrote or replaced the first published output.'
+}
+Write-Host 'FPR-10 IDEMPOTENCY PASS: repeated identical Source/plan produced no second output set.'
+
+if (-not $fpr10Watcher.HasExited) {
+  Stop-Process -Id $fpr10Watcher.Id -Force
+  $fpr10Watcher.WaitForExit()
+}
+$env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
+try {
+  $watcherUninstall = Start-Process -FilePath $app.FullName -ArgumentList @(
+    '--e2e-uninstall-watcher',
+    "--e2e-evidence=$fpr10UninstallEvidence"
+  ) -Wait -PassThru
+  if ($watcherUninstall.ExitCode -ne 0) {
+    throw "FPR-10 watcher cleanup command failed with exit code $($watcherUninstall.ExitCode)."
+  }
+} finally {
+  Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
+}
+Remove-Item -LiteralPath $fpr10WatchFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+# Continue the remaining installed-contract checks in the ordinary foreground UI.
+$process = Start-Process -FilePath $app.FullName -PassThru
+$appWindow = Wait-UiElement -Description 'foreground window after FPR-10 watcher proof' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
+
 # Navigate through the same Settings entry point a user must use after restart.
 # The restart proof intentionally leaves the application on its restored workspace,
 # so the expert <summary> is not in the accessibility tree until Settings is opened.

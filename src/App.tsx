@@ -109,8 +109,8 @@ function AppContent() {
   const [scannerField, setScannerField] = useState('');
   const [scannerText, setScannerText] = useState('');
   const {
-    watchFolder, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, outputPreferencesLoading, outputRootRecoveryRequired, watcherRefreshRevision,
-    setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
+    watchFolder, watcherOpenUiOnDrop, outputRoot, outputRootDraft, folderParts, folderNamingConfirmed, outputPreferencesReady, outputPreferencesLoading, outputRootRecoveryRequired, watcherRefreshRevision,
+    setWatcherOpenUiOnDrop, setOutputRootDraft, setFolderNamingConfirmed, updateFolderParts, commitOutputRoot,
     chooseAndCommitOutputFolder, chooseWatchFolder, outputPlan, installWatcher, uninstallWatcher,
   } = useOutputDestination(run, setStatus);
   const [autoPrint, setAutoPrint] = useState(loadAutoPrintPreference);
@@ -142,7 +142,7 @@ function AppContent() {
   }, []);
 
   useWatcherPreferenceSync({
-    outputPreferencesReady, watcherRefreshRevision, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies,
+    outputPreferencesReady, watcherRefreshRevision, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop: watcherOpenUiOnDrop,
     setAutoPrint, setPrintCopies, setStatus,
   });
 
@@ -1297,6 +1297,7 @@ function AppContent() {
             documents={documents}
             selectedDocumentIds={selectedDocIds}
             watchFolder={watchFolder}
+            watcherOpenUiOnDrop={watcherOpenUiOnDrop}
             intakeSource={intakeSource}
             intakeResult={intakeResult}
             lastOutput={lastOutput}
@@ -1324,6 +1325,7 @@ function AppContent() {
             onPickWatchFolder={() => void chooseWatchFolder()}
             onInstallWatcher={() => void installWatcher(sickLeave, autoPrint, printCopies)}
             onUninstallWatcher={() => void uninstallWatcher()}
+            setWatcherOpenUiOnDrop={setWatcherOpenUiOnDrop}
             setIntakeSource={setIntakeSource}
             setAutoPrint={updateAutoPrint}
             setSourceText={changeSourceText}
@@ -1394,6 +1396,7 @@ function AppContent() {
             outputRoot={outputRootDraft}
             savedOutputRoot={outputRoot}
             folderParts={folderParts}
+            watcherOpenUiOnDrop={watcherOpenUiOnDrop}
             licenseText={licenseText}
             onSeriesStartChange={setSeriesStart}
             onSeriesEndChange={setSeriesEnd}
@@ -1414,6 +1417,7 @@ function AppContent() {
             onCheckUpdates={checkUpdates}
             onInstallWatcher={() => void installWatcher(sickLeave, autoPrint, printCopies)}
             onUninstallWatcher={() => void uninstallWatcher()}
+            onWatcherOpenUiOnDropChange={setWatcherOpenUiOnDrop}
             onVerifyLicense={verifyLicense}
             onSemanticCaseChanged={(semanticCase) => setSemantic({
               fields: Object.values(semanticCase.values).map((value) => ({

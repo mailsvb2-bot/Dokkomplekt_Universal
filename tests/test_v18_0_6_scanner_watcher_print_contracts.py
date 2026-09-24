@@ -107,7 +107,9 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertNotIn("let _ = main_window.hide()", self.main)
         self.assertIn("Открывать приложение при появлении нового файла", self.workspace)
         self.assertIn("FPR-10 CLOSED-UI PASS", self.installer_smoke)
-        self.assertIn("MainWindowHandle -ne [IntPtr]::Zero", self.installer_smoke)
+        self.assertIn("IsWindowVisible($fpr10NativeHandle)", self.installer_smoke)
+        self.assertIn("GetWindowThreadProcessId", self.installer_smoke)
+        self.assertIn("stole foreground focus", self.installer_smoke)
         self.assertIn("FPR-10 IDEMPOTENCY PASS", self.installer_smoke)
         self.assertIn("expected exactly one", self.installer_smoke)
 

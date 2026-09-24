@@ -104,6 +104,7 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("open_ui_on_drop", self.main)
         self.assertIn("if runtime.open_ui_on_drop", self.main)
         self.assertIn("A background watcher is a windowless service process.", self.main)
+        self.assertIn('windows_subsystem = "windows"', self.main)
         self.assertNotIn("let _ = main_window.hide()", self.main)
         self.assertIn("Открывать приложение при появлении нового файла", self.workspace)
         self.assertIn("FPR-10 CLOSED-UI PASS", self.installer_smoke)

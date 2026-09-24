@@ -691,8 +691,8 @@ describe('Tauri command DTO contracts', () => {
     await getOutputPreferences();
     await saveOutputPreferences({ output_root: 'C:/ready', folder_parts: ['DocumentNumber'], naming_confirmed: true });
     await getBackgroundWatcherState();
-    await installBackgroundWatcher('C:/watch', 'C:/ready', 2026, false, ['DocumentNumber'], true, { doc_1: 3 });
-    await updateBackgroundWatcherPreferences('C:/ready', ['DocumentNumber'], false, { doc_1: 7 });
+    await installBackgroundWatcher('C:/watch', 'C:/ready', 2026, false, ['DocumentNumber'], true, { doc_1: 3 }, false);
+    await updateBackgroundWatcherPreferences('C:/ready', ['DocumentNumber'], false, { doc_1: 7 }, true);
     await uninstallBackgroundWatcher();
     await runCreatedDocumentsIntake('C:/Desktop/Созданные документы/Первичный.docx', 'C:/Desktop/Созданные документы', ['FullSubjectName'], 2026, false);
     await printFiles([{ path: 'out.docx', copies: 3 }]);
@@ -713,8 +713,8 @@ describe('Tauri command DTO contracts', () => {
       { command: 'get_output_preferences', payload: undefined },
       { command: 'save_output_preferences', payload: { req: { output_root: 'C:/ready', folder_parts: ['DocumentNumber'], naming_confirmed: true } } },
       { command: 'get_background_watcher_state', payload: undefined },
-      { command: 'install_background_watcher', payload: { req: { watch_folder: 'C:/watch', output_root: 'C:/ready', default_year: 2026, sick_leave_enabled: false, folder_parts: ['DocumentNumber'], auto_print: true, print_copies_by_document: { doc_1: 3 } } } },
-      { command: 'update_background_watcher_preferences', payload: { req: { output_root: 'C:/ready', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: { doc_1: 7 } } } },
+      { command: 'install_background_watcher', payload: { req: { watch_folder: 'C:/watch', output_root: 'C:/ready', default_year: 2026, sick_leave_enabled: false, folder_parts: ['DocumentNumber'], auto_print: true, print_copies_by_document: { doc_1: 3 }, open_ui_on_drop: false } } },
+      { command: 'update_background_watcher_preferences', payload: { req: { output_root: 'C:/ready', folder_parts: ['DocumentNumber'], auto_print: false, print_copies_by_document: { doc_1: 7 }, open_ui_on_drop: true } } },
       { command: 'uninstall_background_watcher', payload: undefined },
       { command: 'run_created_documents_intake', payload: { req: { source_path: 'C:/Desktop/Созданные документы/Первичный.docx', output_root: 'C:/Desktop/Созданные документы', folder_parts: ['FullSubjectName'], default_year: 2026, sick_leave_enabled: false } } },
       { command: 'print_files', payload: { req: { jobs: [{ path: 'out.docx', copies: 3 }] } } },

@@ -2258,6 +2258,7 @@ fn main() {
                             auto_print: false,
                             print_copies_by_document: BTreeMap::new(),
                             max_parallel_cases: 2,
+                            open_ui_on_drop: false,
                         },
                         handle.clone(),
                     )

@@ -364,6 +364,13 @@ fn confirm_template_setup(
             })
         })
         .collect::<BTreeMap<_, _>>();
+    // A learning validation is already bound to the exact bytes produced by
+    // apply_template_learning_map. Generic confirmation may analyze those bytes
+    // but must never run another compiler pass over them before publication.
+    let exact_learning_document_ids = learning_validation_ids
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let requested_rows = req
         .rows
         .into_iter()
@@ -374,7 +381,12 @@ fn confirm_template_setup(
         workspace: _inference_workspace,
         summary: _inference_summary,
         compiler_fields_by_document,
-    } = infer_static_template_rows(&app, &requested_rows, req.auto_infer_static_templates)?;
+    } = infer_static_template_rows(
+        &app,
+        &requested_rows,
+        req.auto_infer_static_templates,
+        &exact_learning_document_ids,
+    )?;
     ensure_persistence_available(&state)?;
     let _persistence_guard = state
         .persistence_gate

@@ -15,6 +15,7 @@ const base = {
   onPendingTemplateLabelChange: vi.fn(),
   onPendingPopupFieldsChange: vi.fn(),
   onMarkupPendingTemplate: vi.fn(async () => undefined),
+  onPickLearningFiles: vi.fn(async () => []),
   onLearnPendingTemplate: vi.fn(async () => undefined),
   onStartGuidedPendingScanner: vi.fn(),
   onAnalyze: vi.fn(),
@@ -62,6 +63,38 @@ describe('TemplateSetupModal', () => {
     expect(screen.getByText('Кнопки готовы к созданию')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Создать кнопки (2)' }));
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it('uses the native staged learning picker and enables held-out learning after four pairs', async () => {
+    const sources = [1, 2, 3, 4].map(index => ({
+      file_name: `source-${index}.txt`,
+      staged_path: `C:/learning/source-${index}.txt`,
+      content_sha256: `source-${index}`,
+    }));
+    const outputs = [1, 2, 3, 4].map(index => ({
+      file_name: `output-${index}.docx`,
+      staged_path: `C:/learning/output-${index}.docx`,
+      content_sha256: `output-${index}`,
+    }));
+    const onPickLearningFiles = vi.fn(async (kind: 'source' | 'correct_output') => kind === 'source' ? sources : outputs);
+
+    render(<TemplateSetupModal {...base} onPickLearningFiles={onPickLearningFiles} pendingTemplates={[{
+      document_id: 'd1',
+      file_name: 'Карточка.docx',
+      button_label: 'Карточка',
+      extracted_text: 'Карточка ИНН',
+      popup_fields: [],
+    }]} />);
+
+    fireEvent.click(screen.getByText('Необязательно: настроить автоматическое заполнение'));
+    fireEvent.click(screen.getByRole('button', { name: '1. Источники (4–10)' }));
+    await waitFor(() => expect(screen.getByText(/Выбрано: источников 4, правильных результатов 0/)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '2. Правильные результаты (4–10)' }));
+    await waitFor(() => expect(screen.getByText(/Выбрано: источников 4, правильных результатов 4/)).toBeTruthy());
+
+    expect(onPickLearningFiles).toHaveBeenCalledWith('source');
+    expect(onPickLearningFiles).toHaveBeenCalledWith('correct_output');
+    expect((screen.getByRole('button', { name: 'Обучить на 4 паре(ах)' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('allows an unmarked DOCX as an immediately usable static-copy button', () => {

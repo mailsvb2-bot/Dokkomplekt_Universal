@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
 import type { DomainKind, PopupFieldConfig, WorkspaceProfileInference, WorkspaceWorkflowShape } from '../lib/types';
+import type { LearningFileKind, PickedLearningFile } from '../lib/api';
 import { canonicalStorageFieldId } from '../lib/fieldAliases';
 import { PopupFieldEditor, ensurePopupField } from './PopupFieldEditor';
 
@@ -35,7 +36,8 @@ interface TemplateSetupModalProps {
   onApplyWorkspaceDomain?(value: DomainKind): void;
   onPendingPopupFieldsChange(documentId: string, fields: PopupFieldConfig[]): void;
   onMarkupPendingTemplate(documentId: string, selectedText: string, fieldId: string, action: 'replace' | 'insert_after'): Promise<void>;
-  onLearnPendingTemplate(documentId: string, pairs: Array<{ source: File; completed: File }>): Promise<void>;
+  onPickLearningFiles(kind: Extract<LearningFileKind, 'source' | 'correct_output'>): Promise<PickedLearningFile[]>;
+  onLearnPendingTemplate(documentId: string, pairs: Array<{ source: PickedLearningFile; completed: PickedLearningFile }>): Promise<void>;
   onStartGuidedPendingScanner(documentId: string): void;
   onAnalyze(): void;
   onPickFile(event: ChangeEvent<HTMLInputElement>): void;
@@ -50,8 +52,8 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
   const [selection, setSelection] = useState<{ start: number; end: number; text: string } | null>(null);
   const [activePendingId, setActivePendingId] = useState('');
   const [marking, setMarking] = useState(false);
-  const [learningSources, setLearningSources] = useState<File[]>([]);
-  const [learningOutputs, setLearningOutputs] = useState<File[]>([]);
+  const [learningSources, setLearningSources] = useState<PickedLearningFile[]>([]);
+  const [learningOutputs, setLearningOutputs] = useState<PickedLearningFile[]>([]);
   const activePending = useMemo(
     () => props.pendingTemplates.find((item) => item.document_id === activePendingId) ?? props.pendingTemplates[0] ?? null,
     [activePendingId, props.pendingTemplates],
@@ -240,32 +242,23 @@ export function TemplateSetupModal(props: TemplateSetupModalProps) {
                     <button className="softBtn" type="button" onClick={() => props.onStartGuidedPendingScanner(activePending.document_id)}><i className="ti ti-hand-click" aria-hidden="true" /> Открыть Word и показать место</button>
 
                     <div className="templateLearningPairs">
-                      <label className="softBtn fileBtn">
+                      <button
+                        className="softBtn fileBtn"
+                        type="button"
+                        aria-label="1. Источники (4–10)"
+                        onClick={() => void props.onPickLearningFiles('source').then(setLearningSources)}
+                      >
                         <i className="ti ti-file-input" aria-hidden="true" /> 1. Источники (4–10)
-                        <input
-                          type="file"
-                          multiple
-                          accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                          onChange={(event) => {
-                            setLearningSources(Array.from(event.currentTarget.files ?? []));
-                            event.currentTarget.value = '';
-                          }}
-                          style={{ display: 'none' }}
-                        />
-                      </label>
-                      <label className="softBtn fileBtn">
+                      </button>
+                      <button
+                        className="softBtn fileBtn"
+                        type="button"
+                        aria-label="2. Правильные результаты (4–10)"
+                        onClick={() => void props.onPickLearningFiles('correct_output').then(setLearningOutputs)}
+                      >
                         <i className="ti ti-file-check" aria-hidden="true" /> 2. Правильные результаты (4–10)
-                        <input
-                          type="file"
-                          multiple
-                          accept=".docx,.docm,.pdf,.txt,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
-                          onChange={(event) => {
-                            setLearningOutputs(Array.from(event.currentTarget.files ?? []));
-                            event.currentTarget.value = '';
-                          }}
-                          style={{ display: 'none' }}
-                        />
-                      </label>
+                      </button>
+                      <small className="hint">Выбрано: источников {learningSources.length}, правильных результатов {learningOutputs.length}.</small>
                       <button
                         className="softBtn"
                         type="button"

@@ -300,29 +300,38 @@
     {
       "id": "FPR-09",
       "group": "Обучение",
-      "status": "needs-runtime-proof",
-      "actual_state": "template setup commands and intelligence engine are present; installed proof pending",
+      "status": "verified",
+      "actual_state": "the primary «Создать свои кнопки» modal learns a placeholder-free template from 4 Source → Correct Output pairs, requires an independently publishable held-out validation plus explicit confirmation, publishes the learned button, restores it after installed restart, and generates a physical DOCX from the held-out Source",
       "entry": [
+        "src/components/TemplateSetupModal.tsx#Создать свои кнопки",
+        "src/lib/pendingTemplateIntelligence.ts#learnPendingTemplateFromExamples",
         "src-tauri/src/subsystems/document_commands.rs#prepare_template_setup/confirm_template_setup"
       ],
       "backend": [
         "crates/dokkomplekt-core/src/template_intelligence.rs",
+        "src-tauri/src/subsystems/template_learning_commands.rs",
         "src-tauri/src/subsystems/document_commands.rs"
       ],
       "storage": [
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "result": [
-        "new confirmed document button usable after restart"
+        "new confirmed learning-backed document button usable after restart on a held-out Source"
       ],
       "before": "source_baseline",
       "after": "installed_baseline",
       "evidence_paths": [
+        "src/components/TemplateSetupModal.tsx",
+        "src/lib/pendingTemplateIntelligence.ts",
         "crates/dokkomplekt-core/src/template_intelligence.rs",
+        "src-tauri/src/subsystems/template_learning_commands.rs",
         "src-tauri/src/subsystems/document_commands.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Placeholder-free UI learning evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_installer_contract.ps1#FPR-09 primary placeholder-free learning/restart/held-out physical DOCX proof",
+        "tests/test_fpr09_primary_learning_contract.py#primary UI and installed-proof regression lock"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-10",

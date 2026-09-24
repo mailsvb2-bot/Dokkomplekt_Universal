@@ -35,8 +35,7 @@ async fn pick_learning_files(
     let selected_paths = tauri::async_runtime::spawn_blocking(move || match picker_kind.as_str() {
         "blank" | "correct_output" => pick_template_files_blocking(req.initial_path),
         "medical_diary" => pick_medical_diary_files_blocking(req.initial_path),
-        "source" => pick_source_file_blocking(req.initial_path)
-            .map(|selected| selected.into_iter().collect::<Vec<_>>()),
+        "source" => pick_source_files_blocking(req.initial_path),
         _ => Err(format!("Неизвестная роль файла обучения: {picker_kind}")),
     })
     .await

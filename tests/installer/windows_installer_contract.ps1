@@ -432,10 +432,17 @@ function New-E2LearningDocxFixture {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Inn,
-    [switch]$Blank
+    [switch]$Blank,
+    [switch]$SubjectSlot,
+    [AllowEmptyString()][string]$Subject = '',
+    [string]$DocumentTitle = 'Карточка',
+    [string]$ModeLine = 'Режим: стандарт'
   )
   if (-not $Blank -and [string]::IsNullOrWhiteSpace($Inn)) {
     throw 'E2 correct-output fixture requires a non-empty Inn.'
+  }
+  if ($SubjectSlot -and -not $Blank -and [string]::IsNullOrWhiteSpace($Subject)) {
+    throw 'E2 subject-slot correct-output fixture requires a non-empty Subject.'
   }
   Add-Type -AssemblyName System.IO.Compression
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -445,9 +452,15 @@ function New-E2LearningDocxFixture {
     $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
     try {
       $innValue = if ($Blank) { '__________' } else { $Inn }
+      $subjectParagraph = ''
+      if ($SubjectSlot) {
+        $subjectValue = if ($Blank) { '____________________' } else { $Subject }
+        $subjectParagraph = '<w:p><w:r><w:t>Субъект: ' + $subjectValue + '</w:t></w:r></w:p>'
+      }
       $body = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-        '<w:p><w:r><w:t>Карточка</w:t></w:r></w:p>' +
-        '<w:p><w:r><w:t>Режим: стандарт</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>' + $DocumentTitle + '</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t>' + $ModeLine + '</w:t></w:r></w:p>' +
+        $subjectParagraph +
         '<w:p><w:r><w:t>ИНН: ' + $innValue + '</w:t></w:r></w:p>' +
         '<w:sectPr/></w:body></w:document>'
       $parts = @{
@@ -1705,14 +1718,10 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
   }
   Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
   Submit-OpenFileDialog -Dialog $restartSourceDialog
-  Wait-UiElement -Description 'FPR-08 restart source accepted' -TimeoutSeconds 40 -Probe {
+  Wait-UiElement -Description 'FPR-08 restart source committed' -TimeoutSeconds 40 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty,
-      'Источник принят'
-    )
-    $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
   } | Out-Null
 
   $restartGenerationAction = $null
@@ -1978,6 +1987,30 @@ for ($index = 0; $index -lt $e2Inns.Count; $index++) {
   $e2Sources += $source
 }
 
+# FPR-09 uses the primary «Создать свои кнопки» surface, not the expert Settings
+# learning card. The blank and all Correct Outputs contain no {{field.id}}
+# placeholders; the mapping must therefore be learned from Source → Correct Output
+# evidence and explicitly confirmed before the button can be published.
+$fpr09Blank = Join-Path $e2FixtureDir 'fpr09-blank.docx'
+New-E2LearningDocxFixture -Path $fpr09Blank -Inn '' -Blank -SubjectSlot -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
+$fpr09Inns = @('5401000102', '5401000208', '5401000303', '5401000409')
+$fpr09Subjects = @('Иванов Иван Иванович', 'Петров Пётр Петрович', 'Сидорова Анна Сергеевна', 'Орлова Мария Ивановна')
+$fpr09Outputs = @()
+$fpr09Sources = @()
+for ($index = 0; $index -lt $fpr09Inns.Count; $index++) {
+  $ordinal = $index + 1
+  $output = Join-Path $e2FixtureDir "fpr09-correct-$ordinal.docx"
+  $source = Join-Path $e2FixtureDir "fpr09-source-$ordinal.txt"
+  New-E2LearningDocxFixture -Path $output -Inn $fpr09Inns[$index] -SubjectSlot -Subject $fpr09Subjects[$index] -DocumentTitle 'Карточка FPR-09' -ModeLine 'Режим: основной'
+  [System.IO.File]::WriteAllText(
+    $source,
+    "Субъект: $($fpr09Subjects[$index])`r`nИНН организации: $($fpr09Inns[$index])",
+    [System.Text.UTF8Encoding]::new($false)
+  )
+  $fpr09Outputs += $output
+  $fpr09Sources += $source
+}
+
 function Find-E2NamedElement {
   param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$Name)
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -2051,6 +2084,339 @@ function Set-E2NamedValue {
   }
   Set-UiValue -Element $element -Value $Value
 }
+
+function Open-Fpr09MultiFileSelection {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][string[]]$Paths
+  )
+  $pickerButton = Wait-UiElement -Description "FPR-09 $Label native picker button" -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+  }
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw "FPR-09 $Label installed window disappeared before native picker." }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($pickerButton.Current.IsOffscreen -and $pickerButton.Current.IsScrollItemPatternAvailable) {
+    $scroll = $pickerButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+    $scroll.ScrollIntoView()
+    Start-Sleep -Milliseconds 100
+  }
+  $pickerButton.SetFocus()
+  Start-Sleep -Milliseconds 100
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  $dialog = $null
+  try {
+    $dialog = Wait-UiElement -Description "FPR-09 $Label file dialog after Enter" -TimeoutSeconds 5 -Probe {
+      Find-FileDialog
+    }
+  } catch {
+    # Hosted WebView2 occasionally focuses the button but does not synthesize the
+    # HTML button activation from Enter. Space is the other native keyboard
+    # activation for a focused button; use it once before declaring the picker broken.
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog after Space fallback"
+  }
+  $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      '1148'
+    )
+    $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  }
+  $multiValue = ($Paths | ForEach-Object { '"' + $_ + '"' }) -join ' '
+  Set-UiValue -Element $edit -Value $multiValue
+  Submit-OpenFileDialog -Dialog $dialog
+}
+
+# FPR-09 — primary placeholder-free learning path.
+$fpr09ButtonLabel = 'FPR-09 обученная кнопка'
+$fpr09TemplateDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-09 primary template add action' `
+  -TransitionDescription 'FPR-09 native template picker' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    # The same primary onAdd path is labelled «Создать свои кнопки» for an empty
+    # pack and «Добавить шаблоны» after FPR-08 has already created one button.
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Добавить шаблоны', 'Создать свои кнопки')
+  } `
+  -TransitionProbe { Find-FileDialog }
+$fpr09TemplateEdit = Wait-UiElement -Description 'FPR-09 blank template filename' -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+  $fpr09TemplateDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+Set-UiValue -Element $fpr09TemplateEdit -Value $fpr09Blank
+Submit-OpenFileDialog -Dialog $fpr09TemplateDialog
+
+$fpr09LabelInput = Wait-UiElement -Description 'FPR-09 primary setup modal' -TimeoutSeconds 40 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-E2NamedElement -Root $currentAppWindow -Name 'Название документа для fpr09-blank.docx'
+}
+Set-UiValue -Element $fpr09LabelInput -Value $fpr09ButtonLabel
+
+Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 expand primary automatic filling setup' -ActionProbe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+}
+Wait-UiElement -Description 'FPR-09 primary learning source control' -TimeoutSeconds 20 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'
+} | Out-Null
+
+Open-Fpr09MultiFileSelection -Label '1. Источники (4–10)' -Paths $fpr09Sources
+try {
+  Wait-UiElement -Description 'FPR-09 staged source count 4' -TimeoutSeconds 60 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Обучить на 4 паре(ах)'
+  } | Out-Null
+} catch {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw
+}
+
+Open-Fpr09MultiFileSelection -Label '2. Правильные результаты (4–10)' -Paths $fpr09Outputs
+try {
+  $fpr09LearnButton = Wait-UiElement -Description 'FPR-09 staged pair count 4/4 and enabled learning' -TimeoutSeconds 60 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Обучить на 4 паре(ах)')
+  }
+} catch {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw
+}
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before learning action.' }
+Activate-LiveAppWindow -Window $currentAppWindow
+if ($fpr09LearnButton.Current.IsOffscreen -and $fpr09LearnButton.Current.IsScrollItemPatternAvailable) {
+  $scroll = $fpr09LearnButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 100
+}
+$fpr09LearnButton.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+$fpr09MapButton = Wait-UiElement -Description 'FPR-09 explicit learned-map confirmation' -TimeoutSeconds 90 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
+}
+$currentAppWindow = Find-LiveAppWindow
+if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before map confirmation.' }
+Activate-LiveAppWindow -Window $currentAppWindow
+if ($fpr09MapButton.Current.IsOffscreen -and $fpr09MapButton.Current.IsScrollItemPatternAvailable) {
+  $scroll = $fpr09MapButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+  $scroll.ScrollIntoView()
+  Start-Sleep -Milliseconds 100
+}
+$fpr09MapButton.SetFocus()
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+Wait-UiElement -Description 'FPR-09 learned map applied in primary setup' -TimeoutSeconds 90 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  $all = $currentAppWindow.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+  )
+  foreach ($node in $all) {
+    try {
+      $name = [string]$node.Current.Name
+      if ($name.StartsWith('Шаблон обучен на 3 парах и проверен на 1 независимой контрольной паре:')) {
+        return $node
+      }
+    } catch {}
+  }
+  return $null
+} | Out-Null
+
+try {
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description 'FPR-09 primary Создать кнопки (1)' `
+    -TransitionDescription 'FPR-09 learned document button' `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать кнопки (1)')
+    } `
+    -TransitionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      $learned = Find-ButtonByNames -Root $currentAppWindow -Names @($fpr09ButtonLabel)
+      if ($null -ne $learned) { return $learned }
+      $all = $currentAppWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )
+      foreach ($node in $all) {
+        try {
+          $name = [string]$node.Current.Name
+          if ($name.StartsWith('Не удалось выполнить действие:')) {
+            throw "FPR-09 final publication was rejected by the product: $name"
+          }
+        } catch {
+          if ($_.Exception.Message.StartsWith('FPR-09 final publication was rejected by the product:')) { throw }
+        }
+      }
+      return $null
+    }
+} catch {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw
+}
+Write-Host 'FPR-09 primary learning PASS: placeholder-free Source → Correct Output map published through the canonical template-add flow («Создать свои кнопки» / «Добавить шаблоны»).'
+
+# A real restart must reload the learned button from native persistence.
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+Start-Sleep -Seconds 1
+$process = Start-Process -FilePath $app.FullName -PassThru
+$appWindow = Wait-UiElement -Description 'FPR-09 restarted installed window' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
+Wait-UiElement -Description 'FPR-09 learned button after restart' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ButtonByNames -Root $currentAppWindow -Names @($fpr09ButtonLabel)
+} | Out-Null
+
+# Use only the held-out Source after restart. The result must be produced by the
+# published local plan and carry the new INN, not a training value or blank line.
+$fpr09SourceDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-09 held-out source picker' `
+  -TransitionDescription 'FPR-09 held-out source file dialog' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Выбрать исходный файл', 'Заменить исходный файл')
+  } `
+  -TransitionProbe { Find-FileDialog }
+$fpr09SourceEdit = Wait-UiElement -Description 'FPR-09 held-out source filename' -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    '1148'
+  )
+  $fpr09SourceDialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+Set-UiValue -Element $fpr09SourceEdit -Value $fpr09Sources[3]
+Submit-OpenFileDialog -Dialog $fpr09SourceDialog
+Wait-UiElement -Description 'FPR-09 held-out source accepted' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-E2NamedElement -Root $currentAppWindow -Name 'Источник принят'
+} | Out-Null
+
+$fpr09Clear = Find-ReadyButtonByNames -Root $appWindow -Names @('Снять выбор')
+if ($null -ne $fpr09Clear) { Invoke-UiElement -Element $fpr09Clear -Description 'Снять выбор before FPR-09 generation' }
+$fpr09Checkbox = Wait-UiElement -Description 'FPR-09 learned document checkbox' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-E2NamedElement -Root $currentAppWindow -Name "Добавить $fpr09ButtonLabel в комплект"
+}
+Invoke-UiElementPhysically -Element $fpr09Checkbox -Description 'FPR-09 learned document checkbox'
+Wait-UiElement -Description 'FPR-09 learned document selected' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+} | Out-Null
+
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-09 held-out generation action' `
+  -TransitionDescription 'FPR-09 held-out preflight' `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Проверка перед созданием'
+  }
+
+$fpr09Create = Wait-UiElement -Description 'FPR-09 Создать документы' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+}
+$currentAppWindow = Find-LiveAppWindow
+Activate-LiveAppWindow -Window $currentAppWindow
+$fpr09Create.SetFocus()
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+
+$fpr09DocumentNumber = Wait-UiElement -Description 'FPR-09 refreshed document number' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-number'
+  )
+  $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+Set-UiValue -Element $fpr09DocumentNumber -Value 'FPR09-4404'
+$fpr09DocumentDate = Wait-UiElement -Description 'FPR-09 refreshed document date' -TimeoutSeconds 30 -Probe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'workflow-document-date'
+  )
+  $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+Set-UiValue -Element $fpr09DocumentDate -Value '23.09.2026'
+
+Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 final Create documents' -ActionProbe {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { return $null }
+  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Создать документы')
+}
+
+$fpr09ExpectedFile = "$fpr09ButtonLabel.docx"
+$fpr09Deadline = [DateTime]::UtcNow.AddSeconds(60)
+$fpr09Created = $null
+do {
+  $fpr09Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr09ExpectedFile -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+  if ($null -ne $fpr09Created) { break }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr09Deadline)
+if ($null -eq $fpr09Created) {
+  throw 'FPR-09 learned button survived restart but did not publish a physical DOCX from the held-out Source.'
+}
+
+$fpr09Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr09Created.FullName)
+try {
+  $entry = $fpr09Archive.GetEntry('word/document.xml')
+  if ($null -eq $entry) { throw 'FPR-09 learned output is not a readable DOCX.' }
+  $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr09Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+  if ($fpr09Xml -notmatch $fpr09Inns[3]) { throw 'FPR-09 held-out Source INN did not reach the learned output.' }
+  if ($fpr09Xml -notmatch [regex]::Escape($fpr09Subjects[3])) { throw 'FPR-09 held-out Source subject did not reach the learned output.' }
+  if ($fpr09Xml -match '__________') { throw 'FPR-09 learned output retained the blank training zone.' }
+  if ($fpr09Xml -notmatch 'Карточка FPR-09') { throw 'FPR-09 learned output lost immutable template content.' }
+  if ($fpr09Xml -notmatch 'Режим: основной') { throw 'FPR-09 learned output changed an immutable template line.' }
+} finally {
+  $fpr09Archive.Dispose()
+}
+Write-Host "FPR-09 INSTALLED PASS: «Создать свои кнопки» -> placeholder-free learning -> restart -> held-out Source -> physical DOCX: $($fpr09Created.FullName)"
 
 # Navigate through the same Settings entry point a user must use after restart.
 # The restart proof intentionally leaves the application on its restored workspace,

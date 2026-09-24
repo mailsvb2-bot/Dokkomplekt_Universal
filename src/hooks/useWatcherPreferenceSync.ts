@@ -7,8 +7,9 @@ function updateWatcherPreferencesSnapshot(
   folderParts: FolderNamePartDto[],
   autoPrint: boolean,
   printCopies: Record<string, number>,
+  openUiOnDrop: boolean,
 ) {
-  return updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies);
+  return updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop);
 }
 
 
@@ -20,6 +21,7 @@ type WatcherPreferenceSyncOptions = {
   folderParts: FolderNamePartDto[];
   autoPrint: boolean;
   printCopies: Record<string, number>;
+  openUiOnDrop: boolean;
   setAutoPrint: (value: boolean) => void;
   setPrintCopies: (value: Record<string, number>) => void;
   setStatus: (message: string) => void;
@@ -33,6 +35,7 @@ export function useWatcherPreferenceSync({
   folderParts,
   autoPrint,
   printCopies,
+  openUiOnDrop,
   setAutoPrint,
   setPrintCopies,
   setStatus,
@@ -67,16 +70,17 @@ export function useWatcherPreferenceSync({
     const partsSnapshot = [...folderParts];
     const autoPrintSnapshot = autoPrint;
     const copiesSnapshot = { ...printCopies };
+    const openUiOnDropSnapshot = openUiOnDrop;
     syncQueue.current = syncQueue.current
       .catch(() => undefined)
       .then(async () => {
         try {
-          await updateWatcherPreferencesSnapshot(rootSnapshot, partsSnapshot, autoPrintSnapshot, copiesSnapshot);
+          await updateWatcherPreferencesSnapshot(rootSnapshot, partsSnapshot, autoPrintSnapshot, copiesSnapshot, openUiOnDropSnapshot);
         } catch (error) {
           if (revision === syncRevision.current) {
             setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
           }
         }
       });
-  }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, setStatus]);
+  }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop, setStatus]);
 }

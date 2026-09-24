@@ -1697,7 +1697,25 @@ mod watcher_handoff_tests {
         }))
         .unwrap();
         assert!(runtime.output_root.is_empty());
+        assert!(!runtime.open_ui_on_drop);
         assert_eq!(effective_watcher_folder_parts(&runtime).len(), 2);
+    }
+
+    #[test]
+    fn explicit_watcher_ui_activation_preference_round_trips() {
+        let runtime: WatcherRuntimeConfig = serde_json::from_value(serde_json::json!({
+            "watch_folder": "C:/Watch",
+            "output_root": "D:/Ready",
+            "default_year": 2026,
+            "sick_leave_enabled": false,
+            "folder_parts": ["DocumentNumber"],
+            "auto_print": false,
+            "print_copies_by_document": {},
+            "max_parallel_cases": 2,
+            "open_ui_on_drop": true
+        }))
+        .unwrap();
+        assert!(runtime.open_ui_on_drop);
     }
 
     #[test]

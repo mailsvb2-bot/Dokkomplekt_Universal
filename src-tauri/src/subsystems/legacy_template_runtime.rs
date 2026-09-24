@@ -761,7 +761,15 @@ fn should_attempt_template_contract_compilation(
     domain: &DomainKind,
     legacy_static: bool,
     infer_blank_zones: bool,
+    exact_learning_bytes: bool,
 ) -> bool {
+    // A published Template Learning proof is bound to the exact learned DOCX
+    // bytes. Running any legacy/domain compiler after that proof would create a
+    // different candidate while still carrying the old validation id. Keep the
+    // proven bytes intact and let the publication gate verify the exact hash.
+    if exact_learning_bytes {
+        return false;
+    }
     if legacy_static {
         return infer_blank_zones;
     }
@@ -779,6 +787,7 @@ fn infer_static_template_rows(
     app: &tauri::AppHandle,
     rows: &[TemplateConfirmationRow],
     infer_blank_zones: bool,
+    exact_learning_document_ids: &BTreeSet<String>,
 ) -> Result<LegacyTemplateInferenceResult, String> {
     let mut updated_rows = rows.to_vec();
     let mut workspace: Option<LegacyTemplateInferenceWorkspace> = None;
@@ -791,10 +800,12 @@ fn infer_static_template_rows(
             .clone()
             .unwrap_or_else(|| dokkomplekt_core::best_domain(&row.analysis));
         let legacy_static = row.is_static_copy || row.analysis.is_static;
+        let exact_learning_bytes = exact_learning_document_ids.contains(&row.document_id);
         if !should_attempt_template_contract_compilation(
             &domain,
             legacy_static,
             infer_blank_zones,
+            exact_learning_bytes,
         ) {
             if legacy_static {
                 summary.untouched_static_documents += 1;
@@ -1035,16 +1046,35 @@ mod legacy_template_runtime_tests {
             &DomainKind::Medical,
             true,
             false,
+            false,
         ));
         assert!(should_attempt_template_contract_compilation(
             &DomainKind::Medical,
             true,
             true,
+            false,
         ));
         assert!(!should_attempt_template_contract_compilation(
             &DomainKind::Generic,
             true,
             false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn validated_learning_bytes_never_enter_post_validation_compiler() {
+        assert!(!should_attempt_template_contract_compilation(
+            &DomainKind::Medical,
+            false,
+            false,
+            true,
+        ));
+        assert!(!should_attempt_template_contract_compilation(
+            &DomainKind::Medical,
+            true,
+            true,
+            true,
         ));
     }
 

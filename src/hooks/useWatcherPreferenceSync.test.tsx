@@ -31,6 +31,7 @@ describe('useWatcherPreferenceSync', () => {
         openUiOnDrop: false,
         setAutoPrint,
         setPrintCopies,
+        setOpenUiOnDrop: vi.fn(),
         setStatus,
       }),
       { initialProps: { ready: false } },
@@ -65,6 +66,7 @@ describe('useWatcherPreferenceSync', () => {
       openUiOnDrop: false,
       setAutoPrint: vi.fn(),
       setPrintCopies: vi.fn(),
+      setOpenUiOnDrop: vi.fn(),
       setStatus,
     }));
 
@@ -163,7 +165,7 @@ describe('useWatcherPreferenceSync', () => {
     const common = {
       outputPreferencesReady: true, watcherRefreshRevision: 0, folderNamingConfirmed: true,
       outputRoot: 'D:/Ready', folderParts: ['DocumentNumber'] as const, autoPrint: false, openUiOnDrop: false,
-      setAutoPrint: vi.fn(), setPrintCopies: vi.fn(), setStatus: vi.fn(),
+      setAutoPrint: vi.fn(), setPrintCopies: vi.fn(), setOpenUiOnDrop: vi.fn(), setStatus: vi.fn(),
     };
     const { rerender } = renderHook(
       ({ copies }) => useWatcherPreferenceSync({ ...common, folderParts: [...common.folderParts], printCopies: copies }),

@@ -173,6 +173,10 @@ public static class DokkomplektNativeMouse {
   public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", SetLastError = true)]
   public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);
 }
 "@
 
@@ -2479,7 +2483,12 @@ if ($fpr10Watcher.HasExited) {
 # requirements of the closed-UI watcher.
 $fpr10NativeHandle = [IntPtr]$fpr10Watcher.MainWindowHandle
 if ($fpr10NativeHandle -ne [IntPtr]::Zero -and [DokkomplektNativeMouse]::IsWindowVisible($fpr10NativeHandle)) {
-  throw "FPR-10 background watcher exposed a visible native main window: $fpr10NativeHandle."
+  $fpr10WindowTitle = [System.Text.StringBuilder]::new(512)
+  $fpr10WindowClass = [System.Text.StringBuilder]::new(512)
+  [void][DokkomplektNativeMouse]::GetWindowText($fpr10NativeHandle, $fpr10WindowTitle, $fpr10WindowTitle.Capacity)
+  [void][DokkomplektNativeMouse]::GetClassName($fpr10NativeHandle, $fpr10WindowClass, $fpr10WindowClass.Capacity)
+  $fpr10CommandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($fpr10Watcher.Id)" -ErrorAction SilentlyContinue).CommandLine
+  throw "FPR-10 background watcher exposed a visible native main window: HWND=$fpr10NativeHandle; class='$($fpr10WindowClass.ToString())'; title='$($fpr10WindowTitle.ToString())'; command_line='$fpr10CommandLine'."
 }
 $fpr10ForegroundAfterStart = [DokkomplektNativeMouse]::GetForegroundWindow()
 if ($fpr10ForegroundAfterStart -ne [IntPtr]::Zero) {

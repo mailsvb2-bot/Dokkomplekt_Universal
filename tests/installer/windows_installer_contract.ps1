@@ -2565,42 +2565,64 @@ $fpr10StartedUtc = [DateTime]::UtcNow
 $fpr10ExpectedFile = "$fpr09ButtonLabel.docx"
 $fpr10Deadline = [DateTime]::UtcNow.AddSeconds(90)
 $fpr10Created = $null
+$fpr10Attention = $null
 do {
   $fpr10Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr10ExpectedFile -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTimeUtc -ge $fpr10StartedUtc } |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1
-  if ($null -ne $fpr10Created) { break }
+  $fpr10AttentionCandidates = @(Get-ChildItem -LiteralPath $fpr10WatchFolder -File -Filter '*_ТРЕБУЕТ_ВНИМАНИЯ.txt' -ErrorAction SilentlyContinue)
+  if ($fpr10AttentionCandidates.Count -gt 1) {
+    throw "FPR-10 closed-UI watcher created $($fpr10AttentionCandidates.Count) clarification notes; expected at most one."
+  }
+  if ($fpr10AttentionCandidates.Count -eq 1) {
+    $fpr10Attention = $fpr10AttentionCandidates[0]
+  }
+  if ($null -ne $fpr10Created -or $null -ne $fpr10Attention) { break }
   if ($fpr10Watcher.HasExited) {
     throw "FPR-10 background watcher exited during closed-UI processing with code $($fpr10Watcher.ExitCode)."
   }
   Start-Sleep -Milliseconds 250
 } while ([DateTime]::UtcNow -lt $fpr10Deadline)
-if ($null -eq $fpr10Created) {
-  $fpr10Notes = Get-ChildItem -LiteralPath $fpr10WatchFolder -File -Filter '*.txt' -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -ne $fpr10Source } |
-    ForEach-Object { "$($_.Name): $((Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue))" }
-  throw "FPR-10 closed-UI watcher did not publish $fpr10ExpectedFile. Service notes: $($fpr10Notes -join ' | ')"
+if ($null -eq $fpr10Created -and $null -eq $fpr10Attention) {
+  throw "FPR-10 closed-UI watcher produced neither an output set nor a clarification job."
+}
+if ($null -ne $fpr10Created -and $null -ne $fpr10Attention) {
+  throw "FPR-10 closed-UI watcher produced both a document and a clarification job for one Source."
 }
 
-$fpr10Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr10Created.FullName)
-try {
-  $entry = $fpr10Archive.GetEntry('word/document.xml')
-  if ($null -eq $entry) { throw 'FPR-10 watcher output is not a readable DOCX.' }
-  $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
-  try { $fpr10Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
-  if ($fpr10Xml -notmatch [regex]::Escape($fpr10Subject)) { throw 'FPR-10 watcher output lost the new subject.' }
-  if ($fpr10Xml -notmatch $fpr10Inn) { throw 'FPR-10 watcher output lost the new INN.' }
-  if ($fpr10Xml -notmatch 'Карточка FPR-09') { throw 'FPR-10 watcher output lost immutable template content.' }
-} finally {
-  $fpr10Archive.Dispose()
+$fpr10OutcomeKind = if ($null -ne $fpr10Created) { 'output' } else { 'clarification' }
+if ($fpr10OutcomeKind -eq 'output') {
+  $fpr10Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr10Created.FullName)
+  try {
+    $entry = $fpr10Archive.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw 'FPR-10 watcher output is not a readable DOCX.' }
+    $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+    try { $fpr10Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    if ($fpr10Xml -notmatch [regex]::Escape($fpr10Subject)) { throw 'FPR-10 watcher output lost the new subject.' }
+    if ($fpr10Xml -notmatch $fpr10Inn) { throw 'FPR-10 watcher output lost the new INN.' }
+    if ($fpr10Xml -notmatch 'Карточка FPR-09') { throw 'FPR-10 watcher output lost immutable template content.' }
+  } finally {
+    $fpr10Archive.Dispose()
+  }
+  $fpr10FirstOutcomePath = $fpr10Created.FullName
+  $fpr10FirstOutcomeWriteUtc = $fpr10Created.LastWriteTimeUtc
+  Write-Host "FPR-10 CLOSED-UI PASS: watcher stayed hidden and published exactly one physical DOCX: $($fpr10Created.FullName)"
+} else {
+  $fpr10AttentionText = Get-Content -LiteralPath $fpr10Attention.FullName -Raw
+  if ($fpr10AttentionText -notmatch 'значения требуют подтверждения|требуется подтвердить состав') {
+    throw "FPR-10 clarification note does not describe a canonical review gate: $($fpr10Attention.FullName)"
+  }
+  if ($fpr10Attention.Name -match 'ТРЕБУЕТ_ВНИМАНИЯ.*ТРЕБУЕТ_ВНИМАНИЯ') {
+    throw "FPR-10 watcher reprocessed its own clarification note: $($fpr10Attention.Name)"
+  }
+  $fpr10FirstOutcomePath = $fpr10Attention.FullName
+  $fpr10FirstOutcomeWriteUtc = $fpr10Attention.LastWriteTimeUtc
+  Write-Host "FPR-10 CLOSED-UI PASS: watcher stayed hidden and created exactly one canonical clarification job: $($fpr10Attention.FullName)"
 }
-Write-Host "FPR-10 CLOSED-UI PASS: installed watcher stayed without visible/UIA UI or foreground-focus theft and published a physical DOCX: $($fpr10Created.FullName)"
 
-$fpr10FirstOutputPath = $fpr10Created.FullName
-$fpr10FirstOutputWriteUtc = $fpr10Created.LastWriteTimeUtc
-# Successful processing can archive/remove the inbox copy. Recreate exactly the
-# same source bytes at the same watched path to generate a genuine repeated event.
+# Re-deliver exactly the same bytes. The same Source/plan must not publish a
+# second output set and must not multiply/rewrite the clarification job.
 [System.IO.File]::WriteAllText(
   $fpr10Source,
   $fpr10SourceText,
@@ -2616,13 +2638,23 @@ do {
 
 $fpr10Outputs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr10ExpectedFile -ErrorAction SilentlyContinue |
   Where-Object { $_.LastWriteTimeUtc -ge $fpr10StartedUtc })
-if ($fpr10Outputs.Count -ne 1) {
-  throw "FPR-10 duplicate event published $($fpr10Outputs.Count) output files; expected exactly one."
+$fpr10Notes = @(Get-ChildItem -LiteralPath $fpr10WatchFolder -File -Filter '*_ТРЕБУЕТ_ВНИМАНИЯ.txt' -ErrorAction SilentlyContinue)
+if ($fpr10OutcomeKind -eq 'output') {
+  if ($fpr10Outputs.Count -ne 1 -or $fpr10Notes.Count -ne 0) {
+    throw "FPR-10 duplicate event changed the output outcome: outputs=$($fpr10Outputs.Count), clarifications=$($fpr10Notes.Count)."
+  }
+  if ($fpr10Outputs[0].FullName -ne $fpr10FirstOutcomePath -or $fpr10Outputs[0].LastWriteTimeUtc -ne $fpr10FirstOutcomeWriteUtc) {
+    throw 'FPR-10 duplicate event rewrote or replaced the first published output.'
+  }
+} else {
+  if ($fpr10Outputs.Count -ne 0 -or $fpr10Notes.Count -ne 1) {
+    throw "FPR-10 duplicate event changed the clarification outcome: outputs=$($fpr10Outputs.Count), clarifications=$($fpr10Notes.Count)."
+  }
+  if ($fpr10Notes[0].FullName -ne $fpr10FirstOutcomePath -or $fpr10Notes[0].LastWriteTimeUtc -ne $fpr10FirstOutcomeWriteUtc) {
+    throw 'FPR-10 duplicate event rewrote or multiplied the clarification job.'
+  }
 }
-if ($fpr10Outputs[0].FullName -ne $fpr10FirstOutputPath -or $fpr10Outputs[0].LastWriteTimeUtc -ne $fpr10FirstOutputWriteUtc) {
-  throw 'FPR-10 duplicate event rewrote or replaced the first published output.'
-}
-Write-Host 'FPR-10 IDEMPOTENCY PASS: repeated identical Source/plan produced no second output set.'
+Write-Host "FPR-10 IDEMPOTENCY PASS: repeated identical Source/plan preserved exactly one $fpr10OutcomeKind outcome."
 
 if (-not $fpr10Watcher.HasExited) {
   Stop-Process -Id $fpr10Watcher.Id -Force

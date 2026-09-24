@@ -1108,6 +1108,51 @@ mod tests {
     }
 
     #[test]
+    fn source_correct_learning_keeps_required_subject_and_inn_fields() {
+        let report = learn_template_from_examples(&TemplateLearningInput {
+            blank_template_text:
+                "Карточка FPR-09\nСубъект: ____________________\nИНН: __________".into(),
+            completed_examples: vec![
+                "Карточка FPR-09\nСубъект: Иванов Иван Иванович\nИНН: 5401000102".into(),
+                "Карточка FPR-09\nСубъект: Петров Пётр Петрович\nИНН: 5401000208".into(),
+                "Карточка FPR-09\nСубъект: Сидорова Анна Сергеевна\nИНН: 5401000303".into(),
+                "Карточка FPR-09\nСубъект: Орлова Мария Ивановна\nИНН: 5401000409".into(),
+            ],
+            source_examples: vec![
+                "Субъект: Иванов Иван Иванович\nИНН организации: 5401000102".into(),
+                "Субъект: Петров Пётр Петрович\nИНН организации: 5401000208".into(),
+                "Субъект: Сидорова Анна Сергеевна\nИНН организации: 5401000303".into(),
+                "Субъект: Орлова Мария Ивановна\nИНН организации: 5401000409".into(),
+            ],
+            default_year: 2026,
+            locale: "ru-RU".into(),
+        });
+        assert!(
+            report
+                .fields
+                .iter()
+                .any(|field| field.field_id == "subject.name" && !field.source_matches.is_empty()),
+            "subject.name must be learned from the same Source -> Correct evidence: {:?}",
+            report.fields
+        );
+        assert!(
+            report
+                .fields
+                .iter()
+                .filter(|field| !field.source_matches.is_empty())
+                .count()
+                >= 2,
+            "subject and INN must both be source-evidenced: {:?}",
+            report.fields
+        );
+        assert!(
+            report.validation.passed,
+            "held-out validation must cover the complete two-field map: {:?}",
+            report.validation.reasons
+        );
+    }
+
+    #[test]
     fn holdout_validation_passes_only_on_unseen_source_value_transfer() {
         let report = learn_template_from_examples(&TemplateLearningInput {
             blank_template_text: "Карточка\nИНН: __________".into(),

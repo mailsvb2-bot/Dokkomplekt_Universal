@@ -113,6 +113,7 @@ async function renderUtility(onCheckUpdates = vi.fn()) {
       outputRoot="output"
       savedOutputRoot="output"
       folderParts={[]}
+      watcherOpenUiOnDrop={false}
       licenseText=""
       onSeriesStartChange={vi.fn()}
       onSeriesEndChange={vi.fn()}
@@ -133,6 +134,7 @@ async function renderUtility(onCheckUpdates = vi.fn()) {
       onCheckUpdates={onCheckUpdates}
       onInstallWatcher={vi.fn()}
       onUninstallWatcher={vi.fn()}
+      onWatcherOpenUiOnDropChange={vi.fn()}
       onVerifyLicense={vi.fn()}
     />,
   );

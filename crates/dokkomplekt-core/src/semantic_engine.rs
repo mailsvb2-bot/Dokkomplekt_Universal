@@ -66,6 +66,7 @@ fn dictionary() -> &'static [FieldDef] {
                 "фамилия имя отчество",
                 "ф.и.о",
                 "фио",
+                "субъект",
                 "пациент",
                 "заявитель",
                 "гражданин",
@@ -1288,6 +1289,16 @@ mod tests {
         assert_eq!(get(&case, "subject.email"), Some("buh@romashka.ru"));
         assert!(get(&case, "org.name").unwrap().contains("Ромашка"));
         assert!(report.fields.iter().any(|f| f.method.starts_with("typed:")));
+    }
+
+    #[test]
+    fn extracts_generic_subject_label_as_subject_name() {
+        let (case, _report) =
+            extract_semantic("Субъект: Иванов Иван Иванович", 2026);
+        assert_eq!(
+            get(&case, "subject.name"),
+            Some("Иванов Иван Иванович")
+        );
     }
 
     #[test]

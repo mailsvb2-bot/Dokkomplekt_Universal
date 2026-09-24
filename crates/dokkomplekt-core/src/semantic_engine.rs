@@ -1293,12 +1293,8 @@ mod tests {
 
     #[test]
     fn extracts_generic_subject_label_as_subject_name() {
-        let (case, _report) =
-            extract_semantic("Субъект: Иванов Иван Иванович", 2026);
-        assert_eq!(
-            get(&case, "subject.name"),
-            Some("Иванов Иван Иванович")
-        );
+        let (case, _report) = extract_semantic("Субъект: Иванов Иван Иванович", 2026);
+        assert_eq!(get(&case, "subject.name"), Some("Иванов Иван Иванович"));
     }
 
     #[test]

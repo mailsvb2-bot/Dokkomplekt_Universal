@@ -121,6 +121,11 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("NativeWindowHandle", self.installer_smoke)
         self.assertIn("GetWindowThreadProcessId", self.installer_smoke)
         self.assertIn("stole foreground focus", self.installer_smoke)
+        self.assertIn("watcher_path_is_service_note", self.main)
+        self.assertIn('name.contains("_ТРЕБУЕТ_ВНИМАНИЯ")', self.main)
+        self.assertIn('name.contains("_НЕ_ПРОЧИТАН")', self.main)
+        self.assertIn("persisted_document_selection(&app, &pack)", self.main)
+        self.assertIn("confirmed_document_ids,", self.main)
         self.assertIn("FPR-10 IDEMPOTENCY PASS", self.installer_smoke)
         self.assertIn("expected exactly one", self.installer_smoke)
 

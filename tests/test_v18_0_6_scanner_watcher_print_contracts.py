@@ -127,7 +127,9 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("persisted_document_selection(&app, &pack)", self.main)
         self.assertIn("confirmed_document_ids,", self.main)
         self.assertIn("FPR-10 IDEMPOTENCY PASS", self.installer_smoke)
-        self.assertIn("expected exactly one", self.installer_smoke)
+        self.assertIn("produced neither an output set nor a clarification job", self.installer_smoke)
+        self.assertIn("created exactly one canonical clarification job", self.installer_smoke)
+        self.assertIn("preserved exactly one $fpr10OutcomeKind outcome", self.installer_smoke)
 
     def test_word_copies_are_queued_in_one_com_print_call(self) -> None:
         self.assertIn("fn print_word_document_copies", self.main)

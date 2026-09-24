@@ -96,10 +96,27 @@ fn effective_watcher_folder_parts(runtime: &WatcherRuntimeConfig) -> Vec<FolderN
     }
 }
 
+fn watcher_path_is_service_note(path: &Path) -> bool {
+    let is_text = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("txt"));
+    if !is_text {
+        return false;
+    }
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| {
+            name.contains("_ТРЕБУЕТ_ВНИМАНИЯ")
+                || name.contains("_НЕ_ПРОЧИТАН")
+        })
+}
+
 fn watcher_path_is_processable(path: &Path) -> bool {
     path.is_file()
         && universal_intake::is_supported_path(path)
         && !universal_intake::is_temporary_source(path)
+        && !watcher_path_is_service_note(path)
 }
 
 fn watcher_owner_for_executable(exe: &Path, ready: bool) -> Result<WatcherHandoffOwner, String> {
@@ -920,6 +937,18 @@ fn process_watcher_source(
             let _ = writeln!(log, "[watcher] ui_activation_failed=true");
         }
     }
+    let state = app.state::<AppState>();
+    // Background automation is allowed to reuse only an explicit durable user
+    // choice. document_selection_v1 is the same selection the foreground UI
+    // restores after restart; using it here makes a closed-UI drop deterministic
+    // without inventing a bundle. If no selection is stored, the canonical intake
+    // engine remains fail-closed and produces a clarification job.
+    let confirmed_document_ids = state
+        .pack
+        .lock()
+        .ok()
+        .and_then(|pack| persisted_document_selection(&app, &pack).ok())
+        .unwrap_or_default();
     let req = CreatedDocumentsIntakeRequest {
         source_path: path.display().to_string(),
         output_root: output_root.display().to_string(),
@@ -928,12 +957,11 @@ fn process_watcher_source(
         sick_leave_enabled,
         model_output: None,
         confirmed_fields: Vec::new(),
-        confirmed_document_ids: Vec::new(),
+        confirmed_document_ids,
         force_reissue: false,
         preserve_source_after_success: false,
         resume_from_case_id: None,
     };
-    let state = app.state::<AppState>();
     match perform_created_documents_intake(&state, &app, req) {
         Ok(response) => {
             // `Ok` also covers attention/setup/ignored outcomes. Service-note cleanup
@@ -1876,6 +1904,31 @@ mod watcher_handoff_tests {
         let (category, retry_policy) = classify_processing_error("DOCX поврежден");
         assert_eq!(category, "source_invalid");
         assert!(matches!(retry_policy, UnreadableRetryPolicy::ContentChange));
+    }
+
+    #[test]
+    fn watcher_never_reprocesses_its_own_service_notes() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-service-note-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create service note root");
+        let attention = root.join("case.docx_ТРЕБУЕТ_ВНИМАНИЯ.txt");
+        let unreadable = root.join("case.pdf_НЕ_ПРОЧИТАН.txt");
+        let ordinary = root.join("case.txt");
+        std::fs::write(&attention, b"attention").expect("write attention note");
+        std::fs::write(&unreadable, b"unreadable").expect("write unreadable note");
+        std::fs::write(&ordinary, b"ordinary source").expect("write ordinary source");
+
+        assert!(watcher_path_is_service_note(&attention));
+        assert!(watcher_path_is_service_note(&unreadable));
+        assert!(!watcher_path_is_service_note(&ordinary));
+        assert!(!watcher_path_is_processable(&attention));
+        assert!(!watcher_path_is_processable(&unreadable));
+        assert!(watcher_path_is_processable(&ordinary));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

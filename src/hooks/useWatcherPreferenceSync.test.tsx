@@ -133,6 +133,7 @@ describe('useWatcherPreferenceSync', () => {
       openUiOnDrop: false,
       setAutoPrint: vi.fn(),
       setPrintCopies: vi.fn(),
+      setOpenUiOnDrop: vi.fn(),
       setStatus: vi.fn(),
     };
     const { rerender } = renderHook(

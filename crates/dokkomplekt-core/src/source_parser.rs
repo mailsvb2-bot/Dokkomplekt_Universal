@@ -1,8 +1,7 @@
 use crate::label_search::find_label_end;
 use crate::{
     merge_value, parse_flexible_date, parse_flexible_date_detailed, validate_case_relations,
-    validate_field_value, SemanticAtom,
-    SemanticCase, SemanticRecord, SemanticValue, ValueSource,
+    validate_field_value, SemanticAtom, SemanticCase, SemanticRecord, SemanticValue, ValueSource,
 };
 use serde::{Deserialize, Serialize};
 

@@ -24,6 +24,7 @@ type WatcherPreferenceSyncOptions = {
   openUiOnDrop: boolean;
   setAutoPrint: (value: boolean) => void;
   setPrintCopies: (value: Record<string, number>) => void;
+  setOpenUiOnDrop: (value: boolean) => void;
   setStatus: (message: string) => void;
 };
 
@@ -38,6 +39,7 @@ export function useWatcherPreferenceSync({
   openUiOnDrop,
   setAutoPrint,
   setPrintCopies,
+  setOpenUiOnDrop,
   setStatus,
 }: WatcherPreferenceSyncOptions): void {
   const [watcherPreferencesReady, setWatcherPreferencesReady] = useState(false);
@@ -52,6 +54,7 @@ export function useWatcherPreferenceSync({
         if (watcher.installed) {
           if (typeof watcher.auto_print === 'boolean') setAutoPrint(watcher.auto_print);
           if (watcher.print_copies_by_document) setPrintCopies(watcher.print_copies_by_document);
+          setOpenUiOnDrop(Boolean(watcher.open_ui_on_drop));
         }
         setWatcherPreferencesReady(!watcher.migration_required);
       })
@@ -61,7 +64,7 @@ export function useWatcherPreferenceSync({
         setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
       });
     return () => { alive = false; };
-  }, [watcherRefreshRevision, setAutoPrint, setPrintCopies, setStatus]);
+  }, [watcherRefreshRevision, setAutoPrint, setPrintCopies, setOpenUiOnDrop, setStatus]);
 
   useEffect(() => {
     if (!watcherPreferencesReady || !outputPreferencesReady || !folderNamingConfirmed || !outputRoot.trim() || !folderParts.length) return;

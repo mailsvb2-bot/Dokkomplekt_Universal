@@ -15,6 +15,8 @@ struct WatcherInstallRequest {
     print_copies_by_document: BTreeMap<String, u16>,
     #[serde(default = "default_parallel_cases")]
     max_parallel_cases: usize,
+    #[serde(default)]
+    open_ui_on_drop: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +42,8 @@ struct WatcherRuntimeConfig {
     print_copies_by_document: BTreeMap<String, u16>,
     #[serde(default = "default_parallel_cases")]
     max_parallel_cases: usize,
+    #[serde(default)]
+    open_ui_on_drop: bool,
     /// Canonical update handoff. Old configs deserialize with `None`, while
     /// handoff-aware versions can retire a stale watcher after a newer install
     /// publishes a ready owner.
@@ -902,10 +906,12 @@ fn process_watcher_source(
     let fallback_auto_print = runtime.auto_print;
     let fallback_copies = runtime.print_copies_by_document.clone();
 
-    // Donor parity: a stable primary dropped while the main UI is closed must
-    // open the program. Launch the normal singleton path, never the hidden
-    // watcher window; an existing UI receives its ordinary activation request.
-    if launch_or_activate_watcher_ui(control_path.as_deref()).is_err() {
+    // Closed-UI processing is the canonical default. The watcher must not steal
+    // focus or reveal a window merely because a stable source arrived. Users can
+    // explicitly opt into the legacy "open application on drop" behavior.
+    if runtime.open_ui_on_drop
+        && launch_or_activate_watcher_ui(control_path.as_deref()).is_err()
+    {
         if let Ok(mut log) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1387,6 +1393,7 @@ fn get_background_watcher_state(app: tauri::AppHandle) -> Result<serde_json::Val
         "auto_print": runtime.auto_print,
         "print_copies_by_document": runtime.print_copies_by_document,
         "max_parallel_cases": normalize_parallel_cases(runtime.max_parallel_cases),
+        "open_ui_on_drop": runtime.open_ui_on_drop,
         "migration_required": migration_required,
     }))
 }
@@ -1426,6 +1433,7 @@ fn install_background_watcher(
         auto_print: req.auto_print,
         print_copies_by_document: req.print_copies_by_document.clone(),
         max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
+        open_ui_on_drop: req.open_ui_on_drop,
         handoff_owner: Some(owner.clone()),
     };
     let config_path = watcher_config_path(&app)?;
@@ -1542,6 +1550,7 @@ fn install_background_watcher(
         "warnings": warnings,
         "autostart_state_file": config_path.display().to_string(),
         "max_parallel_cases": max_parallel_cases,
+        "open_ui_on_drop": req.open_ui_on_drop,
     }))
 }
 
@@ -1554,6 +1563,8 @@ struct WatcherPreferencesRequest {
     auto_print: bool,
     #[serde(default)]
     print_copies_by_document: BTreeMap<String, u16>,
+    #[serde(default)]
+    open_ui_on_drop: bool,
 }
 
 #[tauri::command]
@@ -1590,6 +1601,7 @@ fn update_background_watcher_preferences(
     runtime.default_year = current_year_utc();
     runtime.auto_print = req.auto_print;
     runtime.print_copies_by_document = req.print_copies_by_document;
+    runtime.open_ui_on_drop = req.open_ui_on_drop;
     atomic_write_file(
         &config_path,
         &serde_json::to_vec_pretty(&runtime).map_err(|error| error.to_string())?,
@@ -1699,6 +1711,7 @@ mod watcher_handoff_tests {
             auto_print: false,
             print_copies_by_document: BTreeMap::new(),
             max_parallel_cases: 2,
+            open_ui_on_drop: false,
             handoff_owner: None,
         };
         assert_ne!(runtime.watch_folder, runtime.output_root);

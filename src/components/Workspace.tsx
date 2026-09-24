@@ -32,6 +32,7 @@ interface WorkspaceProps {
   documents: DocumentTemplateSpec[];
   selectedDocumentIds: string[];
   watchFolder: string;
+  watcherOpenUiOnDrop: boolean;
   intakeSource: string;
   intakeResult: CreatedDocumentsIntakeResult | null;
   lastOutput: GeneratedOutput | null;
@@ -59,6 +60,7 @@ interface WorkspaceProps {
   onPickWatchFolder(): void;
   onInstallWatcher(): void;
   onUninstallWatcher(): void;
+  setWatcherOpenUiOnDrop(value: boolean): void;
   setIntakeSource(value: string): void;
   setAutoPrint(value: boolean): void;
   setSourceText(value: string): void;
@@ -398,7 +400,8 @@ export function Workspace(props: WorkspaceProps) {
               <i className="ti ti-eye-off" aria-hidden="true" /> Отключить автоматическую обработку
             </button>
           </div>
-          <small className="automationHelp">После выбора рабочей папки нажмите «Включить автоматическую обработку». Эти же команды остаются доступны в настройках программы.</small>
+          <small className="automationHelp">После выбора рабочей папки нажмите «Включить автоматическую обработку». По умолчанию агент работает скрыто и не открывает окно приложения.</small>
+          <label className="checkLine"><input type="checkbox" checked={props.watcherOpenUiOnDrop} onChange={(event) => props.setWatcherOpenUiOnDrop(event.target.checked)} /><span>Открывать приложение при появлении нового файла</span></label>
           <label><span>Обработать файл по пути</span><div className="inlineInput"><input value={props.intakeSource} onChange={(event) => props.setIntakeSource(event.target.value)} placeholder="Путь к файлу" /><button className="primaryBtn" onClick={props.onRunZeroTouch} disabled={props.busy}>Создать комплект</button></div></label>
           <label className="checkLine"><input type="checkbox" checked={props.autoPrint} onChange={(event) => props.setAutoPrint(event.target.checked)} /><span>Печатать готовый комплект автоматически</span></label>
           <small className="automationHelp">Если файл временно нельзя прочитать, рядом появится заметка «НЕ ПРОЧИТАН.txt» с понятной причиной и временем следующей попытки.</small>

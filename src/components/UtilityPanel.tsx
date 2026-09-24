@@ -20,6 +20,7 @@ interface UtilityPanelProps {
   outputRoot: string;
   savedOutputRoot: string;
   folderParts: FolderNamePartDto[];
+  watcherOpenUiOnDrop: boolean;
   licenseText: string;
   onSeriesStartChange(value: string): void;
   onSeriesEndChange(value: string): void;
@@ -40,6 +41,7 @@ interface UtilityPanelProps {
   onCheckUpdates(): void;
   onInstallWatcher(): void;
   onUninstallWatcher(): void;
+  onWatcherOpenUiOnDropChange(value: boolean): void;
   onVerifyLicense(): void;
   onSemanticCaseChanged?(semanticCase: SemanticCase): void;
 }
@@ -128,7 +130,8 @@ export function UtilityPanel(props: UtilityPanelProps) {
 
         <div className="utilityCard">
           <strong>Автоматическая обработка</strong>
-          <small>Фоновый агент замечает новые файлы в рабочей папке и создаёт комплект без ручного запуска.</small>
+          <small>Фоновый агент замечает новые файлы в рабочей папке и создаёт комплект без ручного запуска. По умолчанию он не открывает окно приложения.</small>
+          <label className="checkLine"><input type="checkbox" checked={props.watcherOpenUiOnDrop} onChange={(event) => props.onWatcherOpenUiOnDropChange(event.target.checked)} /><span>Открывать приложение при новом файле</span></label>
           <button className="utilBtn" onClick={props.onInstallWatcher}>
             <i className="ti ti-eye-cog" aria-hidden="true" /> Включить фоновый агент
           </button>

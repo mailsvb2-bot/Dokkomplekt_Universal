@@ -28,8 +28,10 @@ describe('useWatcherPreferenceSync', () => {
         folderParts: ['DocumentNumber', 'DocumentDate'],
         autoPrint: false,
         printCopies: {},
+        openUiOnDrop: false,
         setAutoPrint,
         setPrintCopies,
+        setOpenUiOnDrop: vi.fn(),
         setStatus,
       }),
       { initialProps: { ready: false } },
@@ -41,7 +43,7 @@ describe('useWatcherPreferenceSync', () => {
     rerender({ ready: true });
     await waitFor(() => expect(calls.some((call) => call.command === 'update_background_watcher_preferences')).toBe(true));
     const update = calls.find((call) => call.command === 'update_background_watcher_preferences');
-    expect(update?.payload).toMatchObject({ req: { output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'] } });
+    expect(update?.payload).toMatchObject({ req: { output_root: 'D:/Ready', folder_parts: ['DocumentNumber', 'DocumentDate'], open_ui_on_drop: false } });
   });
 
   it('fails closed when watcher state cannot be restored', async () => {
@@ -61,8 +63,10 @@ describe('useWatcherPreferenceSync', () => {
       folderParts: ['DocumentNumber'],
       autoPrint: false,
       printCopies: {},
+      openUiOnDrop: false,
       setAutoPrint: vi.fn(),
       setPrintCopies: vi.fn(),
+      setOpenUiOnDrop: vi.fn(),
       setStatus,
     }));
 
@@ -88,8 +92,10 @@ describe('useWatcherPreferenceSync', () => {
       folderParts: ['DocumentNumber'] as const,
       autoPrint: false,
       printCopies: {},
+      openUiOnDrop: false,
       setAutoPrint: vi.fn(),
       setPrintCopies: vi.fn(),
+      setOpenUiOnDrop: vi.fn(),
       setStatus: vi.fn(),
     };
     const { rerender } = renderHook(
@@ -124,8 +130,10 @@ describe('useWatcherPreferenceSync', () => {
       folderParts: ['DocumentNumber'] as const,
       autoPrint: false,
       printCopies: {},
+      openUiOnDrop: false,
       setAutoPrint: vi.fn(),
       setPrintCopies: vi.fn(),
+      setOpenUiOnDrop: vi.fn(),
       setStatus: vi.fn(),
     };
     const { rerender } = renderHook(
@@ -158,8 +166,8 @@ describe('useWatcherPreferenceSync', () => {
     });
     const common = {
       outputPreferencesReady: true, watcherRefreshRevision: 0, folderNamingConfirmed: true,
-      outputRoot: 'D:/Ready', folderParts: ['DocumentNumber'] as const, autoPrint: false,
-      setAutoPrint: vi.fn(), setPrintCopies: vi.fn(), setStatus: vi.fn(),
+      outputRoot: 'D:/Ready', folderParts: ['DocumentNumber'] as const, autoPrint: false, openUiOnDrop: false,
+      setAutoPrint: vi.fn(), setPrintCopies: vi.fn(), setOpenUiOnDrop: vi.fn(), setStatus: vi.fn(),
     };
     const { rerender } = renderHook(
       ({ copies }) => useWatcherPreferenceSync({ ...common, folderParts: [...common.folderParts], printCopies: copies }),

@@ -34,6 +34,7 @@ export function useOutputDestination(
   const cachedParts = loadOutputFolderParts();
   const cachedConfirmed = loadOutputNamingConfirmed();
   const [watchFolder, setWatchFolder] = useState('');
+  const [watcherOpenUiOnDrop, setWatcherOpenUiOnDrop] = useState(false);
   const [outputRoot, setOutputRoot] = useState(cachedRoot);
   const [outputRootDraft, setOutputRootDraft] = useState(cachedRoot);
   const [folderParts, setFolderParts] = useState<FolderNamePartDto[]>(cachedParts);
@@ -105,6 +106,7 @@ export function useOutputDestination(
         const watcher = await getBackgroundWatcherState();
         if (!alive) return;
         setWatchFolder(watcher.installed ? watcher.watch_folder?.trim() ?? '' : '');
+        setWatcherOpenUiOnDrop(Boolean(watcher.installed && watcher.open_ui_on_drop));
         if (watcher.migration_required) {
           setStatus('Фоновый агент создан старой версией. Подтвердите папку готовых документов и включите агент заново.');
         }
@@ -264,7 +266,7 @@ export function useOutputDestination(
     }
     const res = await run(
       'install_background_watcher',
-      () => installBackgroundWatcher(folder, destination, currentDefaultYear(), sickLeave, folderParts, autoPrint, printCopies),
+      () => installBackgroundWatcher(folder, destination, currentDefaultYear(), sickLeave, folderParts, autoPrint, printCopies, watcherOpenUiOnDrop),
     );
     if (res) {
       setWatchFolder(res.watch_folder?.trim() || folder);
@@ -287,6 +289,7 @@ export function useOutputDestination(
 
   return {
     watchFolder,
+    watcherOpenUiOnDrop,
     outputRoot,
     outputRootDraft,
     folderParts,
@@ -295,6 +298,7 @@ export function useOutputDestination(
     outputPreferencesLoading,
     outputRootRecoveryRequired,
     watcherRefreshRevision,
+    setWatcherOpenUiOnDrop,
     setOutputRootDraft,
     setFolderNamingConfirmed,
     updateFolderParts,

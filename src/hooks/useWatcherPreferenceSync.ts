@@ -7,8 +7,9 @@ function updateWatcherPreferencesSnapshot(
   folderParts: FolderNamePartDto[],
   autoPrint: boolean,
   printCopies: Record<string, number>,
+  openUiOnDrop: boolean,
 ) {
-  return updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies);
+  return updateBackgroundWatcherPreferences(outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop);
 }
 
 
@@ -20,8 +21,10 @@ type WatcherPreferenceSyncOptions = {
   folderParts: FolderNamePartDto[];
   autoPrint: boolean;
   printCopies: Record<string, number>;
+  openUiOnDrop: boolean;
   setAutoPrint: (value: boolean) => void;
   setPrintCopies: (value: Record<string, number>) => void;
+  setOpenUiOnDrop: (value: boolean) => void;
   setStatus: (message: string) => void;
 };
 
@@ -33,8 +36,10 @@ export function useWatcherPreferenceSync({
   folderParts,
   autoPrint,
   printCopies,
+  openUiOnDrop,
   setAutoPrint,
   setPrintCopies,
+  setOpenUiOnDrop,
   setStatus,
 }: WatcherPreferenceSyncOptions): void {
   const [watcherPreferencesReady, setWatcherPreferencesReady] = useState(false);
@@ -49,6 +54,7 @@ export function useWatcherPreferenceSync({
         if (watcher.installed) {
           if (typeof watcher.auto_print === 'boolean') setAutoPrint(watcher.auto_print);
           if (watcher.print_copies_by_document) setPrintCopies(watcher.print_copies_by_document);
+          setOpenUiOnDrop(Boolean(watcher.open_ui_on_drop));
         }
         setWatcherPreferencesReady(!watcher.migration_required);
       })
@@ -58,7 +64,7 @@ export function useWatcherPreferenceSync({
         setStatus(`Не удалось восстановить настройки фонового агента: ${errorMessage(error)}.`);
       });
     return () => { alive = false; };
-  }, [watcherRefreshRevision, setAutoPrint, setPrintCopies, setStatus]);
+  }, [watcherRefreshRevision, setAutoPrint, setPrintCopies, setOpenUiOnDrop, setStatus]);
 
   useEffect(() => {
     if (!watcherPreferencesReady || !outputPreferencesReady || !folderNamingConfirmed || !outputRoot.trim() || !folderParts.length) return;
@@ -67,16 +73,17 @@ export function useWatcherPreferenceSync({
     const partsSnapshot = [...folderParts];
     const autoPrintSnapshot = autoPrint;
     const copiesSnapshot = { ...printCopies };
+    const openUiOnDropSnapshot = openUiOnDrop;
     syncQueue.current = syncQueue.current
       .catch(() => undefined)
       .then(async () => {
         try {
-          await updateWatcherPreferencesSnapshot(rootSnapshot, partsSnapshot, autoPrintSnapshot, copiesSnapshot);
+          await updateWatcherPreferencesSnapshot(rootSnapshot, partsSnapshot, autoPrintSnapshot, copiesSnapshot, openUiOnDropSnapshot);
         } catch (error) {
           if (revision === syncRevision.current) {
             setStatus(`Не удалось синхронизировать настройки фонового агента: ${errorMessage(error)}. Агент продолжает использовать последнюю подтверждённую конфигурацию.`);
           }
         }
       });
-  }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, setStatus]);
+  }, [watcherPreferencesReady, outputPreferencesReady, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop, setStatus]);
 }

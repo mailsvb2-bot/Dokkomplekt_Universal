@@ -15,6 +15,8 @@ struct WatcherInstallRequest {
     print_copies_by_document: BTreeMap<String, u16>,
     #[serde(default = "default_parallel_cases")]
     max_parallel_cases: usize,
+    #[serde(default)]
+    open_ui_on_drop: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +42,8 @@ struct WatcherRuntimeConfig {
     print_copies_by_document: BTreeMap<String, u16>,
     #[serde(default = "default_parallel_cases")]
     max_parallel_cases: usize,
+    #[serde(default)]
+    open_ui_on_drop: bool,
     /// Canonical update handoff. Old configs deserialize with `None`, while
     /// handoff-aware versions can retire a stale watcher after a newer install
     /// publishes a ready owner.
@@ -92,10 +96,27 @@ fn effective_watcher_folder_parts(runtime: &WatcherRuntimeConfig) -> Vec<FolderN
     }
 }
 
+fn watcher_path_is_service_note(path: &Path) -> bool {
+    let is_text = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("txt"));
+    if !is_text {
+        return false;
+    }
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| {
+            name.contains("_ТРЕБУЕТ_ВНИМАНИЯ")
+                || name.contains("_НЕ_ПРОЧИТАН")
+        })
+}
+
 fn watcher_path_is_processable(path: &Path) -> bool {
     path.is_file()
         && universal_intake::is_supported_path(path)
         && !universal_intake::is_temporary_source(path)
+        && !watcher_path_is_service_note(path)
 }
 
 fn watcher_owner_for_executable(exe: &Path, ready: bool) -> Result<WatcherHandoffOwner, String> {
@@ -902,10 +923,12 @@ fn process_watcher_source(
     let fallback_auto_print = runtime.auto_print;
     let fallback_copies = runtime.print_copies_by_document.clone();
 
-    // Donor parity: a stable primary dropped while the main UI is closed must
-    // open the program. Launch the normal singleton path, never the hidden
-    // watcher window; an existing UI receives its ordinary activation request.
-    if launch_or_activate_watcher_ui(control_path.as_deref()).is_err() {
+    // Closed-UI processing is the canonical default. The watcher must not steal
+    // focus or reveal a window merely because a stable source arrived. Users can
+    // explicitly opt into the legacy "open application on drop" behavior.
+    if runtime.open_ui_on_drop
+        && launch_or_activate_watcher_ui(control_path.as_deref()).is_err()
+    {
         if let Ok(mut log) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -914,6 +937,18 @@ fn process_watcher_source(
             let _ = writeln!(log, "[watcher] ui_activation_failed=true");
         }
     }
+    let state = app.state::<AppState>();
+    // Background automation is allowed to reuse only an explicit durable user
+    // choice. document_selection_v1 is the same selection the foreground UI
+    // restores after restart; using it here makes a closed-UI drop deterministic
+    // without inventing a bundle. If no selection is stored, the canonical intake
+    // engine remains fail-closed and produces a clarification job.
+    let confirmed_document_ids = state
+        .pack
+        .lock()
+        .ok()
+        .and_then(|pack| persisted_document_selection(&app, &pack).ok())
+        .unwrap_or_default();
     let req = CreatedDocumentsIntakeRequest {
         source_path: path.display().to_string(),
         output_root: output_root.display().to_string(),
@@ -922,12 +957,11 @@ fn process_watcher_source(
         sick_leave_enabled,
         model_output: None,
         confirmed_fields: Vec::new(),
-        confirmed_document_ids: Vec::new(),
+        confirmed_document_ids,
         force_reissue: false,
         preserve_source_after_success: false,
         resume_from_case_id: None,
     };
-    let state = app.state::<AppState>();
     match perform_created_documents_intake(&state, &app, req) {
         Ok(response) => {
             // `Ok` also covers attention/setup/ignored outcomes. Service-note cleanup
@@ -1387,6 +1421,7 @@ fn get_background_watcher_state(app: tauri::AppHandle) -> Result<serde_json::Val
         "auto_print": runtime.auto_print,
         "print_copies_by_document": runtime.print_copies_by_document,
         "max_parallel_cases": normalize_parallel_cases(runtime.max_parallel_cases),
+        "open_ui_on_drop": runtime.open_ui_on_drop,
         "migration_required": migration_required,
     }))
 }
@@ -1426,6 +1461,7 @@ fn install_background_watcher(
         auto_print: req.auto_print,
         print_copies_by_document: req.print_copies_by_document.clone(),
         max_parallel_cases: normalize_parallel_cases(req.max_parallel_cases),
+        open_ui_on_drop: req.open_ui_on_drop,
         handoff_owner: Some(owner.clone()),
     };
     let config_path = watcher_config_path(&app)?;
@@ -1542,6 +1578,7 @@ fn install_background_watcher(
         "warnings": warnings,
         "autostart_state_file": config_path.display().to_string(),
         "max_parallel_cases": max_parallel_cases,
+        "open_ui_on_drop": req.open_ui_on_drop,
     }))
 }
 
@@ -1554,6 +1591,8 @@ struct WatcherPreferencesRequest {
     auto_print: bool,
     #[serde(default)]
     print_copies_by_document: BTreeMap<String, u16>,
+    #[serde(default)]
+    open_ui_on_drop: bool,
 }
 
 #[tauri::command]
@@ -1590,6 +1629,7 @@ fn update_background_watcher_preferences(
     runtime.default_year = current_year_utc();
     runtime.auto_print = req.auto_print;
     runtime.print_copies_by_document = req.print_copies_by_document;
+    runtime.open_ui_on_drop = req.open_ui_on_drop;
     atomic_write_file(
         &config_path,
         &serde_json::to_vec_pretty(&runtime).map_err(|error| error.to_string())?,
@@ -1685,7 +1725,25 @@ mod watcher_handoff_tests {
         }))
         .unwrap();
         assert!(runtime.output_root.is_empty());
+        assert!(!runtime.open_ui_on_drop);
         assert_eq!(effective_watcher_folder_parts(&runtime).len(), 2);
+    }
+
+    #[test]
+    fn explicit_watcher_ui_activation_preference_round_trips() {
+        let runtime: WatcherRuntimeConfig = serde_json::from_value(serde_json::json!({
+            "watch_folder": "C:/Watch",
+            "output_root": "D:/Ready",
+            "default_year": 2026,
+            "sick_leave_enabled": false,
+            "folder_parts": ["DocumentNumber"],
+            "auto_print": false,
+            "print_copies_by_document": {},
+            "max_parallel_cases": 2,
+            "open_ui_on_drop": true
+        }))
+        .unwrap();
+        assert!(runtime.open_ui_on_drop);
     }
 
     #[test]
@@ -1699,6 +1757,7 @@ mod watcher_handoff_tests {
             auto_print: false,
             print_copies_by_document: BTreeMap::new(),
             max_parallel_cases: 2,
+            open_ui_on_drop: false,
             handoff_owner: None,
         };
         assert_ne!(runtime.watch_folder, runtime.output_root);
@@ -1845,6 +1904,31 @@ mod watcher_handoff_tests {
         let (category, retry_policy) = classify_processing_error("DOCX поврежден");
         assert_eq!(category, "source_invalid");
         assert!(matches!(retry_policy, UnreadableRetryPolicy::ContentChange));
+    }
+
+    #[test]
+    fn watcher_never_reprocesses_its_own_service_notes() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-watcher-service-note-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create service note root");
+        let attention = root.join("case.docx_ТРЕБУЕТ_ВНИМАНИЯ.txt");
+        let unreadable = root.join("case.pdf_НЕ_ПРОЧИТАН.txt");
+        let ordinary = root.join("case.txt");
+        std::fs::write(&attention, b"attention").expect("write attention note");
+        std::fs::write(&unreadable, b"unreadable").expect("write unreadable note");
+        std::fs::write(&ordinary, b"ordinary source").expect("write ordinary source");
+
+        assert!(watcher_path_is_service_note(&attention));
+        assert!(watcher_path_is_service_note(&unreadable));
+        assert!(!watcher_path_is_service_note(&ordinary));
+        assert!(!watcher_path_is_processable(&attention));
+        assert!(!watcher_path_is_processable(&unreadable));
+        assert!(watcher_path_is_processable(&ordinary));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

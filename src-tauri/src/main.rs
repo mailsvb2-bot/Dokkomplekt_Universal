@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod central_queue;
 mod component_manager;
 mod generation_publication;
@@ -2258,6 +2260,7 @@ fn main() {
                             auto_print: false,
                             print_copies_by_document: BTreeMap::new(),
                             max_parallel_cases: 2,
+                            open_ui_on_drop: false,
                         },
                         handle.clone(),
                     )
@@ -2278,20 +2281,10 @@ fn main() {
                 handle.exit(0);
                 return Ok(());
             }
-            let window_config = app
-                .config()
-                .app
-                .windows
-                .first()
-                .cloned()
-                .ok_or_else(|| std::io::Error::other("main window config missing"))?;
-            let main_window = tauri::WebviewWindowBuilder::from_config(&handle, &window_config)
-                .map_err(std::io::Error::other)?
-                .build()
-                .map_err(std::io::Error::other)?;
-
             if background_watch {
-                let _ = main_window.hide();
+                // A background watcher is a windowless service process. Do not
+                // build-and-hide the configured WebView window: even a short-lived
+                // native creation can flash on the user's desktop or steal focus.
                 let started = watcher_config_path(&handle)
                     .and_then(|config_path| std::fs::read(config_path).map_err(|e| e.to_string()))
                     .and_then(|bytes| {
@@ -2304,6 +2297,17 @@ fn main() {
                     handle.exit(0);
                 }
             } else {
+                let window_config = app
+                    .config()
+                    .app
+                    .windows
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| std::io::Error::other("main window config missing"))?;
+                tauri::WebviewWindowBuilder::from_config(&handle, &window_config)
+                    .map_err(std::io::Error::other)?
+                    .build()
+                    .map_err(std::io::Error::other)?;
                 start_activation_listener(handle.clone()).map_err(std::io::Error::other)?;
             }
             Ok(())

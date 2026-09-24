@@ -22,6 +22,7 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         cls.guided_modal = (ROOT / "src/components/GuidedScannerModal.tsx").read_text(encoding="utf-8")
         cls.runtime_validation = (ROOT / "src/lib/runtimeValidation.ts").read_text(encoding="utf-8")
         cls.created_documents = (ROOT / "crates/dokkomplekt-core/src/created_documents.rs").read_text(encoding="utf-8")
+        cls.installer_smoke = (ROOT / "tests/installer/windows_installer_contract.ps1").read_text(encoding="utf-8")
 
     def test_short_scanner_keywords_use_token_boundaries(self) -> None:
         self.assertIn("containsTokenSequence", self.suggestions)
@@ -93,11 +94,42 @@ class ScannerWatcherPrintContracts(unittest.TestCase):
         self.assertIn("!watcher.migration_required", self.watcher_sync)
         self.assertRegex(
             self.watcher_sync,
-            r"updateBackgroundWatcherPreferences\(outputRoot, folderParts, autoPrint, printCopies\)",
+            r"updateBackgroundWatcherPreferences\(outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop\)",
         )
         self.assertIn("последнюю подтверждённую конфигурацию", self.watcher_sync)
         self.assertIn("latest_runtime", self.main)
         self.assertIn("effective_copies", self.main)
+
+    def test_background_watcher_is_windowless_by_default_and_installed_proof_is_idempotent(self) -> None:
+        self.assertIn("open_ui_on_drop", self.main)
+        self.assertIn("if runtime.open_ui_on_drop", self.main)
+        self.assertIn("A background watcher is a windowless service process.", self.main)
+        self.assertIn('windows_subsystem = "windows"', self.main)
+        self.assertNotIn("let _ = main_window.hide()", self.main)
+        self.assertIn("Открывать приложение при появлении нового файла", self.workspace)
+        self.assertIn("FPR-10 CLOSED-UI PASS", self.installer_smoke)
+        self.assertIn("IsWindowVisible($fpr10NativeHandle)", self.installer_smoke)
+        self.assertIn("Tao Thread Event Target", self.installer_smoke)
+        self.assertIn("GetExtendedWindowStyle", self.installer_smoke)
+        self.assertIn("fpr10WsExLayered", self.installer_smoke)
+        self.assertIn("fpr10WsExTransparent", self.installer_smoke)
+        self.assertIn("fpr10WsExToolWindow", self.installer_smoke)
+        self.assertIn("fpr10WsExNoActivate", self.installer_smoke)
+        self.assertIn("FPR-10 TAO EVENT TARGET OK", self.installer_smoke)
+        self.assertIn("FPR-10 UIA EVENT TARGET OK", self.installer_smoke)
+        self.assertIn("fpr10UiaSafeTaoEventTarget", self.installer_smoke)
+        self.assertIn("NativeWindowHandle", self.installer_smoke)
+        self.assertIn("GetWindowThreadProcessId", self.installer_smoke)
+        self.assertIn("stole foreground focus", self.installer_smoke)
+        self.assertIn("watcher_path_is_service_note", self.main)
+        self.assertIn('name.contains("_ТРЕБУЕТ_ВНИМАНИЯ")', self.main)
+        self.assertIn('name.contains("_НЕ_ПРОЧИТАН")', self.main)
+        self.assertIn("persisted_document_selection(&app, &pack)", self.main)
+        self.assertIn("confirmed_document_ids,", self.main)
+        self.assertIn("FPR-10 IDEMPOTENCY PASS", self.installer_smoke)
+        self.assertIn("produced neither an output set nor a clarification job", self.installer_smoke)
+        self.assertIn("created exactly one canonical clarification job", self.installer_smoke)
+        self.assertIn("preserved exactly one $fpr10OutcomeKind outcome", self.installer_smoke)
 
     def test_word_copies_are_queued_in_one_com_print_call(self) -> None:
         self.assertIn("fn print_word_document_copies", self.main)

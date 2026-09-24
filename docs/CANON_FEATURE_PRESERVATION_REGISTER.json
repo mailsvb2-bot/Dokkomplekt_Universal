@@ -336,8 +336,8 @@
     {
       "id": "FPR-10",
       "group": "Автоматизация",
-      "status": "needs-runtime-proof",
-      "actual_state": "watcher commands and canonical intake agent are present; installed background proof pending",
+      "status": "verified",
+      "actual_state": "hidden-by-default background watcher uses the canonical intake engine; installed Windows proof covers closed-UI one-outcome behavior (physical output or canonical clarification), no focus theft, service-note isolation, and repeated-event idempotency",
       "entry": [
         "src-tauri/src/subsystems/watcher_commands.rs"
       ],
@@ -357,8 +357,11 @@
         "src-tauri/src/subsystems/watcher_commands.rs",
         "crates/dokkomplekt-core/src/intake_agent.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Closed-UI watcher and idempotency evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_installer_contract.ps1#FPR-10 closed-UI output-or-clarification/idempotency installed proof",
+        "tests/test_v18_0_6_scanner_watcher_print_contracts.py#hidden watcher regression lock"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-11",

@@ -477,6 +477,7 @@ export async function installBackgroundWatcher(
   folderParts: FolderNamePartDto[] = [],
   autoPrint = false,
   printCopiesByDocument: Record<string, number> = {},
+  openUiOnDrop = false,
 ): Promise<BackgroundWatcherPlan> {
   return callRust('install_background_watcher', {
     req: {
@@ -487,6 +488,7 @@ export async function installBackgroundWatcher(
       folder_parts: folderParts,
       auto_print: autoPrint,
       print_copies_by_document: printCopiesByDocument,
+      open_ui_on_drop: openUiOnDrop,
     },
   });
 }
@@ -496,6 +498,7 @@ export async function updateBackgroundWatcherPreferences(
   folderParts: FolderNamePartDto[],
   autoPrint: boolean,
   printCopiesByDocument: Record<string, number>,
+  openUiOnDrop: boolean,
 ): Promise<boolean> {
   return callRust('update_background_watcher_preferences', {
     req: {
@@ -503,6 +506,7 @@ export async function updateBackgroundWatcherPreferences(
       folder_parts: folderParts,
       auto_print: autoPrint,
       print_copies_by_document: printCopiesByDocument,
+      open_ui_on_drop: openUiOnDrop,
     },
   });
 }

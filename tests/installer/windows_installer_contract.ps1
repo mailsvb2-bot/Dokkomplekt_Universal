@@ -166,6 +166,27 @@ public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+  private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+  private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+  public static long GetExtendedWindowStyle(IntPtr hWnd) {
+    const int GWL_EXSTYLE = -20;
+    return IntPtr.Size == 8
+      ? GetWindowLongPtr64(hWnd, GWL_EXSTYLE).ToInt64()
+      : (long)(uint)GetWindowLong32(hWnd, GWL_EXSTYLE);
+  }
 }
 "@
 
@@ -2417,6 +2438,251 @@ try {
   $fpr09Archive.Dispose()
 }
 Write-Host "FPR-09 INSTALLED PASS: «Создать свои кнопки» -> placeholder-free learning -> restart -> held-out Source -> physical DOCX: $($fpr09Created.FullName)"
+
+# FPR-10 — the installed watcher must work with the foreground UI fully closed,
+# must not create/flash a WebView window, and repeated delivery of identical
+# source bytes under the same plan must not publish a second output set.
+if (-not $process.HasExited) {
+  Stop-Process -Id $process.Id -Force
+  $process.WaitForExit()
+}
+Start-Sleep -Milliseconds 500
+
+$fpr10WatchFolder = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr10-watch-$PID"
+$fpr10InstallEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr10-install-$PID.json"
+$fpr10UninstallEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr10-uninstall-$PID.json"
+Remove-Item -LiteralPath $fpr10WatchFolder -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $fpr10InstallEvidence, $fpr10UninstallEvidence -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $fpr10WatchFolder | Out-Null
+
+$env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
+try {
+  $watcherInstall = Start-Process -FilePath $app.FullName -ArgumentList @(
+    "--e2e-install-watcher=$fpr10WatchFolder",
+    "--e2e-evidence=$fpr10InstallEvidence"
+  ) -Wait -PassThru
+  if ($watcherInstall.ExitCode -ne 0) {
+    throw "FPR-10 watcher configuration command failed with exit code $($watcherInstall.ExitCode)."
+  }
+  if (-not (Test-Path -LiteralPath $fpr10InstallEvidence -PathType Leaf)) {
+    throw 'FPR-10 watcher configuration did not publish its evidence file.'
+  }
+  $watcherInstallJson = Get-Content -LiteralPath $fpr10InstallEvidence -Raw | ConvertFrom-Json
+  if (-not $watcherInstallJson.install_result.installed) {
+    throw 'FPR-10 watcher configuration did not report installed=true.'
+  }
+  if ($watcherInstallJson.install_result.open_ui_on_drop -ne $false) {
+    throw 'FPR-10 installed watcher must default to open_ui_on_drop=false.'
+  }
+} finally {
+  Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
+}
+
+$fpr10ForegroundBeforeStart = [DokkomplektNativeMouse]::GetForegroundWindow()
+$fpr10Watcher = Start-Process -FilePath $app.FullName -ArgumentList @('--background-watch') -PassThru
+Start-Sleep -Seconds 2
+$fpr10Watcher.Refresh()
+if ($fpr10Watcher.HasExited) {
+  throw "FPR-10 background watcher exited before accepting input with code $($fpr10Watcher.ExitCode)."
+}
+
+# Tao deliberately marks its internal event-target HWND WS_VISIBLE so it can
+# receive WM_PAINT, while making that exact helper non-user-facing with
+# WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE.
+# Therefore IsWindowVisible alone is not evidence of a user-visible window.
+# Permit only that exact Tao helper shape; every other visible native HWND fails.
+$fpr10NativeHandle = [IntPtr]$fpr10Watcher.MainWindowHandle
+$fpr10SafeTaoEventTarget = $false
+if ($fpr10NativeHandle -ne [IntPtr]::Zero -and [DokkomplektNativeMouse]::IsWindowVisible($fpr10NativeHandle)) {
+  $fpr10WindowTitle = [System.Text.StringBuilder]::new(512)
+  $fpr10WindowClass = [System.Text.StringBuilder]::new(512)
+  [void][DokkomplektNativeMouse]::GetWindowText($fpr10NativeHandle, $fpr10WindowTitle, $fpr10WindowTitle.Capacity)
+  [void][DokkomplektNativeMouse]::GetClassName($fpr10NativeHandle, $fpr10WindowClass, $fpr10WindowClass.Capacity)
+  [int64]$fpr10ExtendedStyle = [DokkomplektNativeMouse]::GetExtendedWindowStyle($fpr10NativeHandle)
+  [int64]$fpr10WsExLayered = 0x00080000
+  [int64]$fpr10WsExTransparent = 0x00000020
+  [int64]$fpr10WsExToolWindow = 0x00000080
+  [int64]$fpr10WsExNoActivate = 0x08000000
+  [int64]$fpr10RequiredTaoStyle = $fpr10WsExLayered -bor $fpr10WsExTransparent -bor $fpr10WsExToolWindow -bor $fpr10WsExNoActivate
+  $fpr10ClassText = $fpr10WindowClass.ToString()
+  $fpr10TitleText = $fpr10WindowTitle.ToString()
+  $fpr10SafeTaoEventTarget = (
+    $fpr10ClassText -eq 'Tao Thread Event Target' -and
+    [string]::IsNullOrEmpty($fpr10TitleText) -and
+    (($fpr10ExtendedStyle -band $fpr10RequiredTaoStyle) -eq $fpr10RequiredTaoStyle)
+  )
+  if (-not $fpr10SafeTaoEventTarget) {
+    $fpr10CommandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($fpr10Watcher.Id)" -ErrorAction SilentlyContinue).CommandLine
+    throw "FPR-10 background watcher exposed a user-visible native window: HWND=$fpr10NativeHandle; class='$fpr10ClassText'; title='$fpr10TitleText'; exstyle=0x$('{0:X}' -f $fpr10ExtendedStyle); command_line='$fpr10CommandLine'."
+  }
+  Write-Host "FPR-10 TAO EVENT TARGET OK: only the non-activating layered/transparent Tao helper HWND is present (exstyle=0x$('{0:X}' -f $fpr10ExtendedStyle))."
+}
+$fpr10ForegroundAfterStart = [DokkomplektNativeMouse]::GetForegroundWindow()
+if ($fpr10ForegroundAfterStart -ne [IntPtr]::Zero) {
+  [uint32]$fpr10ForegroundOwner = 0
+  [void][DokkomplektNativeMouse]::GetWindowThreadProcessId($fpr10ForegroundAfterStart, [ref]$fpr10ForegroundOwner)
+  if ($fpr10ForegroundOwner -eq [uint32]$fpr10Watcher.Id) {
+    throw "FPR-10 background watcher stole foreground focus with HWND $fpr10ForegroundAfterStart."
+  }
+}
+$fpr10WindowCondition = [System.Windows.Automation.PropertyCondition]::new(
+  [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+  [int]$fpr10Watcher.Id
+)
+$fpr10TopLevelElements = $desktop.FindAll(
+  [System.Windows.Automation.TreeScope]::Children,
+  $fpr10WindowCondition
+)
+foreach ($fpr10TopLevelElement in $fpr10TopLevelElements) {
+  $fpr10UiaHandle = [int64]$fpr10TopLevelElement.Current.NativeWindowHandle
+  $fpr10UiaName = [string]$fpr10TopLevelElement.Current.Name
+  $fpr10UiaClass = [string]$fpr10TopLevelElement.Current.ClassName
+  $fpr10UiaSafeTaoEventTarget = (
+    $fpr10SafeTaoEventTarget -and
+    $fpr10UiaHandle -eq $fpr10NativeHandle.ToInt64() -and
+    $fpr10UiaClass -eq 'Tao Thread Event Target' -and
+    [string]::IsNullOrEmpty($fpr10UiaName)
+  )
+  if (-not $fpr10UiaSafeTaoEventTarget) {
+    throw "FPR-10 background watcher exposed a top-level UI Automation window: HWND=$fpr10UiaHandle; class='$fpr10UiaClass'; name='$fpr10UiaName'."
+  }
+}
+if ($fpr10TopLevelElements.Count -gt 0) {
+  Write-Host "FPR-10 UIA EVENT TARGET OK: UI Automation exposes only the already-validated Tao helper HWND."
+}
+
+$fpr10Subject = 'Кузнецова Елена Андреевна'
+$fpr10Inn = '500100732259'
+$fpr10Source = Join-Path $fpr10WatchFolder 'fpr10-source.txt'
+$fpr10SourceText = "Карточка FPR-09`r`nСубъект: $fpr10Subject`r`nИНН организации: $fpr10Inn`r`nНомер документа: FPR10-5505`r`nДата документа: 24.09.2026"
+$fpr10StartedUtc = [DateTime]::UtcNow
+[System.IO.File]::WriteAllText(
+  $fpr10Source,
+  $fpr10SourceText,
+  [System.Text.UTF8Encoding]::new($false)
+)
+
+$fpr10ExpectedFile = "$fpr09ButtonLabel.docx"
+$fpr10Deadline = [DateTime]::UtcNow.AddSeconds(90)
+$fpr10Created = $null
+$fpr10Attention = $null
+do {
+  $fpr10Created = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr10ExpectedFile -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTimeUtc -ge $fpr10StartedUtc } |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1
+  $fpr10AttentionCandidates = @(Get-ChildItem -LiteralPath $fpr10WatchFolder -File -Filter '*_ТРЕБУЕТ_ВНИМАНИЯ.txt' -ErrorAction SilentlyContinue)
+  if ($fpr10AttentionCandidates.Count -gt 1) {
+    throw "FPR-10 closed-UI watcher created $($fpr10AttentionCandidates.Count) clarification notes; expected at most one."
+  }
+  if ($fpr10AttentionCandidates.Count -eq 1) {
+    $fpr10Attention = $fpr10AttentionCandidates[0]
+  }
+  if ($null -ne $fpr10Created -or $null -ne $fpr10Attention) { break }
+  if ($fpr10Watcher.HasExited) {
+    throw "FPR-10 background watcher exited during closed-UI processing with code $($fpr10Watcher.ExitCode)."
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr10Deadline)
+if ($null -eq $fpr10Created -and $null -eq $fpr10Attention) {
+  throw "FPR-10 closed-UI watcher produced neither an output set nor a clarification job."
+}
+if ($null -ne $fpr10Created -and $null -ne $fpr10Attention) {
+  throw "FPR-10 closed-UI watcher produced both a document and a clarification job for one Source."
+}
+
+$fpr10OutcomeKind = if ($null -ne $fpr10Created) { 'output' } else { 'clarification' }
+if ($fpr10OutcomeKind -eq 'output') {
+  $fpr10Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr10Created.FullName)
+  try {
+    $entry = $fpr10Archive.GetEntry('word/document.xml')
+    if ($null -eq $entry) { throw 'FPR-10 watcher output is not a readable DOCX.' }
+    $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::UTF8)
+    try { $fpr10Xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    if ($fpr10Xml -notmatch [regex]::Escape($fpr10Subject)) { throw 'FPR-10 watcher output lost the new subject.' }
+    if ($fpr10Xml -notmatch $fpr10Inn) { throw 'FPR-10 watcher output lost the new INN.' }
+    if ($fpr10Xml -notmatch 'Карточка FPR-09') { throw 'FPR-10 watcher output lost immutable template content.' }
+  } finally {
+    $fpr10Archive.Dispose()
+  }
+  $fpr10FirstOutcomePath = $fpr10Created.FullName
+  $fpr10FirstOutcomeWriteUtc = $fpr10Created.LastWriteTimeUtc
+  Write-Host "FPR-10 CLOSED-UI PASS: watcher stayed hidden and published exactly one physical DOCX: $($fpr10Created.FullName)"
+} else {
+  $fpr10AttentionText = Get-Content -LiteralPath $fpr10Attention.FullName -Raw
+  if ($fpr10AttentionText -notmatch 'значения требуют подтверждения|требуется подтвердить состав') {
+    throw "FPR-10 clarification note does not describe a canonical review gate: $($fpr10Attention.FullName)"
+  }
+  if ($fpr10Attention.Name -match 'ТРЕБУЕТ_ВНИМАНИЯ.*ТРЕБУЕТ_ВНИМАНИЯ') {
+    throw "FPR-10 watcher reprocessed its own clarification note: $($fpr10Attention.Name)"
+  }
+  $fpr10FirstOutcomePath = $fpr10Attention.FullName
+  $fpr10FirstOutcomeWriteUtc = $fpr10Attention.LastWriteTimeUtc
+  Write-Host "FPR-10 CLOSED-UI PASS: watcher stayed hidden and created exactly one canonical clarification job: $($fpr10Attention.FullName)"
+}
+
+# Re-deliver exactly the same bytes. The same Source/plan must not publish a
+# second output set and must not multiply/rewrite the clarification job.
+[System.IO.File]::WriteAllText(
+  $fpr10Source,
+  $fpr10SourceText,
+  [System.Text.UTF8Encoding]::new($false)
+)
+$fpr10DuplicateDeadline = [DateTime]::UtcNow.AddSeconds(12)
+do {
+  if ($fpr10Watcher.HasExited) {
+    throw "FPR-10 background watcher exited during idempotency proof with code $($fpr10Watcher.ExitCode)."
+  }
+  Start-Sleep -Milliseconds 250
+} while ([DateTime]::UtcNow -lt $fpr10DuplicateDeadline)
+
+$fpr10Outputs = @(Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter $fpr10ExpectedFile -ErrorAction SilentlyContinue |
+  Where-Object { $_.LastWriteTimeUtc -ge $fpr10StartedUtc })
+$fpr10Notes = @(Get-ChildItem -LiteralPath $fpr10WatchFolder -File -Filter '*_ТРЕБУЕТ_ВНИМАНИЯ.txt' -ErrorAction SilentlyContinue)
+if ($fpr10OutcomeKind -eq 'output') {
+  if ($fpr10Outputs.Count -ne 1 -or $fpr10Notes.Count -ne 0) {
+    throw "FPR-10 duplicate event changed the output outcome: outputs=$($fpr10Outputs.Count), clarifications=$($fpr10Notes.Count)."
+  }
+  if ($fpr10Outputs[0].FullName -ne $fpr10FirstOutcomePath -or $fpr10Outputs[0].LastWriteTimeUtc -ne $fpr10FirstOutcomeWriteUtc) {
+    throw 'FPR-10 duplicate event rewrote or replaced the first published output.'
+  }
+} else {
+  if ($fpr10Outputs.Count -ne 0 -or $fpr10Notes.Count -ne 1) {
+    throw "FPR-10 duplicate event changed the clarification outcome: outputs=$($fpr10Outputs.Count), clarifications=$($fpr10Notes.Count)."
+  }
+  if ($fpr10Notes[0].FullName -ne $fpr10FirstOutcomePath -or $fpr10Notes[0].LastWriteTimeUtc -ne $fpr10FirstOutcomeWriteUtc) {
+    throw 'FPR-10 duplicate event rewrote or multiplied the clarification job.'
+  }
+}
+Write-Host "FPR-10 IDEMPOTENCY PASS: repeated identical Source/plan preserved exactly one $fpr10OutcomeKind outcome."
+
+if (-not $fpr10Watcher.HasExited) {
+  Stop-Process -Id $fpr10Watcher.Id -Force
+  $fpr10Watcher.WaitForExit()
+}
+$env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
+try {
+  $watcherUninstall = Start-Process -FilePath $app.FullName -ArgumentList @(
+    '--e2e-uninstall-watcher',
+    "--e2e-evidence=$fpr10UninstallEvidence"
+  ) -Wait -PassThru
+  if ($watcherUninstall.ExitCode -ne 0) {
+    throw "FPR-10 watcher cleanup command failed with exit code $($watcherUninstall.ExitCode)."
+  }
+} finally {
+  Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
+}
+Remove-Item -LiteralPath $fpr10WatchFolder -Recurse -Force -ErrorAction SilentlyContinue
+
+# Continue the remaining installed-contract checks in the ordinary foreground UI.
+$process = Start-Process -FilePath $app.FullName -PassThru
+$appWindow = Wait-UiElement -Description 'foreground window after FPR-10 watcher proof' -TimeoutSeconds 30 -Probe {
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+    [int]$process.Id
+  )
+  $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+}
 
 # Navigate through the same Settings entry point a user must use after restart.
 # The restart proof intentionally leaves the application on its restored workspace,

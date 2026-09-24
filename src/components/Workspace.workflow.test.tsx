@@ -22,7 +22,7 @@ function Harness() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [skippedAnswers, setSkippedAnswers] = useState<Record<string, boolean>>({});
   const props = {
-    busy: false, documents: [], selectedDocumentIds: ['diaries'], watchFolder: '', intakeSource: '',
+    busy: false, documents: [], selectedDocumentIds: ['diaries'], watchFolder: '', watcherOpenUiOnDrop: false, intakeSource: '',
     intakeResult: null, lastOutput: null, autoPrint: false, printCopies: {}, sourceText: '',
     sourceFileName: 'patient.docx', sourceFilePath: 'C:/patient.docx', webSourceUrl: '',
     intakeCapabilities: [], scannerField: '', scannerText: '', parsed: { title: 'patient', count: 4, warnings: [] },
@@ -31,7 +31,7 @@ function Harness() {
     answers, skippedAnswers, preview: null, setAnswers, setSkippedAnswers,
     setIntakeSource: noop, setAutoPrint: noop, setSourceText: noop, setSourceFileName: noop,
     setWebSourceUrl: noop, setScannerField: noop, setScannerText: noop, setModelOutput: noop,
-    onPickWatchFolder: noop, onInstallWatcher: noop, onUninstallWatcher: noop, onSickLeaveChange: noop,
+    onPickWatchFolder: noop, onInstallWatcher: noop, onUninstallWatcher: noop, setWatcherOpenUiOnDrop: noop, onSickLeaveChange: noop,
     onRunZeroTouch: noop, onOpenLastOutput: noop, onPrintLastOutput: noop, onExportLastOutputPdf: noop,
     onExportLastOutputPdfa: noop, onExportLastOutputKedo: noop, onPickSourceFile: noop,
     onDropSourceFile: noop, onLoadWebSource: noop, onResetCase: noop, onParseSource: noop,

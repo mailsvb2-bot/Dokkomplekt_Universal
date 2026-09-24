@@ -1110,8 +1110,8 @@ mod tests {
     #[test]
     fn source_correct_learning_keeps_required_subject_and_inn_fields() {
         let report = learn_template_from_examples(&TemplateLearningInput {
-            blank_template_text:
-                "Карточка FPR-09\nСубъект: ____________________\nИНН: __________".into(),
+            blank_template_text: "Карточка FPR-09\nСубъект: ____________________\nИНН: __________"
+                .into(),
             completed_examples: vec![
                 "Карточка FPR-09\nСубъект: Иванов Иван Иванович\nИНН: 5401000102".into(),
                 "Карточка FPR-09\nСубъект: Петров Пётр Петрович\nИНН: 5401000208".into(),

@@ -1391,6 +1391,18 @@ if ($null -eq $createdDoc) {
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
+
+# FPR-11 — the durable default naming rule is document number + document date.
+# The source carries case number 2222 and admission/document evidence 26.08.2026;
+# an address house number must never be misread as a compact date.
+$fpr11ExpectedFolderName = '2222 26.08.2026'
+if ($createdDoc.Directory.Name -ne $fpr11ExpectedFolderName) {
+  throw "FPR-11 output folder mismatch: expected '$fpr11ExpectedFolderName', got '$($createdDoc.Directory.Name)'."
+}
+$fpr11FirstOutputPath = $createdDoc.FullName
+$fpr11FirstOutputHash = (Get-FileHash -LiteralPath $createdDoc.FullName -Algorithm SHA256).Hash
+$fpr11FirstOutputWriteUtc = $createdDoc.LastWriteTimeUtc
+Write-Host "FPR-11 NAMING PASS: durable rule produced exact physical folder '$fpr11ExpectedFolderName'."
 $createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
 try {
   $documentEntry = $createdArchive.GetEntry('word/document.xml')
@@ -1579,6 +1591,15 @@ if ($adversarial) {
   if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
   $distinctFolders = @($versionDocs | ForEach-Object DirectoryName | Sort-Object -Unique)
   if ($distinctFolders.Count -lt 2) { throw 'Repeat generation overwrote the original output folder.' }
+  if (-not (Test-Path -LiteralPath $fpr11FirstOutputPath -PathType Leaf)) {
+    throw 'FPR-11 collision removed the original published document.'
+  }
+  $fpr11OriginalAfter = Get-Item -LiteralPath $fpr11FirstOutputPath
+  $fpr11OriginalHashAfter = (Get-FileHash -LiteralPath $fpr11FirstOutputPath -Algorithm SHA256).Hash
+  if ($fpr11OriginalHashAfter -ne $fpr11FirstOutputHash -or $fpr11OriginalAfter.LastWriteTimeUtc -ne $fpr11FirstOutputWriteUtc) {
+    throw 'FPR-11 collision rewrote the original published document.'
+  }
+  Write-Host "FPR-11 COLLISION PASS: repeat generation preserved the original bytes and published a second version in a distinct folder ($($distinctFolders.Count) folders)."
   Write-Host "ADVERSARIAL OK: collision created a second version in a distinct folder ($($distinctFolders.Count) folders)."
 }
 

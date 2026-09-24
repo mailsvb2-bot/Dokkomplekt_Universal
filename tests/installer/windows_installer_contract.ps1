@@ -177,6 +177,16 @@ public static class DokkomplektNativeMouse {
   public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+  private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+  private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+  public static long GetExtendedWindowStyle(IntPtr hWnd) {
+    const int GWL_EXSTYLE = -20;
+    return IntPtr.Size == 8
+      ? GetWindowLongPtr64(hWnd, GWL_EXSTYLE).ToInt64()
+      : (long)(uint)GetWindowLong32(hWnd, GWL_EXSTYLE);
+  }
 }
 "@
 
@@ -2476,19 +2486,35 @@ if ($fpr10Watcher.HasExited) {
   throw "FPR-10 background watcher exited before accepting input with code $($fpr10Watcher.ExitCode)."
 }
 
-# Tauri/winit may own a hidden message/event-loop HWND even when no application
-# WebView is built. Process.MainWindowHandle alone therefore cannot distinguish
-# an invisible runtime handle from a user-visible window. Fail on visibility and
-# foreground ownership instead: these are the actual no-flash/no-focus-steal
-# requirements of the closed-UI watcher.
+# Tao deliberately marks its internal event-target HWND WS_VISIBLE so it can
+# receive WM_PAINT, while making that exact helper non-user-facing with
+# WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE.
+# Therefore IsWindowVisible alone is not evidence of a user-visible window.
+# Permit only that exact Tao helper shape; every other visible native HWND fails.
 $fpr10NativeHandle = [IntPtr]$fpr10Watcher.MainWindowHandle
 if ($fpr10NativeHandle -ne [IntPtr]::Zero -and [DokkomplektNativeMouse]::IsWindowVisible($fpr10NativeHandle)) {
   $fpr10WindowTitle = [System.Text.StringBuilder]::new(512)
   $fpr10WindowClass = [System.Text.StringBuilder]::new(512)
   [void][DokkomplektNativeMouse]::GetWindowText($fpr10NativeHandle, $fpr10WindowTitle, $fpr10WindowTitle.Capacity)
   [void][DokkomplektNativeMouse]::GetClassName($fpr10NativeHandle, $fpr10WindowClass, $fpr10WindowClass.Capacity)
-  $fpr10CommandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($fpr10Watcher.Id)" -ErrorAction SilentlyContinue).CommandLine
-  throw "FPR-10 background watcher exposed a visible native main window: HWND=$fpr10NativeHandle; class='$($fpr10WindowClass.ToString())'; title='$($fpr10WindowTitle.ToString())'; command_line='$fpr10CommandLine'."
+  [int64]$fpr10ExtendedStyle = [DokkomplektNativeMouse]::GetExtendedWindowStyle($fpr10NativeHandle)
+  [int64]$fpr10WsExLayered = 0x00080000
+  [int64]$fpr10WsExTransparent = 0x00000020
+  [int64]$fpr10WsExToolWindow = 0x00000080
+  [int64]$fpr10WsExNoActivate = 0x08000000
+  [int64]$fpr10RequiredTaoStyle = $fpr10WsExLayered -bor $fpr10WsExTransparent -bor $fpr10WsExToolWindow -bor $fpr10WsExNoActivate
+  $fpr10ClassText = $fpr10WindowClass.ToString()
+  $fpr10TitleText = $fpr10WindowTitle.ToString()
+  $fpr10SafeTaoEventTarget = (
+    $fpr10ClassText -eq 'Tao Thread Event Target' -and
+    [string]::IsNullOrEmpty($fpr10TitleText) -and
+    (($fpr10ExtendedStyle -band $fpr10RequiredTaoStyle) -eq $fpr10RequiredTaoStyle)
+  )
+  if (-not $fpr10SafeTaoEventTarget) {
+    $fpr10CommandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($fpr10Watcher.Id)" -ErrorAction SilentlyContinue).CommandLine
+    throw "FPR-10 background watcher exposed a user-visible native window: HWND=$fpr10NativeHandle; class='$fpr10ClassText'; title='$fpr10TitleText'; exstyle=0x$('{0:X}' -f $fpr10ExtendedStyle); command_line='$fpr10CommandLine'."
+  }
+  Write-Host "FPR-10 TAO EVENT TARGET OK: only the non-activating layered/transparent Tao helper HWND is present (exstyle=0x$('{0:X}' -f $fpr10ExtendedStyle))."
 }
 $fpr10ForegroundAfterStart = [DokkomplektNativeMouse]::GetForegroundWindow()
 if ($fpr10ForegroundAfterStart -ne [IntPtr]::Zero) {

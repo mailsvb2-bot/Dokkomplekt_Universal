@@ -143,7 +143,7 @@ function AppContent() {
 
   useWatcherPreferenceSync({
     outputPreferencesReady, watcherRefreshRevision, folderNamingConfirmed, outputRoot, folderParts, autoPrint, printCopies, openUiOnDrop: watcherOpenUiOnDrop,
-    setAutoPrint, setPrintCopies, setStatus,
+    setAutoPrint, setPrintCopies, setOpenUiOnDrop: setWatcherOpenUiOnDrop, setStatus,
   });
 
   const { backgroundNotice, dismissBackgroundNotice } = useWatcherResultIsolation({ documents, foregroundCaseActive: watcherForegroundCaseActive({ sourceFileName, hasParsedSource: Boolean(parsed), sourceText, intakeSource, intakeResult, lastOutput }), setLastOutput, setIntakeResult, setStatus });

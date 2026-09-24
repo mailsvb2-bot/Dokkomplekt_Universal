@@ -166,6 +166,13 @@ public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 }
 "@
 
@@ -2457,14 +2464,30 @@ try {
   Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
 }
 
+$fpr10ForegroundBeforeStart = [DokkomplektNativeMouse]::GetForegroundWindow()
 $fpr10Watcher = Start-Process -FilePath $app.FullName -ArgumentList @('--background-watch') -PassThru
 Start-Sleep -Seconds 2
 $fpr10Watcher.Refresh()
 if ($fpr10Watcher.HasExited) {
   throw "FPR-10 background watcher exited before accepting input with code $($fpr10Watcher.ExitCode)."
 }
-if ($fpr10Watcher.MainWindowHandle -ne [IntPtr]::Zero) {
-  throw "FPR-10 background watcher created a native main window: $($fpr10Watcher.MainWindowHandle)."
+
+# Tauri/winit may own a hidden message/event-loop HWND even when no application
+# WebView is built. Process.MainWindowHandle alone therefore cannot distinguish
+# an invisible runtime handle from a user-visible window. Fail on visibility and
+# foreground ownership instead: these are the actual no-flash/no-focus-steal
+# requirements of the closed-UI watcher.
+$fpr10NativeHandle = [IntPtr]$fpr10Watcher.MainWindowHandle
+if ($fpr10NativeHandle -ne [IntPtr]::Zero -and [DokkomplektNativeMouse]::IsWindowVisible($fpr10NativeHandle)) {
+  throw "FPR-10 background watcher exposed a visible native main window: $fpr10NativeHandle."
+}
+$fpr10ForegroundAfterStart = [DokkomplektNativeMouse]::GetForegroundWindow()
+if ($fpr10ForegroundAfterStart -ne [IntPtr]::Zero) {
+  [uint32]$fpr10ForegroundOwner = 0
+  [void][DokkomplektNativeMouse]::GetWindowThreadProcessId($fpr10ForegroundAfterStart, [ref]$fpr10ForegroundOwner)
+  if ($fpr10ForegroundOwner -eq [uint32]$fpr10Watcher.Id) {
+    throw "FPR-10 background watcher stole foreground focus with HWND $fpr10ForegroundAfterStart."
+  }
 }
 $fpr10WindowCondition = [System.Windows.Automation.PropertyCondition]::new(
   [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
@@ -2522,7 +2545,7 @@ try {
 } finally {
   $fpr10Archive.Dispose()
 }
-Write-Host "FPR-10 CLOSED-UI PASS: windowless installed watcher published a physical DOCX: $($fpr10Created.FullName)"
+Write-Host "FPR-10 CLOSED-UI PASS: installed watcher stayed without visible/UIA UI or foreground-focus theft and published a physical DOCX: $($fpr10Created.FullName)"
 
 $fpr10FirstOutputPath = $fpr10Created.FullName
 $fpr10FirstOutputWriteUtc = $fpr10Created.LastWriteTimeUtc

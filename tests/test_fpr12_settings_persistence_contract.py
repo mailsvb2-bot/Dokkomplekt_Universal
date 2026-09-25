@@ -10,10 +10,12 @@ def test_fpr12_installed_restart_and_installer_preservation_are_locked() -> None
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
 
     assert "FPR-12 RESTART PASS" in source
-    assert "$fpr12RestartPreferenceCipher -ne $afterFolderRuleSave" in source
+    assert "FPR-12 RESTART SEMANTIC PASS" in source
+    assert "Папка готовых документов" in source
+    assert "$fpr12RestartOutputRoot.Trim() -ne $defaultOutputRoot.Trim()" in source
     assert "FPR-12 INSTALLER PRESERVATION PASS" in source
     assert "$fpr12Replacement = Start-Process -FilePath $installer.FullName" in source
-    assert "$fpr12AfterInstallerReplacement -ne $fpr12BeforeInstallerReplacement" in source
+    assert "$fpr12ReplacementOutputRoot.Trim() -ne $defaultOutputRoot.Trim()" in source
     assert "FPR-12 installer replacement lost the persisted workspace/button state." in source
 
 

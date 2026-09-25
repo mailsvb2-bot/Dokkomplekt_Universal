@@ -234,21 +234,32 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
-  $Element.SetFocus()
-  Start-Sleep -Milliseconds 50
   if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
     $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
   }
+
+  $clickPoint = $null
   try {
-    $point = $Element.GetClickablePoint()
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+    $clickPoint = $Element.GetClickablePoint()
+  } catch {
+    $rect = $Element.Current.BoundingRectangle
+    if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+      $clickPoint = [System.Windows.Point]::new(
+        $rect.Left + ($rect.Width / 2),
+        $rect.Top + ($rect.Height / 2)
+      )
+    }
+  }
+  if ($null -ne $clickPoint) {
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  } catch {
-    $Element.SetFocus()
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    return
   }
+
+  try { $Element.SetFocus() } catch { }
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 }
 
 function Invoke-UiActionPhysicallyFromProbe {
@@ -1617,19 +1628,32 @@ if ($null -ne $clearSelection) {
 }
 Start-Sleep -Milliseconds 200
 
+$fpr01SelectedCount = 0
 foreach ($document in $fpr01Documents) {
-  Invoke-UiActionPhysicallyFromProbe -Description "select $($document.Label) for FPR-01 batch" -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    $window.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        "Добавить $($document.Label) в комплект"
+  $fpr01SelectedCount += 1
+  $expectedActionNames = @(
+    "Проверить и создать ($fpr01SelectedCount)",
+    "Создать документы ($fpr01SelectedCount)"
+  )
+  Invoke-UiActionWithObservedTransition `
+    -Description "select $($document.Label) for FPR-01 batch" `
+    -TransitionDescription "FPR-01 selection count $fpr01SelectedCount" `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          "Добавить $($document.Label) в комплект"
+        )
       )
-    )
-  }
-  Start-Sleep -Milliseconds 150
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names $expectedActionNames
+    } | Out-Null
 }
 
 $null = Invoke-UiActionWithObservedTransition `

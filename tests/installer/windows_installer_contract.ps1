@@ -283,22 +283,37 @@ function Invoke-UiElementPhysically {
       [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
       Start-Sleep -Milliseconds 150
     }
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
     if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
       $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
       $scroll.ScrollIntoView()
       Start-Sleep -Milliseconds 100
     }
+
+    # A WebView2 button can be physically clickable while reporting
+    # IsKeyboardFocusable=false. Do not make SetFocus a prerequisite for a
+    # genuine mouse action: prefer UIA's clickable point, then the visible
+    # bounding-rectangle centre. Keyboard input is only the final fallback.
+    $clickPoint = $null
     try {
-      $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $clickPoint = $Element.GetClickablePoint()
+    } catch {
+      $rect = $Element.Current.BoundingRectangle
+      if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+        $clickPoint = [System.Windows.Point]::new(
+          $rect.Left + ($rect.Width / 2),
+          $rect.Top + ($rect.Height / 2)
+        )
+      }
+    }
+    if ($null -ne $clickPoint) {
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-    } catch {
-      $Element.SetFocus()
-      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      return
     }
+
+    try { $Element.SetFocus() } catch { }
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   } catch {
     throw "Live physical UI action failed for '$Description': $($_.Exception.Message)"
   }

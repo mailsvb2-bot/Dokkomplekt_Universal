@@ -3190,9 +3190,16 @@ try {
     $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
   }
   $fpr12RestoredButton = Wait-UiElement -Description 'FPR-12 restored workspace after installer replacement' -TimeoutSeconds 30 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ButtonByNames -Root $currentAppWindow -Names @($expectedTemplateButtonName)
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $currentReplacementWindow = $desktop.FindFirst(
+      [System.Windows.Automation.TreeScope]::Children,
+      $condition
+    )
+    if ($null -eq $currentReplacementWindow) { return $null }
+    Find-ButtonByNames -Root $currentReplacementWindow -Names @($expectedTemplateButtonName)
   }
   if ($null -eq $fpr12RestoredButton) {
     throw 'FPR-12 installer replacement lost the persisted workspace/button state.'

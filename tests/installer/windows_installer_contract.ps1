@@ -1726,6 +1726,18 @@ if ($restartState.Kind -eq 'empty') {
 }
 Write-Host 'Persisted template button survived application restart.'
 
+# FPR-12 — settings persistence is a user-visible state guarantee, not merely
+# presence of a SQLite file. The exact encrypted preference row written through
+# the installed first-run UI must survive a clean process restart unchanged.
+$fpr12RestartPreferenceCipher = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ($fpr12RestartPreferenceCipher -ne $afterFolderRuleSave) {
+  throw 'FPR-12 restart changed or lost the durable output preference state.'
+}
+Write-Host 'FPR-12 RESTART PASS: output preferences survived installed application restart unchanged.'
+
 $restoredClearSelection = Wait-UiElement -Description 'restored selected document state after restart' -TimeoutSeconds 30 -Probe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
@@ -3144,6 +3156,54 @@ try {
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
+
+# FPR-12 installer-preservation proof. Re-run the actual NSIS installer over the
+# existing installation while keeping %APPDATA% intact, then require the exact
+# user preference row to remain unchanged. This proves the installed replacement/
+# repair path is non-destructive. A true previous-version -> current-version
+# migration remains a separate release-evidence obligation.
+$fpr12BeforeInstallerReplacement = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ($fpr12BeforeInstallerReplacement -ne $afterFolderRuleSave) {
+  throw 'FPR-12 preference state drifted before installer replacement proof.'
+}
+$fpr12Replacement = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+if ($fpr12Replacement.ExitCode -ne 0) {
+  throw "FPR-12 installer replacement failed with exit code $($fpr12Replacement.ExitCode)."
+}
+$fpr12AfterInstallerReplacement = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ($fpr12AfterInstallerReplacement -ne $fpr12BeforeInstallerReplacement) {
+  throw 'FPR-12 installer replacement rewrote or lost durable output preferences.'
+}
+$fpr12ReplacementProcess = Start-Process -FilePath $app.FullName -PassThru
+try {
+  $fpr12ReplacementWindow = Wait-UiElement -Description 'FPR-12 window after installer replacement' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
+  $fpr12RestoredButton = Wait-UiElement -Description 'FPR-12 restored workspace after installer replacement' -TimeoutSeconds 30 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ButtonByNames -Root $currentAppWindow -Names @($expectedTemplateButtonName)
+  }
+  if ($null -eq $fpr12RestoredButton) {
+    throw 'FPR-12 installer replacement lost the persisted workspace/button state.'
+  }
+  Write-Host 'FPR-12 INSTALLER PRESERVATION PASS: preferences and workspace survived installed replacement.'
+} finally {
+  if (-not $fpr12ReplacementProcess.HasExited) {
+    Stop-Process -Id $fpr12ReplacementProcess.Id -Force
+    $fpr12ReplacementProcess.WaitForExit()
+  }
+}
 
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |
   Where-Object { $_.Name -match "uninstall" } |

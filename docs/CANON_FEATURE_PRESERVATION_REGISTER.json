@@ -397,7 +397,7 @@
     {
       "id": "FPR-12",
       "group": "Настройки",
-      "status": "needs-upgrade-proof",
+      "status": "needs-runtime-proof",
       "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence now proves exact output-preference persistence across clean restart and non-destructive installer replacement; true previous-version to current-version migration evidence remains pending",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#save_state/load_state"

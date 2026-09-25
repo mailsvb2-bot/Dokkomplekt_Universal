@@ -851,18 +851,24 @@ function Get-UiValue {
     return [string]$valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
   }
 
-  $supportsLegacyValue = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::IsLegacyIAccessiblePatternAvailableProperty,
-    $true
-  )
-  $legacyElement = $Element.FindFirst(
-    [System.Windows.Automation.TreeScope]::Subtree,
-    $supportsLegacyValue
-  )
-  if ($null -ne $legacyElement) {
-    $legacy = $legacyElement.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-    $legacyValue = [string]$legacy.Current.Value
-    if (-not [string]::IsNullOrWhiteSpace($legacyValue)) { return $legacyValue }
+  # Some hosted UIA providers expose LegacyIAccessiblePattern but leave the
+  # corresponding static AutomationProperty descriptor null. Enumerate the small
+  # live subtree and inspect the runtime capability instead of constructing a
+  # PropertyCondition from that optional descriptor.
+  foreach ($candidate in @($Element) + @(
+    $Element.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+  )) {
+    try {
+      if (-not $candidate.Current.IsLegacyIAccessiblePatternAvailable) { continue }
+      $legacy = $candidate.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+      $legacyValue = [string]$legacy.Current.Value
+      if (-not [string]::IsNullOrWhiteSpace($legacyValue)) { return $legacyValue }
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { continue }
+    }
   }
 
   $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle

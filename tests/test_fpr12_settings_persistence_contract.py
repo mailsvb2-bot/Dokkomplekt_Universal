@@ -21,7 +21,7 @@ def test_fpr12_register_does_not_overclaim_cross_version_upgrade() -> None:
     register = json.loads(REGISTER.read_text(encoding="utf-8"))
     entry = next(item for item in register["features"] if item["id"] == "FPR-12")
 
-    assert entry["status"] == "needs-upgrade-proof"
+    assert entry["status"] == "needs-runtime-proof"
     assert any("clean-restart" in item for item in entry["runtime_evidence"])
     assert any("NSIS replacement" in item for item in entry["runtime_evidence"])
     assert "previous-version -> current-version" in entry["runtime_gap"]

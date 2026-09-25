@@ -2738,7 +2738,7 @@ if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $c
     [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
     [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
   }
-  $currentAppWindow.SetFocus()
+  Activate-LiveAppWindow -Window $currentAppWindow
   [System.Windows.Forms.SendKeys]::SendWait('{END}')
   Start-Sleep -Milliseconds 250
 }

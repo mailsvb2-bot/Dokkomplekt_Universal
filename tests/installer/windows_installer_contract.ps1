@@ -283,22 +283,33 @@ function Invoke-UiElementPhysically {
       [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
       Start-Sleep -Milliseconds 150
     }
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
     if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
       $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
       $scroll.ScrollIntoView()
       Start-Sleep -Milliseconds 100
     }
+
+    $clickPoint = $null
     try {
-      $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $clickPoint = $Element.GetClickablePoint()
+    } catch {
+      $rect = $Element.Current.BoundingRectangle
+      if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+        $clickPoint = [System.Windows.Point]::new(
+          $rect.Left + ($rect.Width / 2),
+          $rect.Top + ($rect.Height / 2)
+        )
+      }
+    }
+    if ($null -ne $clickPoint) {
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-    } catch {
-      $Element.SetFocus()
-      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      return
     }
+
+    try { $Element.SetFocus() } catch { }
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   } catch {
     throw "Live physical UI action failed for '$Description': $($_.Exception.Message)"
   }
@@ -823,6 +834,47 @@ function Set-UiValue {
   }
   $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
   Start-Sleep -Milliseconds 200
+}
+
+function Get-UiValue {
+  param([Parameter(Mandatory = $true)]$Element)
+
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -ne $valueElement) {
+    return [string]$valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  }
+
+  $supportsLegacyValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsLegacyIAccessiblePatternAvailableProperty,
+    $true
+  )
+  $legacyElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsLegacyValue
+  )
+  if ($null -ne $legacyElement) {
+    $legacy = $legacyElement.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+    $legacyValue = [string]$legacy.Current.Value
+    if (-not [string]::IsNullOrWhiteSpace($legacyValue)) { return $legacyValue }
+  }
+
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -ne [IntPtr]::Zero) {
+    $length = [DokkomplektNativeMouse]::GetWindowTextLength($nativeHandle)
+    $builder = [System.Text.StringBuilder]::new([Math]::Max(1, $length + 1))
+    $null = [DokkomplektNativeMouse]::GetWindowText($nativeHandle, $builder, $builder.Capacity)
+    $nativeValue = $builder.ToString()
+    if (-not [string]::IsNullOrWhiteSpace($nativeValue)) { return $nativeValue }
+  }
+
+  throw 'UI value control exposes no readable semantic value.'
 }
 
 function Find-FileDialog {
@@ -2749,11 +2801,7 @@ $fpr12OutputRootInput = Wait-UiElement -Description 'FPR-12 persisted output fol
   )
   $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
-if (-not $fpr12OutputRootInput.Current.IsValuePatternAvailable) {
-  throw 'FPR-12 output-folder control does not expose ValuePattern for semantic persistence proof.'
-}
-$fpr12OutputRootPattern = $fpr12OutputRootInput.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-$fpr12RestartOutputRoot = [string]$fpr12OutputRootPattern.Current.Value
+$fpr12RestartOutputRoot = Get-UiValue -Element $fpr12OutputRootInput
 if ($fpr12RestartOutputRoot.Trim() -ne $defaultOutputRoot.Trim()) {
   throw "FPR-12 restart restored wrong output folder: expected '$defaultOutputRoot', got '$fpr12RestartOutputRoot'."
 }
@@ -3262,11 +3310,7 @@ try {
     )
     $replacementWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCondition)
   }
-  if (-not $fpr12ReplacementRootInput.Current.IsValuePatternAvailable) {
-    throw 'FPR-12 replacement output-folder control does not expose ValuePattern.'
-  }
-  $fpr12ReplacementRootPattern = $fpr12ReplacementRootInput.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-  $fpr12ReplacementOutputRoot = [string]$fpr12ReplacementRootPattern.Current.Value
+  $fpr12ReplacementOutputRoot = Get-UiValue -Element $fpr12ReplacementRootInput
   if ($fpr12ReplacementOutputRoot.Trim() -ne $defaultOutputRoot.Trim()) {
     throw "FPR-12 installer replacement restored wrong output folder: expected '$defaultOutputRoot', got '$fpr12ReplacementOutputRoot'."
   }

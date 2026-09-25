@@ -9,7 +9,7 @@ REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
 def test_fpr12_installed_restart_and_installer_preservation_are_locked() -> None:
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
 
-    assert "FPR-12 RESTART PASS" in source
+    assert "FPR-12 RESTART STORAGE PASS" in source
     assert "FPR-12 RESTART SEMANTIC PASS" in source
     assert "Папка готовых документов" in source
     assert "$fpr12RestartOutputRoot.Trim() -ne $defaultOutputRoot.Trim()" in source

@@ -214,6 +214,38 @@ function Invoke-UiActionWithObservedTransition {
 
   Write-Host "E1 UI action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
   Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe -Description "$Description physical retry"
+
+  # WebView2 on hosted Windows can acknowledge both UIA Invoke and a foreground
+  # coordinate click without dispatching the React DOM activation. Do not declare
+  # success from either input method: first require the observable transition.
+  # If it is still absent and the exact same action remains enabled, use one
+  # focused keyboard activation (the same user-equivalent path already required
+  # by the installed learning proof), then still require the real transition.
+  $physicalDeadline = [DateTime]::UtcNow.AddSeconds($TransitionSeconds)
+  do {
+    try { $transition = & $TransitionProbe } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $transition = $null
+    }
+    if ($null -ne $transition) { return $transition }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $physicalDeadline)
+
+  $keyboardAction = $null
+  try { $keyboardAction = & $ActionProbe } catch {
+    if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+  }
+  if ($null -ne $keyboardAction -and $keyboardAction.Current.IsEnabled) {
+    Write-Host "E1 UI action '$Description' still has no transition after physical retry; using one focused keyboard Space fallback."
+    if ($keyboardAction.Current.IsOffscreen -and $keyboardAction.Current.IsScrollItemPatternAvailable) {
+      $keyboardAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+      Start-Sleep -Milliseconds 100
+    }
+    $keyboardAction.SetFocus()
+    Start-Sleep -Milliseconds 100
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+  }
+
   return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
 }
 

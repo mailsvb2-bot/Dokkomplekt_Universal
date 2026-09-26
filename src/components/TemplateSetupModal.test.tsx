@@ -201,9 +201,7 @@ describe('TemplateSetupModal', () => {
       }]}
     />);
 
-    fireEvent.change(screen.getByLabelText('Профиль для Договор.docx'), {
-      target: { value: 'Legal' },
-    });
+    fireEvent.click(screen.getByLabelText('Юридическая работа для Договор.docx'));
 
     expect(onPendingTemplateDomainChange).toHaveBeenCalledWith('d1', 'Legal');
   });

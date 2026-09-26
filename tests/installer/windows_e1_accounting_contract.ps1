@@ -747,6 +747,56 @@ function Get-E1DomainSelection {
     }
   } catch { }
 
+  # Chromium may expose an HTML <select> without SelectionPattern/ValuePattern on
+  # the collapsed combobox while still exposing the selected <option> through
+  # SelectionItemPattern. Inspect the live option items and require IsSelected.
+  $domainOptionNames = @(
+    'Профиль: автоматически',
+    'Универсальный документооборот',
+    'Медицина',
+    'Юридическая работа',
+    'Кадровая работа',
+    'Бухгалтерия',
+    'Образование',
+    'Своя профессия / профиль'
+  )
+  $expandedForRead = $false
+  try {
+    if ($combo.Current.IsExpandCollapsePatternAvailable) {
+      $expandCollapse = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($expandCollapse.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+        $expandCollapse.Expand()
+        $expandedForRead = $true
+        Start-Sleep -Milliseconds 150
+      }
+    }
+
+    $window = Find-LiveAppWindow
+    if ($null -ne $window) {
+      foreach ($candidate in $window.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )) {
+        try {
+          $name = [string]$candidate.Current.Name
+          if ($domainOptionNames -notcontains $name) { continue }
+          if (-not $candidate.Current.IsSelectionItemPatternAvailable) { continue }
+          $selectionItem = $candidate.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+          if ($selectionItem.Current.IsSelected) { return $name }
+        } catch { }
+      }
+    }
+  } finally {
+    if ($expandedForRead) {
+      try {
+        $combo = Find-E1NamedElement -Name "Профиль для $FileName"
+        if ($null -ne $combo -and $combo.Current.IsExpandCollapsePatternAvailable) {
+          $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+        }
+      } catch { }
+    }
+  }
+
   try {
     return [string](Get-UiValue -Element $combo)
   } catch {

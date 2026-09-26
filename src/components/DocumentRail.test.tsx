@@ -39,6 +39,7 @@ function buildProps(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
     onConfigurePopups: vi.fn(),
     onScanTemplate: vi.fn(),
     onApprove: vi.fn(),
+    onVersions: vi.fn(),
     onRemove: vi.fn(),
     onAdd: vi.fn(),
     onAddFromText: vi.fn(),
@@ -99,6 +100,20 @@ it('keeps the native picker primary and exposes an explicit text fallback', () =
     renderRail({ onToggleSelected });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Добавить Выписной эпикриз в комплект' }));
     expect(onToggleSelected).toHaveBeenCalledWith(document.id);
+  });
+
+  it('opens saved template versions only for an active document', () => {
+    const onVersions = vi.fn();
+    renderRail({ onVersions });
+    fireEvent.click(screen.getByText('Управление кнопками'));
+    fireEvent.click(screen.getByRole('button', { name: 'Версии шаблона' }));
+    expect(onVersions).toHaveBeenCalledOnce();
+  });
+
+  it('hides template version selection when no document is active', () => {
+    renderRail({ activeDocumentId: null });
+    fireEvent.click(screen.getByText('Управление кнопками'));
+    expect(screen.queryByRole('button', { name: 'Версии шаблона' })).toBeNull();
   });
 
   it('locks selection, template management and copy count while an operation is in flight', () => {

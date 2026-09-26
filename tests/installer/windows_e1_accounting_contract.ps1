@@ -1193,55 +1193,10 @@ $accountingLabel = 'Акт оказанных услуг'
 $accountingOutputName = "$accountingLabel.docx"
 $completionReceiptRoot = Join-Path $appDataRoot 'generation-completion-receipts'
 
-$templateDialog = Invoke-UiActionWithObservedTransition `
-  -Description 'Добавить шаблоны for E1 Accounting' `
-  -TransitionDescription 'native template picker for E1 Accounting' `
-  -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Добавить шаблоны')
-  } `
-  -TransitionProbe { Find-FileDialog }
-$templateEdit = $templateDialog.FindFirst(
-  [System.Windows.Automation.TreeScope]::Descendants,
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
-)
-Set-UiValue -Element $templateEdit -Value $accountingTemplate
-Submit-OpenFileDialog -Dialog $templateDialog
-
-$labelInput = Wait-UiElement -Description 'Accounting template label input' -TimeoutSeconds 40 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  $window.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Название документа для service_act.docx')
-  )
-}
-Set-UiValue -Element $labelInput -Value $accountingLabel
-$labelInput.SetFocus()
-Start-Sleep -Milliseconds 50
-[System.Windows.Forms.SendKeys]::SendWait(' ')
-[System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
-[System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-Start-Sleep -Milliseconds 200
-$labelInput = Wait-UiElement -Description 'persisted Accounting template label' -Probe {
-  Find-E1NamedElement -Name 'Название документа для service_act.docx'
-}
-$actualAccountingLabel = Normalize-UiValue -Value (Get-UiValue -Element $labelInput)
-if ($actualAccountingLabel -ne (Normalize-UiValue -Value $accountingLabel)) {
-  throw "E1 Accounting template label did not persist. Expected '$accountingLabel', actual '$actualAccountingLabel'."
-}
-Set-E1TemplateDomainOverride -FileName 'service_act.docx' -OptionName 'Бухгалтерия'
-Invoke-UiActionPhysicallyFromProbe -Description 'Создать Accounting button' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
-}
-$null = Wait-UiElement -Description 'Accounting document button' -TimeoutSeconds 90 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ButtonByNames -Root $window -Names @($accountingLabel)
-}
+Add-E1DomainTemplate `
+  -TemplatePath $accountingTemplate `
+  -Label $accountingLabel `
+  -DomainOption 'Бухгалтерия'
 
 $sourceDialog = Invoke-UiActionWithObservedTransition `
   -Description 'Replace source with E1 Accounting source' `

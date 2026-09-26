@@ -151,6 +151,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "GetWindowText(IntPtr hWnd" in source
     assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source
     assert "function Invoke-UiActionWithObservedTransition" in source
+    assert "function Find-ReadyButtonByAutomationId" in source
+    assert "create-selected-documents" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
     assert "still has no transition after physical retry; using one focused keyboard Space fallback." in source
     assert "$keyboardAction.SetFocus()" in source

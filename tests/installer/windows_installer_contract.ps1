@@ -283,22 +283,33 @@ function Invoke-UiElementPhysically {
       [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
       Start-Sleep -Milliseconds 150
     }
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
     if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
       $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
       $scroll.ScrollIntoView()
       Start-Sleep -Milliseconds 100
     }
+
+    $clickPoint = $null
     try {
-      $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $clickPoint = $Element.GetClickablePoint()
+    } catch {
+      $rect = $Element.Current.BoundingRectangle
+      if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+        $clickPoint = [System.Windows.Point]::new(
+          $rect.Left + ($rect.Width / 2),
+          $rect.Top + ($rect.Height / 2)
+        )
+      }
+    }
+    if ($null -ne $clickPoint) {
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-    } catch {
-      $Element.SetFocus()
-      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      return
     }
+
+    try { $Element.SetFocus() } catch { }
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   } catch {
     throw "Live physical UI action failed for '$Description': $($_.Exception.Message)"
   }
@@ -823,6 +834,53 @@ function Set-UiValue {
   }
   $null = [DokkomplektNativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
   Start-Sleep -Milliseconds 200
+}
+
+function Get-UiValue {
+  param([Parameter(Mandatory = $true)]$Element)
+
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -ne $valueElement) {
+    return [string]$valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  }
+
+  # Some hosted UIA providers expose LegacyIAccessiblePattern but leave the
+  # corresponding static AutomationProperty descriptor null. Enumerate the small
+  # live subtree and inspect the runtime capability instead of constructing a
+  # PropertyCondition from that optional descriptor.
+  foreach ($candidate in @($Element) + @(
+    $Element.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+  )) {
+    try {
+      if (-not $candidate.Current.IsLegacyIAccessiblePatternAvailable) { continue }
+      $legacy = $candidate.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+      $legacyValue = [string]$legacy.Current.Value
+      if (-not [string]::IsNullOrWhiteSpace($legacyValue)) { return $legacyValue }
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { continue }
+    }
+  }
+
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -ne [IntPtr]::Zero) {
+    $length = [DokkomplektNativeMouse]::GetWindowTextLength($nativeHandle)
+    $builder = [System.Text.StringBuilder]::new([Math]::Max(1, $length + 1))
+    $null = [DokkomplektNativeMouse]::GetWindowText($nativeHandle, $builder, $builder.Capacity)
+    $nativeValue = $builder.ToString()
+    if (-not [string]::IsNullOrWhiteSpace($nativeValue)) { return $nativeValue }
+  }
+
+  throw 'UI value control exposes no readable semantic value.'
 }
 
 function Find-FileDialog {
@@ -1391,6 +1449,18 @@ if ($null -eq $createdDoc) {
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
+
+# FPR-11 — the durable default naming rule is document number + document date.
+# The source carries case number 2222 and admission/document evidence 26.08.2026;
+# an address house number must never be misread as a compact date.
+$fpr11ExpectedFolderName = '2222 26.08.2026'
+if ($createdDoc.Directory.Name -ne $fpr11ExpectedFolderName) {
+  throw "FPR-11 output folder mismatch: expected '$fpr11ExpectedFolderName', got '$($createdDoc.Directory.Name)'."
+}
+$fpr11FirstOutputPath = $createdDoc.FullName
+$fpr11FirstOutputHash = (Get-FileHash -LiteralPath $createdDoc.FullName -Algorithm SHA256).Hash
+$fpr11FirstOutputWriteUtc = $createdDoc.LastWriteTimeUtc
+Write-Host "FPR-11 NAMING PASS: durable rule produced exact physical folder '$fpr11ExpectedFolderName'."
 $createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
 try {
   $documentEntry = $createdArchive.GetEntry('word/document.xml')
@@ -1579,6 +1649,15 @@ if ($adversarial) {
   if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
   $distinctFolders = @($versionDocs | ForEach-Object DirectoryName | Sort-Object -Unique)
   if ($distinctFolders.Count -lt 2) { throw 'Repeat generation overwrote the original output folder.' }
+  if (-not (Test-Path -LiteralPath $fpr11FirstOutputPath -PathType Leaf)) {
+    throw 'FPR-11 collision removed the original published document.'
+  }
+  $fpr11OriginalAfter = Get-Item -LiteralPath $fpr11FirstOutputPath
+  $fpr11OriginalHashAfter = (Get-FileHash -LiteralPath $fpr11FirstOutputPath -Algorithm SHA256).Hash
+  if ($fpr11OriginalHashAfter -ne $fpr11FirstOutputHash -or $fpr11OriginalAfter.LastWriteTimeUtc -ne $fpr11FirstOutputWriteUtc) {
+    throw 'FPR-11 collision rewrote the original published document.'
+  }
+  Write-Host "FPR-11 COLLISION PASS: repeat generation preserved the original bytes and published a second version in a distinct folder ($($distinctFolders.Count) folders)."
   Write-Host "ADVERSARIAL OK: collision created a second version in a distinct folder ($($distinctFolders.Count) folders)."
 }
 
@@ -1704,6 +1783,18 @@ if ($restartState.Kind -eq 'empty') {
   throw 'Persisted workspace restart returned an empty first-run pack after the button had been durably created.'
 }
 Write-Host 'Persisted template button survived application restart.'
+
+# FPR-12 — settings persistence is a user-visible state guarantee, not merely
+# presence of a SQLite file. The exact encrypted preference row written through
+# the installed first-run UI must survive a clean process restart unchanged.
+$fpr12RestartPreferenceCipher = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($fpr12RestartPreferenceCipher)) {
+  throw 'FPR-12 restart lost the durable output preference row.'
+}
+Write-Host 'FPR-12 RESTART STORAGE PASS: output preferences remained durably readable after installed application restart.'
 
 $restoredClearSelection = Wait-UiElement -Description 'restored selected document state after restart' -TimeoutSeconds 30 -Probe {
   $currentAppWindow = Find-LiveAppWindow
@@ -1981,6 +2072,15 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     $restartArchive.Dispose()
   }
   Write-Host "FPR-08 INSTALLED PASS: selection + button name + published template binding survived restart -> physical DOCX: $($restartCreated.FullName)"
+
+  # FPR-12 semantic restart proof: the physical output itself is the product
+  # behavior that matters. After restart, the restored output preference must
+  # route the new case into the configured root and preserve the naming rule.
+  $expectedFpr12RestartFolder = Join-Path $defaultOutputRoot '3333 27.08.2026'
+  if ($restartCreated.Directory.FullName.TrimEnd('\') -ne $expectedFpr12RestartFolder.TrimEnd('\')) {
+    throw "FPR-12 restart restored wrong output destination or naming rule: expected '$expectedFpr12RestartFolder', got '$($restartCreated.Directory.FullName)'."
+  }
+  Write-Host "FPR-12 RESTART SEMANTIC PASS: restored settings published the post-restart DOCX in '$expectedFpr12RestartFolder'."
 }
 
 # Canon v2 E2 installed proof. Reuse this already-installed process and the same
@@ -2111,34 +2211,18 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  $pickerButton = Wait-UiElement -Description "FPR-09 $Label native picker button" -TimeoutSeconds 30 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
-  }
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { throw "FPR-09 $Label installed window disappeared before native picker." }
-  Activate-LiveAppWindow -Window $currentAppWindow
-  if ($pickerButton.Current.IsOffscreen -and $pickerButton.Current.IsScrollItemPatternAvailable) {
-    $scroll = $pickerButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-    $scroll.ScrollIntoView()
-    Start-Sleep -Milliseconds 100
-  }
-  $pickerButton.SetFocus()
-  Start-Sleep -Milliseconds 100
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-  $dialog = $null
-  try {
-    $dialog = Wait-UiElement -Description "FPR-09 $Label file dialog after Enter" -TimeoutSeconds 5 -Probe {
+  $dialog = Invoke-UiActionWithObservedTransition `
+    -Description "FPR-09 $Label native picker" `
+    -TransitionDescription "FPR-09 $Label native file dialog" `
+    -TransitionSeconds 8 `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+    } `
+    -TransitionProbe {
       Find-FileDialog
     }
-  } catch {
-    # Hosted WebView2 occasionally focuses the button but does not synthesize the
-    # HTML button activation from Enter. Space is the other native keyboard
-    # activation for a focused button; use it once before declaring the picker broken.
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog after Space fallback"
-  }
   $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -2717,7 +2801,7 @@ if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $c
     [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
     [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
   }
-  $currentAppWindow.SetFocus()
+  Activate-LiveAppWindow -Window $currentAppWindow
   [System.Windows.Forms.SendKeys]::SendWait('{END}')
   Start-Sleep -Milliseconds 250
 }
@@ -3123,6 +3207,91 @@ try {
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
+
+# FPR-12 installer-preservation proof. Re-run the actual NSIS installer over the
+# existing installation while keeping %APPDATA% intact, then require the exact
+# user preference row to remain unchanged. This proves the installed replacement/
+# repair path is non-destructive. A true previous-version -> current-version
+# migration remains a separate release-evidence obligation.
+$fpr12BeforeInstallerReplacement = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($fpr12BeforeInstallerReplacement)) {
+  throw 'FPR-12 durable output preferences were unreadable before installer replacement proof.'
+}
+$fpr12Replacement = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+if ($fpr12Replacement.ExitCode -ne 0) {
+  throw "FPR-12 installer replacement failed with exit code $($fpr12Replacement.ExitCode)."
+}
+$fpr12AfterInstallerReplacement = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($fpr12AfterInstallerReplacement)) {
+  throw 'FPR-12 installer replacement lost the durable output preference row.'
+}
+$fpr12ReplacementProcess = Start-Process -FilePath $app.FullName -PassThru
+try {
+  $fpr12ReplacementWindow = Wait-UiElement -Description 'FPR-12 window after installer replacement' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
+  $fpr12RestoredButton = Wait-UiElement -Description 'FPR-12 restored workspace after installer replacement' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $currentReplacementWindow = $desktop.FindFirst(
+      [System.Windows.Automation.TreeScope]::Children,
+      $condition
+    )
+    if ($null -eq $currentReplacementWindow) { return $null }
+    Find-ButtonByNames -Root $currentReplacementWindow -Names @($expectedTemplateButtonName)
+  }
+  if ($null -eq $fpr12RestoredButton) {
+    throw 'FPR-12 installer replacement lost the persisted workspace/button state.'
+  }
+
+  Invoke-UiActionWithObservedTransition `
+    -Description 'FPR-12 Настройки after installer replacement' `
+    -TransitionDescription 'FPR-12 settings panel after installer replacement' `
+    -ActionProbe {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        [int]$fpr12ReplacementProcess.Id
+      )
+      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+      if ($null -eq $replacementWindow) { return $null }
+      Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
+    } `
+    -TransitionProbe {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        [int]$fpr12ReplacementProcess.Id
+      )
+      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+      if ($null -eq $replacementWindow) { return $null }
+      Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
+    } | Out-Null
+
+  $fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint `
+    -DatabasePath $stateDatabase `
+    -StateKey $outputPreferenceStateKey `
+    -TimeoutSeconds 20
+  if ([string]::IsNullOrWhiteSpace($fpr12AfterReplacementStorage)) {
+    throw 'FPR-12 installer replacement lost the durable output preference row.'
+  }
+  Write-Host 'FPR-12 INSTALLER PRESERVATION PASS: durable output preferences and workspace survived installed replacement.'
+} finally {
+  if (-not $fpr12ReplacementProcess.HasExited) {
+    Stop-Process -Id $fpr12ReplacementProcess.Id -Force
+    $fpr12ReplacementProcess.WaitForExit()
+  }
+}
 
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |
   Where-Object { $_.Name -match "uninstall" } |

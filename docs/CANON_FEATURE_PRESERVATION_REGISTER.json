@@ -398,7 +398,7 @@
       "id": "FPR-12",
       "group": "Настройки",
       "status": "needs-runtime-proof",
-      "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence now proves durable output-preference presence plus the actual output-folder value through the Settings UI after clean restart and non-destructive installer replacement; true previous-version to current-version migration evidence remains pending",
+      "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence now proves durable output-preference presence and a physical post-restart DOCX published into the restored output root with the restored naming rule; same-version NSIS replacement preserves durable preferences and workspace; true previous-version to current-version migration evidence remains pending",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#save_state/load_state"
       ],
@@ -419,8 +419,8 @@
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [
-        "tests/installer/windows_installer_contract.ps1#FPR-12 clean-restart semantic Settings proof",
-        "tests/installer/windows_installer_contract.ps1#FPR-12 non-destructive NSIS replacement + semantic Settings proof",
+        "tests/installer/windows_installer_contract.ps1#FPR-12 clean-restart physical output destination/naming proof",
+        "tests/installer/windows_installer_contract.ps1#FPR-12 non-destructive NSIS replacement durable-state/workspace proof",
         "tests/test_fpr12_settings_persistence_contract.py#FPR-12 regression lock"
       ],
       "runtime_gap": "A real previous-version -> current-version installed upgrade with preserved settings is still required for final register closure."

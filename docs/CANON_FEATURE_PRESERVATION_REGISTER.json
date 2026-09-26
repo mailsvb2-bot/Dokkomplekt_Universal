@@ -106,7 +106,8 @@
       "status": "verified",
       "actual_state": "real UI source picker, retained source snapshot, fail-closed SHA-256 publication read-back and installed byte-for-byte proof implemented on candidate",
       "entry": [
-        "src/App.tsx"
+        "src/hooks/useTemplateTransfer.ts",
+        "src/components/DocumentRail.tsx#Экспорт шаблонов / Импорт шаблонов"
       ],
       "backend": [
         "src-tauri/src/subsystems/document_commands.rs",
@@ -273,7 +274,7 @@
         "src/components/DocumentRail.tsx"
       ],
       "backend": [
-        "src-tauri/src/subsystems/document_commands.rs"
+        "src-tauri/src/subsystems/template_transfer.rs"
       ],
       "storage": [
         "crates/dokkomplekt-storage/src/lib.rs"
@@ -490,12 +491,13 @@
       "id": "FPR-15",
       "group": "Перенос шаблонов",
       "status": "needs-runtime-proof",
-      "actual_state": "template import/export-facing commands and persistent template state are present; clean-profile proof pending",
+      "actual_state": "privacy-safe .dktpack export/import is implemented in Rust and exposed in template management UI; clean-profile installed proof is pending",
       "entry": [
-        "src/App.tsx"
+        "src/hooks/useTemplateTransfer.ts",
+        "src/components/DocumentRail.tsx#Экспорт шаблонов / Импорт шаблонов"
       ],
       "backend": [
-        "src-tauri/src/subsystems/document_commands.rs"
+        "src-tauri/src/subsystems/template_transfer.rs"
       ],
       "storage": [
         "crates/dokkomplekt-storage/src/lib.rs"
@@ -506,12 +508,17 @@
       "before": "source_baseline",
       "after": "installed_baseline",
       "evidence_paths": [
-        "src/App.tsx",
-        "src-tauri/src/subsystems/document_commands.rs",
-        "crates/dokkomplekt-storage/src/lib.rs"
+        "src/hooks/useTemplateTransfer.ts",
+        "src/components/DocumentRail.tsx",
+        "src-tauri/src/subsystems/template_transfer.rs",
+        "tests/test_fpr15_template_transfer_contract.py"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Clean-profile transfer evidence is required for final register closure."
+      "runtime_evidence": [
+        "src-tauri/src/subsystems/template_transfer.rs#dokkomplekt.template-transfer.v1",
+        "tests/test_fpr15_template_transfer_contract.py#privacy-safe transfer contract",
+        "src/components/DocumentRail.test.tsx#template transfer controls"
+      ],
+      "runtime_gap": "Installed clean-profile proof must export a real template set, reset to a clean profile, import the .dktpack, generate a physical DOCX, and prove prior-case values are absent before final closure."
     },
     {
       "id": "FPR-16",

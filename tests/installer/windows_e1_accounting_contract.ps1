@@ -926,17 +926,12 @@ function Set-E1TemplateDomainOverride {
     $custom = Wait-UiElement -Description "custom domain value for $FileName" -Probe {
       Find-E1NamedElement -Name $customName
     }
-    Set-UiValue -Element $custom -Value $CustomProfile
-
-    # React controls this input. UIA ValuePattern.SetValue can update the DOM
-    # without dispatching React's input/onChange event, so force one
-    # user-equivalent no-op edit and then blur. This commits exactly the
-    # already supplied Unicode value without depending on the runner keyboard
-    # layout for Cyrillic text.
+    # Commit the exact Unicode custom profile through a real input event.
     $custom.SetFocus()
     Start-Sleep -Milliseconds 50
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+    Set-Clipboard -Value $CustomProfile
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
     [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
     Start-Sleep -Milliseconds 300
 
@@ -1001,16 +996,17 @@ function Add-E1DomainTemplate {
   $labelInput = Wait-UiElement -Description "template label for $Label" -TimeoutSeconds 40 -Probe {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }
-  Set-UiValue -Element $labelInput -Value $Label
-  # React controls the template label input. UIA SetValue alone may update the
-  # DOM without dispatching input/change, so commit the exact value through one
-  # user-equivalent no-op edit and blur before confirmation.
+  # React controls this input. UIA ValuePattern.SetValue can mutate the DOM
+  # without dispatching React's input event, while a space/backspace no-op can
+  # be lossy for Unicode text on hosted runners. Paste the exact Unicode label
+  # through the focused control so React receives a real user-equivalent edit.
   $labelInput.SetFocus()
   Start-Sleep -Milliseconds 50
-  [System.Windows.Forms.SendKeys]::SendWait(' ')
-  [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+  Set-Clipboard -Value $Label
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
   [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-  Start-Sleep -Milliseconds 200
+  Start-Sleep -Milliseconds 250
   $labelInput = Wait-UiElement -Description "persisted template label for $Label" -Probe {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }
@@ -1338,7 +1334,7 @@ $null = Invoke-UiActionWithObservedTransition `
   -ActionProbe {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'
   } `
   -TransitionProbe {
     $window = Find-LiveAppWindow

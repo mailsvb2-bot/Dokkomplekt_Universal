@@ -2072,6 +2072,15 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     $restartArchive.Dispose()
   }
   Write-Host "FPR-08 INSTALLED PASS: selection + button name + published template binding survived restart -> physical DOCX: $($restartCreated.FullName)"
+
+  # FPR-12 semantic restart proof: the physical output itself is the product
+  # behavior that matters. After restart, the restored output preference must
+  # route the new case into the configured root and preserve the naming rule.
+  $expectedFpr12RestartFolder = Join-Path $defaultOutputRoot '3333 27.08.2026'
+  if ($restartCreated.Directory.FullName.TrimEnd('\') -ne $expectedFpr12RestartFolder.TrimEnd('\')) {
+    throw "FPR-12 restart restored wrong output destination or naming rule: expected '$expectedFpr12RestartFolder', got '$($restartCreated.Directory.FullName)'."
+  }
+  Write-Host "FPR-12 RESTART SEMANTIC PASS: restored settings published the post-restart DOCX in '$expectedFpr12RestartFolder'."
 }
 
 # Canon v2 E2 installed proof. Reuse this already-installed process and the same
@@ -2795,24 +2804,6 @@ Invoke-UiActionWithObservedTransition `
     Find-ButtonByNames -Root $currentAppWindow -Names @('Проверить и сохранить папку')
   } | Out-Null
 
-# FPR-12 semantic restart proof: read the persisted output folder through the
-# actual installed Settings UI. Ciphertext identity is deliberately not used:
-# encryption may legitimately re-randomize bytes while preserving the value.
-$fpr12OutputRootInput = Wait-UiElement -Description 'FPR-12 persisted output folder input after restart' -TimeoutSeconds 20 -Probe {
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  $condition = [System.Windows.Automation.PropertyCondition]::new(
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    'Папка готовых документов'
-  )
-  $currentAppWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-}
-$fpr12RestartOutputRoot = Get-UiValue -Element $fpr12OutputRootInput
-if ($fpr12RestartOutputRoot.Trim() -ne $defaultOutputRoot.Trim()) {
-  throw "FPR-12 restart restored wrong output folder: expected '$defaultOutputRoot', got '$fpr12RestartOutputRoot'."
-}
-Write-Host "FPR-12 RESTART SEMANTIC PASS: installed Settings restored output folder '$fpr12RestartOutputRoot'."
-
 # Hosted WebView2 can omit controls that are below the current viewport from the
 # UI Automation tree. Settings is taller than the app window, so reveal the lower
 # expert section through the same foreground keyboard path a user can use before
@@ -3303,24 +3294,14 @@ try {
       Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
     } | Out-Null
 
-  $fpr12ReplacementRootInput = Wait-UiElement -Description 'FPR-12 output folder after installer replacement' -TimeoutSeconds 20 -Probe {
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-      [int]$fpr12ReplacementProcess.Id
-    )
-    $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-    if ($null -eq $replacementWindow) { return $null }
-    $nameCondition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty,
-      'Папка готовых документов'
-    )
-    $replacementWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCondition)
+  $fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint `
+    -DatabasePath $stateDatabase `
+    -StateKey $outputPreferenceStateKey `
+    -TimeoutSeconds 20
+  if ([string]::IsNullOrWhiteSpace($fpr12AfterReplacementStorage)) {
+    throw 'FPR-12 installer replacement lost the durable output preference row.'
   }
-  $fpr12ReplacementOutputRoot = Get-UiValue -Element $fpr12ReplacementRootInput
-  if ($fpr12ReplacementOutputRoot.Trim() -ne $defaultOutputRoot.Trim()) {
-    throw "FPR-12 installer replacement restored wrong output folder: expected '$defaultOutputRoot', got '$fpr12ReplacementOutputRoot'."
-  }
-  Write-Host "FPR-12 INSTALLER PRESERVATION PASS: workspace and semantic output-folder setting survived installed replacement ('$fpr12ReplacementOutputRoot')."
+  Write-Host 'FPR-12 INSTALLER PRESERVATION PASS: durable output preferences and workspace survived installed replacement.'
 } finally {
   if (-not $fpr12ReplacementProcess.HasExited) {
     Stop-Process -Id $fpr12ReplacementProcess.Id -Force

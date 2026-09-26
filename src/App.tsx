@@ -23,7 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
-import { useTemplateVersionSelection } from './hooks/useTemplateVersionSelection';
+import { useTemplateTransfer } from './hooks/useTemplateTransfer'; import { useTemplateVersionSelection } from './hooks/useTemplateVersionSelection';
 import { useDocumentSelectionPersistence } from './hooks/useDocumentSelectionPersistence';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { watcherForegroundCaseActive, useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
@@ -43,7 +43,6 @@ function AppContent() {
   const dialogs = useAppDialog();
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
   useEffect(() => { applyTheme(buildTheme(theme)); saveTheme(theme); }, [theme]);
-
   const [documents, setDocuments] = useState<DocumentTemplateSpec[]>([]);
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
@@ -53,7 +52,7 @@ function AppContent() {
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
   const chooseActiveTemplateVersion = useTemplateVersionSelection({ activeDocumentId: activeDoc, documents, dialogs, run, setDocuments, setStatus });
-
+  const { exportTemplates, importTemplates } = useTemplateTransfer({ run, setDocuments, setStatus });
   useDocumentSelectionPersistence({
     ready: workspaceStateReady,
     selectedDocumentIds: selectedDocIds,
@@ -80,10 +79,8 @@ function AppContent() {
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({}); const [skippedAnswers, setSkippedAnswers] = useState<Record<string, boolean>>({});
   const [sickLeave, setSickLeave] = useState(false);
-
   const [activeTemplateText, setActiveTemplateText] = useState('');
   const [preview, setPreview] = useState<{ text: string; missing: number; label: string } | null>(null);
-
   const [setupOpen, setSetupOpen] = useState(false);
   const [templateText, setTemplateText] = useState('');
   const [buttonLabel, setButtonLabel] = useState('');
@@ -1377,6 +1374,8 @@ function AppContent() {
             onVersions={chooseActiveTemplateVersion}
             onAdd={openTemplateSetup}
             onAddFromText={openTextTemplateSetup}
+            onExportTemplates={exportTemplates}
+            onImportTemplates={importTemplates}
             onToggleUtilities={() => setUtilityOpen((value) => !value)}
           />
         </div>

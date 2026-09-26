@@ -213,6 +213,7 @@ export const registeredBackendCommands = [
   'export_files_to_pdf',
   'create_kedo_package',
   'pick_template_files',
+  'pick_template_transfer_file',
   'pick_learning_files',
   'pick_folder',
   'open_in_file_manager',
@@ -227,6 +228,7 @@ export const registeredBackendCommands = [
   'lookup_business_registry',
   'apply_business_registry_record',
   'export_one_c_counterparties',
+  'export_template_transfer',
   'list_organization_knowledge',
   'upsert_organization_knowledge',
   'delete_organization_knowledge',
@@ -235,6 +237,7 @@ export const registeredBackendCommands = [
   'get_process_blueprints',
   'select_process_blueprint',
   'import_template_file',
+  'import_template_transfer',
 ] as const;
 
 const document = {

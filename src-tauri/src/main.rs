@@ -2070,6 +2070,7 @@ include!("subsystems/source_intake_commands.rs");
 include!("subsystems/startup_state.rs");
 include!("subsystems/manual_publication_identity.rs");
 include!("subsystems/document_commands.rs");
+include!("subsystems/template_transfer.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
 #[cfg(test)]
@@ -2439,7 +2440,10 @@ fn main() {
             get_quality_telemetry,
             get_process_blueprints,
             select_process_blueprint,
-            import_template_file
+            import_template_file,
+            export_template_transfer,
+            pick_template_transfer_file,
+            import_template_transfer
         ])
         .run(tauri::generate_context!());
     if let Err(error) = run_result {

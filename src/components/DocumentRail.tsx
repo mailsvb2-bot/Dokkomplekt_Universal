@@ -21,6 +21,8 @@ interface DocumentRailProps {
   onRemove(): void;
   onAdd(): void;
   onAddFromText(): void;
+  onExportTemplates(): void;
+  onImportTemplates(): void;
   onToggleUtilities(): void;
 }
 
@@ -93,6 +95,10 @@ export function DocumentRail(props: DocumentRailProps) {
               ) : (
                 <small>Откройте нужную кнопку документа, чтобы изменить её настройки.</small>
               )}
+              <div className="templateTransferActions">
+                <button className="softBtn" disabled={props.busy} onClick={props.onExportTemplates}>Экспорт шаблонов</button>
+                <button className="softBtn" disabled={props.busy} onClick={props.onImportTemplates}>Импорт шаблонов</button>
+              </div>
               <details className="copySettings">
                 <summary>Количество экземпляров</summary>
                 {props.documents.map(document => (

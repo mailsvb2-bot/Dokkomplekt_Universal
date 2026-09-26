@@ -39,7 +39,7 @@ export interface AppFormOptions {
   danger?: boolean;
 }
 
-interface AppDialogApi {
+export interface AppDialogApi {
   confirm(options: AppConfirmOptions): Promise<boolean>;
   prompt(options: AppPromptOptions): Promise<string | null>;
   form(options: AppFormOptions): Promise<Record<string, string> | null>;

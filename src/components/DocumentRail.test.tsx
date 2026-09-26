@@ -43,6 +43,8 @@ function buildProps(overrides: Partial<Parameters<typeof DocumentRail>[0]> = {})
     onRemove: vi.fn(),
     onAdd: vi.fn(),
     onAddFromText: vi.fn(),
+    onExportTemplates: vi.fn(),
+    onImportTemplates: vi.fn(),
     onToggleUtilities: vi.fn(),
     ...overrides,
   };
@@ -114,6 +116,17 @@ it('keeps the native picker primary and exposes an explicit text fallback', () =
     renderRail({ activeDocumentId: null });
     fireEvent.click(screen.getByText('Управление кнопками'));
     expect(screen.queryByRole('button', { name: 'Версии шаблона' })).toBeNull();
+  });
+
+  it('exposes template transfer actions without requiring an active document', () => {
+    const onExportTemplates = vi.fn();
+    const onImportTemplates = vi.fn();
+    renderRail({ activeDocumentId: null, onExportTemplates, onImportTemplates });
+    fireEvent.click(screen.getByText('Управление кнопками'));
+    fireEvent.click(screen.getByRole('button', { name: 'Экспорт шаблонов' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Импорт шаблонов' }));
+    expect(onExportTemplates).toHaveBeenCalledOnce();
+    expect(onImportTemplates).toHaveBeenCalledOnce();
   });
 
   it('locks selection, template management and copy count while an operation is in flight', () => {

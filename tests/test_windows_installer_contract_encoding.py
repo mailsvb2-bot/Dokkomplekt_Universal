@@ -90,26 +90,21 @@ def test_quality_gate_names_and_uploads_cross_domain_installed_evidence() -> Non
     assert source.index("Windows installer smoke") < source.index("Windows E1 cross-domain installed path")
 
 
-def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
+def test_e1_domain_selector_uses_physical_radio_and_behavioral_proof() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
-    assert "Chromium/WebView2 does not consistently publish <option> descendants" in source
-    assert "$domainOffsets = @{" in source
     for marker in (
-        "'Юридическая работа' = 3",
-        "'Кадровая работа' = 4",
-        "'Бухгалтерия' = 5",
-        "'Образование' = 6",
-        "'Своя профессия / профиль' = 7",
-        "SendWait('{HOME}')",
-        "SendWait('{DOWN}')",
-        "SendWait('{TAB}')",
-        "Get-E1DomainSelection -FileName $FileName",
-        "IsSelectionPatternAvailable",
-        "domain override did not persist",
+        '$radioName = "$OptionName для $FileName"',
+        'Invoke-UiElementPhysically -Element $radio',
+        'IsSelectionItemPatternAvailable',
+        'IsTogglePatternAvailable',
+        'downstream domain-specific installed behavior remains authoritative',
         "foreach ($fieldId in $PluginRequiredFields)",
         "did not expose canonical domain-required field",
     ):
         assert marker in source
+    assert "$domainOffsets = @{" not in source
+    assert "SendWait('{HOME}')" not in source
+    assert "SendWait('{DOWN}')" not in source
 
 
 

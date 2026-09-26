@@ -11,11 +11,11 @@ def test_fpr12_installed_restart_and_installer_preservation_are_locked() -> None
 
     assert "FPR-12 RESTART STORAGE PASS" in source
     assert "FPR-12 RESTART SEMANTIC PASS" in source
-    assert "Папка готовых документов" in source
-    assert "$fpr12RestartOutputRoot.Trim() -ne $defaultOutputRoot.Trim()" in source
+    assert "$expectedFpr12RestartFolder = Join-Path $defaultOutputRoot '3333 27.08.2026'" in source
+    assert "$restartCreated.Directory.FullName" in source
     assert "FPR-12 INSTALLER PRESERVATION PASS" in source
     assert "$fpr12Replacement = Start-Process -FilePath $installer.FullName" in source
-    assert "$fpr12ReplacementOutputRoot.Trim() -ne $defaultOutputRoot.Trim()" in source
+    assert "$fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint" in source
     assert "FPR-12 installer replacement lost the persisted workspace/button state." in source
 
 

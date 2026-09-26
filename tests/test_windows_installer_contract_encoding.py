@@ -116,23 +116,20 @@ def test_e1_domain_selector_uses_physical_radio_and_behavioral_proof() -> None:
 
 def test_e1_custom_domain_value_commits_through_react_input_event() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    helper_start = source.index("function Set-ReactControlledText")
+    helper_end = source.index("function Get-UiValue", helper_start)
+    helper = source[helper_start:helper_end]
     for marker in (
-        "React controls this input",
-        "Set-UiValue -Element $custom -Value $CustomProfile",
-        "SendWait(' ')",
-        "SendWait('{BACKSPACE}')",
-        "persisted custom domain value for $FileName",
-        "E1 custom domain value commit:",
-        "custom domain override did not persist",
+        "Set-Clipboard -Value $Value -ErrorAction Stop",
+        "SendWait('^a')",
+        "SendWait('^v')",
+        "SendWait('{TAB}')",
+        "React input did not persist",
     ):
-        assert marker in source
-    custom_start = source.index("Set-UiValue -Element $custom -Value $CustomProfile")
-    custom_space = source.index("SendWait(' ')", custom_start)
-    custom_backspace = source.index("SendWait('{BACKSPACE}')", custom_space)
-    custom_persist = source.index("persisted custom domain value for $FileName", custom_backspace)
-    assert custom_start < custom_space < custom_backspace < custom_persist
-
-
+        assert marker in helper
+    assert 'Set-ReactControlledText -Element $custom -Value $CustomProfile' in source
+    assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source
+    assert "SendWait('{BACKSPACE}')" not in helper
 
 def test_e1_cross_domain_scenarios_reset_case_through_real_ui() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")

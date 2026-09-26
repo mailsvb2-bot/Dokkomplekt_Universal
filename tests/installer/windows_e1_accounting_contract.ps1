@@ -860,7 +860,20 @@ function Set-E1TemplateDomainOverride {
   if ($selectionVerified) {
     Write-Host "E1 domain radio PASS: '$OptionName' selected for $FileName."
   } else {
-    Write-Host "E1 domain radio state is not readable through hosted UIA for $FileName; downstream domain-specific installed behavior remains authoritative."
+    # Hosted WebView2 can expose the radio but omit its selected/toggle state.
+    # Give Chromium one explicit keyboard activation on the same radio so React
+    # receives a real user change event even when UIA state read-back is absent.
+    try {
+      $radio.SetFocus()
+      Start-Sleep -Milliseconds 75
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      Start-Sleep -Milliseconds 150
+      [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+      Start-Sleep -Milliseconds 150
+      Write-Host "E1 domain radio keyboard activation sent for '$OptionName' / $FileName; downstream domain-specific installed behavior remains authoritative."
+    } catch {
+      throw "E1 domain radio for $FileName could not be activated by physical click or keyboard Space: $($_.Exception.Message)"
+    }
   }
 
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {

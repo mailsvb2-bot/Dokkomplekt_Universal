@@ -28,7 +28,12 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
 
     assert "preceding installed baseline smoke" in source
     assert "content-packs\\tier1-accounting-ru\\templates\\service_act.docx" in source
-    assert "Название документа для service_act.docx" in source
+    assert "Add-E1DomainTemplate" in source
+    assert "-TemplatePath $accountingTemplate" in source
+    assert "-Label $accountingLabel" in source
+    assert "-DomainOption 'Бухгалтерия'" in source
+    assert 'Find-E1NamedElement -Name "Название документа для $fileName"' in source
+    assert "persisted template label for $Label" in source
     assert "workflow-amount-currency" in source
     assert "workflow-amount-vat" in source
     assert "$sourceOwnedValues = [ordered]@{" in source
@@ -153,7 +158,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert '-Description "open advanced template settings for $FileName"' in source
     assert "after failed advanced settings transition" in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source
-    assert "$templateDialog = Invoke-UiActionWithObservedTransition" in source
+    assert "function Add-E1DomainTemplate" in source
+    assert "-TemplatePath $accountingTemplate" in source
+    assert "-Label $accountingLabel" in source
+    assert "-DomainOption 'Бухгалтерия'" in source
+    assert "$dialog = Invoke-UiActionWithObservedTransition" in source
     assert "$sourceDialog = Invoke-UiActionWithObservedTransition" in source
     assert "-TransitionProbe { Find-FileDialog }" in source
     assert "FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts." in source

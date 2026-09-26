@@ -283,22 +283,37 @@ function Invoke-UiElementPhysically {
       [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
       Start-Sleep -Milliseconds 150
     }
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
     if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
       $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
       $scroll.ScrollIntoView()
       Start-Sleep -Milliseconds 100
     }
+
+    # A WebView2 button can be physically clickable while reporting
+    # IsKeyboardFocusable=false. Do not make SetFocus a prerequisite for a
+    # genuine mouse action: prefer UIA's clickable point, then the visible
+    # bounding-rectangle centre. Keyboard input is only the final fallback.
+    $clickPoint = $null
     try {
-      $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $clickPoint = $Element.GetClickablePoint()
+    } catch {
+      $rect = $Element.Current.BoundingRectangle
+      if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+        $clickPoint = [System.Windows.Point]::new(
+          $rect.Left + ($rect.Width / 2),
+          $rect.Top + ($rect.Height / 2)
+        )
+      }
+    }
+    if ($null -ne $clickPoint) {
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-    } catch {
-      $Element.SetFocus()
-      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      return
     }
+
+    try { $Element.SetFocus() } catch { }
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   } catch {
     throw "Live physical UI action failed for '$Description': $($_.Exception.Message)"
   }
@@ -1391,6 +1406,18 @@ if ($null -eq $createdDoc) {
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
+
+# FPR-11 — the durable default naming rule is document number + document date.
+# The source carries case number 2222 and admission/document evidence 26.08.2026;
+# an address house number must never be misread as a compact date.
+$fpr11ExpectedFolderName = '2222 26.08.2026'
+if ($createdDoc.Directory.Name -ne $fpr11ExpectedFolderName) {
+  throw "FPR-11 output folder mismatch: expected '$fpr11ExpectedFolderName', got '$($createdDoc.Directory.Name)'."
+}
+$fpr11FirstOutputPath = $createdDoc.FullName
+$fpr11FirstOutputHash = (Get-FileHash -LiteralPath $createdDoc.FullName -Algorithm SHA256).Hash
+$fpr11FirstOutputWriteUtc = $createdDoc.LastWriteTimeUtc
+Write-Host "FPR-11 NAMING PASS: durable rule produced exact physical folder '$fpr11ExpectedFolderName'."
 $createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
 try {
   $documentEntry = $createdArchive.GetEntry('word/document.xml')
@@ -1579,6 +1606,15 @@ if ($adversarial) {
   if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
   $distinctFolders = @($versionDocs | ForEach-Object DirectoryName | Sort-Object -Unique)
   if ($distinctFolders.Count -lt 2) { throw 'Repeat generation overwrote the original output folder.' }
+  if (-not (Test-Path -LiteralPath $fpr11FirstOutputPath -PathType Leaf)) {
+    throw 'FPR-11 collision removed the original published document.'
+  }
+  $fpr11OriginalAfter = Get-Item -LiteralPath $fpr11FirstOutputPath
+  $fpr11OriginalHashAfter = (Get-FileHash -LiteralPath $fpr11FirstOutputPath -Algorithm SHA256).Hash
+  if ($fpr11OriginalHashAfter -ne $fpr11FirstOutputHash -or $fpr11OriginalAfter.LastWriteTimeUtc -ne $fpr11FirstOutputWriteUtc) {
+    throw 'FPR-11 collision rewrote the original published document.'
+  }
+  Write-Host "FPR-11 COLLISION PASS: repeat generation preserved the original bytes and published a second version in a distinct folder ($($distinctFolders.Count) folders)."
   Write-Host "ADVERSARIAL OK: collision created a second version in a distinct folder ($($distinctFolders.Count) folders)."
 }
 
@@ -2111,34 +2147,18 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  $pickerButton = Wait-UiElement -Description "FPR-09 $Label native picker button" -TimeoutSeconds 30 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
-  }
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { throw "FPR-09 $Label installed window disappeared before native picker." }
-  Activate-LiveAppWindow -Window $currentAppWindow
-  if ($pickerButton.Current.IsOffscreen -and $pickerButton.Current.IsScrollItemPatternAvailable) {
-    $scroll = $pickerButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-    $scroll.ScrollIntoView()
-    Start-Sleep -Milliseconds 100
-  }
-  $pickerButton.SetFocus()
-  Start-Sleep -Milliseconds 100
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-  $dialog = $null
-  try {
-    $dialog = Wait-UiElement -Description "FPR-09 $Label file dialog after Enter" -TimeoutSeconds 5 -Probe {
+  $dialog = Invoke-UiActionWithObservedTransition `
+    -Description "FPR-09 $Label native picker" `
+    -TransitionDescription "FPR-09 $Label native file dialog" `
+    -TransitionSeconds 8 `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+    } `
+    -TransitionProbe {
       Find-FileDialog
     }
-  } catch {
-    # Hosted WebView2 occasionally focuses the button but does not synthesize the
-    # HTML button activation from Enter. Space is the other native keyboard
-    # activation for a focused button; use it once before declaring the picker broken.
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog after Space fallback"
-  }
   $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -2717,7 +2737,7 @@ if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $c
     [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
     [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
   }
-  $currentAppWindow.SetFocus()
+  Activate-LiveAppWindow -Window $currentAppWindow
   [System.Windows.Forms.SendKeys]::SendWait('{END}')
   Start-Sleep -Milliseconds 250
 }

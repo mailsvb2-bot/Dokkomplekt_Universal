@@ -1,7 +1,7 @@
 use crate::label_search::find_label_end;
 use crate::{
-    merge_value, parse_flexible_date, validate_case_relations, validate_field_value, SemanticAtom,
-    SemanticCase, SemanticRecord, SemanticValue, ValueSource,
+    merge_value, parse_flexible_date, parse_flexible_date_detailed, validate_case_relations,
+    validate_field_value, SemanticAtom, SemanticCase, SemanticRecord, SemanticValue, ValueSource,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1228,8 +1228,17 @@ pub fn detect_date_near_title(text: &str, default_year: i32) -> Option<String> {
                 return Some(parsed);
             }
         }
-        if let Some(parsed) = parse_flexible_date(line, default_year) {
-            return Some(parsed);
+        if let Some(parsed) = parse_flexible_date_detailed(line, default_year) {
+            // Legacy compact date input intentionally accepts values such as "1"
+            // (01.01.<default year>) and "1126". That compatibility is correct
+            // for a date field, but not for arbitrary source prose: otherwise
+            // "Адрес: ул. Тестовая, д. 1" near the title becomes 01.01.<year>.
+            // Explicit numeric candidates above and named-month dates have no
+            // such heuristic assumption and remain valid source evidence.
+            let has_letters = line.chars().any(char::is_alphabetic);
+            if !has_letters || parsed.assumption.is_none() {
+                return Some(parsed.normalized);
+            }
         }
     }
     None
@@ -2088,6 +2097,27 @@ mod tests {
     fn kelvin_sign_before_label_never_panics() {
         let value = find_labeled_value("K — Номер документа: A-17", &["Номер документа"], false);
         assert_eq!(value.as_deref(), Some("A-17"));
+    }
+
+    #[test]
+    fn date_near_title_does_not_turn_address_house_number_into_january_first() {
+        let text = "Первичный осмотр\nФ.И.О.: Петров Пётр Петрович\nАдрес регистрации: г. Нижний Новгород, ул. Тестовая, д. 1\nДата поступления: 26.08.2026";
+        assert_eq!(
+            detect_date_near_title(text, 2026).as_deref(),
+            Some("26.08.2026")
+        );
+    }
+
+    #[test]
+    fn date_near_title_keeps_standalone_compact_and_named_month_dates() {
+        assert_eq!(
+            detect_date_near_title("Первичный осмотр\n1", 2026).as_deref(),
+            Some("01.01.2026")
+        );
+        assert_eq!(
+            detect_date_near_title("Первичный осмотр\n24 сентября 2026", 2026).as_deref(),
+            Some("24.09.2026")
+        );
     }
 
     #[test]

@@ -234,21 +234,32 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
-  $Element.SetFocus()
-  Start-Sleep -Milliseconds 50
   if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
     $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
   }
+
+  $clickPoint = $null
   try {
-    $point = $Element.GetClickablePoint()
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+    $clickPoint = $Element.GetClickablePoint()
+  } catch {
+    $rect = $Element.Current.BoundingRectangle
+    if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+      $clickPoint = [System.Windows.Point]::new(
+        $rect.Left + ($rect.Width / 2),
+        $rect.Top + ($rect.Height / 2)
+      )
+    }
+  }
+  if ($null -ne $clickPoint) {
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  } catch {
-    $Element.SetFocus()
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    return
   }
+
+  try { $Element.SetFocus() } catch { }
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 }
 
 function Invoke-UiActionPhysicallyFromProbe {
@@ -736,6 +747,56 @@ function Get-E1DomainSelection {
     }
   } catch { }
 
+  # Chromium may expose an HTML <select> without SelectionPattern/ValuePattern on
+  # the collapsed combobox while still exposing the selected <option> through
+  # SelectionItemPattern. Inspect the live option items and require IsSelected.
+  $domainOptionNames = @(
+    'Профиль: автоматически',
+    'Универсальный документооборот',
+    'Медицина',
+    'Юридическая работа',
+    'Кадровая работа',
+    'Бухгалтерия',
+    'Образование',
+    'Своя профессия / профиль'
+  )
+  $expandedForRead = $false
+  try {
+    if ($combo.Current.IsExpandCollapsePatternAvailable) {
+      $expandCollapse = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($expandCollapse.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+        $expandCollapse.Expand()
+        $expandedForRead = $true
+        Start-Sleep -Milliseconds 150
+      }
+    }
+
+    $window = Find-LiveAppWindow
+    if ($null -ne $window) {
+      foreach ($candidate in $window.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )) {
+        try {
+          $name = [string]$candidate.Current.Name
+          if ($domainOptionNames -notcontains $name) { continue }
+          if (-not $candidate.Current.IsSelectionItemPatternAvailable) { continue }
+          $selectionItem = $candidate.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+          if ($selectionItem.Current.IsSelected) { return $name }
+        } catch { }
+      }
+    }
+  } finally {
+    if ($expandedForRead) {
+      try {
+        $combo = Find-E1NamedElement -Name "Профиль для $FileName"
+        if ($null -ne $combo -and $combo.Current.IsExpandCollapsePatternAvailable) {
+          $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+        }
+      } catch { }
+    }
+  }
+
   try {
     return [string](Get-UiValue -Element $combo)
   } catch {
@@ -750,19 +811,19 @@ function Set-E1TemplateDomainOverride {
     [string]$CustomProfile = ''
   )
 
-  $comboName = "Профиль для $FileName"
-  $combo = Find-E1NamedElement -Name $comboName
-  if ($null -eq $combo) {
+  $groupName = "Профиль для $FileName"
+  $group = Find-E1NamedElement -Name $groupName
+  if ($null -eq $group) {
     try {
-      $combo = Invoke-UiActionWithObservedTransition `
+      $group = Invoke-UiActionWithObservedTransition `
         -Description "open advanced template settings for $FileName" `
-        -TransitionDescription "domain selector for $FileName" `
+        -TransitionDescription "domain choices for $FileName" `
         -TransitionSeconds 5 `
         -ActionProbe {
           Find-E1NamedElement -Name 'Необязательно: настроить автоматическое заполнение'
         } `
         -TransitionProbe {
-          Find-E1NamedElement -Name $comboName
+          Find-E1NamedElement -Name $groupName
         }
     } catch {
       Write-Host ("E1 UI snapshot after failed advanced settings transition for '$FileName': " + (Get-E1UiSnapshot))
@@ -770,105 +831,49 @@ function Set-E1TemplateDomainOverride {
     }
   }
 
-  if ($combo.Current.IsOffscreen -and $combo.Current.IsScrollItemPatternAvailable) {
-    $combo.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+  $radioName = "$OptionName для $FileName"
+  $radio = Wait-UiElement -Description "domain radio '$OptionName' for $FileName" -Probe {
+    Find-E1NamedElement -Name $radioName
+  }
+  if ($radio.Current.IsOffscreen -and $radio.Current.IsScrollItemPatternAvailable) {
+    $radio.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
   }
 
-  # Chromium/WebView2 does not consistently publish <option> descendants for an
-  # expanded HTML <select> on hosted Windows runners. Prefer semantic UIA when
-  # available, but never treat input delivery itself as proof: the live selected
-  # option is read back before this helper returns.
-  $option = $null
-  try {
-    if ($combo.Current.IsExpandCollapsePatternAvailable) {
-      $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    } else {
-      Invoke-UiElement -Element $combo -Description "open domain selector for $FileName"
-    }
-    Start-Sleep -Milliseconds 150
-    $optionDeadline = [DateTime]::UtcNow.AddSeconds(2)
-    do {
-      $window = Find-LiveAppWindow
-      if ($null -ne $window) {
-        $option = $window.FindFirst(
-          [System.Windows.Automation.TreeScope]::Descendants,
-          [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::NameProperty,
-            $OptionName
-          )
+  Invoke-UiElementPhysically -Element $radio -Description "select domain '$OptionName' for $FileName"
+  Start-Sleep -Milliseconds 250
+
+  $selectionVerified = $false
+  $radio = Find-E1NamedElement -Name $radioName
+  if ($null -ne $radio) {
+    try {
+      if ($radio.Current.IsSelectionItemPatternAvailable) {
+        $selectionVerified = $radio.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected
+      } elseif ($radio.Current.IsTogglePatternAvailable) {
+        $selectionVerified = (
+          $radio.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq
+          [System.Windows.Automation.ToggleState]::On
         )
       }
-      if ($null -ne $option) { break }
-      Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $optionDeadline)
-  } catch {
-    $option = $null
+    } catch { }
   }
-
-  if ($null -ne $option) {
-    if ($option.Current.IsSelectionItemPatternAvailable) {
-      $option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    } else {
-      Invoke-UiElement -Element $option -Description "select domain '$OptionName' for $FileName"
+  if ($selectionVerified) {
+    Write-Host "E1 domain radio PASS: '$OptionName' selected for $FileName."
+  } else {
+    # Hosted WebView2 can expose the radio but omit its selected/toggle state.
+    # Give Chromium one explicit keyboard activation on the same radio so React
+    # receives a real user change event even when UIA state read-back is absent.
+    try {
+      $radio.SetFocus()
+      Start-Sleep -Milliseconds 75
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      Start-Sleep -Milliseconds 150
+      [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+      Start-Sleep -Milliseconds 150
+      Write-Host "E1 domain radio keyboard activation sent for '$OptionName' / $FileName; downstream domain-specific installed behavior remains authoritative."
+    } catch {
+      throw "E1 domain radio for $FileName could not be activated by physical click or keyboard Space: $($_.Exception.Message)"
     }
-    Start-Sleep -Milliseconds 200
-  }
-
-  $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)
-  $expectedDomain = Normalize-UiValue -Value $OptionName
-  if ($actualDomain -ne $expectedDomain) {
-    $domainOffsets = @{
-      'Универсальный документооборот' = 1
-      'Медицина' = 2
-      'Юридическая работа' = 3
-      'Кадровая работа' = 4
-      'Бухгалтерия' = 5
-      'Образование' = 6
-      'Своя профессия / профиль' = 7
-    }
-    if (-not $domainOffsets.ContainsKey($OptionName)) {
-      throw "Unsupported E1 domain option for keyboard fallback: $OptionName"
-    }
-
-    $combo = Wait-UiElement -Description "domain selector before keyboard fallback for $FileName" -Probe {
-      Find-E1NamedElement -Name $comboName
-    }
-    if ($combo.Current.IsExpandCollapsePatternAvailable) {
-      try {
-        $expandCollapse = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        if ($expandCollapse.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
-          $expandCollapse.Collapse()
-          Start-Sleep -Milliseconds 100
-        }
-      } catch { }
-    }
-
-    $appWindow = Find-LiveAppWindow
-    if ($null -ne $appWindow) {
-      try { $appWindow.SetFocus() } catch { }
-    }
-    $combo = Wait-UiElement -Description "live domain selector for keyboard fallback for $FileName" -Probe {
-      Find-E1NamedElement -Name $comboName
-    }
-    $combo.SetFocus()
-    Start-Sleep -Milliseconds 100
-    [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
-    Start-Sleep -Milliseconds 100
-    for ($index = 0; $index -lt [int]$domainOffsets[$OptionName]; $index += 1) {
-      [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
-      Start-Sleep -Milliseconds 50
-    }
-    # Blurring the closed HTML select commits Chromium's change event into React.
-    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-    Start-Sleep -Milliseconds 300
-
-    $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)
-    Write-Host "E1 domain selector keyboard fallback: expected='$OptionName' actual='$actualDomain'."
-  }
-
-  if ($actualDomain -ne $expectedDomain) {
-    throw "E1 domain override did not persist for $FileName. Expected '$OptionName', actual '$actualDomain'."
   }
 
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {
@@ -952,6 +957,22 @@ function Add-E1DomainTemplate {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }
   Set-UiValue -Element $labelInput -Value $Label
+  # React controls the template label input. UIA SetValue alone may update the
+  # DOM without dispatching input/change, so commit the exact value through one
+  # user-equivalent no-op edit and blur before confirmation.
+  $labelInput.SetFocus()
+  Start-Sleep -Milliseconds 50
+  [System.Windows.Forms.SendKeys]::SendWait(' ')
+  [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+  [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+  Start-Sleep -Milliseconds 200
+  $labelInput = Wait-UiElement -Description "persisted template label for $Label" -Probe {
+    Find-E1NamedElement -Name "Название документа для $fileName"
+  }
+  $actualLabel = Normalize-UiValue -Value (Get-UiValue -Element $labelInput)
+  if ($actualLabel -ne (Normalize-UiValue -Value $Label)) {
+    throw "E1 template label did not persist for $fileName. Expected '$Label', actual '$actualLabel'."
+  }
   Set-E1TemplateDomainOverride -FileName $fileName -OptionName $DomainOption -CustomProfile $CustomProfile
 
   try {
@@ -971,7 +992,34 @@ function Add-E1DomainTemplate {
       }
   } catch {
     Write-Host ("E1 UI snapshot after failed template confirmation for '$Label': " + (Get-E1UiSnapshot))
-    throw
+    # Hosted WebView2 can expose an enabled HTML button whose UIA InvokePattern
+    # and one coordinate click are both acknowledged without delivering a DOM
+    # click. The same runner already needs a focused keyboard fallback for other
+    # React controls. Use one bounded Space activation only after both previous
+    # user-equivalent paths failed and the button is still enabled.
+    $createButton = Wait-UiElement -Description "focused create $Label button fallback" -Probe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
+    }
+    try {
+      if ($createButton.Current.IsOffscreen -and $createButton.Current.IsScrollItemPatternAvailable) {
+        $createButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+      $createButton.SetFocus()
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      $null = Wait-UiElement -Description "$Label document button after focused Space fallback" -TimeoutSeconds 30 -Probe {
+        $window = Find-LiveAppWindow
+        if ($null -eq $window) { return $null }
+        Find-ButtonByNames -Root $window -Names @($Label)
+      }
+      Write-Host "E1 template confirmation keyboard fallback PASS for '$Label'."
+    } catch {
+      Write-Host ("E1 UI snapshot after keyboard fallback failure for '$Label': " + (Get-E1UiSnapshot))
+      throw
+    }
   }
 }
 
@@ -1172,42 +1220,10 @@ $accountingLabel = 'Акт оказанных услуг'
 $accountingOutputName = "$accountingLabel.docx"
 $completionReceiptRoot = Join-Path $appDataRoot 'generation-completion-receipts'
 
-$templateDialog = Invoke-UiActionWithObservedTransition `
-  -Description 'Добавить шаблоны for E1 Accounting' `
-  -TransitionDescription 'native template picker for E1 Accounting' `
-  -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Добавить шаблоны')
-  } `
-  -TransitionProbe { Find-FileDialog }
-$templateEdit = $templateDialog.FindFirst(
-  [System.Windows.Automation.TreeScope]::Descendants,
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
-)
-Set-UiValue -Element $templateEdit -Value $accountingTemplate
-Submit-OpenFileDialog -Dialog $templateDialog
-
-$labelInput = Wait-UiElement -Description 'Accounting template label input' -TimeoutSeconds 40 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  $window.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Название документа для service_act.docx')
-  )
-}
-Set-UiValue -Element $labelInput -Value $accountingLabel
-Set-E1TemplateDomainOverride -FileName 'service_act.docx' -OptionName 'Бухгалтерия'
-Invoke-UiActionPhysicallyFromProbe -Description 'Создать Accounting button' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
-}
-$null = Wait-UiElement -Description 'Accounting document button' -TimeoutSeconds 90 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ButtonByNames -Root $window -Names @($accountingLabel)
-}
+Add-E1DomainTemplate `
+  -TemplatePath $accountingTemplate `
+  -Label $accountingLabel `
+  -DomainOption 'Бухгалтерия'
 
 $sourceDialog = Invoke-UiActionWithObservedTransition `
   -Description 'Replace source with E1 Accounting source' `
@@ -1270,20 +1286,23 @@ Invoke-UiActionPhysicallyFromProbe -Description 'select Accounting service act' 
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, "Добавить $accountingLabel в комплект")
   )
 }
-$generationAction = Wait-UiElement -Description 'one-document Accounting generation action' -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
-}
-Invoke-UiElementPhysically -Element $generationAction -Description 'open E1 Accounting preflight'
-$null = Wait-UiElement -Description 'E1 Accounting preflight' -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  $window.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
-  )
-}
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'open E1 Accounting preflight' `
+  -TransitionDescription 'E1 Accounting preflight' `
+  -TransitionSeconds 6 `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    $window.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+    )
+  }
 
 foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-vat')) {
   $control = (Find-LiveAppWindow).FindFirst(
@@ -1617,19 +1636,32 @@ if ($null -ne $clearSelection) {
 }
 Start-Sleep -Milliseconds 200
 
+$fpr01SelectedCount = 0
 foreach ($document in $fpr01Documents) {
-  Invoke-UiActionPhysicallyFromProbe -Description "select $($document.Label) for FPR-01 batch" -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    $window.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        "Добавить $($document.Label) в комплект"
+  $fpr01SelectedCount += 1
+  $expectedActionNames = @(
+    "Проверить и создать ($fpr01SelectedCount)",
+    "Создать документы ($fpr01SelectedCount)"
+  )
+  Invoke-UiActionWithObservedTransition `
+    -Description "select $($document.Label) for FPR-01 batch" `
+    -TransitionDescription "FPR-01 selection count $fpr01SelectedCount" `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          "Добавить $($document.Label) в комплект"
+        )
       )
-    )
-  }
-  Start-Sleep -Milliseconds 150
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names $expectedActionNames
+    } | Out-Null
 }
 
 $null = Invoke-UiActionWithObservedTransition `

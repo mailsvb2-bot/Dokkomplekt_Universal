@@ -366,8 +366,8 @@
     {
       "id": "FPR-11",
       "group": "Папки",
-      "status": "needs-runtime-proof",
-      "actual_state": "folder naming UI and canonical output naming engine are present; installed collision proof pending",
+      "status": "verified",
+      "actual_state": "folder naming UI persists the canonical rule; source date detection no longer converts prose house numbers into compact dates; installed Windows proof requires the exact physical folder name and collision-safe second-version publication without rewriting the original bytes",
       "entry": [
         "src/components/FolderNamingOnboarding.tsx"
       ],
@@ -387,8 +387,12 @@
         "src/components/FolderNamingOnboarding.tsx",
         "crates/dokkomplekt-core/src/output_naming.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Installed naming/collision evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_installer_contract.ps1#FPR-11 exact installed folder naming/collision preservation proof",
+        "tests/test_windows_output_root_installer_contract.py#FPR-11 regression lock",
+        "crates/dokkomplekt-core/src/source_parser.rs#date-near-title prose-digit regression tests"
+      ],
+      "runtime_gap": ""
     },
     {
       "id": "FPR-12",

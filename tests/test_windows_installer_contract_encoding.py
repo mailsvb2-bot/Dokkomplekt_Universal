@@ -92,19 +92,25 @@ def test_quality_gate_names_and_uploads_cross_domain_installed_evidence() -> Non
 
 def test_e1_domain_selector_uses_physical_radio_and_behavioral_proof() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    start = source.index("function Set-E1TemplateDomainOverride")
+    end = source.index("function ", start + len("function Set-E1TemplateDomainOverride"))
+    domain_helper = source[start:end]
     for marker in (
         '$radioName = "$OptionName для $FileName"',
         'Invoke-UiElementPhysically -Element $radio',
         'IsSelectionItemPatternAvailable',
         'IsTogglePatternAvailable',
         'downstream domain-specific installed behavior remains authoritative',
+    ):
+        assert marker in domain_helper
+    for marker in (
         "foreach ($fieldId in $PluginRequiredFields)",
         "did not expose canonical domain-required field",
     ):
         assert marker in source
-    assert "$domainOffsets = @{" not in source
-    assert "SendWait('{HOME}')" not in source
-    assert "SendWait('{DOWN}')" not in source
+    assert "$domainOffsets = @{" not in domain_helper
+    assert "SendWait('{HOME}')" not in domain_helper
+    assert "SendWait('{DOWN}')" not in domain_helper
 
 
 

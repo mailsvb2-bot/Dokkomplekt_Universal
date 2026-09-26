@@ -28,7 +28,12 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
 
     assert "preceding installed baseline smoke" in source
     assert "content-packs\\tier1-accounting-ru\\templates\\service_act.docx" in source
-    assert "Название документа для service_act.docx" in source
+    assert "Add-E1DomainTemplate" in source
+    assert "-TemplatePath $accountingTemplate" in source
+    assert "-Label $accountingLabel" in source
+    assert "-DomainOption 'Бухгалтерия'" in source
+    assert 'Find-E1NamedElement -Name "Название документа для $fileName"' in source
+    assert "persisted template label for $Label" in source
     assert "workflow-amount-currency" in source
     assert "workflow-amount-vat" in source
     assert "$sourceOwnedValues = [ordered]@{" in source

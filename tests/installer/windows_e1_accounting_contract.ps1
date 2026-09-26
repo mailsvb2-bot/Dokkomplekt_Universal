@@ -132,6 +132,19 @@ function Find-ReadyButtonByNames {
   return $null
 }
 
+function Find-ReadyButtonByAutomationId {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
+  $button = $Root.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.AndCondition]::new(
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button),
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $AutomationId)
+    )
+  )
+  if ($null -ne $button -and $button.Current.IsEnabled) { return $button }
+  return $null
+}
+
 function Invoke-UiElement {
   param([Parameter(Mandatory = $true)]$Element, [string]$Description = 'UI element')
   try {
@@ -1122,7 +1135,7 @@ function Invoke-E1DomainScenario {
   $generationAction = Wait-UiElement -Description "generation action for $Label" -Probe {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'
   }
   Invoke-UiElementPhysically -Element $generationAction -Description "start canonical generation for $Label"
 

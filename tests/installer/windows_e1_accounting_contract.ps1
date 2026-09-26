@@ -957,6 +957,22 @@ function Add-E1DomainTemplate {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }
   Set-UiValue -Element $labelInput -Value $Label
+  # React controls the template label input. UIA SetValue alone may update the
+  # DOM without dispatching input/change, so commit the exact value through one
+  # user-equivalent no-op edit and blur before confirmation.
+  $labelInput.SetFocus()
+  Start-Sleep -Milliseconds 50
+  [System.Windows.Forms.SendKeys]::SendWait(' ')
+  [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+  [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+  Start-Sleep -Milliseconds 200
+  $labelInput = Wait-UiElement -Description "persisted template label for $Label" -Probe {
+    Find-E1NamedElement -Name "Название документа для $fileName"
+  }
+  $actualLabel = Normalize-UiValue -Value (Get-UiValue -Element $labelInput)
+  if ($actualLabel -ne (Normalize-UiValue -Value $Label)) {
+    throw "E1 template label did not persist for $fileName. Expected '$Label', actual '$actualLabel'."
+  }
   Set-E1TemplateDomainOverride -FileName $fileName -OptionName $DomainOption -CustomProfile $CustomProfile
 
   try {
@@ -1202,6 +1218,19 @@ $labelInput = Wait-UiElement -Description 'Accounting template label input' -Tim
   )
 }
 Set-UiValue -Element $labelInput -Value $accountingLabel
+$labelInput.SetFocus()
+Start-Sleep -Milliseconds 50
+[System.Windows.Forms.SendKeys]::SendWait(' ')
+[System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+[System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+Start-Sleep -Milliseconds 200
+$labelInput = Wait-UiElement -Description 'persisted Accounting template label' -Probe {
+  Find-E1NamedElement -Name 'Название документа для service_act.docx'
+}
+$actualAccountingLabel = Normalize-UiValue -Value (Get-UiValue -Element $labelInput)
+if ($actualAccountingLabel -ne (Normalize-UiValue -Value $accountingLabel)) {
+  throw "E1 Accounting template label did not persist. Expected '$accountingLabel', actual '$actualAccountingLabel'."
+}
 Set-E1TemplateDomainOverride -FileName 'service_act.docx' -OptionName 'Бухгалтерия'
 Invoke-UiActionPhysicallyFromProbe -Description 'Создать Accounting button' -ActionProbe {
   $window = Find-LiveAppWindow

@@ -855,14 +855,15 @@ function Set-E1TemplateDomainOverride {
       } catch { }
     }
 
-    $appWindow = Find-LiveAppWindow
-    if ($null -ne $appWindow) {
-      try { $appWindow.SetFocus() } catch { }
-    }
     $combo = Wait-UiElement -Description "live domain selector for keyboard fallback for $FileName" -Probe {
       Find-E1NamedElement -Name $comboName
     }
-    $combo.SetFocus()
+
+    # Exercise the real controlled <select> instead of relying on UIA focus
+    # routing, which is flaky for WebView2 on hosted runners. A physical click
+    # gives Chromium foreground ownership; HOME/DOWN/ENTER then changes the live
+    # selection and dispatches React's change event.
+    Invoke-UiElementPhysically -Element $combo -Description "focus domain selector for $FileName"
     Start-Sleep -Milliseconds 100
     [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
     Start-Sleep -Milliseconds 100
@@ -870,8 +871,7 @@ function Set-E1TemplateDomainOverride {
       [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
       Start-Sleep -Milliseconds 50
     }
-    # Blurring the closed HTML select commits Chromium's change event into React.
-    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     Start-Sleep -Milliseconds 300
 
     $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)

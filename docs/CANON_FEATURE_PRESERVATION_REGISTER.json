@@ -459,9 +459,10 @@
       "id": "FPR-14",
       "group": "Версии",
       "status": "needs-runtime-proof",
-      "actual_state": "template snapshot/version boundary is present; selected-version runtime proof pending",
+      "actual_state": "template snapshot/version boundary and saved-version rollback commands are present; the active-document UI now exposes saved template version selection; installed selected-version generation proof is pending",
       "entry": [
-        "src-tauri/src/subsystems/document_commands.rs"
+        "src/App.tsx#chooseActiveTemplateVersion",
+        "src/components/DocumentRail.tsx#Версии шаблона"
       ],
       "backend": [
         "src-tauri/src/template_snapshot.rs"
@@ -478,8 +479,12 @@
         "src-tauri/src/template_snapshot.rs",
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Selected-version runtime binding evidence is required for final register closure."
+      "runtime_evidence": [
+        "src/components/DocumentRail.test.tsx#saved template version selection UI",
+        "src-tauri/src/subsystems/document_commands.rs#rollback_template_version",
+        "src-tauri/src/template_snapshot.rs#immutable generation snapshot"
+      ],
+      "runtime_gap": "Installed UI proof must select a saved superseded version and read back a physical DOCX rendered from that exact archived template snapshot before final closure."
     },
     {
       "id": "FPR-15",

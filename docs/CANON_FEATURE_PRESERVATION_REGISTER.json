@@ -429,7 +429,7 @@
       "id": "FPR-13",
       "group": "Комплекты",
       "status": "needs-runtime-proof",
-      "actual_state": "batch document command and output engine are present; physical bundle proof pending",
+      "actual_state": "batch document command and output engine are present; installed physical two-document bundle proof is implemented and awaiting a green Windows run",
       "entry": [
         "src/components/DocumentRail.tsx"
       ],
@@ -449,8 +449,11 @@
         "src-tauri/src/subsystems/document_commands.rs",
         "crates/dokkomplekt-core/src/output_engine.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Physical multi-document bundle evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-13 one folder + two readable DOCX + shared plan binding + honest UI count + two committed receipts",
+        "tests/test_fpr13_bundle_contract.py#FPR-13 regression lock"
+      ],
+      "runtime_gap": "Physical multi-document bundle evidence is implemented; a green installed Windows run is still required for final closure."
     },
     {
       "id": "FPR-14",

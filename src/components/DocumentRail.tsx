@@ -17,6 +17,7 @@ interface DocumentRailProps {
   onConfigurePopups(): void;
   onScanTemplate(): void;
   onApprove(): void;
+  onVersions(): void;
   onRemove(): void;
   onAdd(): void;
   onAddFromText(): void;
@@ -86,6 +87,7 @@ export function DocumentRail(props: DocumentRailProps) {
                   <button className="softBtn" disabled={props.busy} onClick={props.onScanTemplate}>Разметить шаблон</button>
                   <button className="softBtn" disabled={props.busy} onClick={props.onRename}>Переименовать</button>
                   <button className="softBtn" disabled={props.busy} onClick={props.onApprove}>Подтвердить версию</button>
+                  <button className="softBtn" disabled={props.busy} onClick={props.onVersions}>Версии шаблона</button>
                   <button className="softBtn danger" disabled={props.busy} onClick={props.onRemove}>Убрать из набора</button>
                 </>
               ) : (

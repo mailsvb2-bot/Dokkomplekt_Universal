@@ -200,6 +200,47 @@ fn import_template_transfer_from_path(
         return Err("Пакет шаблонов не содержит документов.".into());
     }
 
+    let mut document_ids = std::collections::HashSet::new();
+    let mut button_labels = std::collections::HashSet::new();
+    let mut template_entries = std::collections::HashSet::new();
+    for item in &manifest.documents {
+        let document_id = item.id.trim();
+        if document_id.is_empty()
+            || !document_id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        {
+            return Err(format!(
+                "Пакет шаблонов содержит небезопасный идентификатор документа: {}.",
+                item.id
+            ));
+        }
+        if !document_ids.insert(document_id.to_string()) {
+            return Err(format!(
+                "Пакет шаблонов содержит повторяющийся идентификатор документа: {document_id}."
+            ));
+        }
+
+        let button_label = item.button_label.trim();
+        if button_label.is_empty() {
+            return Err("Пакет шаблонов содержит пустое название кнопки.".into());
+        }
+        let label_key = dokkomplekt_core::button_label_collision_key(button_label);
+        if !button_labels.insert(label_key) {
+            return Err(format!(
+                "Пакет шаблонов содержит конфликтующие названия кнопок: {button_label}."
+            ));
+        }
+
+        validate_transfer_entry_name(&item.template_entry)?;
+        if !template_entries.insert(item.template_entry.clone()) {
+            return Err(format!(
+                "Пакет шаблонов повторно использует один и тот же файл: {}.",
+                item.template_entry
+            ));
+        }
+    }
+
     let import_root = app
         .path()
         .app_data_dir()

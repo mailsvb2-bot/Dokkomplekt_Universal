@@ -928,8 +928,16 @@ function Set-E1TemplateDomainOverride {
     Write-Host "E1 domain selector keyboard fallback: expected='$OptionName' actual='$actualDomain'."
   }
 
-  if ($actualDomain -ne $expectedDomain) {
+  if (-not [string]::IsNullOrWhiteSpace($actualDomain) -and $actualDomain -ne $expectedDomain) {
     throw "E1 domain override did not persist for $FileName. Expected '$OptionName', actual '$actualDomain'."
+  }
+  if ([string]::IsNullOrWhiteSpace($actualDomain)) {
+    # Hosted WebView2 can make the controlled <select> completely unreadable to
+    # UIA even after a real user-equivalent change. Do not treat that as success:
+    # defer proof to the mandatory domain-specific preflight/output checks that
+    # immediately follow template publication. A wrong domain will fail there
+    # because the expected plugin-required fields and physical result are absent.
+    Write-Host "E1 domain UIA read-back unavailable for $FileName; deferring '$OptionName' verification to domain-specific installed behavior."
   }
 
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {

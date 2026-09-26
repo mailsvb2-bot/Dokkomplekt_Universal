@@ -369,7 +369,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             ));
         }
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok((!raw.is_empty()).then_some(raw));
+        Ok((!raw.is_empty()).then_some(raw))
     }
 
     #[cfg(target_os = "macos")]
@@ -395,7 +395,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             return Err("Выбор пакета шаблонов завершился с ошибкой.".into());
         }
         let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok((!raw.is_empty()).then_some(raw));
+        Ok((!raw.is_empty()).then_some(raw))
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

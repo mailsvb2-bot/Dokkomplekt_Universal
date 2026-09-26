@@ -23,6 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { useTemplateVersionSelection } from './hooks/useTemplateVersionSelection';
 import { useDocumentSelectionPersistence } from './hooks/useDocumentSelectionPersistence';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { watcherForegroundCaseActive, useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
@@ -37,9 +38,7 @@ import {
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
   replaceAllLiteral, semanticPreviewFromParsedSource, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
-export function App() {
-  return <AppDialogProvider><AppContent /></AppDialogProvider>;
-}
+export function App() { return <AppDialogProvider><AppContent /></AppDialogProvider>; }
 function AppContent() {
   const dialogs = useAppDialog();
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
@@ -53,6 +52,7 @@ function AppContent() {
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
+  const chooseActiveTemplateVersion = useTemplateVersionSelection({ activeDocumentId: activeDoc, documents, dialogs, run, setDocuments, setStatus });
 
   useDocumentSelectionPersistence({
     ready: workspaceStateReady,
@@ -60,7 +60,6 @@ function AppContent() {
     setSelectedDocumentIds: setSelectedDocIds,
     setStatus,
   });
-
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
   const [sourceFilePath, setSourceFilePath] = useState<string | null>(null);
@@ -1375,6 +1374,7 @@ function AppContent() {
             onScanTemplate={startGuidedExistingTemplateScanner}
             onRemove={removeActiveDocument}
             onApprove={approveActiveTemplate}
+            onVersions={chooseActiveTemplateVersion}
             onAdd={openTemplateSetup}
             onAddFromText={openTextTemplateSetup}
             onToggleUtilities={() => setUtilityOpen((value) => !value)}

@@ -992,7 +992,34 @@ function Add-E1DomainTemplate {
       }
   } catch {
     Write-Host ("E1 UI snapshot after failed template confirmation for '$Label': " + (Get-E1UiSnapshot))
-    throw
+    # Hosted WebView2 can expose an enabled HTML button whose UIA InvokePattern
+    # and one coordinate click are both acknowledged without delivering a DOM
+    # click. The same runner already needs a focused keyboard fallback for other
+    # React controls. Use one bounded Space activation only after both previous
+    # user-equivalent paths failed and the button is still enabled.
+    $createButton = Wait-UiElement -Description "focused create $Label button fallback" -Probe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
+    }
+    try {
+      if ($createButton.Current.IsOffscreen -and $createButton.Current.IsScrollItemPatternAvailable) {
+        $createButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+      $createButton.SetFocus()
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      $null = Wait-UiElement -Description "$Label document button after focused Space fallback" -TimeoutSeconds 30 -Probe {
+        $window = Find-LiveAppWindow
+        if ($null -eq $window) { return $null }
+        Find-ButtonByNames -Root $window -Names @($Label)
+      }
+      Write-Host "E1 template confirmation keyboard fallback PASS for '$Label'."
+    } catch {
+      Write-Host ("E1 UI snapshot after keyboard fallback failure for '$Label': " + (Get-E1UiSnapshot))
+      throw
+    }
   }
 }
 

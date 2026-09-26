@@ -24,6 +24,8 @@ def test_fpr15_transfer_package_is_template_only_and_integrity_checked() -> None
     assert "semantic_case" not in manifest_block
     assert "template_path" not in manifest_block
     assert "source_path" not in manifest_block
+    assert 'import_root.join(format!("{index:04}.{extension}"))' in source
+    assert '{index:04}-{id}' not in source
 
 
 def test_fpr15_transfer_is_visible_in_primary_template_management_ui() -> None:

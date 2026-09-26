@@ -354,6 +354,40 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
+function Set-ReactControlledText {
+  param(
+    [Parameter(Mandatory = $true)]$Element,
+    [Parameter(Mandatory = $true)][string]$Value,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+
+  # WebView2 exposes HTML inputs through UIA, but ValuePattern.SetValue changes
+  # the accessibility value without guaranteeing a React input/change event.
+  # Commit controlled text exactly as a user does: focus, select all, paste the
+  # exact Unicode payload, blur, then re-read the persisted value.
+  try {
+    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+      $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+      Start-Sleep -Milliseconds 100
+    }
+    $Element.SetFocus()
+    Start-Sleep -Milliseconds 75
+    Set-Clipboard -Value $Value -ErrorAction Stop
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+    Start-Sleep -Milliseconds 250
+  } catch {
+    throw "React input commit failed for '$Description': $($_.Exception.Message)"
+  }
+
+  $actual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+  $expected = Normalize-UiValue -Value $Value
+  if ($actual -ne $expected) {
+    throw "React input did not persist for '$Description'. Expected '$expected', actual '$actual'."
+  }
+}
+
 function Get-UiValue {
   param([Parameter(Mandatory = $true)]$Element)
   $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
@@ -926,14 +960,7 @@ function Set-E1TemplateDomainOverride {
     $custom = Wait-UiElement -Description "custom domain value for $FileName" -Probe {
       Find-E1NamedElement -Name $customName
     }
-    # Commit the exact Unicode custom profile through a real input event.
-    $custom.SetFocus()
-    Start-Sleep -Milliseconds 50
-    Set-Clipboard -Value $CustomProfile
-    [System.Windows.Forms.SendKeys]::SendWait('^a')
-    [System.Windows.Forms.SendKeys]::SendWait('^v')
-    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-    Start-Sleep -Milliseconds 300
+    Set-ReactControlledText -Element $custom -Value $CustomProfile -Description "custom domain value for $FileName"
 
     $custom = Wait-UiElement -Description "persisted custom domain value for $FileName" -Probe {
       Find-E1NamedElement -Name $customName
@@ -996,17 +1023,7 @@ function Add-E1DomainTemplate {
   $labelInput = Wait-UiElement -Description "template label for $Label" -TimeoutSeconds 40 -Probe {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }
-  # React controls this input. UIA ValuePattern.SetValue can mutate the DOM
-  # without dispatching React's input event, while a space/backspace no-op can
-  # be lossy for Unicode text on hosted runners. Paste the exact Unicode label
-  # through the focused control so React receives a real user-equivalent edit.
-  $labelInput.SetFocus()
-  Start-Sleep -Milliseconds 50
-  Set-Clipboard -Value $Label
-  [System.Windows.Forms.SendKeys]::SendWait('^a')
-  [System.Windows.Forms.SendKeys]::SendWait('^v')
-  [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-  Start-Sleep -Milliseconds 250
+  Set-ReactControlledText -Element $labelInput -Value $Label -Description "template label for $fileName"
   $labelInput = Wait-UiElement -Description "persisted template label for $Label" -Probe {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }

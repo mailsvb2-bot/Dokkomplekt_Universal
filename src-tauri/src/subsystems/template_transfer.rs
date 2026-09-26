@@ -252,7 +252,10 @@ fn import_template_transfer_from_path(
                     item.button_label
                 ));
             }
-            // The manifest id is logical data, not a filesystem component. Keep the physical\n            // storage name entirely application-owned so a hostile transfer package cannot\n            // smuggle path separators or parent components through document.id.\n            let target = import_root.join(format!("{index:04}.{extension}"));
+            // The manifest id is logical data, not a filesystem component. Keep the physical
+            // storage name entirely application-owned so a hostile transfer package cannot
+            // smuggle path separators or parent components through document.id.
+            let target = import_root.join(format!("{index:04}.{extension}"));
             std::fs::write(&target, &bytes)
                 .map_err(|error| format!("Не удалось сохранить импортированный шаблон: {error}"))?;
             validate_safe_template_file(&target).map_err(|error| {

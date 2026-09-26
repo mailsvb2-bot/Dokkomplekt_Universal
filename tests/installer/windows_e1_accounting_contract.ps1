@@ -1339,20 +1339,23 @@ Invoke-UiActionPhysicallyFromProbe -Description 'select Accounting service act' 
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, "Добавить $accountingLabel в комплект")
   )
 }
-$generationAction = Wait-UiElement -Description 'one-document Accounting generation action' -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
-}
-Invoke-UiElementPhysically -Element $generationAction -Description 'open E1 Accounting preflight'
-$null = Wait-UiElement -Description 'E1 Accounting preflight' -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  $window.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
-  )
-}
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'open E1 Accounting preflight' `
+  -TransitionDescription 'E1 Accounting preflight' `
+  -TransitionSeconds 6 `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    $window.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+    )
+  }
 
 foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-vat')) {
   $control = (Find-LiveAppWindow).FindFirst(

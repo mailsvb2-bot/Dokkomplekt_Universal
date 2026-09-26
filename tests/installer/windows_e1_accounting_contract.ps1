@@ -1751,6 +1751,11 @@ if ($fpr01Created.Count -ne $fpr01Documents.Count) {
   throw "FPR-01 did not publish every selected document. Missing: $missing"
 }
 
+$fpr13BundleFolders = @($fpr01Created.Values | ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique)
+if ($fpr13BundleFolders.Count -ne 1) {
+  throw "FPR-13 selected documents were not published into one physical bundle folder: $($fpr13BundleFolders -join ' | ')"
+}
+
 $fpr01OutputHashes = New-Object System.Collections.Generic.HashSet[string]
 foreach ($document in $fpr01Documents) {
   $created = $fpr01Created[$document.Label]
@@ -1780,6 +1785,7 @@ foreach ($document in $fpr01Documents) {
 
 $fpr01ReceiptDeadline = [DateTime]::UtcNow.AddSeconds(30)
 $fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]
+$fpr13PlanBindings = New-Object System.Collections.Generic.HashSet[string]
 do {
   if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
     foreach ($file in @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
@@ -1788,6 +1794,11 @@ do {
         $receiptHash = [string]$data.output_sha256
         if ($data.status -eq 'committed' -and $fpr01OutputHashes.Contains($receiptHash)) {
           $null = $fpr01MatchedHashes.Add($receiptHash)
+          $planBinding = [string]$data.plan_binding_sha256
+          if ([string]::IsNullOrWhiteSpace($planBinding) -or $planBinding.Length -ne 64) {
+            throw "FPR-13 committed receipt for output $receiptHash has no complete plan binding."
+          }
+          $null = $fpr13PlanBindings.Add($planBinding)
         }
       } catch { }
     }
@@ -1803,6 +1814,16 @@ $fpr01ReceiptCountAfter = @(Get-ChildItem -LiteralPath $completionReceiptRoot -F
 if ($fpr01ReceiptCountAfter -ne ($fpr01ReceiptCountBefore + $fpr01Documents.Count)) {
   throw "FPR-01 one batch did not add exactly $($fpr01Documents.Count) committed GenerationReceipts."
 }
+if ($fpr13PlanBindings.Count -ne 1) {
+  throw "FPR-13 two outputs do not share one immutable plan binding; distinct bindings=$($fpr13PlanBindings.Count)."
+}
+$fpr13BundleStatus = Wait-UiElement -Description 'FPR-13 honest bundle completion status' -TimeoutSeconds 15 -Probe {
+  Find-E1NamedElementContaining -Text 'Комплект создан: 2 документ(ов)'
+}
+if ($null -eq $fpr13BundleStatus) {
+  throw 'FPR-13 UI did not report the actual two-document bundle size.'
+}
+Write-Host "FPR-13 INSTALLED PASS: one selected bundle -> one physical folder '$($fpr13BundleFolders[0])' -> 2 distinct readable DOCX -> one shared plan binding -> honest UI count -> 2 committed receipts."
 Write-Host 'FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts.'
 
 # FPR-02: prove the real installed medical diary path. The registered diary

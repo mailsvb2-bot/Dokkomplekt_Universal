@@ -155,7 +155,13 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "create-selected-documents" in source
     assert "app-status" in app_source
     assert "Проверяем финальный план выбранного комплекта…" in (ROOT / "src" / "hooks" / "useGenerationPreflight.ts").read_text(encoding="utf-8")
-    assert "E1 Accounting preflight diagnostic status:" in source
+    assert "E1 Accounting preflight diagnostic status before canonical shortcut:" in source
+    assert "E1 canonical generation shortcut PASS: Ctrl+Enter opened the same Accounting preflight." in source
+    assert "SendKeys]::SendWait('^({ENTER})')" in source
+    assert "onGenerationShortcut" in app_source
+    assert "event.key !== 'Enter'" in app_source
+    assert "void openGenerationPreflight()" in app_source
+    assert 'title="Проверить и создать · Ctrl+Enter"' in (ROOT / "src" / "components" / "Workspace.tsx").read_text(encoding="utf-8")
     assert source.count("Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'") >= 2
     assert "function Set-ReactControlledText" in source
     assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source

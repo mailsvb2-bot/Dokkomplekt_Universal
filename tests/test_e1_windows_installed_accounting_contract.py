@@ -156,7 +156,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "public static extern bool SetCursorPos(int x, int y);" in source
     assert "DokkomplektE1NativeMouse]::SetCursorPos($x, $y)" in source
     assert "E1 physical target '$Description': point=" in source
-    assert "remains outside the visible WebView2 viewport after bounded scroll/focus recovery" in source
+    assert "function Test-ElementPhysicallyVisible" in source
+    assert "[System.Windows.Forms.SystemInformation]::VirtualScreen" in source
+    assert "remains outside the physically clickable WebView2/VirtualScreen area after bounded scroll/focus recovery" in source
+    assert "produced a click point outside VirtualScreen" in source
     assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $Element.Current.IsOffscreen; $scrollAttempt++)" in source
     assert "[DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)" in source
     assert "public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);" in source

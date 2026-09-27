@@ -615,6 +615,17 @@ function AppContent() {
     onConfirmed: performGenerateSelectedDocuments,
   });
 
+  useEffect(() => {
+    function onGenerationShortcut(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
+      if (setupOpen || generationPreflightOpen || busy || preflightLoading || selectedDocIds.length === 0) return;
+      event.preventDefault();
+      void openGenerationPreflight();
+    }
+    document.addEventListener('keydown', onGenerationShortcut);
+    return () => document.removeEventListener('keydown', onGenerationShortcut);
+  }, [setupOpen, generationPreflightOpen, busy, preflightLoading, selectedDocIds.length, openGenerationPreflight]);
+
   function openPopupDesigner() {
     if (!activeDoc) return;
     const document = documents.find((item) => item.id === activeDoc);

@@ -2399,6 +2399,174 @@ Write-Host 'FPR-07 ZERO-QUESTION INSTALLED PASS: fully resolved Scanner case ski
 Write-Host 'FPR-07 INSTALLED PASS: missing-value case prompts; zero-question case has no form; both publish through the same canonical workflow.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
 
+# FPR-15 / ACC-61: real installed clean-profile transfer proof.
+# Export the current confirmed template set while a case-only sentinel exists,
+# prove that the package contains no case state or local paths, destroy the
+# temporary application profile, import through the installed UI, and generate
+# a physical DOCX from a new case with the imported button.
+$fpr15OldCaseSentinel = $fpr06ScannerValue
+$fpr15ExistingPackages = @{}
+foreach ($item in @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue)) {
+  $fpr15ExistingPackages[$item.FullName] = $true
+}
+$fpr15Export = Find-E1NamedElement -Name 'Экспорт шаблонов'
+if ($null -eq $fpr15Export) {
+  $management = Wait-UiElement -Description 'FPR-15 template management' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Управление кнопками'
+  }
+  Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 template management'
+  $fpr15Export = Wait-UiElement -Description 'FPR-15 export templates button' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Экспорт шаблонов'
+  }
+}
+Invoke-UiElementPhysically -Element $fpr15Export -Description 'FPR-15 export templates'
+
+$fpr15Package = $null
+$fpr15ExportDeadline = [DateTime]::UtcNow.AddSeconds(30)
+do {
+  $fpr15Package = @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue |
+    Where-Object { -not $fpr15ExistingPackages.ContainsKey($_.FullName) } |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1)
+  if ($fpr15Package.Count -gt 0) { $fpr15Package = $fpr15Package[0]; break }
+  Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $fpr15ExportDeadline)
+if ($null -eq $fpr15Package) { throw 'FPR-15 installed export did not publish a .dktpack file.' }
+
+$fpr15Zip = [System.IO.Compression.ZipFile]::OpenRead($fpr15Package.FullName)
+try {
+  $manifestEntry = $fpr15Zip.GetEntry('manifest.json')
+  if ($null -eq $manifestEntry) { throw 'FPR-15 package has no manifest.json.' }
+  $manifestReader = [System.IO.StreamReader]::new($manifestEntry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr15ManifestText = $manifestReader.ReadToEnd() } finally { $manifestReader.Dispose() }
+  foreach ($forbidden in @('semantic_case', 'source_path', 'template_path', $appDataRoot, $fixtureDir, $fpr15OldCaseSentinel, 'fpr06-scanner-source.docx')) {
+    if (-not [string]::IsNullOrWhiteSpace($forbidden) -and $fpr15ManifestText.Contains($forbidden)) {
+      throw "FPR-15 manifest leaked forbidden case/local value: $forbidden"
+    }
+  }
+  foreach ($entry in $fpr15Zip.Entries) {
+    if ($entry.Length -gt 64MB) { throw "FPR-15 package entry is unexpectedly large: $($entry.FullName)" }
+    $stream = $entry.Open()
+    try {
+      $memory = New-Object System.IO.MemoryStream
+      try {
+        $stream.CopyTo($memory)
+        $entryBytes = $memory.ToArray()
+      } finally { $memory.Dispose() }
+    } finally { $stream.Dispose() }
+    $entryText = [System.Text.Encoding]::UTF8.GetString($entryBytes)
+    if ($entryText.Contains($fpr15OldCaseSentinel)) {
+      throw "FPR-15 package leaked the prior case sentinel through $($entry.FullName)."
+    }
+  }
+} finally {
+  $fpr15Zip.Dispose()
+}
+Write-Host "FPR-15 EXPORT PRIVACY PASS: $($fpr15Package.FullName)"
+
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction Stop
+if (Test-Path -LiteralPath $appDataRoot) { throw 'FPR-15 clean-profile reset left application data behind.' }
+
+$process = Start-Process -FilePath $app.FullName -PassThru
+$window = Wait-UiElement -Description 'FPR-15 clean-profile application window' -TimeoutSeconds 40 -Probe {
+  Find-LiveAppWindow
+}
+if ($null -ne (Find-E1NamedElement -Name $fpr06Label)) {
+  throw 'FPR-15 clean profile already contains the transferred button before import.'
+}
+Write-Host 'FPR-15 CLEAN PROFILE PASS: application data removed and transferred button is absent before import.'
+
+$fpr15Import = Find-E1NamedElement -Name 'Импорт шаблонов'
+if ($null -eq $fpr15Import) {
+  $management = Wait-UiElement -Description 'FPR-15 clean-profile template management' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Управление кнопками'
+  }
+  Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 clean-profile template management'
+  $fpr15Import = Wait-UiElement -Description 'FPR-15 import templates button' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Импорт шаблонов'
+  }
+}
+$importDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-15 import templates' `
+  -TransitionDescription 'FPR-15 native transfer package picker' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Импорт шаблонов')
+  } `
+  -TransitionProbe { Find-FileDialog }
+Set-OpenFileDialogPath -Dialog $importDialog -Path $fpr15Package.FullName | Out-Null
+Submit-OpenFileDialog -Dialog $importDialog
+$null = Wait-UiElement -Description 'FPR-15 imported Scanner button' -TimeoutSeconds 40 -Probe {
+  Find-E1NamedElement -Name $fpr06Label
+}
+if (-not (Test-Path -LiteralPath $appDataRoot -PathType Container)) {
+  throw 'FPR-15 import did not recreate clean profile application data.'
+}
+Write-Host 'FPR-15 IMPORT PASS: .dktpack imported through installed UI into a genuinely clean profile.'
+
+$fpr15NewSentinel = 'FPR15-NEW-CLEAN-PROFILE'
+$fpr15Source = Join-Path $fixtureDir 'fpr15-new-case.docx'
+New-E1TextDocx -Path $fpr15Source -Lines @(
+  'FPR-15 clean-profile new case',
+  'Номер документа: FPR15-NEW-1',
+  'Дата документа: 27.09.2026',
+  "Новое значение: $fpr15NewSentinel"
+)
+Set-E1DomainSource -SourcePath $fpr15Source
+
+$fpr15FieldInput = Find-E1NamedElement -Name 'Идентификатор поля'
+if ($null -eq $fpr15FieldInput) {
+  $fpr15Advanced = Wait-UiElement -Description 'FPR-15 advanced tools toggle' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Расширенные инструменты'
+  }
+  Invoke-UiElementPhysically -Element $fpr15Advanced -Description 'open FPR-15 manual Scanner tools'
+  $fpr15FieldInput = Wait-UiElement -Description 'FPR-15 Scanner field input' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Идентификатор поля'
+  }
+}
+Set-UiValue -Element $fpr15FieldInput -Value $fpr06FieldId
+$fpr15TextInput = Wait-UiElement -Description 'FPR-15 Scanner text input' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Выделенный текст'
+}
+Set-UiValue -Element $fpr15TextInput -Value $fpr15NewSentinel
+Invoke-UiActionPhysicallyFromProbe -Description 'apply FPR-15 new Scanner value' -ActionProbe {
+  Find-E1NamedElement -Name 'Назначить выделение полю'
+}
+$null = Wait-UiElement -Description 'FPR-15 Scanner accepted status' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElementContaining -Text 'Разметка сохранена: принято 1'
+}
+
+Invoke-E1DomainScenario `
+  -Label $fpr06Label `
+  -PromptValues @{} `
+  -PluginRequiredFields @() `
+  -ExpectedOutputValues @($fpr15NewSentinel) `
+  -OutputRoot $defaultOutputRoot `
+  -ReceiptRoot $completionReceiptRoot `
+  -ExpectPreflight $false
+
+$fpr15Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter "$fpr06Label.docx" -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTimeUtc -Descending |
+  Select-Object -First 1
+if ($null -eq $fpr15Doc) { throw 'FPR-15 clean-profile import did not publish a physical DOCX.' }
+$fpr15Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr15Doc.FullName)
+try {
+  $fpr15Entry = $fpr15Archive.GetEntry('word/document.xml')
+  if ($null -eq $fpr15Entry) { throw 'FPR-15 output is not a readable DOCX package.' }
+  $fpr15Reader = [System.IO.StreamReader]::new($fpr15Entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr15Xml = $fpr15Reader.ReadToEnd() } finally { $fpr15Reader.Dispose() }
+} finally { $fpr15Archive.Dispose() }
+if ($fpr15Xml -notmatch [regex]::Escape($fpr15NewSentinel)) {
+  throw 'FPR-15 imported button did not render the new clean-profile case value.'
+}
+if ($fpr15Xml -match [regex]::Escape($fpr15OldCaseSentinel)) {
+  throw 'FPR-15 imported button leaked the pre-export case value into the clean-profile output.'
+}
+Write-Host "FPR-15 INSTALLED PASS: export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt: $($fpr15Doc.FullName)"
+
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter '*.exe' | Where-Object { $_.Name -match 'uninstall' } | Select-Object -First 1

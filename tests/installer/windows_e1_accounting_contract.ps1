@@ -59,7 +59,7 @@ using System;
 using System.Runtime.InteropServices;
 public static class DokkomplektE1NativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -320,7 +320,7 @@ function Invoke-UiElementPhysically {
           $targetCenterY = $targetRect.Top + ($targetRect.Height / 2)
           $windowCenterY = $windowRect.Top + ($windowRect.Height / 2)
           $wheelDelta = if ($targetCenterY -gt $windowCenterY) { -360 } else { 360 }
-          [DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, [uint32]$wheelDelta, [UIntPtr]::Zero)
+          [DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)
           Start-Sleep -Milliseconds 120
         }
       }

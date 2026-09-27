@@ -60,6 +60,7 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
     }
     setGenerationError(null);
     setGenerationValidationFieldId(null);
+    options.setStatus('Проверяем финальный план выбранного комплекта…');
     const snapshot: GenerationSnapshot = {
       documentIds: [...options.selectedDocumentIds],
       sickLeaveEnabled: options.sickLeaveEnabled,

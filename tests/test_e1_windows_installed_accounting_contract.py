@@ -153,6 +153,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "function Invoke-UiActionWithObservedTransition" in source
     assert "function Find-ReadyButtonByAutomationId" in source
     assert "create-selected-documents" in source
+    assert "app-status" in app_source
+    assert "Проверяем финальный план выбранного комплекта…" in (ROOT / "src" / "hooks" / "useGenerationPreflight.ts").read_text(encoding="utf-8")
+    assert "E1 Accounting preflight diagnostic status:" in source
     assert source.count("Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'") >= 2
     assert "function Set-ReactControlledText" in source
     assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source

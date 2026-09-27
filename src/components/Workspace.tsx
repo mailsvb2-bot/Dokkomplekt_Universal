@@ -354,7 +354,7 @@ export function Workspace(props: WorkspaceProps) {
                 />
               ))}
               <div className="reviewActions">
-                <button id="create-selected-documents" className="primaryBtn" onClick={props.onCreateSelected} disabled={props.busy || !planReady}>
+                <button id="create-selected-documents" className="primaryBtn" title="Проверить и создать · Ctrl+Enter" onClick={props.onCreateSelected} disabled={props.busy || !planReady}>
                   {props.busy ? 'Создаём документы…' : `Проверить и создать (${props.selectedDocumentCount})`}
                 </button>
                 <button className="softBtn" onClick={props.onPreview} disabled={props.busy || !props.activeDocumentLabel}>
@@ -368,7 +368,7 @@ export function Workspace(props: WorkspaceProps) {
               <div><strong>Можно создавать документы</strong><span>{props.semantic ? `Распознано значений: ${props.semantic.fields.length}${reviewCount ? ` · рекомендуем проверить: ${reviewCount}` : ''}` : 'Данные источника будут проверены ещё раз перед сохранением.'}</span></div>
               <div className="readyActions">
                 <button className="softBtn" onClick={props.onUnderstand} disabled={props.busy || !planReady || !props.selectedDocumentCount}>Проверить данные</button>
-                <button id="create-selected-documents" className="primaryBtn" onClick={props.onCreateSelected} disabled={props.busy || !planReady || !props.selectedDocumentCount}>
+                <button id="create-selected-documents" className="primaryBtn" title="Проверить и создать · Ctrl+Enter" onClick={props.onCreateSelected} disabled={props.busy || !planReady || !props.selectedDocumentCount}>
                   {props.busy ? 'Создаём документы…' : `Создать документы (${props.selectedDocumentCount})`}
                 </button>
               </div>

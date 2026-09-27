@@ -60,6 +60,8 @@ using System.Runtime.InteropServices;
 public static class DokkomplektE1NativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
@@ -308,7 +310,18 @@ function Invoke-UiElementPhysically {
     }
   }
   if ($null -ne $clickPoint) {
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
+    # UIA returns physical screen coordinates. WinForms Cursor.Position may be
+    # DPI-virtualized on hosted runners, which can shift lower WebView2 targets
+    # away from the actual HTML control. Use user32 directly so UIA and mouse
+    # coordinates stay in the same native coordinate space.
+    $x = [int][Math]::Round($clickPoint.X)
+    $y = [int][Math]::Round($clickPoint.Y)
+    $rect = $Element.Current.BoundingRectangle
+    Write-Host "E1 physical target '$Description': point=($x,$y) rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)) offscreen=$($Element.Current.IsOffscreen)"
+    if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
+      throw "$Description failed to position the native cursor at ($x,$y)."
+    }
+    Start-Sleep -Milliseconds 75
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
     return

@@ -1830,11 +1830,29 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
   }
   Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
   Submit-OpenFileDialog -Dialog $restartSourceDialog
+  $restartSourceName = [System.IO.Path]::GetFileName($restartMedicalSource)
   Wait-UiElement -Description 'FPR-08 restart source committed' -TimeoutSeconds 40 -Probe {
     $currentAppWindow = Find-LiveAppWindow
     if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
+    $accepted = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        'Источник принят'
+      )
+    )
+    if ($null -eq $accepted) { return $null }
+    $exactSource = $currentAppWindow.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        $restartSourceName
+      )
+    )
+    if ($null -eq $exactSource) { return $null }
+    return $exactSource
   } | Out-Null
+  Write-Host "FPR-08 restart source commit PASS: exact source '$restartSourceName' is accepted after restart."
 
   $restartGenerationAction = $null
   try {

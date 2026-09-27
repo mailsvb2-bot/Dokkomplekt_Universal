@@ -169,6 +169,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "void openGenerationPreflight()" in preflight_hook
     assert "shortcutEnabled: !setupOpen && !busy" in app_source
     assert 'title="Проверить и создать · Ctrl+Enter"' in (ROOT / "src" / "components" / "Workspace.tsx").read_text(encoding="utf-8")
+    styles = (ROOT / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".reviewActions { grid-column: 1 / -1; position: sticky; bottom: 0; z-index: 12;" in styles
     assert source.count("Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'") >= 2
     assert "function Set-ReactControlledText" in source
     assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source

@@ -169,6 +169,9 @@ public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", SetLastError = true)]
@@ -924,6 +927,7 @@ function Submit-OpenFileDialog {
   [void][DokkomplektNativeMouse]::SetForegroundWindow($dialogHandle)
   Start-Sleep -Milliseconds 100
 
+  # Native OpenFileDialog primary Open button invariant: AutomationId=1
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
     '1'

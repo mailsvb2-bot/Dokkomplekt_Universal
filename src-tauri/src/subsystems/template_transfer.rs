@@ -63,6 +63,64 @@ fn validate_transfer_entry_name(entry: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn write_transfer_archive_atomically(
+    output_path: &Path,
+    manifest_bytes: &[u8],
+    template_payloads: &[(String, Vec<u8>)],
+) -> Result<Vec<u8>, String> {
+    if output_path.exists() {
+        return Err("Файл пакета переноса уже существует. Выберите новое имя, чтобы не перезаписать существующий пакет.".into());
+    }
+    let parent = output_path
+        .parent()
+        .ok_or_else(|| "Не удалось определить папку экспорта.".to_string())?;
+    let file_name = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Некорректное имя файла пакета переноса.".to_string())?;
+    let temporary = parent.join(format!(".{file_name}.tmp-{}", Uuid::new_v4()));
+
+    let result = (|| -> Result<Vec<u8>, String> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("Не удалось создать временный пакет переноса: {error}"))?;
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive
+            .start_file("manifest.json", options)
+            .map_err(|error| format!("Не удалось записать manifest пакета: {error}"))?;
+        archive
+            .write_all(manifest_bytes)
+            .map_err(|error| format!("Не удалось записать manifest пакета: {error}"))?;
+        for (entry, bytes) in template_payloads {
+            archive
+                .start_file(entry, options)
+                .map_err(|error| format!("Не удалось добавить шаблон в пакет: {error}"))?;
+            archive
+                .write_all(bytes)
+                .map_err(|error| format!("Не удалось записать шаблон в пакет: {error}"))?;
+        }
+        let file = archive
+            .finish()
+            .map_err(|error| format!("Не удалось завершить пакет переноса: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Не удалось синхронизировать пакет переноса: {error}"))?;
+        let package_bytes = std::fs::read(&temporary)
+            .map_err(|error| format!("Не удалось проверить созданный пакет: {error}"))?;
+        std::fs::rename(&temporary, output_path)
+            .map_err(|error| format!("Не удалось атомарно опубликовать пакет переноса: {error}"))?;
+        Ok(package_bytes)
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn export_template_transfer_to_path(
     pack: &DocumentPack,
     output_path: &Path,
@@ -134,31 +192,8 @@ fn export_template_transfer_to_path(
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
 
-    let file = std::fs::File::create(output_path)
-        .map_err(|error| format!("Не удалось создать пакет переноса: {error}"))?;
-    let mut archive = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    archive
-        .start_file("manifest.json", options)
-        .map_err(|error| format!("Не удалось записать manifest пакета: {error}"))?;
-    archive
-        .write_all(&manifest_bytes)
-        .map_err(|error| format!("Не удалось записать manifest пакета: {error}"))?;
-    for (entry, bytes) in template_payloads {
-        archive
-            .start_file(entry, options)
-            .map_err(|error| format!("Не удалось добавить шаблон в пакет: {error}"))?;
-        archive
-            .write_all(&bytes)
-            .map_err(|error| format!("Не удалось записать шаблон в пакет: {error}"))?;
-    }
-    archive
-        .finish()
-        .map_err(|error| format!("Не удалось завершить пакет переноса: {error}"))?;
-
-    let package_bytes = std::fs::read(output_path)
-        .map_err(|error| format!("Не удалось проверить созданный пакет: {error}"))?;
+    let package_bytes =
+        write_transfer_archive_atomically(output_path, &manifest_bytes, &template_payloads)?;
     Ok(ExportTemplateTransferResponse {
         package_path: output_path.display().to_string(),
         document_count: manifest.documents.len(),
@@ -341,11 +376,18 @@ fn import_template_transfer_from_path(
     } else {
         manifest.pack_name.trim().to_string()
     };
-    let (pack, versions) = publish_pack_with_template_versions(app, state, &drafts, |pack| {
+    let publication = publish_pack_with_template_versions(app, state, &drafts, |pack| {
         pack.name = imported_name.clone();
         pack.documents = imported_documents.clone();
         Ok(())
-    })?;
+    });
+    let (pack, versions) = match publication {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&import_root);
+            return Err(error);
+        }
+    };
     if versions.len() != pack.documents.len() {
         return Err("Не все импортированные шаблоны получили опубликованную версию.".into());
     }
@@ -473,6 +515,54 @@ mod template_transfer_tests {
             assert!(validate_transfer_entry_name(value).is_err(), "{value}");
         }
         assert!(validate_transfer_entry_name("templates/0000.docx").is_ok());
+    }
+
+    #[test]
+    fn atomic_transfer_writer_never_overwrites_existing_destination() {
+        let root = std::env::temp_dir().join(format!("dkk-transfer-atomic-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("bundle.dktpack");
+        std::fs::write(&destination, b"existing").unwrap();
+
+        let result = write_transfer_archive_atomically(
+            &destination,
+            br#"{"schema":"dokkomplekt.template-transfer.v1"}"#,
+            &[],
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
+        assert_eq!(
+            std::fs::read_dir(&root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn atomic_transfer_writer_publishes_complete_zip_without_temp_residue() {
+        let root = std::env::temp_dir().join(format!("dkk-transfer-atomic-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("bundle.dktpack");
+        let bytes = write_transfer_archive_atomically(
+            &destination,
+            br#"{"schema":"dokkomplekt.template-transfer.v1","pack_name":"x","documents":[]}"#,
+            &[("templates/0000.docx".into(), b"template".to_vec())],
+        )
+        .unwrap();
+        assert_eq!(bytes, std::fs::read(&destination).unwrap());
+        let archive = zip::ZipArchive::new(std::fs::File::open(&destination).unwrap()).unwrap();
+        assert_eq!(archive.len(), 2);
+        assert_eq!(
+            std::fs::read_dir(&root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

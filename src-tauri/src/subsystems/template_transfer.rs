@@ -112,8 +112,11 @@ fn write_transfer_archive_atomically(
             .map_err(|error| format!("Не удалось проверить созданный пакет: {error}"))?;
         std::fs::hard_link(&temporary, output_path)
             .map_err(|error| format!("Не удалось атомарно опубликовать пакет переноса без перезаписи существующего файла: {error}"))?;
-        std::fs::remove_file(&temporary)
-            .map_err(|error| format!("Пакет опубликован, но не удалось удалить временный файл: {error}"))?;
+        // The hard-link creation is the publication commit boundary: from this
+        // point the final package exists with the already-synced bytes. Cleanup
+        // must not turn a committed export into a false failure; a stale temp
+        // file is harmless and is never treated as another package.
+        let _ = std::fs::remove_file(&temporary);
         Ok(package_bytes)
     })();
 

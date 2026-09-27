@@ -138,3 +138,42 @@ test('marked DOCX becomes a button without copying example facts', async ({ page
   expect(commands).toContain('analyze_template_file');
   expect(commands).toContain('confirm_template_setup');
 });
+
+test('long review keeps the primary generation action inside a short viewport', async ({ page }) => {
+  await installTauriMock(page);
+  await page.setViewportSize({ width: 900, height: 600 });
+  await page.goto('/');
+
+  await page.evaluate(() => {
+    const fields = Array.from({ length: 12 }, (_, index) => `
+      <label class="clientField">
+        <span>Поле ${index + 1}</span>
+        <div><div class="clientFieldControl"><input value="значение ${index + 1}" /></div></div>
+      </label>
+    `).join('');
+    document.body.innerHTML = `
+      <div class="appRoot">
+        <div class="window">
+          <main class="clientWorkspace">
+            <section class="reviewStage">
+              <div class="clientFields">
+                ${fields}
+                <div class="reviewActions">
+                  <button id="viewport-generation-action" class="primaryBtn">Проверить и создать (1)</button>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    `;
+    window.scrollTo(0, 0);
+  });
+
+  const action = page.locator('#viewport-generation-action');
+  await expect(action).toBeVisible();
+  const box = await action.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(600);
+});

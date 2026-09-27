@@ -33,7 +33,8 @@ def test_fpr15_transfer_package_is_template_only_and_integrity_checked() -> None
     assert "write_transfer_archive_atomically" in source
     assert ".create_new(true)" in source
     assert ".sync_all()" in source
-    assert "std::fs::rename(&temporary, output_path)" in source
+    assert "std::fs::hard_link(&temporary, output_path)" in source
+    assert "std::fs::rename(&temporary, output_path)" not in source
     assert "Файл пакета переноса уже существует" in source
     assert "let publication = publish_pack_with_template_versions" in source
     assert "remove_dir_all(&import_root)" in source

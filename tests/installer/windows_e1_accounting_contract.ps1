@@ -132,6 +132,17 @@ function Find-ReadyButtonByNames {
   return $null
 }
 
+function Find-ElementByAutomationId {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
+  return $Root.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $AutomationId
+    )
+  )
+}
+
 function Find-ReadyButtonByAutomationId {
   param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
   $button = $Root.FindFirst(
@@ -1344,23 +1355,32 @@ Invoke-UiActionPhysicallyFromProbe -Description 'select Accounting service act' 
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, "Добавить $accountingLabel в комплект")
   )
 }
-$null = Invoke-UiActionWithObservedTransition `
-  -Description 'open E1 Accounting preflight' `
-  -TransitionDescription 'E1 Accounting preflight' `
-  -TransitionSeconds 6 `
-  -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'
-  } `
-  -TransitionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    $window.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
-    )
-  }
+try {
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description 'open E1 Accounting preflight' `
+    -TransitionDescription 'E1 Accounting preflight' `
+    -TransitionSeconds 6 `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+      )
+    }
+} catch {
+  $window = Find-LiveAppWindow
+  $statusElement = if ($null -ne $window) { Find-ElementByAutomationId -Root $window -AutomationId 'app-status' } else { $null }
+  $statusText = if ($null -ne $statusElement) { [string]$statusElement.Current.Name } else { '<missing>' }
+  Write-Host "E1 Accounting preflight diagnostic status: $statusText"
+  Write-Host ("E1 Accounting preflight UI snapshot: " + (Get-E1UiSnapshot))
+  throw
+}
 
 foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-vat')) {
   $control = (Find-LiveAppWindow).FindFirst(

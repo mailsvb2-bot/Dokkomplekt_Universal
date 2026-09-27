@@ -677,7 +677,12 @@ function Submit-OpenFileDialog {
         $openButton.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
       } else {
         $point = $openButton.GetClickablePoint()
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        $x = [int][Math]::Round($point.X)
+        $y = [int][Math]::Round($point.Y)
+        if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
+          throw "Native Open button failed to position the cursor at ($x,$y)."
+        }
+        Start-Sleep -Milliseconds 75
         [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
       }

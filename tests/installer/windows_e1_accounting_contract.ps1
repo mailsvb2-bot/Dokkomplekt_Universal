@@ -292,9 +292,43 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
-  if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-    $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
-    Start-Sleep -Milliseconds 100
+  if ($Element.Current.IsOffscreen) {
+    # WebView2 HTML controls often expose no ScrollItemPattern even though they
+    # are below the current viewport. First try the accessibility scroll/focus
+    # paths, then use bounded real mouse-wheel input inside the app window.
+    if ($Element.Current.IsScrollItemPatternAvailable) {
+      try {
+        $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      } catch { }
+    }
+    if ($Element.Current.IsOffscreen) {
+      try {
+        $Element.SetFocus()
+        Start-Sleep -Milliseconds 200
+      } catch { }
+    }
+    if ($Element.Current.IsOffscreen) {
+      $appWindow = Find-LiveAppWindow
+      if ($null -ne $appWindow) {
+        $windowRect = $appWindow.Current.BoundingRectangle
+        $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
+        $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+        [void][DokkomplektE1NativeMouse]::SetCursorPos($wheelX, $wheelY)
+        for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $Element.Current.IsOffscreen; $scrollAttempt++) {
+          $targetRect = $Element.Current.BoundingRectangle
+          $targetCenterY = $targetRect.Top + ($targetRect.Height / 2)
+          $windowCenterY = $windowRect.Top + ($windowRect.Height / 2)
+          $wheelDelta = if ($targetCenterY -gt $windowCenterY) { -360 } else { 360 }
+          [DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, [uint32]$wheelDelta, [UIntPtr]::Zero)
+          Start-Sleep -Milliseconds 120
+        }
+      }
+    }
+    if ($Element.Current.IsOffscreen) {
+      $rect = $Element.Current.BoundingRectangle
+      throw "$Description remains outside the visible WebView2 viewport after bounded scroll/focus recovery. rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height))."
+    }
   }
 
   $clickPoint = $null

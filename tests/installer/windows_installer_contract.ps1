@@ -253,7 +253,17 @@ function Invoke-UiElement {
     }
     try {
       $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $x = [int][Math]::Round($point.X)
+      $y = [int][Math]::Round($point.Y)
+      $liveWindow = Find-LiveAppWindow
+      if ($null -eq $liveWindow) { throw "$Description lost the installed app window before fallback click." }
+      $windowRect = $liveWindow.Current.BoundingRectangle
+      if ($x -lt $windowRect.Left -or $x -ge $windowRect.Right -or $y -lt $windowRect.Top -or $y -ge $windowRect.Bottom) {
+        throw "$Description fallback click point is outside the installed app window: point=($x,$y)."
+      }
+      if (-not [DokkomplektNativeMouse]::SetCursorPos($x, $y)) {
+        throw "$Description failed to position the native cursor at ($x,$y)."
+      }
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
       return

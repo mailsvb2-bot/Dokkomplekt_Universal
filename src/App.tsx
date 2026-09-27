@@ -603,24 +603,13 @@ function AppContent() {
   const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds), autoPrint, printCopies,
-    preflightPlan, preflightLoading, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
+    preflightPlan, preflightLoading, shortcutEnabled: !setupOpen && !busy, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
       ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))
       : run('apply_popup_batch', () => applyPopupBatch(snapshot.documentIds, snapshot.sickLeaveEnabled, payload, snapshot.folderParts)),
     onConfirmed: performGenerateSelectedDocuments,
   });
-
-  useEffect(() => {
-    function onGenerationShortcut(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
-      if (setupOpen || generationPreflightOpen || busy || preflightLoading || selectedDocIds.length === 0) return;
-      event.preventDefault();
-      void openGenerationPreflight();
-    }
-    document.addEventListener('keydown', onGenerationShortcut);
-    return () => document.removeEventListener('keydown', onGenerationShortcut);
-  }, [setupOpen, generationPreflightOpen, busy, preflightLoading, selectedDocIds.length, openGenerationPreflight]);
 
   function openPopupDesigner() {
     if (!activeDoc) return;

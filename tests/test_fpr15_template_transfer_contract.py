@@ -54,3 +54,20 @@ def test_fpr15_register_does_not_claim_runtime_closure_before_clean_profile_proo
     assert '"id": "FPR-15"' in register
     assert '"status": "needs-runtime-proof"' in register
     assert "clean-profile" in register.lower() or "чист" in register.lower()
+
+
+def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_output() -> None:
+    source = (ROOT / "tests" / "installer" / "windows_e1_accounting_contract.ps1").read_text(encoding="utf-8-sig")
+    for marker in (
+        "FPR-15 / ACC-61: real installed clean-profile transfer proof.",
+        "FPR-15 EXPORT PRIVACY PASS:",
+        "FPR-15 CLEAN PROFILE PASS:",
+        "FPR-15 IMPORT PASS:",
+        "FPR15-NEW-CLEAN-PROFILE",
+        "Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction Stop",
+        "Set-OpenFileDialogPath -Dialog $importDialog -Path $fpr15Package.FullName",
+        "FPR-15 INSTALLED PASS: export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt",
+    ):
+        assert marker in source
+    assert source.index("FPR-15 CLEAN PROFILE PASS:") < source.index("FPR-15 IMPORT PASS:")
+    assert source.index("FPR-15 IMPORT PASS:") < source.index("FPR-15 INSTALLED PASS:")

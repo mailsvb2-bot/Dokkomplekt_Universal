@@ -155,7 +155,10 @@ using System;
 using System.Runtime.InteropServices;
 public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
@@ -275,10 +278,7 @@ function Invoke-UiElementPhysically {
     if (-not $Element.Current.IsEnabled) {
       throw "$Description is currently disabled."
     }
-    # mouse_event is global input. After a native OpenFileDialog closes, the WebView
-    # can be visible while another runner window still owns the foreground. Restore
-    # the installed app explicitly before the one permitted physical retry so the
-    # click cannot be swallowed as a mere window-activation click.
+
     $process.Refresh()
     $windowHandle = [IntPtr]$process.MainWindowHandle
     if ($windowHandle -ne [IntPtr]::Zero) {
@@ -286,16 +286,57 @@ function Invoke-UiElementPhysically {
       [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
       Start-Sleep -Milliseconds 150
     }
-    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-      $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-      $scroll.ScrollIntoView()
-      Start-Sleep -Milliseconds 100
+
+    function Test-BaselineElementPhysicallyVisible {
+      param([Parameter(Mandatory = $true)]$Target)
+      if ($Target.Current.IsOffscreen) { return $false }
+      $targetRect = $Target.Current.BoundingRectangle
+      if ($targetRect.IsEmpty -or $targetRect.Width -le 1 -or $targetRect.Height -le 1) { return $false }
+      $liveWindow = Find-LiveAppWindow
+      if ($null -eq $liveWindow) { return $false }
+      $windowRect = $liveWindow.Current.BoundingRectangle
+      $cx = $targetRect.Left + ($targetRect.Width / 2)
+      $cy = $targetRect.Top + ($targetRect.Height / 2)
+      $margin = 6
+      return $cx -ge ($windowRect.Left + $margin) -and $cx -lt ($windowRect.Right - $margin) -and
+        $cy -ge ($windowRect.Top + $margin) -and $cy -lt ($windowRect.Bottom - $margin)
     }
 
-    # A WebView2 button can be physically clickable while reporting
-    # IsKeyboardFocusable=false. Do not make SetFocus a prerequisite for a
-    # genuine mouse action: prefer UIA's clickable point, then the visible
-    # bounding-rectangle centre. Keyboard input is only the final fallback.
+    if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+      if ($Element.Current.IsScrollItemPatternAvailable) {
+        try {
+          $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+          Start-Sleep -Milliseconds 150
+        } catch { }
+      }
+      if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+        try { $Element.SetFocus(); Start-Sleep -Milliseconds 150 } catch { }
+      }
+      if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+        $liveWindow = Find-LiveAppWindow
+        if ($null -ne $liveWindow) {
+          $windowRect = $liveWindow.Current.BoundingRectangle
+          $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
+          $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+          [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
+          for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-BaselineElementPhysicallyVisible -Target $Element); $scrollAttempt++) {
+            $targetRect = $Element.Current.BoundingRectangle
+            $targetCenterY = $targetRect.Top + ($targetRect.Height / 2)
+            $windowCenterY = $windowRect.Top + ($windowRect.Height / 2)
+            $wheelDelta = if ($targetCenterY -gt $windowCenterY) { -360 } else { 360 }
+            [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 120
+          }
+        }
+      }
+      if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+        $targetRect = $Element.Current.BoundingRectangle
+        $liveWindow = Find-LiveAppWindow
+        $windowRect = if ($null -ne $liveWindow) { $liveWindow.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
+        throw "$Description remains outside the installed app window after bounded recovery. target=($([int]$targetRect.Left),$([int]$targetRect.Top),$([int]$targetRect.Width),$([int]$targetRect.Height)); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
+      }
+    }
+
     $clickPoint = $null
     try {
       $clickPoint = $Element.GetClickablePoint()
@@ -309,7 +350,18 @@ function Invoke-UiElementPhysically {
       }
     }
     if ($null -ne $clickPoint) {
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$clickPoint.X, [int]$clickPoint.Y)
+      $x = [int][Math]::Round($clickPoint.X)
+      $y = [int][Math]::Round($clickPoint.Y)
+      $liveWindow = Find-LiveAppWindow
+      if ($null -eq $liveWindow) { throw "$Description lost the installed app window before physical click." }
+      $windowRect = $liveWindow.Current.BoundingRectangle
+      if ($x -lt $windowRect.Left -or $x -ge $windowRect.Right -or $y -lt $windowRect.Top -or $y -ge $windowRect.Bottom) {
+        throw "$Description produced a click point outside the installed app window: point=($x,$y); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
+      }
+      if (-not [DokkomplektNativeMouse]::SetCursorPos($x, $y)) {
+        throw "$Description failed to position the native cursor at ($x,$y)."
+      }
+      Start-Sleep -Milliseconds 75
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
       return

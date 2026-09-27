@@ -297,11 +297,14 @@ function Invoke-UiElementPhysically {
     if ($Target.Current.IsOffscreen) { return $false }
     $rect = $Target.Current.BoundingRectangle
     if ($rect.IsEmpty -or $rect.Width -le 1 -or $rect.Height -le 1) { return $false }
-    $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $appWindow = Find-LiveAppWindow
+    if ($null -eq $appWindow) { return $false }
+    $windowRect = $appWindow.Current.BoundingRectangle
     $centerX = $rect.Left + ($rect.Width / 2)
     $centerY = $rect.Top + ($rect.Height / 2)
-    return $centerX -ge $screen.Left -and $centerX -lt $screen.Right -and
-      $centerY -ge $screen.Top -and $centerY -lt $screen.Bottom
+    $margin = 6
+    return $centerX -ge ($windowRect.Left + $margin) -and $centerX -lt ($windowRect.Right - $margin) -and
+      $centerY -ge ($windowRect.Top + $margin) -and $centerY -lt ($windowRect.Bottom - $margin)
   }
 
   if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
@@ -339,8 +342,9 @@ function Invoke-UiElementPhysically {
     }
     if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
       $rect = $Element.Current.BoundingRectangle
-      $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-      throw "$Description remains outside the physically clickable WebView2/VirtualScreen area after bounded scroll/focus recovery. rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)); virtualScreen=($($screen.Left),$($screen.Top),$($screen.Width),$($screen.Height))."
+      $appWindow = Find-LiveAppWindow
+      $windowRect = if ($null -ne $appWindow) { $appWindow.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
+      throw "$Description remains outside the physically clickable installed-app area after bounded scroll/focus recovery. rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
     }
   }
 
@@ -365,9 +369,11 @@ function Invoke-UiElementPhysically {
     $y = [int][Math]::Round($clickPoint.Y)
     $rect = $Element.Current.BoundingRectangle
     Write-Host "E1 physical target '$Description': point=($x,$y) rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)) offscreen=$($Element.Current.IsOffscreen)"
-    $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-    if ($x -lt $screen.Left -or $x -ge $screen.Right -or $y -lt $screen.Top -or $y -ge $screen.Bottom) {
-      throw "$Description produced a click point outside VirtualScreen: point=($x,$y); virtualScreen=($($screen.Left),$($screen.Top),$($screen.Width),$($screen.Height))."
+    $appWindow = Find-LiveAppWindow
+    if ($null -eq $appWindow) { throw "$Description lost the installed app window before physical click." }
+    $windowRect = $appWindow.Current.BoundingRectangle
+    if ($x -lt $windowRect.Left -or $x -ge $windowRect.Right -or $y -lt $windowRect.Top -or $y -ge $windowRect.Bottom) {
+      throw "$Description produced a click point outside the installed app window: point=($x,$y); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
     }
     if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
       throw "$Description failed to position the native cursor at ($x,$y)."

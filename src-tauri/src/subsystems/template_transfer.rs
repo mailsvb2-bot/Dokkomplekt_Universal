@@ -110,8 +110,10 @@ fn write_transfer_archive_atomically(
             .map_err(|error| format!("Не удалось синхронизировать пакет переноса: {error}"))?;
         let package_bytes = std::fs::read(&temporary)
             .map_err(|error| format!("Не удалось проверить созданный пакет: {error}"))?;
-        std::fs::rename(&temporary, output_path)
-            .map_err(|error| format!("Не удалось атомарно опубликовать пакет переноса: {error}"))?;
+        std::fs::hard_link(&temporary, output_path)
+            .map_err(|error| format!("Не удалось атомарно опубликовать пакет переноса без перезаписи существующего файла: {error}"))?;
+        std::fs::remove_file(&temporary)
+            .map_err(|error| format!("Пакет опубликован, но не удалось удалить временный файл: {error}"))?;
         Ok(package_bytes)
     })();
 

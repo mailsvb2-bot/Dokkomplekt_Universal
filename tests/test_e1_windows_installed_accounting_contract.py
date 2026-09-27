@@ -153,6 +153,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "function Invoke-UiActionWithObservedTransition" in source
     assert "function Find-ReadyButtonByAutomationId" in source
     assert "create-selected-documents" in source
+    assert "public static extern bool SetCursorPos(int x, int y);" in source
+    assert "DokkomplektE1NativeMouse]::SetCursorPos($x, $y)" in source
+    assert "E1 physical target '$Description': point=" in source
+    assert "System.Windows.Forms.Cursor]::Position" not in source
     assert "app-status" in app_source
     assert "Проверяем финальный план выбранного комплекта…" in (ROOT / "src" / "hooks" / "useGenerationPreflight.ts").read_text(encoding="utf-8")
     assert "E1 Accounting preflight diagnostic status before canonical shortcut:" in source

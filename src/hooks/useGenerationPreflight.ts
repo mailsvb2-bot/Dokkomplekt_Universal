@@ -1,4 +1,4 @@
-import { useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { FolderNamePartDto, PopupAnswerDto, PopupApplyResult, WorkflowPlan } from '../lib/types';
 import { activeWorkflowPrompts, isInternalWorkflowPrompt } from '../lib/workflowPromptVisibility';
 
@@ -22,6 +22,7 @@ interface UseGenerationPreflightOptions {
   printCopies: Record<string, number>;
   preflightPlan: WorkflowPlan | null;
   preflightLoading: boolean;
+  shortcutEnabled?: boolean;
   /** Keep the review surface when a non-prompt user option (for example sick leave) still needs an explicit choice. */
   requiresExplicitReview?: boolean;
   answers: Record<string, string>;
@@ -48,6 +49,17 @@ export function useGenerationPreflight(options: UseGenerationPreflightOptions) {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [generationValidationFieldId, setGenerationValidationFieldId] = useState<string | null>(null);
   const confirmationInFlight = useRef(false);
+
+  useEffect(() => {
+    function onGenerationShortcut(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return;
+      if (options.shortcutEnabled === false || generationPreflightOpen || options.preflightLoading || options.selectedDocumentIds.length === 0) return;
+      event.preventDefault();
+      void openGenerationPreflight();
+    }
+    document.addEventListener('keydown', onGenerationShortcut);
+    return () => document.removeEventListener('keydown', onGenerationShortcut);
+  }, [generationPreflightOpen, options.preflightLoading, options.selectedDocumentIds.length, options.shortcutEnabled]);
 
   async function openGenerationPreflight() {
     if (!options.selectedDocumentIds.length) {

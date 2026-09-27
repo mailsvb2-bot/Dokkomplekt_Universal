@@ -154,3 +154,14 @@ def test_windows_file_dialog_submit_requires_native_window_closure() -> None:
     assert "[IntPtr]1" in source
     assert "SendWait('{ENTER}')" in source
     assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
+
+
+def test_windows_physical_input_is_native_and_window_bounded() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "public static extern bool SetCursorPos(int x, int y);" in source
+    assert "function Test-BaselineElementPhysicallyVisible" in source
+    assert "remains outside the installed app window after bounded recovery" in source
+    assert "produced a click point outside the installed app window" in source
+    assert "DokkomplektNativeMouse]::SetCursorPos($x, $y)" in source
+    assert "System.Windows.Forms.Cursor]::Position" not in source

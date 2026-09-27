@@ -158,9 +158,11 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "E1 Accounting preflight diagnostic status before canonical shortcut:" in source
     assert "E1 canonical generation shortcut PASS: Ctrl+Enter opened the same Accounting preflight." in source
     assert "SendKeys]::SendWait('^({ENTER})')" in source
-    assert "onGenerationShortcut" in app_source
-    assert "event.key !== 'Enter'" in app_source
-    assert "void openGenerationPreflight()" in app_source
+    preflight_hook = (ROOT / "src" / "hooks" / "useGenerationPreflight.ts").read_text(encoding="utf-8")
+    assert "onGenerationShortcut" in preflight_hook
+    assert "event.key !== 'Enter'" in preflight_hook
+    assert "void openGenerationPreflight()" in preflight_hook
+    assert "shortcutEnabled: !setupOpen && !busy" in app_source
     assert 'title="Проверить и создать · Ctrl+Enter"' in (ROOT / "src" / "components" / "Workspace.tsx").read_text(encoding="utf-8")
     assert source.count("Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'") >= 2
     assert "function Set-ReactControlledText" in source

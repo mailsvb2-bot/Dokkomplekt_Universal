@@ -1249,7 +1249,22 @@ function Invoke-E1DomainScenario {
         }
         continue
       }
-      Set-UiValue -Element $control -Value ([string]$PromptValues[$fieldId])
+      $expectedPromptValue = [string]$PromptValues[$fieldId]
+      Set-ReactControlledText -Element $control -Value $expectedPromptValue -Description "$Label preflight field $fieldId"
+      $control = (Find-LiveAppWindow).FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+          $automationId
+        )
+      )
+      if ($null -eq $control) {
+        throw "E1 $Label lost preflight control after commit: $fieldId"
+      }
+      $actualPromptValue = Normalize-UiValue -Value (Get-UiValue -Element $control)
+      if ($actualPromptValue -ne (Normalize-UiValue -Value $expectedPromptValue)) {
+        throw "E1 $Label preflight field did not commit through React: $fieldId expected='$expectedPromptValue' actual='$actualPromptValue'"
+      }
     }
 
     Invoke-UiActionPhysicallyFromProbe -Description "create $Label" -ActionProbe {
@@ -1273,11 +1288,34 @@ function Invoke-E1DomainScenario {
     $created = Get-ChildItem -LiteralPath $OutputRoot -Recurse -File -Filter $outputName -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $created) {
       $failure = Find-E1NamedElement -Name 'Документы не созданы'
-      if ($null -ne $failure) { throw "E1 $Label backend rejected the completed preflight." }
+      $failureDetail = Find-E1NamedElementContaining -Text 'Документы не созданы:'
+      if ($null -ne $failure -or $null -ne $failureDetail) {
+        $failureText = ''
+        if ($null -ne $failureDetail) {
+          try { $failureText = [string]$failureDetail.Current.Name } catch { $failureText = '' }
+        }
+        if ([string]::IsNullOrWhiteSpace($failureText)) {
+          $statusElement = Find-ElementByAutomationId -Root (Find-LiveAppWindow) -AutomationId 'app-status'
+          if ($null -ne $statusElement) {
+            try { $failureText = [string]$statusElement.Current.Name } catch { $failureText = '' }
+          }
+        }
+        if ([string]::IsNullOrWhiteSpace($failureText)) { $failureText = Get-E1UiSnapshot }
+        throw "E1 $Label backend rejected the completed preflight: $failureText"
+      }
       Start-Sleep -Milliseconds 250
     }
   }
-  if ($null -eq $created) { throw "E1 $Label did not publish a physical DOCX." }
+  if ($null -eq $created) {
+    $statusElement = Find-ElementByAutomationId -Root (Find-LiveAppWindow) -AutomationId 'app-status'
+    $statusText = '<missing>'
+    if ($null -ne $statusElement) {
+      try { $statusText = [string]$statusElement.Current.Name } catch { $statusText = '<unreadable>' }
+    }
+    $visibleDocx = @(Get-ChildItem -LiteralPath $OutputRoot -Recurse -File -Filter '*.docx' -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty FullName)
+    throw "E1 $Label did not publish a physical DOCX. app-status='$statusText'; visible-docx=$($visibleDocx -join ' | ')"
+  }
 
   $archive = [System.IO.Compression.ZipFile]::OpenRead($created.FullName)
   try {

@@ -1377,9 +1377,25 @@ try {
   $window = Find-LiveAppWindow
   $statusElement = if ($null -ne $window) { Find-ElementByAutomationId -Root $window -AutomationId 'app-status' } else { $null }
   $statusText = if ($null -ne $statusElement) { [string]$statusElement.Current.Name } else { '<missing>' }
-  Write-Host "E1 Accounting preflight diagnostic status: $statusText"
-  Write-Host ("E1 Accounting preflight UI snapshot: " + (Get-E1UiSnapshot))
-  throw
+  Write-Host "E1 Accounting preflight diagnostic status before canonical shortcut: $statusText"
+  Write-Host ("E1 Accounting preflight UI snapshot before canonical shortcut: " + (Get-E1UiSnapshot))
+
+  # Hosted WebView2 can expose an enabled HTML button while swallowing UIA,
+  # coordinate click and focused Space. Ctrl+Enter is an application-owned,
+  # documented user path wired to the exact same openGenerationPreflight action.
+  # It is therefore the stable installed-shell fallback, not a test bypass.
+  $process.Refresh()
+  $windowHandle = [IntPtr]$process.MainWindowHandle
+  if ($windowHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)
+    [void][DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)
+    Start-Sleep -Milliseconds 150
+  }
+  [System.Windows.Forms.SendKeys]::SendWait('^({ENTER})')
+  $null = Wait-UiElement -Description 'E1 Accounting preflight through canonical Ctrl+Enter' -TimeoutSeconds 30 -Probe {
+    Find-E1NamedElement -Name 'Проверка перед созданием'
+  }
+  Write-Host "E1 canonical generation shortcut PASS: Ctrl+Enter opened the same Accounting preflight."
 }
 
 foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-vat')) {

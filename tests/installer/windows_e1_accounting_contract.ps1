@@ -1391,7 +1391,7 @@ try {
     [void][DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)
     Start-Sleep -Milliseconds 150
   }
-  [System.Windows.Forms.SendKeys]::SendWait('^({ENTER})')
+  [System.Windows.Forms.SendKeys]::SendWait('^{ENTER}')
   $null = Wait-UiElement -Description 'E1 Accounting preflight through canonical Ctrl+Enter' -TimeoutSeconds 30 -Probe {
     Find-E1NamedElement -Name 'Проверка перед созданием'
   }

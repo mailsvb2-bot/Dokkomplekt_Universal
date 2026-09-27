@@ -142,3 +142,15 @@ def test_windows_restart_source_commit_is_bound_to_exact_source_identity() -> No
     assert "FPR-08 restart source commit PASS: exact source" in source
     restart_block = source[source.index("$restartSourceName ="):source.index("$restartGenerationAction = $null")]
     assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')" not in restart_block
+
+
+def test_windows_file_dialog_submit_requires_native_window_closure() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "function Submit-OpenFileDialog" in source
+    assert "UIA InvokePattern returning successfully is not evidence" in source
+    assert "DokkomplektNativeMouse]::IsWindow($dialogHandle)" in source
+    assert "0x0111" in source
+    assert "[IntPtr]1" in source
+    assert "SendWait('{ENTER}')" in source
+    assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source

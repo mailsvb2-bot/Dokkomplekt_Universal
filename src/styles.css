@@ -13,7 +13,7 @@ button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 
 .appRoot { min-height: 100vh; background: var(--bg); padding: 20px; display: flex; justify-content: center; }
-.window { width: 100%; max-width: 1080px; background: var(--panel2); border: 0.5px solid var(--line); border-radius: var(--radius-card); overflow: hidden; align-self: flex-start; }
+.window { width: 100%; max-width: 1080px; background: var(--panel2); border: 0.5px solid var(--line); border-radius: var(--radius-card); overflow: clip; align-self: flex-start; }
 
 .hdr { display: flex; align-items: center; justify-content: space-between; padding: 11px 16px; border-bottom: 0.5px solid var(--line); background: var(--panel2); }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }

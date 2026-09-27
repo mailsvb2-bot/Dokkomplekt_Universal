@@ -160,7 +160,8 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "[System.Windows.Forms.SystemInformation]::VirtualScreen" in source
     assert "remains outside the physically clickable WebView2/VirtualScreen area after bounded scroll/focus recovery" in source
     assert "produced a click point outside VirtualScreen" in source
-    assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $Element.Current.IsOffscreen; $scrollAttempt++)" in source
+    assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-ElementPhysicallyVisible -Target $Element); $scrollAttempt++)" in source
+    assert "center inside the real Windows VirtualScreen" in source
     assert "[DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)" in source
     assert "public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);" in source
     assert "System.Windows.Forms.Cursor]::Position" not in source

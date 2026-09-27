@@ -292,30 +292,42 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
-  if ($Element.Current.IsOffscreen) {
-    # WebView2 HTML controls often expose no ScrollItemPattern even though they
-    # are below the current viewport. First try the accessibility scroll/focus
-    # paths, then use bounded real mouse-wheel input inside the app window.
+  function Test-ElementPhysicallyVisible {
+    param([Parameter(Mandatory = $true)]$Target)
+    if ($Target.Current.IsOffscreen) { return $false }
+    $rect = $Target.Current.BoundingRectangle
+    if ($rect.IsEmpty -or $rect.Width -le 1 -or $rect.Height -le 1) { return $false }
+    $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $centerX = $rect.Left + ($rect.Width / 2)
+    $centerY = $rect.Top + ($rect.Height / 2)
+    return $centerX -ge $screen.Left -and $centerX -lt $screen.Right -and
+      $centerY -ge $screen.Top -and $centerY -lt $screen.Bottom
+  }
+
+  if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
+    # WebView2 can report IsOffscreen=false even when the HTML control is below
+    # the physical desktop. Require both accessibility visibility and a target
+    # center inside the real Windows VirtualScreen before dispatching a click.
     if ($Element.Current.IsScrollItemPatternAvailable) {
       try {
         $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
         Start-Sleep -Milliseconds 150
       } catch { }
     }
-    if ($Element.Current.IsOffscreen) {
+    if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
       try {
         $Element.SetFocus()
         Start-Sleep -Milliseconds 200
       } catch { }
     }
-    if ($Element.Current.IsOffscreen) {
+    if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
       $appWindow = Find-LiveAppWindow
       if ($null -ne $appWindow) {
         $windowRect = $appWindow.Current.BoundingRectangle
         $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
         $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
         [void][DokkomplektE1NativeMouse]::SetCursorPos($wheelX, $wheelY)
-        for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $Element.Current.IsOffscreen; $scrollAttempt++) {
+        for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-ElementPhysicallyVisible -Target $Element); $scrollAttempt++) {
           $targetRect = $Element.Current.BoundingRectangle
           $targetCenterY = $targetRect.Top + ($targetRect.Height / 2)
           $windowCenterY = $windowRect.Top + ($windowRect.Height / 2)
@@ -325,9 +337,10 @@ function Invoke-UiElementPhysically {
         }
       }
     }
-    if ($Element.Current.IsOffscreen) {
+    if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
       $rect = $Element.Current.BoundingRectangle
-      throw "$Description remains outside the visible WebView2 viewport after bounded scroll/focus recovery. rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height))."
+      $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+      throw "$Description remains outside the physically clickable WebView2/VirtualScreen area after bounded scroll/focus recovery. rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)); virtualScreen=($($screen.Left),$($screen.Top),$($screen.Width),$($screen.Height))."
     }
   }
 
@@ -352,6 +365,10 @@ function Invoke-UiElementPhysically {
     $y = [int][Math]::Round($clickPoint.Y)
     $rect = $Element.Current.BoundingRectangle
     Write-Host "E1 physical target '$Description': point=($x,$y) rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)) offscreen=$($Element.Current.IsOffscreen)"
+    $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    if ($x -lt $screen.Left -or $x -ge $screen.Right -or $y -lt $screen.Top -or $y -ge $screen.Bottom) {
+      throw "$Description produced a click point outside VirtualScreen: point=($x,$y); virtualScreen=($($screen.Left),$($screen.Top),$($screen.Width),$($screen.Height))."
+    }
     if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
       throw "$Description failed to position the native cursor at ($x,$y)."
     }

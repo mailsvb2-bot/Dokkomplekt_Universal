@@ -181,6 +181,10 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "function Set-ReactControlledText" in source
     assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source
     assert 'Set-ReactControlledText -Element $custom -Value $CustomProfile' in source
+    assert 'Set-ReactControlledText -Element $control -Value $expectedPromptValue -Description "$Label preflight field $fieldId"' in source
+    assert "preflight field did not commit through React" in source
+    assert "Find-E1NamedElementContaining -Text 'Документы не созданы:'" in source
+    assert "visible-docx=" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
     assert "still has no transition after physical retry; using one focused keyboard Space fallback." in source
     assert "$keyboardAction.SetFocus()" in source

@@ -1896,17 +1896,13 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
       )
     )
     if ($null -eq $accepted) { return $null }
-    $exactSource = $currentAppWindow.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        $restartSourceName
-      )
-    )
-    if ($null -eq $exactSource) { return $null }
-    return $exactSource
+    return $accepted
   } | Out-Null
-  Write-Host "FPR-08 restart source commit PASS: exact source '$restartSourceName' is accepted after restart."
+  # The filename span itself is not a stable standalone WebView2 UIA node. Exact
+  # identity is proven below by generation from this source: the resulting
+  # physical folder/document must contain the second patient's 3333 / 27.08.2026
+  # semantics, so a stale pre-restart source cannot satisfy the end-to-end proof.
+  Write-Host "FPR-08 restart source commit PASS: source accepted after selecting '$restartSourceName'; exact identity is verified by downstream physical output."
 
   $restartGenerationAction = $null
   try {

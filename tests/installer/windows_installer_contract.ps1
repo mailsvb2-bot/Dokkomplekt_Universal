@@ -302,9 +302,15 @@ function Invoke-UiElementPhysically {
       if ($Target.Current.IsOffscreen) { return $false }
       $targetRect = $Target.Current.BoundingRectangle
       if ($targetRect.IsEmpty -or $targetRect.Width -le 1 -or $targetRect.Height -le 1) { return $false }
+      foreach ($value in @($targetRect.Left, $targetRect.Top, $targetRect.Width, $targetRect.Height)) {
+        if ([double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value)) { return $false }
+      }
       $liveWindow = Find-LiveAppWindow
       if ($null -eq $liveWindow) { return $false }
       $windowRect = $liveWindow.Current.BoundingRectangle
+      foreach ($value in @($windowRect.Left, $windowRect.Top, $windowRect.Width, $windowRect.Height)) {
+        if ([double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value)) { return $false }
+      }
       $cx = $targetRect.Left + ($targetRect.Width / 2)
       $cy = $targetRect.Top + ($targetRect.Height / 2)
       $margin = 6
@@ -343,7 +349,7 @@ function Invoke-UiElementPhysically {
         $targetRect = $Element.Current.BoundingRectangle
         $liveWindow = Find-LiveAppWindow
         $windowRect = if ($null -ne $liveWindow) { $liveWindow.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
-        throw "$Description remains outside the installed app window after bounded recovery. target=($([int]$targetRect.Left),$([int]$targetRect.Top),$([int]$targetRect.Width),$([int]$targetRect.Height)); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
+        throw "$Description remains outside the installed app window after bounded recovery. target=($($targetRect.Left),$($targetRect.Top),$($targetRect.Width),$($targetRect.Height)); window=($($windowRect.Left),$($windowRect.Top),$($windowRect.Width),$($windowRect.Height))."
       }
     }
 
@@ -357,6 +363,12 @@ function Invoke-UiElementPhysically {
           $rect.Left + ($rect.Width / 2),
           $rect.Top + ($rect.Height / 2)
         )
+      }
+    }
+    if ($null -ne $clickPoint) {
+      if ([double]::IsNaN([double]$clickPoint.X) -or [double]::IsInfinity([double]$clickPoint.X) -or
+          [double]::IsNaN([double]$clickPoint.Y) -or [double]::IsInfinity([double]$clickPoint.Y)) {
+        $clickPoint = $null
       }
     }
     if ($null -ne $clickPoint) {

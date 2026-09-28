@@ -311,8 +311,8 @@ function Invoke-UiElementPhysically {
     $virtual = [System.Windows.Forms.SystemInformation]::VirtualScreen
     $centerX = $rect.Left + ($rect.Width / 2)
     $centerY = $rect.Top + ($rect.Height / 2)
-    # A UIA rectangle is physically clickable only when its center is also
-    # inside the real Windows VirtualScreen. This fail-closed guard prevents
+    # A UIA rectangle is physically clickable only when its center inside the real Windows VirtualScreen
+    # is valid. This fail-closed guard prevents
     # stale/virtualized WebView2 geometry from sending a global click off-screen.
     if ($centerX -lt $virtual.Left -or $centerX -ge $virtual.Right -or
         $centerY -lt $virtual.Top -or $centerY -ge $virtual.Bottom) {

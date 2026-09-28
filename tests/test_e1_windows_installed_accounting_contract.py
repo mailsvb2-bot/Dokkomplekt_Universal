@@ -196,6 +196,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert 'Set-ReactControlledText -Element $control -Value $expectedPromptValue -Description "$Label preflight field $fieldId"' in source
     assert "preflight field did not commit through React" in source
     assert "E1 keyboard activation used for \'$Label\' create because the canonical physical helper proved the live preflight button was outside Windows WorkingArea." in source
+    assert "E1 selection TogglePattern fallback used for \'$Label\' after physical click produced no committed selection." in source
+    assert "E1 selection keyboard fallback used for \'$Label\' after physical click produced no committed selection." in source
+    assert "create-selected-documents" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')" in source
     assert "Find-E1NamedElementContaining -Text 'Документы не созданы:'" in source
     assert "visible-docx=" in source

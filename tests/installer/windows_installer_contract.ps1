@@ -3042,10 +3042,42 @@ try {
     $e2KeyboardAction.SetFocus()
     Start-Sleep -Milliseconds 150
     [System.Windows.Forms.SendKeys]::SendWait(' ')
-    Wait-UiElement -Description 'publishable held-out learning result after focused Space fallback' -TimeoutSeconds 60 -Probe {
+
+    $spaceDeadline = [DateTime]::UtcNow.AddSeconds(6)
+    $spaceTransition = $null
+    do {
       $windowAfterSpace = Find-LiveAppWindow
-      if ($null -eq $windowAfterSpace) { return $null }
-      Find-ButtonByNames -Root $windowAfterSpace -Names @('Подтвердить проверенную карту и создать копию')
+      if ($null -ne $windowAfterSpace) {
+        $spaceTransition = Find-ButtonByNames -Root $windowAfterSpace -Names @('Подтвердить проверенную карту и создать копию')
+      }
+      if ($null -ne $spaceTransition) { break }
+      Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $spaceDeadline)
+
+    if ($null -eq $spaceTransition) {
+      # WebView2 occasionally acknowledges UIA focus while routing Space to the
+      # document instead of the focused HTML button. Re-resolve the live button,
+      # focus it again and use Enter, which is the second browser-native user
+      # activation path. Downstream appearance of the publishable action remains
+      # the authoritative proof that the click actually reached React.
+      $windowAfterSpace = Find-LiveAppWindow
+      if ($null -eq $windowAfterSpace) { throw 'E2 learning window disappeared before Enter fallback.' }
+      $e2EnterAction = Find-ReadyButtonByNames -Root $windowAfterSpace -Names @('Проверить пары и предложить карту')
+      if ($null -eq $e2EnterAction) { throw 'E2 learning action disappeared before Enter fallback.' }
+      Activate-LiveAppWindow -Window $windowAfterSpace
+      if ($e2EnterAction.Current.IsOffscreen -and $e2EnterAction.Current.IsScrollItemPatternAvailable) {
+        $e2EnterAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      }
+      $e2EnterAction.SetFocus()
+      Start-Sleep -Milliseconds 150
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    }
+
+    Wait-UiElement -Description 'publishable held-out learning result after focused keyboard fallback' -TimeoutSeconds 60 -Probe {
+      $windowAfterKeyboard = Find-LiveAppWindow
+      if ($null -eq $windowAfterKeyboard) { return $null }
+      Find-ButtonByNames -Root $windowAfterKeyboard -Names @('Подтвердить проверенную карту и создать копию')
     } | Out-Null
   }
 } catch {

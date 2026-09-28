@@ -157,6 +157,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "DokkomplektE1NativeMouse]::SetCursorPos($x, $y)" in source
     assert "E1 physical target '$Description': point=" in source
     assert "function Test-ElementPhysicallyVisible" in source
+    assert "WebView2 IsOffscreen is advisory only" in source
+    visible_fn = source[source.index("function Test-ElementPhysicallyVisible"):source.index("$clickPoint = $null")]
+    assert "if ($Target.Current.IsOffscreen) { return $false }" not in visible_fn
     assert "Find-LiveAppWindow" in source
     assert "remains outside the physically clickable installed-app area after bounded scroll/focus recovery" in source
     assert "[System.Windows.Forms.Screen]::FromPoint" in source

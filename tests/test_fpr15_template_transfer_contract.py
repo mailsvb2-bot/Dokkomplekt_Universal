@@ -60,6 +60,9 @@ def test_fpr15_register_does_not_claim_runtime_closure_before_clean_profile_proo
 
 def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_output() -> None:
     source = (ROOT / "tests" / "installer" / "windows_e1_accounting_contract.ps1").read_text(encoding="utf-8-sig")
+    assert "function Find-ReadyButtonByTrimmedName" in source
+    assert "([string]$candidate.Current.Name).Trim()" in source
+    assert "Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'" in source
     for marker in (
         "FPR-15 / ACC-61: real installed clean-profile transfer proof.",
         "FPR-15 EXPORT PRIVACY PASS:",

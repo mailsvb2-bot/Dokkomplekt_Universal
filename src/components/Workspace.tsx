@@ -424,7 +424,7 @@ export function Workspace(props: WorkspaceProps) {
                 {props.semantic.fields.map((field) => (
                   <li key={field.field_id}>
                     <div><strong>{field.value}</strong><small>{field.field_id} · уверенность {(field.confidence * 100).toFixed(0)}%</small></div>
-                    <div><button className="textBtn" onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Здесь ошибка</button></div>
+                    <div><button className="textBtn" aria-label={`Сверить источник для ${field.field_id}`} onClick={() => setReviewFieldId(field.field_id)}>Сверить</button><button className="textBtn" disabled={props.busy} onClick={() => props.onReportSemanticError(field.field_id, field.value)}>Здесь ошибка</button></div>
                   </li>
                 ))}
               </ul>

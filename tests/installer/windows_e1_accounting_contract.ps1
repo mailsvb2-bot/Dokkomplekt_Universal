@@ -1531,6 +1531,16 @@ if (-not $fpr16SourceName.Contains('document.number') -or -not $fpr16ValueName.C
 }
 Write-Host "FPR-16 INSTALLED PASS: current-case source explanation -> document.number -> E1-17 is visible through the real installed UI."
 
+# Restore the compact workspace before continuing the cross-domain matrix.
+# FPR-16 deliberately expands a long diagnostics section; leaving it open can
+# push later canonical generation controls outside the physical viewport even
+# though UIA still exposes them. Close it through the same installed user path.
+$fpr16Advanced = Wait-UiElement -Description 'FPR-16 advanced tools toggle before close' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Расширенные инструменты'
+}
+Invoke-UiElementPhysically -Element $fpr16Advanced -Description 'close FPR-16 source explanation tools'
+Start-Sleep -Milliseconds 250
+
 $window = Find-LiveAppWindow
 $clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
 if ($null -ne $clearSelection) { Invoke-UiElementPhysically -Element $clearSelection -Description 'clear previous document selection' }

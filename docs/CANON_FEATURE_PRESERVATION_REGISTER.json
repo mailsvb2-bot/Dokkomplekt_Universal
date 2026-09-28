@@ -557,7 +557,7 @@
       "id": "FPR-17",
       "group": "Печать и конвертация",
       "status": "needs-runtime-proof",
-      "actual_state": "print/export commands are wired through Tauri; supported-configuration proof pending",
+      "actual_state": "print/export commands are wired through Tauri; private Windows hardware proof now requires both a real dedicated-printer PrintService Event 307 and an installed offline-app PDF created through the packaged LibreOffice production converter",
       "entry": [
         "src/App.tsx"
       ],
@@ -577,8 +577,12 @@
         "src-tauri/src/subsystems/document_commands.rs",
         "crates/dokkomplekt-core/src/print_triage.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Supported installed printer/export evidence is required for final register closure."
+      "runtime_evidence": [
+        "tests/windows/windows_hardware_e2e.ps1#FPR-17 dedicated-printer Event 307 and installed packaged-LibreOffice PDF proof",
+        "tests/test_fpr17_print_pdf_contract.py#hardware proof regression lock",
+        "src-tauri/src/main.rs#guarded --e2e-export-pdf installed-binary evidence path"
+      ],
+      "runtime_gap": "Run the protected private Windows hardware validation for the exact release SHA and retain green FPR-17 PRINT INSTALLED PASS plus FPR-17 PDF INSTALLED PASS evidence before marking verified."
     },
     {
       "id": "FPR-18",

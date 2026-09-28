@@ -300,11 +300,22 @@ function Invoke-UiElementPhysically {
     $appWindow = Find-LiveAppWindow
     if ($null -eq $appWindow) { return $false }
     $windowRect = $appWindow.Current.BoundingRectangle
+    $screen = [System.Windows.Forms.Screen]::FromPoint(
+      [System.Drawing.Point]::new(
+        [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2)),
+        [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+      )
+    )
+    $work = $screen.WorkingArea
     $centerX = $rect.Left + ($rect.Width / 2)
     $centerY = $rect.Top + ($rect.Height / 2)
     $margin = 6
-    return $centerX -ge ($windowRect.Left + $margin) -and $centerX -lt ($windowRect.Right - $margin) -and
-      $centerY -ge ($windowRect.Top + $margin) -and $centerY -lt ($windowRect.Bottom - $margin)
+    $left = [Math]::Max($windowRect.Left + $margin, $work.Left + $margin)
+    $top = [Math]::Max($windowRect.Top + $margin, $work.Top + $margin)
+    $right = [Math]::Min($windowRect.Right - $margin, $work.Right - $margin)
+    $bottom = [Math]::Min($windowRect.Bottom - $margin, $work.Bottom - $margin)
+    return $centerX -ge $left -and $centerX -lt $right -and
+      $centerY -ge $top -and $centerY -lt $bottom
   }
 
   if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
@@ -372,8 +383,19 @@ function Invoke-UiElementPhysically {
     $appWindow = Find-LiveAppWindow
     if ($null -eq $appWindow) { throw "$Description lost the installed app window before physical click." }
     $windowRect = $appWindow.Current.BoundingRectangle
-    if ($x -lt $windowRect.Left -or $x -ge $windowRect.Right -or $y -lt $windowRect.Top -or $y -ge $windowRect.Bottom) {
-      throw "$Description produced a click point outside the installed app window: point=($x,$y); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
+    $screen = [System.Windows.Forms.Screen]::FromPoint(
+      [System.Drawing.Point]::new(
+        [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2)),
+        [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+      )
+    )
+    $work = $screen.WorkingArea
+    $left = [Math]::Max($windowRect.Left, $work.Left)
+    $top = [Math]::Max($windowRect.Top, $work.Top)
+    $right = [Math]::Min($windowRect.Right, $work.Right)
+    $bottom = [Math]::Min($windowRect.Bottom, $work.Bottom)
+    if ($x -lt $left -or $x -ge $right -or $y -lt $top -or $y -ge $bottom) {
+      throw "$Description produced a click point outside the installed app working area: point=($x,$y); app=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height)); work=($($work.Left),$($work.Top),$($work.Width),$($work.Height))."
     }
     if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
       throw "$Description failed to position the native cursor at ($x,$y)."

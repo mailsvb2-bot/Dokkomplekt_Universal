@@ -1486,6 +1486,31 @@ foreach ($fieldId in $fpr04SourceFields) {
 }
 Write-Host "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake."
 
+# FPR-16: source explanation is a real installed user path, not only a stored trace.
+$fpr16Advanced = Wait-UiElement -Description 'FPR-16 advanced tools toggle' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Расширенные инструменты'
+}
+Invoke-UiElementPhysically -Element $fpr16Advanced -Description 'open FPR-16 source explanation tools'
+$fpr16Review = Wait-UiElement -Description 'FPR-16 document.number source review action' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Сверить источник для document.number'
+}
+Invoke-UiElementPhysically -Element $fpr16Review -Description 'review FPR-16 document.number source'
+$null = Wait-UiElement -Description 'FPR-16 source comparison panel' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Сверка источника для document.number'
+}
+$fpr16SourcePane = Wait-UiElement -Description 'FPR-16 source fragment pane' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Фрагмент источника для document.number'
+}
+$fpr16ValuePane = Wait-UiElement -Description 'FPR-16 recognized value pane' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Распознанное значение для document.number: E1-17'
+}
+$fpr16SourceName = [string]$fpr16SourcePane.Current.Name
+$fpr16ValueName = [string]$fpr16ValuePane.Current.Name
+if (-not $fpr16SourceName.Contains('document.number') -or -not $fpr16ValueName.Contains('E1-17')) {
+  throw "FPR-16 installed source explanation lost field/value context. Source=$fpr16SourceName Value=$fpr16ValueName"
+}
+Write-Host "FPR-16 INSTALLED PASS: current-case source explanation -> document.number -> E1-17 is visible through the real installed UI."
+
 $window = Find-LiveAppWindow
 $clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
 if ($null -ne $clearSelection) { Invoke-UiElementPhysically -Element $clearSelection -Description 'clear previous document selection' }

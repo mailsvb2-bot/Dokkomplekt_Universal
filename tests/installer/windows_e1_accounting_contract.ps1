@@ -1094,12 +1094,40 @@ function Set-E1TemplateDomainOverride {
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {
     $customName = "Своя профессия / профиль для $FileName"
     $custom = Wait-UiElement -Description "custom domain value for $FileName" -Probe {
-      Find-E1NamedElement -Name $customName
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.AndCondition]::new(
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $customName
+          ),
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit
+          )
+        )
+      )
     }
     Set-ReactControlledText -Element $custom -Value $CustomProfile -Description "custom domain value for $FileName"
 
     $custom = Wait-UiElement -Description "persisted custom domain value for $FileName" -Probe {
-      Find-E1NamedElement -Name $customName
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.AndCondition]::new(
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $customName
+          ),
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit
+          )
+        )
+      )
     }
     $actualCustom = Normalize-UiValue -Value (Get-UiValue -Element $custom)
     Write-Host "E1 custom domain value commit: expected='$CustomProfile' actual='$actualCustom'."

@@ -472,31 +472,51 @@ function Set-ReactControlledText {
     [Parameter(Mandatory = $true)][string]$Description
   )
 
-  # WebView2 exposes HTML inputs through UIA, but ValuePattern.SetValue changes
-  # the accessibility value without guaranteeing a React input/change event.
-  # Commit controlled text exactly as a user does: focus, select all, paste the
-  # exact Unicode payload, blur, then re-read the persisted value.
-  try {
-    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-      $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
-      Start-Sleep -Milliseconds 100
+  # WebView2 exposes HTML inputs through UIA, but SetFocus can succeed without
+  # transferring real DOM keyboard focus. Commit through user-equivalent input
+  # and require observable value persistence before accepting the interaction.
+  $expected = Normalize-UiValue -Value $Value
+  $lastActual = ''
+  for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    try {
+      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+        $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+
+      if ($attempt -gt 0) {
+        Invoke-UiElementPhysically -Element $Element -Description "$Description focus retry $attempt"
+        Start-Sleep -Milliseconds 120
+      } else {
+        $Element.SetFocus()
+        Start-Sleep -Milliseconds 100
+      }
+
+      Set-Clipboard -Value $Value -ErrorAction Stop
+      [System.Windows.Forms.SendKeys]::SendWait('^a')
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+
+      $commitDeadline = [DateTime]::UtcNow.AddSeconds(2)
+      do {
+        Start-Sleep -Milliseconds 100
+        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+        if ($lastActual -eq $expected) { break }
+      } while ([DateTime]::UtcNow -lt $commitDeadline)
+
+      if ($lastActual -eq $expected) {
+        [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+        Start-Sleep -Milliseconds 200
+        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+        if ($lastActual -eq $expected) { return }
+      }
+    } catch {
+      if ($attempt -ge 2) {
+        throw "React input commit failed for '$Description': $($_.Exception.Message)"
+      }
     }
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 75
-    Set-Clipboard -Value $Value -ErrorAction Stop
-    [System.Windows.Forms.SendKeys]::SendWait('^a')
-    [System.Windows.Forms.SendKeys]::SendWait('^v')
-    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-    Start-Sleep -Milliseconds 250
-  } catch {
-    throw "React input commit failed for '$Description': $($_.Exception.Message)"
   }
 
-  $actual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
-  $expected = Normalize-UiValue -Value $Value
-  if ($actual -ne $expected) {
-    throw "React input did not persist for '$Description'. Expected '$expected', actual '$actual'."
-  }
+  throw "React input did not persist for '$Description'. Expected '$expected', actual '$lastActual'."
 }
 
 function Get-UiValue {

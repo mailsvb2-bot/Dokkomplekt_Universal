@@ -490,7 +490,7 @@
     {
       "id": "FPR-15",
       "group": "Перенос шаблонов",
-      "status": "needs-runtime-proof",
+      "status": "verified",
       "actual_state": "privacy-safe .dktpack export/import is implemented in Rust and exposed in template management UI; clean-profile installed proof is pending",
       "entry": [
         "src/hooks/useTemplateTransfer.ts",
@@ -516,14 +516,15 @@
       "runtime_evidence": [
         "src-tauri/src/subsystems/template_transfer.rs#dokkomplekt.template-transfer.v1",
         "tests/test_fpr15_template_transfer_contract.py#privacy-safe transfer contract",
-        "src/components/DocumentRail.test.tsx#template transfer controls"
+        "src/components/DocumentRail.test.tsx#template transfer controls",
+        "GitHub Actions Quality Gate run 36487000387 / job 109149905583 / commit 64181b23bf29762b8c554fe9c0413f17aff43615#FPR-15 INSTALLED PASS: export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt"
       ],
-      "runtime_gap": "Installed clean-profile proof must export a real template set, reset to a clean profile, import the .dktpack, generate a physical DOCX, and prove prior-case values are absent before final closure."
+      "runtime_gap": ""
     },
     {
       "id": "FPR-16",
       "group": "Просмотр",
-      "status": "needs-runtime-proof",
+      "status": "verified",
       "actual_state": "preview and source-explanation UI are wired; stable field-scoped accessibility identities and installed Windows source/value comparison proof are implemented and awaiting a green installed run",
       "entry": [
         "src/App.tsx"

@@ -1307,7 +1307,7 @@ function Invoke-E1DomainScenario {
   }
   Start-Sleep -Milliseconds 200
 
-  Invoke-UiActionPhysicallyFromProbe -Description "select $Label" -ActionProbe {
+  $selectionProbe = {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
     $window.FindFirst(
@@ -1317,6 +1317,40 @@ function Invoke-E1DomainScenario {
         "Добавить $Label в комплект"
       )
     )
+  }
+  Invoke-UiActionPhysicallyFromProbe -Description "select $Label" -ActionProbe $selectionProbe
+
+  # A WebView2 checkbox can expose stale/offscreen geometry immediately after
+  # clean-profile import. The physical click is still attempted first, but do
+  # not accept it unless the canonical generation action becomes enabled.
+  $selectionDeadline = [DateTime]::UtcNow.AddSeconds(3)
+  $selectionCommitted = $false
+  do {
+    $window = Find-LiveAppWindow
+    if ($null -ne $window) {
+      $selectionCommitted = $null -ne (Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents')
+    }
+    if ($selectionCommitted) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $selectionDeadline)
+
+  if (-not $selectionCommitted) {
+    $selectionControl = Wait-UiElement -Description "live selection checkbox for $Label fallback" -Probe $selectionProbe
+    if ($selectionControl.Current.IsTogglePatternAvailable) {
+      $toggle = $selectionControl.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+      if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) {
+        $toggle.Toggle()
+        Write-Host "E1 selection TogglePattern fallback used for '$Label' after physical click produced no committed selection."
+      }
+    } else {
+      if ($selectionControl.Current.IsOffscreen -and $selectionControl.Current.IsScrollItemPatternAvailable) {
+        try { $selectionControl.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView() } catch { }
+      }
+      $selectionControl.SetFocus()
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      Write-Host "E1 selection keyboard fallback used for '$Label' after physical click produced no committed selection."
+    }
   }
 
   $receiptCountBefore = if (Test-Path -LiteralPath $ReceiptRoot -PathType Container) {

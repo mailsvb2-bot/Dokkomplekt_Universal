@@ -190,6 +190,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "function Set-ReactControlledText" in source
     assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source
     assert 'Set-ReactControlledText -Element $custom -Value $CustomProfile' in source
+    assert "[System.Windows.Automation.AutomationElement]::ControlTypeProperty" in source
+    assert "[System.Windows.Automation.ControlType]::Edit" in source
+    assert "$customName" in source
     assert 'Set-ReactControlledText -Element $control -Value $expectedPromptValue -Description "$Label preflight field $fieldId"' in source
     assert "preflight field did not commit through React" in source
     assert "E1 keyboard activation used for \'$Label\' create because the canonical physical helper proved the live preflight button was outside Windows WorkingArea." in source

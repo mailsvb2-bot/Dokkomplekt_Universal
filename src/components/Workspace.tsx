@@ -429,9 +429,9 @@ export function Workspace(props: WorkspaceProps) {
                 ))}
               </ul>
             )}
-            {reviewField && <div className="evidenceReview">
-              <div className="evidencePane"><strong>Фрагмент источника</strong><pre>{highlightedSource(props.sourceText, reviewEvidence)}</pre></div>
-              <div className="evidencePane"><strong>Распознанное значение</strong><pre>{reviewField.value}</pre></div>
+            {reviewField && <div className="evidenceReview" aria-label={`Сверка источника для ${reviewField.field_id}`}>
+              <div className="evidencePane" aria-label={`Фрагмент источника для ${reviewField.field_id}`}><strong>Фрагмент источника</strong><pre>{highlightedSource(props.sourceText, reviewEvidence)}</pre></div>
+              <div className="evidencePane" aria-label={`Распознанное значение для ${reviewField.field_id}: ${reviewField.value}`}><strong>Распознанное значение</strong><pre>{reviewField.value}</pre></div>
             </div>}
           </section>
 

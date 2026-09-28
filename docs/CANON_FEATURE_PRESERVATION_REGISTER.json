@@ -524,7 +524,7 @@
       "id": "FPR-16",
       "group": "Просмотр",
       "status": "needs-runtime-proof",
-      "actual_state": "preview flow is present in UI/backend; source-explanation runtime proof pending",
+      "actual_state": "preview and source-explanation UI are wired; stable field-scoped accessibility identities and installed Windows source/value comparison proof are implemented and awaiting a green installed run",
       "entry": [
         "src/App.tsx"
       ],
@@ -541,10 +541,16 @@
       "after": "installed_baseline",
       "evidence_paths": [
         "src/App.tsx",
-        "src-tauri/src/subsystems/document_commands.rs"
+        "src/components/Workspace.tsx",
+        "src-tauri/src/subsystems/document_commands.rs",
+        "tests/test_fpr16_source_explanation_contract.py"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Installed source-explanation preview evidence is required for final register closure."
+      "runtime_evidence": [
+        "src/components/Workspace.workflow.test.tsx#current-case source explanation component proof",
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-16 current-case source explanation -> document.number -> E1-17",
+        "tests/test_fpr16_source_explanation_contract.py#FPR-16 regression lock"
+      ],
+      "runtime_gap": "Installed source-explanation proof is implemented; a green Windows E1 run is still required for final register closure."
     },
     {
       "id": "FPR-17",

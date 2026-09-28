@@ -2401,11 +2401,24 @@ Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 expand primary automatic
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
 }
-Wait-UiElement -Description 'FPR-09 primary learning source control' -TimeoutSeconds 20 -Probe {
+$fpr09SourceControl = $null
+for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {
   $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'
-} | Out-Null
+  if ($null -eq $currentAppWindow) {
+    Start-Sleep -Milliseconds 200
+    continue
+  }
+  $fpr09SourceControl = Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'
+  if ($null -ne $fpr09SourceControl) { break }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  Start-Sleep -Milliseconds 250
+}
+if ($null -eq $fpr09SourceControl) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
+  throw 'UI smoke timeout: FPR-09 primary learning source control after expanding setup and bounded viewport navigation'
+}
 
 Open-Fpr09MultiFileSelection -Label '1. Источники (4–10)' -Paths $fpr09Sources
 try {

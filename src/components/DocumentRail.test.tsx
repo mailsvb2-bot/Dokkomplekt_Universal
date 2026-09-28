@@ -76,6 +76,13 @@ it('keeps the native picker primary and exposes an explicit text fallback', () =
   expect(onAddFromText).toHaveBeenCalledOnce();
 });
 
+  it('allows importing a transfer package as the first action on a clean profile', () => {
+    const onImportTemplates = vi.fn();
+    renderRail({ documents: [], activeDocumentId: null, selectedDocumentIds: [], onImportTemplates });
+    fireEvent.click(screen.getByRole('button', { name: 'Импорт шаблонов' }));
+    expect(onImportTemplates).toHaveBeenCalledOnce();
+  });
+
   it('keeps document selection and button management separate from generation', () => {
     const { props } = renderRail();
     fireEvent.click(screen.getByRole('button', { name: 'Добавить шаблоны' }));

@@ -294,7 +294,8 @@ function Invoke-UiElementPhysically {
 
   function Test-ElementPhysicallyVisible {
     param([Parameter(Mandatory = $true)]$Target)
-    if ($Target.Current.IsOffscreen) { return $false }
+    # WebView2 IsOffscreen is advisory only: hosted runners can report true for
+    # a rectangle whose center is physically inside the live app window.
     $rect = $Target.Current.BoundingRectangle
     if ($rect.IsEmpty -or $rect.Width -le 1 -or $rect.Height -le 1) { return $false }
     $appWindow = Find-LiveAppWindow
@@ -319,9 +320,8 @@ function Invoke-UiElementPhysically {
   }
 
   if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
-    # WebView2 can report IsOffscreen=false even when the HTML control is below
-    # the physical desktop. Require both accessibility visibility and a target
-    # center inside the real Windows VirtualScreen before dispatching a click.
+    # Recover only when geometry is not physically clickable. UIA IsOffscreen
+    # is logged but cannot veto a point whose rectangle is inside the live app.
     if ($Element.Current.IsScrollItemPatternAvailable) {
       try {
         $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()

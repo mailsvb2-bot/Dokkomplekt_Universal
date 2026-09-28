@@ -48,6 +48,10 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "workflow-document-date" in source
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
+    assert "[double]::IsInfinity([double]$value)" in source
+    assert "[double]::IsNaN([double]$value)" in source
+    assert "[double]::IsInfinity([double]$clickPoint.X)" in source
+    assert "[double]::IsInfinity([double]$clickPoint.Y)" in source
     assert "Invoke-UiActionWithObservedTransition" in source
     assert "function Invoke-UiActionPhysicallyFromProbe" in source
     assert "Never poll the same WebView2 AutomationElement" in source

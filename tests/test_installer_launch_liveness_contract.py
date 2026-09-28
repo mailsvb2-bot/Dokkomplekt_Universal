@@ -165,3 +165,13 @@ def test_windows_physical_input_is_native_and_window_bounded() -> None:
     assert "produced a click point outside the installed app window" in source
     assert "DokkomplektNativeMouse]::SetCursorPos($x, $y)" in source
     assert "System.Windows.Forms.Cursor]::Position" not in source
+
+
+def test_fpr09_expanded_learning_controls_use_bounded_viewport_navigation() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "$fpr09SourceControl = $null" in source
+    assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++)" in source
+    assert "Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{PGDN}')" in source
+    assert "after expanding setup and bounded viewport navigation" in source

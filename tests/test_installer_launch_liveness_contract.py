@@ -132,17 +132,16 @@ def test_linux_ready_title_requires_successful_frontend_tauri_ipc() -> None:
     assert '"core:window:allow-set-title"' in capability
 
 
-def test_windows_restart_source_commit_is_bound_to_exact_source_identity() -> None:
+def test_windows_restart_source_commit_is_bound_to_physical_output_identity() -> None:
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
 
     assert "$restartSourceName = [System.IO.Path]::GetFileName($restartMedicalSource)" in source
     assert "'Источник принят'" in source
-    assert "[System.Windows.Automation.AutomationElement]::NameProperty" in source
-    assert "$restartSourceName" in source
-    assert "FPR-08 restart source commit PASS: exact source" in source
+    assert "exact identity is verified by downstream physical output" in source
     restart_block = source[source.index("$restartSourceName ="):source.index("$restartGenerationAction = $null")]
+    assert "$restartSourceName" in restart_block
     assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')" not in restart_block
-
+    assert "$exactSource =" not in restart_block
 
 def test_windows_file_dialog_submit_requires_native_window_closure() -> None:
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")

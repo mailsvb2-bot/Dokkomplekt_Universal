@@ -159,7 +159,9 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "function Test-ElementPhysicallyVisible" in source
     assert "Find-LiveAppWindow" in source
     assert "remains outside the physically clickable installed-app area after bounded scroll/focus recovery" in source
-    assert "produced a click point outside the installed app window" in source
+    assert "[System.Windows.Forms.Screen]::FromPoint" in source
+    assert ".WorkingArea" in source
+    assert "produced a click point outside the installed app working area" in source
     assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-ElementPhysicallyVisible -Target $Element); $scrollAttempt++)" in source
     assert "center inside the real Windows VirtualScreen" in source
     assert "[DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)" in source

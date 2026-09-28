@@ -72,8 +72,10 @@ def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_
         "FPR15-NEW-CLEAN-PROFILE",
         "Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction Stop",
         "Set-OpenFileDialogPath -Dialog $importDialog -Path $fpr15Package.FullName",
+        "FPR-15 clean-profile import templates button",
         "FPR-15 INSTALLED PASS: export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt",
     ):
         assert marker in source
     assert source.index("FPR-15 CLEAN PROFILE PASS:") < source.index("FPR-15 IMPORT PASS:")
+    assert "FPR-15 clean-profile template management" not in source
     assert source.index("FPR-15 IMPORT PASS:") < source.index("FPR-15 INSTALLED PASS:")

@@ -49,6 +49,7 @@ def test_fpr15_transfer_is_visible_in_primary_template_management_ui() -> None:
     assert "onImportTemplates={importTemplates}" in app
     assert "Экспорт шаблонов" in rail
     assert "Импорт шаблонов" in rail
+    assert "firstRunImportTemplates" in rail
 
 
 def test_fpr15_register_does_not_claim_runtime_closure_before_clean_profile_proof() -> None:

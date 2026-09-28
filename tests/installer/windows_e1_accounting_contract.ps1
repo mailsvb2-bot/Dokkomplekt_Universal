@@ -1345,18 +1345,22 @@ function Invoke-E1DomainScenario {
       if ($null -eq $window) { return $null }
       Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
     }
-    if (Test-ElementPhysicallyVisible -Target $createAction) {
+    try {
       Invoke-UiElementPhysically -Element $createAction -Description "create $Label"
-    } else {
-      # A fixed preflight footer can sit below Windows WorkingArea when the
-      # hosted runner taskbar reduces the physically clickable desktop. Do not
-      # synthesize an off-screen mouse click: activate the same real HTML button
-      # through browser-native keyboard input, then let physical output/receipt
-      # evidence below prove that React actually accepted the action.
+    } catch {
+      $physicalError = [string]$_.Exception.Message
+      if ($physicalError -notmatch 'outside the physically clickable installed-app area after bounded scroll/focus recovery') {
+        throw
+      }
+      # The canonical physical helper has already proven the button is outside
+      # Windows WorkingArea. Do not synthesize an off-screen mouse click:
+      # activate that same live HTML button through browser-native keyboard
+      # input, then let physical DOCX + committed receipt evidence below prove
+      # that React actually accepted the action.
       $createAction.SetFocus()
       Start-Sleep -Milliseconds 150
       [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-      Write-Host "E1 keyboard activation used for '$Label' create because the live preflight button was outside Windows WorkingArea."
+      Write-Host "E1 keyboard activation used for '$Label' create because the canonical physical helper proved the live preflight button was outside Windows WorkingArea."
     }
   } else {
     Write-Host "FPR-07 zero-question path: $Label started directly from the canonical generation action."

@@ -134,6 +134,23 @@ function Find-ReadyButtonByNames {
   return $null
 }
 
+function Find-ReadyButtonByTrimmedName {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$Name)
+  foreach ($candidate in $Root.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+  )) {
+    try {
+      $candidateName = ([string]$candidate.Current.Name).Trim()
+      if ($candidateName -eq $Name -and $candidate.Current.IsEnabled) { return $candidate }
+    } catch { }
+  }
+  return $null
+}
+
 function Find-ElementByAutomationId {
   param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
   return $Root.FindFirst(
@@ -2607,7 +2624,9 @@ foreach ($item in @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dkt
 $fpr15Export = Find-E1NamedElement -Name 'Экспорт шаблонов'
 if ($null -eq $fpr15Export) {
   $management = Wait-UiElement -Description 'FPR-15 template management' -TimeoutSeconds 20 -Probe {
-    Find-E1NamedElement -Name 'Управление кнопками'
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
   }
   Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 template management'
   $fpr15Export = Wait-UiElement -Description 'FPR-15 export templates button' -TimeoutSeconds 20 -Probe {
@@ -2676,7 +2695,9 @@ Write-Host 'FPR-15 CLEAN PROFILE PASS: application data removed and transferred 
 $fpr15Import = Find-E1NamedElement -Name 'Импорт шаблонов'
 if ($null -eq $fpr15Import) {
   $management = Wait-UiElement -Description 'FPR-15 clean-profile template management' -TimeoutSeconds 20 -Probe {
-    Find-E1NamedElement -Name 'Управление кнопками'
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
   }
   Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 clean-profile template management'
   $fpr15Import = Wait-UiElement -Description 'FPR-15 import templates button' -TimeoutSeconds 20 -Probe {

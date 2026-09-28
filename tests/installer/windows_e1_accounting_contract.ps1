@@ -2727,17 +2727,10 @@ if ($null -ne (Find-E1NamedElement -Name $fpr06Label)) {
 }
 Write-Host 'FPR-15 CLEAN PROFILE PASS: application data removed and transferred button is absent before import.'
 
-$fpr15Import = Find-E1NamedElement -Name 'Импорт шаблонов'
-if ($null -eq $fpr15Import) {
-  $management = Wait-UiElement -Description 'FPR-15 clean-profile template management' -TimeoutSeconds 20 -Probe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
-  }
-  Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 clean-profile template management'
-  $fpr15Import = Wait-UiElement -Description 'FPR-15 import templates button' -TimeoutSeconds 20 -Probe {
-    Find-E1NamedElement -Name 'Импорт шаблонов'
-  }
+$fpr15Import = Wait-UiElement -Description 'FPR-15 clean-profile import templates button' -TimeoutSeconds 20 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Импорт шаблонов')
 }
 $importDialog = Invoke-UiActionWithObservedTransition `
   -Description 'FPR-15 import templates' `

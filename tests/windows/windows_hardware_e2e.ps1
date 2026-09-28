@@ -75,6 +75,71 @@ if ($appCandidates.Count -ne 1) {
 $app = $appCandidates[0].FullName
 $installedSignature = Get-AuthenticodeSignature -FilePath $app
 if ($installedSignature.Status -ne 'Valid') { throw "Installed application is not validly signed: $($installedSignature.Status)" }
+# FPR-17: prove PDF conversion through the installed offline application and
+# the exact production converter/runtime resolver. The dedicated hardware runner
+# already requires Microsoft Word, so create a deterministic source DOCX there
+# instead of depending on a repository fixture or a developer workstation path.
+$fpr17Source = Join-Path $env:RUNNER_TEMP ("FPR17-PDF-SOURCE-" + [Guid]::NewGuid().ToString('N') + '.docx')
+$fpr17Evidence = Join-Path $releaseGate 'FPR17_PDF_EXPORT.json'
+$fpr17Pdf = [IO.Path]::ChangeExtension($fpr17Evidence, '.pdf')
+$wordForPdf = $null
+$docForPdf = $null
+try {
+    $wordForPdf = New-Object -ComObject Word.Application
+    $wordForPdf.Visible = $false
+    $wordForPdf.DisplayAlerts = 0
+    $docForPdf = $wordForPdf.Documents.Add()
+    $docForPdf.Content.Text = 'Dokkomplekt FPR-17 installed PDF export proof' + [Environment]::NewLine + 'Hardware runtime conversion.'
+    # wdFormatDocumentDefault = 16 (DOCX)
+    $docForPdf.SaveAs2($fpr17Source, 16)
+} finally {
+    if ($null -ne $docForPdf) {
+        try { $docForPdf.Close(0) } catch { }
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($docForPdf)
+    }
+    if ($null -ne $wordForPdf) {
+        try { $wordForPdf.Quit() } catch { }
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($wordForPdf)
+    }
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+}
+if (-not (Test-Path -LiteralPath $fpr17Source -PathType Leaf)) {
+    throw 'FPR-17 source DOCX was not created on the hardware runner.'
+}
+$env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
+$fpr17Process = Start-Process -FilePath $app -ArgumentList @(
+    "--e2e-export-pdf=$fpr17Source",
+    "--e2e-evidence=$fpr17Evidence"
+) -Wait -PassThru
+if ($fpr17Process.ExitCode -ne 0) {
+    throw "FPR-17 installed PDF export command failed with exit code $($fpr17Process.ExitCode)."
+}
+if (-not (Test-Path -LiteralPath $fpr17Evidence -PathType Leaf)) {
+    throw 'FPR-17 installed PDF export did not write JSON evidence.'
+}
+if (-not (Test-Path -LiteralPath $fpr17Pdf -PathType Leaf)) {
+    throw 'FPR-17 installed PDF export did not publish a physical PDF.'
+}
+$fpr17Record = Get-Content -LiteralPath $fpr17Evidence -Raw | ConvertFrom-Json
+if ($fpr17Record.schema -ne 'dokkomplekt.fpr17-pdf-export-e2e.v1' -or
+    $fpr17Record.action -ne 'export_pdf' -or
+    $fpr17Record.pdf_signature_valid -ne $true) {
+    throw 'FPR-17 installed PDF export evidence is incomplete or malformed.'
+}
+$fpr17Header = [IO.File]::ReadAllBytes($fpr17Pdf)
+if ($fpr17Header.Length -lt 5 -or [Text.Encoding]::ASCII.GetString($fpr17Header, 0, 5) -ne '%PDF-') {
+    throw 'FPR-17 installed PDF export artifact has no PDF signature.'
+}
+$fpr17PdfHash = (Get-FileHash -LiteralPath $fpr17Pdf -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($fpr17PdfHash -ne [string]$fpr17Record.pdf_sha256) {
+    throw 'FPR-17 installed PDF export SHA-256 does not match application evidence.'
+}
+if ([int64]$fpr17Record.pdf_size_bytes -ne (Get-Item -LiteralPath $fpr17Pdf).Length) {
+    throw 'FPR-17 installed PDF export byte length does not match application evidence.'
+}
+Write-Host "FPR-17 PDF INSTALLED PASS: installed offline app -> packaged LibreOffice runtime -> physical PDF -> SHA-256 verified: $fpr17Pdf"
+
 [ordered]@{
     schema = 'dokkomplekt.authenticode-evidence.v1'
     installer = [ordered]@{
@@ -357,10 +422,15 @@ if (-not (Test-Path -LiteralPath $guiConsoleEvidencePath -PathType Leaf)) {
     post_reboot_output_sha256 = $verifiedReboot.post_reboot_output_sha256
     print_spooler_completion_observed = $true
     print_event_count = $printEvents.Count
+    fpr17_pdf_export_verified = $true
+    fpr17_pdf_sha256 = $fpr17PdfHash
+    fpr17_pdf_evidence_sha256 = (Get-FileHash $fpr17Evidence -Algorithm SHA256).Hash.ToLowerInvariant()
     print_event_evidence_sha256 = (Get-FileHash $printEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
     authenticode_evidence_sha256 = (Get-FileHash $signatureEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
     installed_application_signature_valid = $true
     silent_uninstall_passed = $true
 } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $releaseGate 'WINDOWS_HARDWARE_E2E_PASSED.json') -Encoding utf8
 Remove-Item -LiteralPath $watchFolder -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "WINDOWS HARDWARE E2E PASSED: printer=$($printer.Name); installer=$($installer.Name); reboot=true; uninstall=true"
+Remove-Item -LiteralPath $fpr17Source -Force -ErrorAction SilentlyContinue
+Write-Host "FPR-17 PRINT INSTALLED PASS: Word COM -> dedicated printer -> Windows PrintService Event 307 count=$($printEvents.Count)"
+Write-Host "WINDOWS HARDWARE E2E PASSED: printer=$($printer.Name); installer=$($installer.Name); reboot=true; uninstall=true; fpr17_pdf=true"

@@ -118,6 +118,7 @@ export function DocumentRail(props: DocumentRailProps) {
           <p>Выберите свои шаблоны Word. Один файл станет одной понятной кнопкой.</p>
           <button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd} disabled={props.busy}>Создать свои кнопки</button>
           <button className="textBtn firstRunTextTemplate" onClick={props.onAddFromText} disabled={props.busy}>Создать кнопку из текста</button>
+          <button className="textBtn firstRunImportTemplates" onClick={props.onImportTemplates} disabled={props.busy}>Импорт шаблонов</button>
         </div>
       )}
 

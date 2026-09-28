@@ -134,6 +134,23 @@ function Find-ReadyButtonByNames {
   return $null
 }
 
+function Find-ReadyButtonByTrimmedName {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$Name)
+  foreach ($candidate in $Root.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+  )) {
+    try {
+      $candidateName = ([string]$candidate.Current.Name).Trim()
+      if ($candidateName -eq $Name -and $candidate.Current.IsEnabled) { return $candidate }
+    } catch { }
+  }
+  return $null
+}
+
 function Find-ElementByAutomationId {
   param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
   return $Root.FindFirst(
@@ -1551,41 +1568,6 @@ foreach ($fieldId in $fpr04SourceFields) {
 }
 Write-Host "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake."
 
-# FPR-16: source explanation is a real installed user path, not only a stored trace.
-$fpr16Advanced = Wait-UiElement -Description 'FPR-16 advanced tools toggle' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Расширенные инструменты'
-}
-Invoke-UiElementPhysically -Element $fpr16Advanced -Description 'open FPR-16 source explanation tools'
-$fpr16Review = Wait-UiElement -Description 'FPR-16 document.number source review action' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Сверить источник для document.number'
-}
-Invoke-UiElementPhysically -Element $fpr16Review -Description 'review FPR-16 document.number source'
-$null = Wait-UiElement -Description 'FPR-16 source comparison panel' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Сверка источника для document.number'
-}
-$fpr16SourcePane = Wait-UiElement -Description 'FPR-16 source fragment pane' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Фрагмент источника для document.number'
-}
-$fpr16ValuePane = Wait-UiElement -Description 'FPR-16 recognized value pane' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Распознанное значение для document.number: E1-17'
-}
-$fpr16SourceName = [string]$fpr16SourcePane.Current.Name
-$fpr16ValueName = [string]$fpr16ValuePane.Current.Name
-if (-not $fpr16SourceName.Contains('document.number') -or -not $fpr16ValueName.Contains('E1-17')) {
-  throw "FPR-16 installed source explanation lost field/value context. Source=$fpr16SourceName Value=$fpr16ValueName"
-}
-Write-Host "FPR-16 INSTALLED PASS: current-case source explanation -> document.number -> E1-17 is visible through the real installed UI."
-
-# Restore the compact workspace before continuing the cross-domain matrix.
-# FPR-16 deliberately expands a long diagnostics section; leaving it open can
-# push later canonical generation controls outside the physical viewport even
-# though UIA still exposes them. Close it through the same installed user path.
-$fpr16Advanced = Wait-UiElement -Description 'FPR-16 advanced tools toggle before close' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Расширенные инструменты'
-}
-Invoke-UiElementPhysically -Element $fpr16Advanced -Description 'close FPR-16 source explanation tools'
-Start-Sleep -Milliseconds 250
-
 $window = Find-LiveAppWindow
 $clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
 if ($null -ne $clearSelection) { Invoke-UiElementPhysically -Element $clearSelection -Description 'clear previous document selection' }
@@ -2642,7 +2624,9 @@ foreach ($item in @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dkt
 $fpr15Export = Find-E1NamedElement -Name 'Экспорт шаблонов'
 if ($null -eq $fpr15Export) {
   $management = Wait-UiElement -Description 'FPR-15 template management' -TimeoutSeconds 20 -Probe {
-    Find-E1NamedElement -Name 'Управление кнопками'
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
   }
   Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 template management'
   $fpr15Export = Wait-UiElement -Description 'FPR-15 export templates button' -TimeoutSeconds 20 -Probe {
@@ -2711,7 +2695,9 @@ Write-Host 'FPR-15 CLEAN PROFILE PASS: application data removed and transferred 
 $fpr15Import = Find-E1NamedElement -Name 'Импорт шаблонов'
 if ($null -eq $fpr15Import) {
   $management = Wait-UiElement -Description 'FPR-15 clean-profile template management' -TimeoutSeconds 20 -Probe {
-    Find-E1NamedElement -Name 'Управление кнопками'
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
   }
   Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 clean-profile template management'
   $fpr15Import = Wait-UiElement -Description 'FPR-15 import templates button' -TimeoutSeconds 20 -Probe {

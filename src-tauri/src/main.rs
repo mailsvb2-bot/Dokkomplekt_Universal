@@ -2093,10 +2093,9 @@ fn main() {
             .map(str::to_string)
     });
     let e2e_uninstall_watcher = args.iter().any(|arg| arg == "--e2e-uninstall-watcher");
-    let e2e_export_pdf_source = args.iter().find_map(|arg| {
-        arg.strip_prefix("--e2e-export-pdf=")
-            .map(PathBuf::from)
-    });
+    let e2e_export_pdf_source = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--e2e-export-pdf=").map(PathBuf::from));
     let e2e_evidence_path = args
         .iter()
         .find_map(|arg| arg.strip_prefix("--e2e-evidence=").map(PathBuf::from));
@@ -2237,43 +2236,8 @@ fn main() {
                     std::fs::create_dir_all(parent)?;
                 }
                 let payload = if let Some(source) = e2e_export_pdf_source.clone() {
-                    if !source.is_absolute() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "--e2e-export-pdf requires an absolute source path",
-                        )
-                        .into());
-                    }
-                    let source = std::fs::canonicalize(&source)?;
-                    let (temporary_pdf, temporary_dir) =
-                        convert_office_document_to_pdf(&source, false)
-                            .map_err(std::io::Error::other)?;
-                    let pdf_evidence_path = evidence_path.with_extension("pdf");
-                    if pdf_evidence_path.exists() {
-                        std::fs::remove_file(&pdf_evidence_path)?;
-                    }
-                    std::fs::copy(&temporary_pdf, &pdf_evidence_path)?;
-                    let _ = std::fs::remove_dir_all(&temporary_dir);
-                    verify_pdf_signature(&pdf_evidence_path)
-                        .map_err(std::io::Error::other)?;
-                    let (pdf_size_bytes, _, pdf_sha256) =
-                        file_content_signature(&pdf_evidence_path)
-                            .map_err(std::io::Error::other)?;
-                    let (source_size_bytes, _, source_sha256) =
-                        file_content_signature(&source)
-                            .map_err(std::io::Error::other)?;
-                    serde_json::json!({
-                        "schema": "dokkomplekt.fpr17-pdf-export-e2e.v1",
-                        "action": "export_pdf",
-                        "source_name": source.file_name().and_then(|value| value.to_str()).unwrap_or("source.docx"),
-                        "source_size_bytes": source_size_bytes,
-                        "source_sha256": source_sha256,
-                        "pdf_name": pdf_evidence_path.file_name().and_then(|value| value.to_str()).unwrap_or("FPR17_PDF_EXPORT.pdf"),
-                        "pdf_size_bytes": pdf_size_bytes,
-                        "pdf_sha256": pdf_sha256,
-                        "pdf_signature_valid": true,
-                        "converter": "production convert_office_document_to_pdf",
-                    })
+                    run_fpr17_pdf_export_e2e(&source, &evidence_path)
+                        .map_err(std::io::Error::other)?
                 } else if e2e_uninstall_watcher {
                     let (removed, warnings) = remove_autostart_entries();
                     if let Ok(config_path) = watcher_config_path(&handle) {

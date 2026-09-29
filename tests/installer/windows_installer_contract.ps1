@@ -3486,6 +3486,74 @@ try {
   }
 }
 
+# FPR-18 installed licensing proof. Quality Gate supplies an ephemeral signed
+# license pair and compiles the matching public trust anchor into this exact
+# release binary. The private seed is deleted before the application build.
+$fpr18ValidLicense = [string]$env:DOKKOMPLEKT_FPR18_VALID_LICENSE_PATH
+$fpr18TamperedLicense = [string]$env:DOKKOMPLEKT_FPR18_TAMPERED_LICENSE_PATH
+if (-not [string]::IsNullOrWhiteSpace($fpr18ValidLicense) -or -not [string]::IsNullOrWhiteSpace($fpr18TamperedLicense)) {
+  if ([string]::IsNullOrWhiteSpace($fpr18ValidLicense) -or -not (Test-Path -LiteralPath $fpr18ValidLicense -PathType Leaf)) {
+    throw 'FPR-18 valid signed license fixture is missing.'
+  }
+  if ([string]::IsNullOrWhiteSpace($fpr18TamperedLicense) -or -not (Test-Path -LiteralPath $fpr18TamperedLicense -PathType Leaf)) {
+    throw 'FPR-18 tampered signed license fixture is missing.'
+  }
+  if ($env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ne '1') {
+    throw 'FPR-18 installed proof requires the guarded E2E command boundary.'
+  }
+
+  $fpr18ValidEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-valid-$PID.json"
+  $fpr18TamperedEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-tampered-$PID.json"
+  $fpr18RestartEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-restart-$PID.json"
+  Remove-Item -LiteralPath $fpr18ValidEvidence, $fpr18TamperedEvidence, $fpr18RestartEvidence -Force -ErrorAction SilentlyContinue
+
+  $validProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+    "--e2e-license-proof=$fpr18ValidLicense",
+    "--e2e-evidence=$fpr18ValidEvidence"
+  ) -Wait -PassThru
+  if ($validProcess.ExitCode -ne 0) {
+    throw "FPR-18 valid installed license activation failed with exit code $($validProcess.ExitCode)."
+  }
+  if (-not (Test-Path -LiteralPath $fpr18ValidEvidence -PathType Leaf)) {
+    throw 'FPR-18 valid license activation produced no evidence.'
+  }
+  $validRecord = Get-Content -LiteralPath $fpr18ValidEvidence -Raw | ConvertFrom-Json
+  if ($validRecord.schema -ne 'dokkomplekt.fpr18-license-e2e.v1' -or
+      $validRecord.accepted -ne $true -or
+      $validRecord.mode -ne 'paid' -or
+      $validRecord.license_applied -ne $true) {
+    throw 'FPR-18 valid license did not produce paid accepted access.'
+  }
+  Write-Host "FPR-18 POSITIVE INSTALLED PASS: signed license -> durable state -> paid access ($($validRecord.plan))."
+
+  $tamperedProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+    "--e2e-license-proof=$fpr18TamperedLicense",
+    "--e2e-evidence=$fpr18TamperedEvidence"
+  ) -Wait -PassThru
+  if ($tamperedProcess.ExitCode -eq 0) {
+    throw 'FPR-18 tampered license was accepted by the installed release binary.'
+  }
+  if (Test-Path -LiteralPath $fpr18TamperedEvidence -PathType Leaf) {
+    throw 'FPR-18 tampered license produced success evidence despite fail-closed rejection.'
+  }
+  Write-Host "FPR-18 NEGATIVE INSTALLED PASS: post-signature payload tamper -> nonzero rejection -> no success evidence."
+
+  $restartProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+    '--e2e-license-access-proof',
+    "--e2e-evidence=$fpr18RestartEvidence"
+  ) -Wait -PassThru
+  if ($restartProcess.ExitCode -ne 0) {
+    throw "FPR-18 persisted valid license did not survive restart after negative activation attempt: exit $($restartProcess.ExitCode)."
+  }
+  $restartRecord = Get-Content -LiteralPath $fpr18RestartEvidence -Raw | ConvertFrom-Json
+  if ($restartRecord.accepted -ne $true -or
+      $restartRecord.mode -ne 'paid' -or
+      $restartRecord.license_applied -ne $false) {
+    throw 'FPR-18 restart access proof did not restore the previously valid paid license.'
+  }
+  Write-Host "FPR-18 RESTART INSTALLED PASS: rejected tampered license did not corrupt persisted valid paid access."
+}
+
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |
   Where-Object { $_.Name -match "uninstall" } |
   Select-Object -First 1

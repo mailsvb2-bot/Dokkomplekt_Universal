@@ -2,18 +2,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "src-tauri" / "src" / "main.rs"
+DESKTOP_IO = ROOT / "src-tauri" / "src" / "subsystems" / "desktop_io.rs"
 HARDWARE = ROOT / "tests" / "windows" / "windows_hardware_e2e.ps1"
 REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
 
 
 def test_fpr17_installed_pdf_export_uses_production_converter_and_is_hardware_guarded() -> None:
     main = MAIN.read_text(encoding="utf-8")
+    desktop_io = DESKTOP_IO.read_text(encoding="utf-8")
     assert '--e2e-export-pdf=' in main
     assert 'DOKKOMPLEKT_RUN_HARDWARE_E2E' in main
-    assert 'convert_office_document_to_pdf(&source, false)' in main
-    assert 'verify_pdf_signature(&pdf_evidence_path)' in main
-    assert '"dokkomplekt.fpr17-pdf-export-e2e.v1"' in main
-    assert '"production convert_office_document_to_pdf"' in main
+    assert 'run_fpr17_pdf_export_e2e(&source, &evidence_path)' in main
+    assert 'fn run_fpr17_pdf_export_e2e(' in desktop_io
+    assert 'convert_office_document_to_pdf(&source, false)' in desktop_io
+    assert 'verify_pdf_signature(&pdf_evidence_path)' in desktop_io
+    assert '"dokkomplekt.fpr17-pdf-export-e2e.v1"' in desktop_io
+    assert '"production convert_office_document_to_pdf"' in desktop_io
 
 
 def test_fpr17_hardware_lane_requires_real_pdf_bytes_hash_and_spooler_completion() -> None:

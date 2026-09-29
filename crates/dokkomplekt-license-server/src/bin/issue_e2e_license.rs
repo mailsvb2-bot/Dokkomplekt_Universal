@@ -18,8 +18,8 @@ fn required_arg(name: &str) -> Result<String> {
 fn main() -> Result<()> {
     let private_key_file = PathBuf::from(required_arg("private-key-file")?);
     let output = PathBuf::from(required_arg("output")?);
-    let issuer_key_b64 = std::fs::read_to_string(&private_key_file)
-        .context("read ephemeral FPR-18 private key")?;
+    let issuer_key_b64 =
+        std::fs::read_to_string(&private_key_file).context("read ephemeral FPR-18 private key")?;
     let document = issue_license(
         IssueLicenseInput {
             order_id: Uuid::new_v4(),

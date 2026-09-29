@@ -501,3 +501,333 @@ fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResponse, Strin
 }
 
 include!("template_picker.rs");
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpdateRecoveryState {
+    schema: String,
+    status: String,
+    from_version: String,
+    target_version: String,
+    package_path: String,
+    package_sha256: String,
+    package_size_bytes: u64,
+    backup_dir: String,
+    created_at: String,
+    #[serde(default)]
+    verified_at: Option<String>,
+    #[serde(default)]
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UpdateApplyResponse {
+    prepared: bool,
+    target_version: String,
+    recovery_state_path: String,
+    backup_dir: String,
+    message: String,
+}
+
+const UPDATE_RECOVERY_SCHEMA: &str = "dokkomplekt.update-recovery.v1";
+
+fn update_recovery_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("update-recovery.json"))
+}
+
+fn sha256_file(path: &Path) -> Result<(u64, String), String> {
+    let mut input = std::fs::File::open(path)
+        .map_err(|error| format!("Не удалось открыть пакет обновления: {error}"))?;
+    let mut digest = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = input.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        digest.update(&buffer[..read]);
+    }
+    Ok((total, hex::encode(digest.finalize())))
+}
+
+fn verify_downloaded_package(
+    package_path: &Path,
+    expected_sha256: &str,
+    expected_size_bytes: u64,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(package_path)
+        .map_err(|error| format!("Проверенный пакет обновления недоступен: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Путь обновления должен указывать на обычный файл".to_string());
+    }
+    let (actual_size, actual_sha256) = sha256_file(package_path)?;
+    if actual_size != expected_size_bytes {
+        return Err("Размер пакета изменился после первичной проверки".to_string());
+    }
+    if actual_sha256 != expected_sha256.trim().to_ascii_lowercase() {
+        return Err("SHA-256 пакета изменился после первичной проверки".to_string());
+    }
+    Ok(())
+}
+
+fn copy_update_backup_file(source: &Path, target_dir: &Path) -> Result<Option<PathBuf>, String> {
+    match std::fs::symlink_metadata(source) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "Небезопасный тип файла состояния для backup: {}",
+                    source.display()
+                ));
+            }
+            std::fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
+            let name = source
+                .file_name()
+                .ok_or_else(|| "Не удалось определить имя файла backup".to_string())?;
+            let target = target_dir.join(name);
+            std::fs::copy(source, &target).map_err(|error| {
+                format!(
+                    "Не удалось создать backup {} -> {}: {error}",
+                    source.display(),
+                    target.display()
+                )
+            })?;
+            Ok(Some(target))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<PathBuf, String> {
+    let db_path = default_state_db_path(app)?;
+    {
+        let repo = repository_for(&db_path)?;
+        repo.quick_integrity_check()
+            .map_err(|error| format!("Локальная база не прошла integrity check: {error}"))?;
+    }
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let backup_dir = data_dir
+        .join("update-backups")
+        .join(format!("{}-{}", target_version, Uuid::new_v4()));
+    std::fs::create_dir_all(&backup_dir).map_err(|error| error.to_string())?;
+
+    copy_update_backup_file(&db_path, &backup_dir)?;
+    let key_path = db_path.with_file_name(format!(
+        "{}.key",
+        db_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(DEFAULT_STATE_DB)
+    ));
+    copy_update_backup_file(&key_path, &backup_dir)?;
+    copy_update_backup_file(&PathBuf::from(format!("{}-wal", db_path.display())), &backup_dir)?;
+    copy_update_backup_file(&PathBuf::from(format!("{}-shm", db_path.display())), &backup_dir)?;
+    Ok(backup_dir)
+}
+
+fn ensure_no_active_case_runs(app: &tauri::AppHandle) -> Result<(), String> {
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    let active = repo
+        .list_case_runs(10_000)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|run| !matches!(run.status.as_str(), "completed" | "failed" | "cancelled"))
+        .map(|run| run.case_id)
+        .collect::<Vec<_>>();
+    if !active.is_empty() {
+        return Err(format!(
+            "Обновление отложено: есть незавершённые операции ({})",
+            active.len()
+        ));
+    }
+    Ok(())
+}
+
+fn write_update_recovery_state(
+    app: &tauri::AppHandle,
+    state: &UpdateRecoveryState,
+) -> Result<PathBuf, String> {
+    let path = update_recovery_state_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let temp = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+    let bytes = serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?;
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| error.to_string())?;
+        file.write_all(&bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(&temp, &path).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+fn load_update_recovery_state(app: &tauri::AppHandle) -> Result<Option<UpdateRecoveryState>, String> {
+    let path = update_recovery_state_path(app)?;
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let state: UpdateRecoveryState = serde_json::from_slice(&bytes)
+                .map_err(|error| format!("Повреждён recovery marker обновления: {error}"))?;
+            if state.schema != UPDATE_RECOVERY_SCHEMA {
+                return Err("Неизвестная схема recovery marker обновления".to_string());
+            }
+            Ok(Some(state))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn reconcile_pending_update(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(mut state) = load_update_recovery_state(app)? else {
+        return Ok(());
+    };
+    if state.status != "installer_started" && state.status != "prepared" {
+        return Ok(());
+    }
+
+    let current = parse_semver(env!("CARGO_PKG_VERSION"))?;
+    let target = parse_semver(&state.target_version)?;
+    if current >= target {
+        let repo = repository_for(&default_state_db_path(app)?)?;
+        repo.quick_integrity_check()
+            .map_err(|error| format!("После обновления повреждено локальное состояние: {error}"))?;
+        state.status = "verified".to_string();
+        state.verified_at = Some(OffsetDateTime::now_utc().to_string());
+        state.last_error = None;
+        write_update_recovery_state(app, &state)?;
+    } else if state.status == "installer_started" {
+        state.status = "recoverable_failure".to_string();
+        state.last_error = Some(
+            "Installer был запущен, но приложение стартовало в прежней версии; backup сохранён."
+                .to_string(),
+        );
+        write_update_recovery_state(app, &state)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_update_recovery_status(
+    app: tauri::AppHandle,
+) -> Result<Option<UpdateRecoveryState>, String> {
+    load_update_recovery_state(&app)
+}
+
+#[tauri::command]
+fn apply_verified_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    package_path: String,
+    target_version: String,
+    sha256: String,
+    size_bytes: u64,
+) -> Result<UpdateApplyResponse, String> {
+    let _persistence_guard = state
+        .persistence_gate
+        .lock()
+        .map_err(|_| "Не удалось заблокировать persistence на время подготовки обновления".to_string())?;
+
+    if state.persistence_blocked.load(Ordering::SeqCst) {
+        return Err("Persistence уже заблокирован из-за предыдущей критической ошибки".to_string());
+    }
+
+    let target = parse_semver(&target_version)?;
+    let current = parse_semver(env!("CARGO_PKG_VERSION"))?;
+    if target <= current {
+        return Err("Нельзя применить обновление той же или более старой версии".to_string());
+    }
+
+    ensure_no_active_case_runs(&app)?;
+
+    let package = PathBuf::from(package_path);
+    verify_downloaded_package(&package, &sha256, size_bytes)?;
+
+    let expected_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("verified-updates")
+        .join(&target_version);
+    let canonical_package = package
+        .canonicalize()
+        .map_err(|error| format!("Не удалось канонизировать пакет обновления: {error}"))?;
+    let canonical_root = expected_root
+        .canonicalize()
+        .map_err(|error| format!("Каталог проверенного обновления недоступен: {error}"))?;
+    if !canonical_package.starts_with(&canonical_root) {
+        return Err("Пакет находится вне доверенного каталога verified-updates".to_string());
+    }
+
+    let backup_dir = backup_update_state(&app, &target_version)?;
+    let mut recovery = UpdateRecoveryState {
+        schema: UPDATE_RECOVERY_SCHEMA.to_string(),
+        status: "prepared".to_string(),
+        from_version: env!("CARGO_PKG_VERSION").to_string(),
+        target_version: target_version.clone(),
+        package_path: canonical_package.display().to_string(),
+        package_sha256: sha256.trim().to_ascii_lowercase(),
+        package_size_bytes: size_bytes,
+        backup_dir: backup_dir.display().to_string(),
+        created_at: OffsetDateTime::now_utc().to_string(),
+        verified_at: None,
+        last_error: None,
+    };
+    let recovery_path = write_update_recovery_state(&app, &recovery)?;
+
+    if let Ok(mut watcher) = state.watcher.lock() {
+        if let Some(handle) = watcher.take() {
+            handle.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    verify_downloaded_package(&canonical_package, &recovery.package_sha256, size_bytes)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let child = std::process::Command::new(&canonical_package)
+            .arg("/S")
+            .spawn()
+            .map_err(|error| format!("Не удалось запустить проверенный installer: {error}"))?;
+        recovery.status = "installer_started".to_string();
+        recovery.last_error = None;
+        write_update_recovery_state(&app, &recovery)?;
+        state.persistence_blocked.store(true, Ordering::SeqCst);
+        let response = UpdateApplyResponse {
+            prepared: true,
+            target_version,
+            recovery_state_path: recovery_path.display().to_string(),
+            backup_dir: backup_dir.display().to_string(),
+            message: format!(
+                "Проверенный installer запущен (pid {}). Приложение завершает работу; backup и recovery marker сохранены.",
+                child.id()
+            ),
+        };
+        app.exit(0);
+        return Ok(response);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        recovery.status = "prepared".to_string();
+        recovery.last_error = Some(
+            "Автоматическое применение пакета пока разрешено только для Windows NSIS; backup сохранён."
+                .to_string(),
+        );
+        write_update_recovery_state(&app, &recovery)?;
+        Err("Автоматическое применение обновления пока поддерживается только для Windows NSIS".to_string())
+    }
+}

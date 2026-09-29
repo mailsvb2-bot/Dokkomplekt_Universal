@@ -831,3 +831,39 @@ fn apply_verified_update(
         Err("Автоматическое применение обновления пока поддерживается только для Windows NSIS".to_string())
     }
 }
+
+
+#[cfg(test)]
+mod fpr19_update_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn downloaded_package_is_reverified_before_install() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-update-verify-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let package = root.join("Dokkomplekt-setup.exe");
+        std::fs::write(&package, b"verified-installer").unwrap();
+        let (size, hash) = sha256_file(&package).unwrap();
+
+        verify_downloaded_package(&package, &hash, size).expect("initial package must verify");
+
+        std::fs::write(&package, b"tampered-installer").unwrap();
+        let error = verify_downloaded_package(&package, &hash, size)
+            .expect_err("tampered package must fail closed");
+        assert!(
+            error.contains("Размер пакета изменился") || error.contains("SHA-256 пакета изменился"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn downloaded_package_rejects_symlink_or_non_file_path() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-update-type-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let error = verify_downloaded_package(&root, &"0".repeat(64), 1)
+            .expect_err("directory must not be accepted as installer");
+        assert!(error.contains("обычный файл"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

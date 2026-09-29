@@ -17,8 +17,8 @@ def test_fpr22_installed_proof_covers_receipt_schema_and_diagnostics() -> None:
         "allowedReceiptFields",
         "RedirectStandardOutput",
         "RedirectStandardError",
-        "committed GenerationReceipt exposes an unexpected field",
-        "installed diagnostics leaked path/case data",
+        "FPR-22 committed receipt exposes an unexpected field",
+        "FPR-22 installed diagnostics leaked path/case data",
     ]
     for marker in required:
         assert marker in script, marker

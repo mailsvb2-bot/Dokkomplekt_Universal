@@ -465,6 +465,46 @@ export async function checkForUpdates(): Promise<UpdateCheckResponse> {
   return callRust('check_for_updates');
 }
 
+export type UpdateRecoveryState = {
+  schema: string;
+  status: string;
+  from_version: string;
+  target_version: string;
+  package_path: string;
+  package_sha256: string;
+  package_size_bytes: number;
+  backup_dir: string;
+  created_at: string;
+  verified_at?: string | null;
+  last_error?: string | null;
+};
+
+export type UpdateApplyResponse = {
+  prepared: boolean;
+  target_version: string;
+  recovery_state_path: string;
+  backup_dir: string;
+  message: string;
+};
+
+export async function getUpdateRecoveryStatus(): Promise<UpdateRecoveryState | null> {
+  return callRust('get_update_recovery_status');
+}
+
+export async function applyVerifiedUpdate(
+  packagePath: string,
+  targetVersion: string,
+  sha256: string,
+  sizeBytes: number,
+): Promise<UpdateApplyResponse> {
+  return callRust('apply_verified_update', {
+    packagePath,
+    targetVersion,
+    sha256,
+    sizeBytes,
+  });
+}
+
 export async function getBackgroundWatcherState(): Promise<BackgroundWatcherPlan> {
   return callRust('get_background_watcher_state');
 }

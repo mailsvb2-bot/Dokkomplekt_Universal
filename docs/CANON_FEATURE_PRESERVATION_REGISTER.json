@@ -398,7 +398,7 @@
     {
       "id": "FPR-12",
       "group": "Настройки",
-      "status": "needs-runtime-proof",
+      "status": "verified",
       "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence now proves durable output-preference presence and a physical post-restart DOCX published into the restored output root with the restored naming rule; same-version NSIS replacement preserves durable preferences and workspace; true previous-version to current-version migration evidence remains pending",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#save_state/load_state"
@@ -612,9 +612,12 @@
         "src-tauri/src/subsystems/document_commands.rs#canonical signed-license persistence and FPR-18 installed proof helper",
         "crates/dokkomplekt-license-server/src/bin/issue_e2e_license.rs#existing Rust issue_license fixture path",
         "tests/installer/windows_installer_contract.ps1#FPR-18 positive/negative/restart installed proof",
-        "tests/test_fpr18_license_installed_contract.py#fail-closed regression lock"
+        "tests/test_fpr18_license_installed_contract.py#fail-closed regression lock",
+        "GitHub Actions Quality Gate run 36570978086 / job 109416986284 / commit 010ae2b3bd4391f218fe05443863e43d0e6cdfff#FPR-18 POSITIVE INSTALLED PASS: signed license -> durable state -> paid access (doctor_pro)",
+        "GitHub Actions Quality Gate run 36570978086 / job 109416986284 / commit 010ae2b3bd4391f218fe05443863e43d0e6cdfff#FPR-18 NEGATIVE INSTALLED PASS: post-signature payload tamper -> nonzero rejection -> no success evidence",
+        "GitHub Actions Quality Gate run 36570978086 / job 109416986284 / commit 010ae2b3bd4391f218fe05443863e43d0e6cdfff#FPR-18 RESTART INSTALLED PASS: rejected tampered license did not corrupt persisted valid paid access"
       ],
-      "runtime_gap": "Run the exact-head Windows Quality Gate and retain green FPR-18 POSITIVE, NEGATIVE, and RESTART INSTALLED PASS evidence before marking verified."
+      "runtime_gap": ""
     },
     {
       "id": "FPR-19",

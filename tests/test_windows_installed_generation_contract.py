@@ -100,6 +100,12 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Installed sick_leave_vk generation did not render the current protocol number" in source
     assert "Installed sick_leave_vk generation left medical.sick_leave_vk.position unresolved" in source
     assert "Installed end-to-end document generation OK" in source
+    assert "FPR-08 restart source dialog closed after submit" in source
+    assert "exact commit identity is verified by downstream physical output" in source
+    assert "Источник принят" not in source[source.index("# Quality Gate uses the blank discharge donor"):source.index("# Canon v2 E2 installed proof")]
+    assert "IsExpandCollapsePatternAvailable" in source
+    assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
+    assert "FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion." in source
 
 
 def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> None:

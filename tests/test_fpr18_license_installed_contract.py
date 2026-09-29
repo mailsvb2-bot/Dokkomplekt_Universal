@@ -31,7 +31,7 @@ def test_fpr18_fixture_uses_existing_rust_issuer_and_ephemeral_key_cleanup() -> 
     assert "allowed_machines: vec![]" in issuer
     assert "python -m pip install --disable-pip-version-check -r requirements-dev.txt" in workflow
     assert "generate_license_keypair.py --json-output" in workflow
-    assert "issue_e2e_license" in workflow
+    assert "--manifest-path crates/dokkomplekt-license-server/Cargo.toml --bin issue_e2e_license" in workflow
     assert "FPR-18 ephemeral private key cleanup failed." in workflow
     assert "Remove-Item -LiteralPath $privateKey, $keypair" in workflow
 

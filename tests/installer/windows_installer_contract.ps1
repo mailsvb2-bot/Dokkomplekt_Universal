@@ -2418,8 +2418,19 @@ for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceContro
   }
   $fpr09SourceControl = Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'
   if ($null -ne $fpr09SourceControl) { break }
+
+  # WebView2 can report the native <details> as Expanded while keeping lower
+  # descendants out of the UIA tree until the actual modal viewport is scrolled.
+  # PgDn is focus-dependent and can target the host window instead of the modal,
+  # so move the pointer inside the live app and scroll the rendered viewport
+  # physically. Re-resolve the control on every iteration because WebView2 may
+  # recreate accessibility nodes as content enters the viewport.
   Activate-LiveAppWindow -Window $currentAppWindow
-  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  $windowRect = $currentAppWindow.Current.BoundingRectangle
+  $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
+  $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height * 0.70))
+  [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
+  [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, -480, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 250
 }
 if ($null -eq $fpr09SourceControl) {

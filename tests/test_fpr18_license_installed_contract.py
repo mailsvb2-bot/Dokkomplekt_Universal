@@ -54,7 +54,13 @@ def test_fpr18_installed_positive_negative_and_restart_are_fail_closed() -> None
     assert "Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E" in script
 
 
-def test_fpr18_register_stays_open_until_installed_run_is_green() -> None:
+def test_fpr18_register_is_verified_only_with_bound_installed_evidence() -> None:
     register = REGISTER.read_text(encoding="utf-8")
     block = register[register.index('"id": "FPR-18"'):register.index('"id": "FPR-19"')]
-    assert '"status": "needs-runtime-proof"' in block
+    assert '"status": "verified"' in block
+    assert '"runtime_gap": ""' in block
+    assert "FPR-18 POSITIVE INSTALLED PASS:" in block
+    assert "FPR-18 NEGATIVE INSTALLED PASS:" in block
+    assert "FPR-18 RESTART INSTALLED PASS:" in block
+    assert "GitHub Actions Quality Gate run 36570978086" in block
+    assert "commit 010ae2b3bd4391f218fe05443863e43d0e6cdfff" in block

@@ -80,7 +80,10 @@ public static class DokkomplektE1NativeMouse {
 "@
 
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
-$process = Start-Process -FilePath $app.FullName -PassThru
+$fpr22Stdout = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr22-stdout-$PID.log"
+$fpr22Stderr = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr22-stderr-$PID.log"
+Remove-Item -LiteralPath $fpr22Stdout, $fpr22Stderr -Force -ErrorAction SilentlyContinue
+$process = Start-Process -FilePath $app.FullName -PassThru -RedirectStandardOutput $fpr22Stdout -RedirectStandardError $fpr22Stderr
 
 function Test-UiaTransientTimeout {
   param([Parameter(Mandatory = $true)]$ErrorRecord)
@@ -1856,9 +1859,37 @@ if ($matchingReceipt.Data.schema -ne 1 -or $matchingReceipt.Data.status -ne 'com
 if ($matchingReceipt.Data.receipt_id -notmatch '^[0-9a-f]{64}$' -or $matchingReceipt.Data.output_id -notmatch '^[0-9a-f]{64}$') { throw 'E1 receipt identities are not opaque SHA-256 values.' }
 if ($matchingReceipt.Data.proof_contract -ne 'physical-output-sha256-v1' -or $matchingReceipt.Data.verifier_contract -ne 'published-readback-v1') { throw 'E1 receipt proof/verifier contract mismatch.' }
 if ([string]$matchingReceipt.Data.plan_binding_sha256 -notmatch '^[0-9a-f]{64}$') { throw 'E1 committed receipt is not bound to the frozen source/case/plan/template identity.' }
-foreach ($forbidden in @($defaultOutputRoot, $sourceFileName, 'ООО «Альфа»', 'ООО «Бета»', 'D-77')) {
-  if ($matchingReceipt.Raw.Contains($forbidden)) { throw "E1 receipt leaked path/user data: $forbidden" }
+$allowedReceiptFields = @(
+  'schema', 'receipt_id', 'output_id', 'output_sha256', 'status', 'committed_unix',
+  'proof_contract', 'verifier_contract', 'plan_binding_sha256'
+)
+$actualReceiptFields = @($matchingReceipt.Data.PSObject.Properties.Name)
+foreach ($field in $actualReceiptFields) {
+  if ($field -notin $allowedReceiptFields) {
+    throw "FPR-22 committed receipt exposes an unexpected field: $field"
+  }
 }
+foreach ($requiredField in $allowedReceiptFields) {
+  if ($requiredField -notin $actualReceiptFields) {
+    throw "FPR-22 committed receipt is missing required privacy-safe field: $requiredField"
+  }
+}
+foreach ($forbidden in @(
+  $defaultOutputRoot,
+  $fixtureDir,
+  $accountingSource,
+  $sourceFileName,
+  'ООО «Альфа»',
+  'ООО «Бета»',
+  'D-77',
+  'Консультационные услуги',
+  '20 833,33'
+)) {
+  if (-not [string]::IsNullOrWhiteSpace($forbidden) -and $matchingReceipt.Raw.Contains($forbidden)) {
+    throw "FPR-22 committed receipt leaked path/case data: $forbidden"
+  }
+}
+Write-Host 'FPR-22 RECEIPT PRIVACY PASS: committed GenerationReceipt contains only opaque ids/hashes/status/contracts and no source path or case values.'
 $receiptsAfterSuccess = @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue).Count
 if ($receiptsAfterSuccess -ne ($receiptsBeforeBlocked + 1)) { throw 'E1 successful Accounting publication did not add exactly one committed receipt.' }
 Write-Host "E1 INSTALLED PASS: Accounting source -> UI -> physical DOCX -> committed receipt: $($accountingDoc.FullName)"
@@ -2749,6 +2780,32 @@ Write-Host "FPR-15 EXPORT PRIVACY PASS: $($fpr15Package.FullName)"
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
+
+$fpr22DiagnosticText = ''
+foreach ($diagnosticPath in @($fpr22Stdout, $fpr22Stderr)) {
+  if (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) {
+    $fpr22DiagnosticText += [System.IO.File]::ReadAllText($diagnosticPath, [System.Text.Encoding]::UTF8)
+  }
+}
+foreach ($forbidden in @(
+  $defaultOutputRoot,
+  $fixtureDir,
+  $accountingSource,
+  $sourceFileName,
+  'ООО «Альфа»',
+  'ООО «Бета»',
+  'D-77',
+  'Консультационные услуги',
+  '20 833,33',
+  'Сидоров Сергей Сергеевич',
+  'Орлова Анна Игоревна'
+)) {
+  if (-not [string]::IsNullOrWhiteSpace($forbidden) -and $fpr22DiagnosticText.Contains($forbidden)) {
+    throw "FPR-22 installed diagnostics leaked path/case data: $forbidden"
+  }
+}
+Write-Host 'FPR-22 DIAGNOSTIC PRIVACY PASS: installed application stdout/stderr contain no source path or case values.'
+
 Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction Stop
 if (Test-Path -LiteralPath $appDataRoot) { throw 'FPR-15 clean-profile reset left application data behind.' }
 

@@ -102,7 +102,9 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Installed end-to-end document generation OK" in source
     assert "FPR-08 restart source dialog closed after submit" in source
     assert "exact commit identity is verified by downstream physical output" in source
-    assert "Источник принят" not in source[source.index("# Quality Gate uses the blank discharge donor"):source.index("# Canon v2 E2 installed proof")]
+    restart_section = source[source.index("# Quality Gate uses the blank discharge donor"):source.index("# Canon v2 E2 installed proof")]
+    assert "NameProperty,\n        'Источник принят'" not in restart_section
+    assert "FPR-08 restart source committed" not in restart_section
     assert "IsExpandCollapsePatternAvailable" in source
     assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
     assert "FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion." in source

@@ -136,8 +136,8 @@ def test_windows_restart_source_commit_is_bound_to_physical_output_identity() ->
     source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
 
     assert "$restartSourceName = [System.IO.Path]::GetFileName($restartMedicalSource)" in source
-    assert "'Источник принят'" in source
-    assert "exact identity is verified by downstream physical output" in source
+    assert "FPR-08 restart source dialog closed after submit" in source
+    assert "exact commit identity is verified by downstream physical output" in source
     restart_block = source[source.index("$restartSourceName ="):source.index("$restartGenerationAction = $null")]
     assert "$restartSourceName" in restart_block
     assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')" not in restart_block
@@ -173,4 +173,6 @@ def test_fpr09_expanded_learning_controls_use_bounded_viewport_navigation() -> N
     assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++)" in source
     assert "Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('{PGDN}')" in source
-    assert "after expanding setup and bounded viewport navigation" in source
+    assert "IsExpandCollapsePatternAvailable" in source
+    assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
+    assert "after confirmed expansion and bounded viewport navigation" in source

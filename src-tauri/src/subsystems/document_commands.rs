@@ -2906,6 +2906,54 @@ struct RustLicenseVerifyRequest {
     public_key_b64: Option<String>,
 }
 
+fn persist_verified_license_text(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    license_text: &str,
+    key_b64: &str,
+) -> Result<bool, String> {
+    let document: dokkomplekt_license_core::LicenseDocument =
+        serde_json::from_str(license_text).map_err(|error| error.to_string())?;
+    let public_key = dokkomplekt_license_core::PublicKeyBytes::from_base64(key_b64)
+        .map_err(|error| error.to_string())?;
+    verify_license_document_now(&document, &public_key).map_err(|error| error.to_string())?;
+    transact_default_state(app, state, |snapshot| {
+        snapshot.license_document = Some(document);
+        Ok((true, true))
+    })
+}
+
+fn run_fpr18_license_e2e(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    license_path: Option<&Path>,
+) -> Result<serde_json::Value, String> {
+    if let Some(path) = license_path {
+        if !path.is_absolute() {
+            return Err("--e2e-license-proof requires an absolute license path".into());
+        }
+        let license_text = std::fs::read_to_string(path)
+            .map_err(|error| format!("Не удалось прочитать FPR-18 license fixture: {error}"))?;
+        persist_verified_license_text(app, state, &license_text, TRUSTED_LICENSE_PUBKEY_B64)?;
+    }
+    let decision = inspect_desktop_access(app, state, 1)?;
+    if !decision.accepted || decision.mode != "paid" {
+        return Err(format!(
+            "FPR-18 installed access is not paid/accepted: mode={} reason={}",
+            decision.mode, decision.reason
+        ));
+    }
+    Ok(serde_json::json!({
+        "schema": "dokkomplekt.fpr18-license-e2e.v1",
+        "accepted": decision.accepted,
+        "mode": decision.mode,
+        "plan": decision.plan,
+        "reason": decision.reason,
+        "documents_left_month": decision.documents_left_month,
+        "license_applied": license_path.is_some(),
+    }))
+}
+
 #[tauri::command]
 fn verify_rust_license_text(
     req: RustLicenseVerifyRequest,
@@ -2937,15 +2985,7 @@ fn verify_rust_license_text(
             }
         }
     };
-    let document: dokkomplekt_license_core::LicenseDocument =
-        serde_json::from_str(&req.license_text).map_err(|e| e.to_string())?;
-    let public_key = dokkomplekt_license_core::PublicKeyBytes::from_base64(key_b64)
-        .map_err(|e| e.to_string())?;
-    verify_license_document_now(&document, &public_key).map_err(|e| e.to_string())?;
-    transact_default_state(&app, &state, |snapshot| {
-        snapshot.license_document = Some(document);
-        Ok((true, true))
-    })
+    persist_verified_license_text(&app, &state, &req.license_text, key_b64)
 }
 
 include!("watcher_commands.rs");

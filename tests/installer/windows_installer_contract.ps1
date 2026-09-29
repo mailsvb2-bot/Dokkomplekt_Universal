@@ -3498,19 +3498,19 @@ if (-not [string]::IsNullOrWhiteSpace($fpr18ValidLicense) -or -not [string]::IsN
   if ([string]::IsNullOrWhiteSpace($fpr18TamperedLicense) -or -not (Test-Path -LiteralPath $fpr18TamperedLicense -PathType Leaf)) {
     throw 'FPR-18 tampered signed license fixture is missing.'
   }
-  if ($env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ne '1') {
-    throw 'FPR-18 installed proof requires the guarded E2E command boundary.'
-  }
+  $fpr18PreviousHardwareE2E = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_RUN_HARDWARE_E2E', 'Process')
+  $env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
 
   $fpr18ValidEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-valid-$PID.json"
   $fpr18TamperedEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-tampered-$PID.json"
   $fpr18RestartEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-restart-$PID.json"
   Remove-Item -LiteralPath $fpr18ValidEvidence, $fpr18TamperedEvidence, $fpr18RestartEvidence -Force -ErrorAction SilentlyContinue
 
-  $validProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
-    "--e2e-license-proof=$fpr18ValidLicense",
-    "--e2e-evidence=$fpr18ValidEvidence"
-  ) -Wait -PassThru
+  try {
+    $validProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+      "--e2e-license-proof=$fpr18ValidLicense",
+      "--e2e-evidence=$fpr18ValidEvidence"
+    ) -Wait -PassThru
   if ($validProcess.ExitCode -ne 0) {
     throw "FPR-18 valid installed license activation failed with exit code $($validProcess.ExitCode)."
   }
@@ -3551,7 +3551,14 @@ if (-not [string]::IsNullOrWhiteSpace($fpr18ValidLicense) -or -not [string]::IsN
       $restartRecord.license_applied -ne $false) {
     throw 'FPR-18 restart access proof did not restore the previously valid paid license.'
   }
-  Write-Host "FPR-18 RESTART INSTALLED PASS: rejected tampered license did not corrupt persisted valid paid access."
+    Write-Host "FPR-18 RESTART INSTALLED PASS: rejected tampered license did not corrupt persisted valid paid access."
+  } finally {
+    if ([string]::IsNullOrWhiteSpace($fpr18PreviousHardwareE2E)) {
+      Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
+    } else {
+      $env:DOKKOMPLEKT_RUN_HARDWARE_E2E = $fpr18PreviousHardwareE2E
+    }
+  }
 }
 
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |

@@ -17,9 +17,12 @@ interface DocumentRailProps {
   onConfigurePopups(): void;
   onScanTemplate(): void;
   onApprove(): void;
+  onVersions(): void;
   onRemove(): void;
   onAdd(): void;
   onAddFromText(): void;
+  onExportTemplates(): void;
+  onImportTemplates(): void;
   onToggleUtilities(): void;
 }
 
@@ -86,11 +89,16 @@ export function DocumentRail(props: DocumentRailProps) {
                   <button className="softBtn" disabled={props.busy} onClick={props.onScanTemplate}>Разметить шаблон</button>
                   <button className="softBtn" disabled={props.busy} onClick={props.onRename}>Переименовать</button>
                   <button className="softBtn" disabled={props.busy} onClick={props.onApprove}>Подтвердить версию</button>
+                  <button className="softBtn" disabled={props.busy} onClick={props.onVersions}>Версии шаблона</button>
                   <button className="softBtn danger" disabled={props.busy} onClick={props.onRemove}>Убрать из набора</button>
                 </>
               ) : (
                 <small>Откройте нужную кнопку документа, чтобы изменить её настройки.</small>
               )}
+              <div className="templateTransferActions">
+                <button className="softBtn" disabled={props.busy} onClick={props.onExportTemplates}>Экспорт шаблонов</button>
+                <button className="softBtn" disabled={props.busy} onClick={props.onImportTemplates}>Импорт шаблонов</button>
+              </div>
               <details className="copySettings">
                 <summary>Количество экземпляров</summary>
                 {props.documents.map(document => (
@@ -110,6 +118,7 @@ export function DocumentRail(props: DocumentRailProps) {
           <p>Выберите свои шаблоны Word. Один файл станет одной понятной кнопкой.</p>
           <button className="primaryBtn full firstRunCreateButtons" onClick={props.onAdd} disabled={props.busy}>Создать свои кнопки</button>
           <button className="textBtn firstRunTextTemplate" onClick={props.onAddFromText} disabled={props.busy}>Создать кнопку из текста</button>
+          <button className="textBtn firstRunImportTemplates" onClick={props.onImportTemplates} disabled={props.busy}>Импорт шаблонов</button>
         </div>
       )}
 

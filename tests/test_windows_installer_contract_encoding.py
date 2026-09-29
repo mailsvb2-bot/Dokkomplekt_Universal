@@ -90,48 +90,46 @@ def test_quality_gate_names_and_uploads_cross_domain_installed_evidence() -> Non
     assert source.index("Windows installer smoke") < source.index("Windows E1 cross-domain installed path")
 
 
-def test_e1_domain_selector_keeps_webview2_keyboard_fallback() -> None:
+def test_e1_domain_selector_uses_physical_radio_and_behavioral_proof() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
-    assert "Chromium/WebView2 does not consistently publish <option> descendants" in source
-    assert "$domainOffsets = @{" in source
+    start = source.index("function Set-E1TemplateDomainOverride")
+    end = source.index("function ", start + len("function Set-E1TemplateDomainOverride"))
+    domain_helper = source[start:end]
     for marker in (
-        "'Юридическая работа' = 3",
-        "'Кадровая работа' = 4",
-        "'Бухгалтерия' = 5",
-        "'Образование' = 6",
-        "'Своя профессия / профиль' = 7",
-        "SendWait('{HOME}')",
-        "SendWait('{DOWN}')",
-        "SendWait('{TAB}')",
-        "Get-E1DomainSelection -FileName $FileName",
-        "IsSelectionPatternAvailable",
-        "domain override did not persist",
+        '$radioName = "$OptionName для $FileName"',
+        'Invoke-UiElementPhysically -Element $radio',
+        'IsSelectionItemPatternAvailable',
+        'IsTogglePatternAvailable',
+        'downstream domain-specific installed behavior remains authoritative',
+    ):
+        assert marker in domain_helper
+    for marker in (
         "foreach ($fieldId in $PluginRequiredFields)",
         "did not expose canonical domain-required field",
     ):
         assert marker in source
+    assert "$domainOffsets = @{" not in domain_helper
+    assert "SendWait('{HOME}')" not in domain_helper
+    assert "SendWait('{DOWN}')" not in domain_helper
 
 
 
 def test_e1_custom_domain_value_commits_through_react_input_event() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")
+    helper_start = source.index("function Set-ReactControlledText")
+    helper_end = source.index("function Get-UiValue", helper_start)
+    helper = source[helper_start:helper_end]
     for marker in (
-        "React controls this input",
-        "Set-UiValue -Element $custom -Value $CustomProfile",
-        "SendWait(' ')",
-        "SendWait('{BACKSPACE}')",
-        "persisted custom domain value for $FileName",
-        "E1 custom domain value commit:",
-        "custom domain override did not persist",
+        "Set-Clipboard -Value $Value -ErrorAction Stop",
+        "SendWait('^a')",
+        "SendWait('^v')",
+        "SendWait('{TAB}')",
+        "React input did not persist",
     ):
-        assert marker in source
-    custom_start = source.index("Set-UiValue -Element $custom -Value $CustomProfile")
-    custom_space = source.index("SendWait(' ')", custom_start)
-    custom_backspace = source.index("SendWait('{BACKSPACE}')", custom_space)
-    custom_persist = source.index("persisted custom domain value for $FileName", custom_backspace)
-    assert custom_start < custom_space < custom_backspace < custom_persist
-
-
+        assert marker in helper
+    assert 'Set-ReactControlledText -Element $custom -Value $CustomProfile' in source
+    assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source
+    assert "SendWait('{BACKSPACE}')" not in helper
 
 def test_e1_cross_domain_scenarios_reset_case_through_real_ui() -> None:
     source = E1_DOMAIN_MATRIX.read_text(encoding="utf-8-sig")

@@ -604,6 +604,30 @@ export async function importTemplateFile(
   });
 }
 
+export interface ExportTemplateTransferResponse {
+  package_path: string;
+  document_count: number;
+  package_sha256: string;
+}
+
+export interface ImportTemplateTransferResponse {
+  pack: DocumentPack;
+  document_count: number;
+}
+
+export async function exportTemplateTransfer(outputPath?: string | null): Promise<ExportTemplateTransferResponse> {
+  return callRust('export_template_transfer', { req: { output_path: outputPath ?? null } });
+}
+
+export async function pickTemplateTransferFile(): Promise<string | null> {
+  const response = await callRust<{ selected_path: string | null }>('pick_template_transfer_file');
+  return response.selected_path;
+}
+
+export async function importTemplateTransfer(packagePath: string): Promise<ImportTemplateTransferResponse> {
+  return callRust('import_template_transfer', { req: { package_path: packagePath } });
+}
+
 
 export async function getPrivacyPreferences(): Promise<PrivacyPreferences> {
   return callRust('get_privacy_preferences');
@@ -861,7 +885,10 @@ export const rustCommandNames = [
   'get_quality_telemetry',
   'get_process_blueprints',
   'select_process_blueprint',
-  'import_template_file'
+  'import_template_file',
+  'export_template_transfer',
+  'pick_template_transfer_file',
+  'import_template_transfer'
 ] as const;
 
 

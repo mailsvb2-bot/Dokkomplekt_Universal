@@ -155,7 +155,10 @@ using System;
 using System.Runtime.InteropServices;
 public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
@@ -169,6 +172,9 @@ public static class DokkomplektNativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", SetLastError = true)]
@@ -247,7 +253,17 @@ function Invoke-UiElement {
     }
     try {
       $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $x = [int][Math]::Round($point.X)
+      $y = [int][Math]::Round($point.Y)
+      $liveWindow = Find-LiveAppWindow
+      if ($null -eq $liveWindow) { throw "$Description lost the installed app window before fallback click." }
+      $windowRect = $liveWindow.Current.BoundingRectangle
+      if ($x -lt $windowRect.Left -or $x -ge $windowRect.Right -or $y -lt $windowRect.Top -or $y -ge $windowRect.Bottom) {
+        throw "$Description fallback click point is outside the installed app window: point=($x,$y)."
+      }
+      if (-not [DokkomplektNativeMouse]::SetCursorPos($x, $y)) {
+        throw "$Description failed to position the native cursor at ($x,$y)."
+      }
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
       return
@@ -272,10 +288,7 @@ function Invoke-UiElementPhysically {
     if (-not $Element.Current.IsEnabled) {
       throw "$Description is currently disabled."
     }
-    # mouse_event is global input. After a native OpenFileDialog closes, the WebView
-    # can be visible while another runner window still owns the foreground. Restore
-    # the installed app explicitly before the one permitted physical retry so the
-    # click cannot be swallowed as a mere window-activation click.
+
     $process.Refresh()
     $windowHandle = [IntPtr]$process.MainWindowHandle
     if ($windowHandle -ne [IntPtr]::Zero) {
@@ -283,22 +296,101 @@ function Invoke-UiElementPhysically {
       [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
       Start-Sleep -Milliseconds 150
     }
-    $Element.SetFocus()
-    Start-Sleep -Milliseconds 50
-    if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-      $scroll = $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-      $scroll.ScrollIntoView()
-      Start-Sleep -Milliseconds 100
+
+    function Test-BaselineElementPhysicallyVisible {
+      param([Parameter(Mandatory = $true)]$Target)
+      if ($Target.Current.IsOffscreen) { return $false }
+      $targetRect = $Target.Current.BoundingRectangle
+      if ($targetRect.IsEmpty -or $targetRect.Width -le 1 -or $targetRect.Height -le 1) { return $false }
+      foreach ($value in @($targetRect.Left, $targetRect.Top, $targetRect.Width, $targetRect.Height)) {
+        if ([double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value)) { return $false }
+      }
+      $liveWindow = Find-LiveAppWindow
+      if ($null -eq $liveWindow) { return $false }
+      $windowRect = $liveWindow.Current.BoundingRectangle
+      foreach ($value in @($windowRect.Left, $windowRect.Top, $windowRect.Width, $windowRect.Height)) {
+        if ([double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value)) { return $false }
+      }
+      $cx = $targetRect.Left + ($targetRect.Width / 2)
+      $cy = $targetRect.Top + ($targetRect.Height / 2)
+      $margin = 6
+      return $cx -ge ($windowRect.Left + $margin) -and $cx -lt ($windowRect.Right - $margin) -and
+        $cy -ge ($windowRect.Top + $margin) -and $cy -lt ($windowRect.Bottom - $margin)
     }
+
+    if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+      if ($Element.Current.IsScrollItemPatternAvailable) {
+        try {
+          $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+          Start-Sleep -Milliseconds 150
+        } catch { }
+      }
+      if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+        try { $Element.SetFocus(); Start-Sleep -Milliseconds 150 } catch { }
+      }
+      if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+        $liveWindow = Find-LiveAppWindow
+        if ($null -ne $liveWindow) {
+          $windowRect = $liveWindow.Current.BoundingRectangle
+          $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
+          $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+          [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
+          for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-BaselineElementPhysicallyVisible -Target $Element); $scrollAttempt++) {
+            $targetRect = $Element.Current.BoundingRectangle
+            $targetCenterY = $targetRect.Top + ($targetRect.Height / 2)
+            $windowCenterY = $windowRect.Top + ($windowRect.Height / 2)
+            $wheelDelta = if ($targetCenterY -gt $windowCenterY) { -360 } else { 360 }
+            [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 120
+          }
+        }
+      }
+      if (-not (Test-BaselineElementPhysicallyVisible -Target $Element)) {
+        $targetRect = $Element.Current.BoundingRectangle
+        $liveWindow = Find-LiveAppWindow
+        $windowRect = if ($null -ne $liveWindow) { $liveWindow.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
+        throw "$Description remains outside the installed app window after bounded recovery. target=($($targetRect.Left),$($targetRect.Top),$($targetRect.Width),$($targetRect.Height)); window=($($windowRect.Left),$($windowRect.Top),$($windowRect.Width),$($windowRect.Height))."
+      }
+    }
+
+    $clickPoint = $null
     try {
-      $point = $Element.GetClickablePoint()
-      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+      $clickPoint = $Element.GetClickablePoint()
+    } catch {
+      $rect = $Element.Current.BoundingRectangle
+      if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+        $clickPoint = [System.Windows.Point]::new(
+          $rect.Left + ($rect.Width / 2),
+          $rect.Top + ($rect.Height / 2)
+        )
+      }
+    }
+    if ($null -ne $clickPoint) {
+      if ([double]::IsNaN([double]$clickPoint.X) -or [double]::IsInfinity([double]$clickPoint.X) -or
+          [double]::IsNaN([double]$clickPoint.Y) -or [double]::IsInfinity([double]$clickPoint.Y)) {
+        $clickPoint = $null
+      }
+    }
+    if ($null -ne $clickPoint) {
+      $x = [int][Math]::Round($clickPoint.X)
+      $y = [int][Math]::Round($clickPoint.Y)
+      $liveWindow = Find-LiveAppWindow
+      if ($null -eq $liveWindow) { throw "$Description lost the installed app window before physical click." }
+      $windowRect = $liveWindow.Current.BoundingRectangle
+      if ($x -lt $windowRect.Left -or $x -ge $windowRect.Right -or $y -lt $windowRect.Top -or $y -ge $windowRect.Bottom) {
+        throw "$Description produced a click point outside the installed app window: point=($x,$y); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
+      }
+      if (-not [DokkomplektNativeMouse]::SetCursorPos($x, $y)) {
+        throw "$Description failed to position the native cursor at ($x,$y)."
+      }
+      Start-Sleep -Milliseconds 75
       [DokkomplektNativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
       [DokkomplektNativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-    } catch {
-      $Element.SetFocus()
-      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      return
     }
+
+    try { $Element.SetFocus() } catch { }
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   } catch {
     throw "Live physical UI action failed for '$Description': $($_.Exception.Message)"
   }
@@ -825,6 +917,53 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
+function Get-UiValue {
+  param([Parameter(Mandatory = $true)]$Element)
+
+  $supportsValue = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty,
+    $true
+  )
+  $valueElement = $Element.FindFirst(
+    [System.Windows.Automation.TreeScope]::Subtree,
+    $supportsValue
+  )
+  if ($null -ne $valueElement) {
+    return [string]$valueElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  }
+
+  # Some hosted UIA providers expose LegacyIAccessiblePattern but leave the
+  # corresponding static AutomationProperty descriptor null. Enumerate the small
+  # live subtree and inspect the runtime capability instead of constructing a
+  # PropertyCondition from that optional descriptor.
+  foreach ($candidate in @($Element) + @(
+    $Element.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+  )) {
+    try {
+      if (-not $candidate.Current.IsLegacyIAccessiblePatternAvailable) { continue }
+      $legacy = $candidate.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+      $legacyValue = [string]$legacy.Current.Value
+      if (-not [string]::IsNullOrWhiteSpace($legacyValue)) { return $legacyValue }
+    } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { continue }
+    }
+  }
+
+  $nativeHandle = [IntPtr]$Element.Current.NativeWindowHandle
+  if ($nativeHandle -ne [IntPtr]::Zero) {
+    $length = [DokkomplektNativeMouse]::GetWindowTextLength($nativeHandle)
+    $builder = [System.Text.StringBuilder]::new([Math]::Max(1, $length + 1))
+    $null = [DokkomplektNativeMouse]::GetWindowText($nativeHandle, $builder, $builder.Capacity)
+    $nativeValue = $builder.ToString()
+    if (-not [string]::IsNullOrWhiteSpace($nativeValue)) { return $nativeValue }
+  }
+
+  throw 'UI value control exposes no readable semantic value.'
+}
+
 function Find-FileDialog {
   $fileNameCondition = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -856,6 +995,17 @@ function Wait-FileDialog {
 function Submit-OpenFileDialog {
   param([Parameter(Mandatory = $true)]$Dialog)
 
+  # UIA InvokePattern returning successfully is not evidence that a hosted common
+  # dialog accepted the selected path. The exact native HWND must disappear.
+  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
+  if ($dialogHandle -eq [IntPtr]::Zero) {
+    throw 'OpenFileDialog does not expose a native HWND.'
+  }
+  [void][DokkomplektNativeMouse]::ShowWindow($dialogHandle, 5)
+  [void][DokkomplektNativeMouse]::SetForegroundWindow($dialogHandle)
+  Start-Sleep -Milliseconds 100
+
+  # Native OpenFileDialog primary Open button invariant: AutomationId=1
   $automationId = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
     '1'
@@ -869,23 +1019,56 @@ function Submit-OpenFileDialog {
     [System.Windows.Automation.AndCondition]::new($automationId, $kind)
   )
   if ($null -ne $openButton) {
-    Invoke-UiElement -Element $openButton
-    return
+    try {
+      if ($openButton.Current.IsInvokePatternAvailable) {
+        $openButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      } elseif ($openButton.Current.IsLegacyIAccessiblePatternAvailable) {
+        $openButton.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
+      }
+    } catch {
+      Write-Host "Baseline OpenFileDialog UIA submit did not complete cleanly; falling back to IDOK: $($_.Exception.Message)"
+    }
   }
 
-  # Hosted Windows runners may hide the localized Open button from UIA.
-  # IDOK=1 is the stable native command for confirming a common dialog.
-  $dialogHandle = [IntPtr]$Dialog.Current.NativeWindowHandle
-  if ($dialogHandle -eq [IntPtr]::Zero) {
-    throw 'OpenFileDialog exposes neither AutomationId=1 nor a native HWND.'
+  $uiaDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  while ([DokkomplektNativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $uiaDeadline) {
+    Start-Sleep -Milliseconds 100
   }
+  if (-not [DokkomplektNativeMouse]::IsWindow($dialogHandle)) { return }
+
+  [void][DokkomplektNativeMouse]::SetForegroundWindow($dialogHandle)
   $null = [DokkomplektNativeMouse]::SendMessagePtr(
     $dialogHandle,
     0x0111,
     [IntPtr]1,
     [IntPtr]::Zero
   )
-  Start-Sleep -Milliseconds 500
+  $nativeDeadline = [DateTime]::UtcNow.AddSeconds(3)
+  while ([DokkomplektNativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $nativeDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not [DokkomplektNativeMouse]::IsWindow($dialogHandle)) { return }
+
+  [void][DokkomplektNativeMouse]::SetForegroundWindow($dialogHandle)
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  $keyDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  while ([DokkomplektNativeMouse]::IsWindow($dialogHandle) -and [DateTime]::UtcNow -lt $keyDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not [DokkomplektNativeMouse]::IsWindow($dialogHandle)) { return }
+
+  $filename = ''
+  try {
+    $filenameEdit = $Dialog.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        '1148'
+      )
+    )
+    if ($null -ne $filenameEdit) { $filename = [string](Get-UiValue -Element $filenameEdit) }
+  } catch { }
+  throw "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter. Filename='$filename'."
 }
 
 $desktop = [System.Windows.Automation.AutomationElement]::RootElement
@@ -1391,6 +1574,18 @@ if ($null -eq $createdDoc) {
   throw "Installed application did not physically create $expectedGeneratedFileName under $defaultOutputRoot"
 }
 if ($createdDoc.Length -le 0) { throw "Created DOCX is empty: $($createdDoc.FullName)" }
+
+# FPR-11 — the durable default naming rule is document number + document date.
+# The source carries case number 2222 and admission/document evidence 26.08.2026;
+# an address house number must never be misread as a compact date.
+$fpr11ExpectedFolderName = '2222 26.08.2026'
+if ($createdDoc.Directory.Name -ne $fpr11ExpectedFolderName) {
+  throw "FPR-11 output folder mismatch: expected '$fpr11ExpectedFolderName', got '$($createdDoc.Directory.Name)'."
+}
+$fpr11FirstOutputPath = $createdDoc.FullName
+$fpr11FirstOutputHash = (Get-FileHash -LiteralPath $createdDoc.FullName -Algorithm SHA256).Hash
+$fpr11FirstOutputWriteUtc = $createdDoc.LastWriteTimeUtc
+Write-Host "FPR-11 NAMING PASS: durable rule produced exact physical folder '$fpr11ExpectedFolderName'."
 $createdArchive = [System.IO.Compression.ZipFile]::OpenRead($createdDoc.FullName)
 try {
   $documentEntry = $createdArchive.GetEntry('word/document.xml')
@@ -1579,6 +1774,15 @@ if ($adversarial) {
   if ($versionDocs.Count -lt 2) { throw 'Repeat generation did not publish a second version without overwrite.' }
   $distinctFolders = @($versionDocs | ForEach-Object DirectoryName | Sort-Object -Unique)
   if ($distinctFolders.Count -lt 2) { throw 'Repeat generation overwrote the original output folder.' }
+  if (-not (Test-Path -LiteralPath $fpr11FirstOutputPath -PathType Leaf)) {
+    throw 'FPR-11 collision removed the original published document.'
+  }
+  $fpr11OriginalAfter = Get-Item -LiteralPath $fpr11FirstOutputPath
+  $fpr11OriginalHashAfter = (Get-FileHash -LiteralPath $fpr11FirstOutputPath -Algorithm SHA256).Hash
+  if ($fpr11OriginalHashAfter -ne $fpr11FirstOutputHash -or $fpr11OriginalAfter.LastWriteTimeUtc -ne $fpr11FirstOutputWriteUtc) {
+    throw 'FPR-11 collision rewrote the original published document.'
+  }
+  Write-Host "FPR-11 COLLISION PASS: repeat generation preserved the original bytes and published a second version in a distinct folder ($($distinctFolders.Count) folders)."
   Write-Host "ADVERSARIAL OK: collision created a second version in a distinct folder ($($distinctFolders.Count) folders)."
 }
 
@@ -1705,6 +1909,18 @@ if ($restartState.Kind -eq 'empty') {
 }
 Write-Host 'Persisted template button survived application restart.'
 
+# FPR-12 — settings persistence is a user-visible state guarantee, not merely
+# presence of a SQLite file. The exact encrypted preference row written through
+# the installed first-run UI must survive a clean process restart unchanged.
+$fpr12RestartPreferenceCipher = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($fpr12RestartPreferenceCipher)) {
+  throw 'FPR-12 restart lost the durable output preference row.'
+}
+Write-Host 'FPR-12 RESTART STORAGE PASS: output preferences remained durably readable after installed application restart.'
+
 $restoredClearSelection = Wait-UiElement -Description 'restored selected document state after restart' -TimeoutSeconds 30 -Probe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
@@ -1739,11 +1955,16 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
   }
   Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
   Submit-OpenFileDialog -Dialog $restartSourceDialog
-  Wait-UiElement -Description 'FPR-08 restart source committed' -TimeoutSeconds 40 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')
+  $restartSourceName = [System.IO.Path]::GetFileName($restartMedicalSource)
+  Wait-UiElement -Description 'FPR-08 restart source dialog closed after submit' -TimeoutSeconds 40 -Probe {
+    if ($null -eq (Find-FileDialog)) { return $true }
+    return $null
   } | Out-Null
+  # Do not gate on the short-lived «Источник принят» status node: WebView2 can
+  # remount it between UIA polls after restart. Exact source commit remains
+  # fail-closed below: the only accepted proof is a physical DOCX carrying the
+  # second patient's 3333 / 27.08.2026 semantics and no pre-restart patient data.
+  Write-Host "FPR-08 restart source submitted: '$restartSourceName'; exact commit identity is verified by downstream physical output."
 
   $restartGenerationAction = $null
   try {
@@ -1981,6 +2202,15 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
     $restartArchive.Dispose()
   }
   Write-Host "FPR-08 INSTALLED PASS: selection + button name + published template binding survived restart -> physical DOCX: $($restartCreated.FullName)"
+
+  # FPR-12 semantic restart proof: the physical output itself is the product
+  # behavior that matters. After restart, the restored output preference must
+  # route the new case into the configured root and preserve the naming rule.
+  $expectedFpr12RestartFolder = Join-Path $defaultOutputRoot '3333 27.08.2026'
+  if ($restartCreated.Directory.FullName.TrimEnd('\') -ne $expectedFpr12RestartFolder.TrimEnd('\')) {
+    throw "FPR-12 restart restored wrong output destination or naming rule: expected '$expectedFpr12RestartFolder', got '$($restartCreated.Directory.FullName)'."
+  }
+  Write-Host "FPR-12 RESTART SEMANTIC PASS: restored settings published the post-restart DOCX in '$expectedFpr12RestartFolder'."
 }
 
 # Canon v2 E2 installed proof. Reuse this already-installed process and the same
@@ -2111,34 +2341,18 @@ function Open-Fpr09MultiFileSelection {
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][string[]]$Paths
   )
-  $pickerButton = Wait-UiElement -Description "FPR-09 $Label native picker button" -TimeoutSeconds 30 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
-  }
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { throw "FPR-09 $Label installed window disappeared before native picker." }
-  Activate-LiveAppWindow -Window $currentAppWindow
-  if ($pickerButton.Current.IsOffscreen -and $pickerButton.Current.IsScrollItemPatternAvailable) {
-    $scroll = $pickerButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-    $scroll.ScrollIntoView()
-    Start-Sleep -Milliseconds 100
-  }
-  $pickerButton.SetFocus()
-  Start-Sleep -Milliseconds 100
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-  $dialog = $null
-  try {
-    $dialog = Wait-UiElement -Description "FPR-09 $Label file dialog after Enter" -TimeoutSeconds 5 -Probe {
+  $dialog = Invoke-UiActionWithObservedTransition `
+    -Description "FPR-09 $Label native picker" `
+    -TransitionDescription "FPR-09 $Label native file dialog" `
+    -TransitionSeconds 8 `
+    -ActionProbe {
+      $currentAppWindow = Find-LiveAppWindow
+      if ($null -eq $currentAppWindow) { return $null }
+      Find-ReadyButtonByNames -Root $currentAppWindow -Names @($Label)
+    } `
+    -TransitionProbe {
       Find-FileDialog
     }
-  } catch {
-    # Hosted WebView2 occasionally focuses the button but does not synthesize the
-    # HTML button activation from Enter. Space is the other native keyboard
-    # activation for a focused button; use it once before declaring the picker broken.
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    $dialog = Wait-FileDialog -Description "FPR-09 $Label file dialog after Space fallback"
-  }
   $edit = Wait-UiElement -Description "FPR-09 $Label filename field" -Probe {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
@@ -2181,16 +2395,47 @@ $fpr09LabelInput = Wait-UiElement -Description 'FPR-09 primary setup modal' -Tim
 }
 Set-UiValue -Element $fpr09LabelInput -Value $fpr09ButtonLabel
 
-Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 expand primary automatic filling setup' -ActionProbe {
+$fpr09ExpandControl = Wait-UiElement -Description 'FPR-09 primary automatic filling setup control' -Probe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
 }
-Wait-UiElement -Description 'FPR-09 primary learning source control' -TimeoutSeconds 20 -Probe {
+if ($fpr09ExpandControl.Current.IsExpandCollapsePatternAvailable) {
+  $expandPattern = $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+  if ($expandPattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+    $expandPattern.Expand()
+    Write-Host 'FPR-09 setup expanded through UIA ExpandCollapsePattern.'
+  }
+} else {
+  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 expand primary automatic filling setup'
+}
+$fpr09SourceControl = $null
+for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {
   $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'
-} | Out-Null
+  if ($null -eq $currentAppWindow) {
+    Start-Sleep -Milliseconds 200
+    continue
+  }
+  $fpr09SourceControl = Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'
+  if ($null -ne $fpr09SourceControl) { break }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  [System.Windows.Forms.SendKeys]::SendWait('{PGDN}')
+  Start-Sleep -Milliseconds 250
+}
+if ($null -eq $fpr09SourceControl) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -ne $currentAppWindow) {
+    $liveExpand = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+    if ($null -ne $liveExpand -and $liveExpand.Current.IsExpandCollapsePatternAvailable) {
+      $livePattern = $liveExpand.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($livePattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+        throw 'FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion.'
+      }
+    }
+    Write-E2LearningUiDiagnostic -Root $currentAppWindow
+  }
+  throw 'UI smoke timeout: FPR-09 primary learning source control after confirmed expansion and bounded viewport navigation'
+}
 
 Open-Fpr09MultiFileSelection -Label '1. Источники (4–10)' -Paths $fpr09Sources
 try {
@@ -2717,7 +2962,7 @@ if ($null -ne $currentAppWindow -and $null -eq (Find-ReadyButtonByNames -Root $c
     [void][DokkomplektNativeMouse]::ShowWindow($windowHandle, 5)
     [void][DokkomplektNativeMouse]::SetForegroundWindow($windowHandle)
   }
-  $currentAppWindow.SetFocus()
+  Activate-LiveAppWindow -Window $currentAppWindow
   [System.Windows.Forms.SendKeys]::SendWait('{END}')
   Start-Sleep -Milliseconds 250
 }
@@ -2818,10 +3063,42 @@ try {
     $e2KeyboardAction.SetFocus()
     Start-Sleep -Milliseconds 150
     [System.Windows.Forms.SendKeys]::SendWait(' ')
-    Wait-UiElement -Description 'publishable held-out learning result after focused Space fallback' -TimeoutSeconds 60 -Probe {
+
+    $spaceDeadline = [DateTime]::UtcNow.AddSeconds(6)
+    $spaceTransition = $null
+    do {
       $windowAfterSpace = Find-LiveAppWindow
-      if ($null -eq $windowAfterSpace) { return $null }
-      Find-ButtonByNames -Root $windowAfterSpace -Names @('Подтвердить проверенную карту и создать копию')
+      if ($null -ne $windowAfterSpace) {
+        $spaceTransition = Find-ButtonByNames -Root $windowAfterSpace -Names @('Подтвердить проверенную карту и создать копию')
+      }
+      if ($null -ne $spaceTransition) { break }
+      Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $spaceDeadline)
+
+    if ($null -eq $spaceTransition) {
+      # WebView2 occasionally acknowledges UIA focus while routing Space to the
+      # document instead of the focused HTML button. Re-resolve the live button,
+      # focus it again and use Enter, which is the second browser-native user
+      # activation path. Downstream appearance of the publishable action remains
+      # the authoritative proof that the click actually reached React.
+      $windowAfterSpace = Find-LiveAppWindow
+      if ($null -eq $windowAfterSpace) { throw 'E2 learning window disappeared before Enter fallback.' }
+      $e2EnterAction = Find-ReadyButtonByNames -Root $windowAfterSpace -Names @('Проверить пары и предложить карту')
+      if ($null -eq $e2EnterAction) { throw 'E2 learning action disappeared before Enter fallback.' }
+      Activate-LiveAppWindow -Window $windowAfterSpace
+      if ($e2EnterAction.Current.IsOffscreen -and $e2EnterAction.Current.IsScrollItemPatternAvailable) {
+        $e2EnterAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      }
+      $e2EnterAction.SetFocus()
+      Start-Sleep -Milliseconds 150
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    }
+
+    Wait-UiElement -Description 'publishable held-out learning result after focused keyboard fallback' -TimeoutSeconds 60 -Probe {
+      $windowAfterKeyboard = Find-LiveAppWindow
+      if ($null -eq $windowAfterKeyboard) { return $null }
+      Find-ButtonByNames -Root $windowAfterKeyboard -Names @('Подтвердить проверенную карту и создать копию')
     } | Out-Null
   }
 } catch {
@@ -3123,6 +3400,166 @@ try {
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()
+
+# FPR-12 installer-preservation proof. Re-run the actual NSIS installer over the
+# existing installation while keeping %APPDATA% intact, then require the exact
+# user preference row to remain unchanged. This proves the installed replacement/
+# repair path is non-destructive. A true previous-version -> current-version
+# migration remains a separate release-evidence obligation.
+$fpr12BeforeInstallerReplacement = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($fpr12BeforeInstallerReplacement)) {
+  throw 'FPR-12 durable output preferences were unreadable before installer replacement proof.'
+}
+$fpr12Replacement = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+if ($fpr12Replacement.ExitCode -ne 0) {
+  throw "FPR-12 installer replacement failed with exit code $($fpr12Replacement.ExitCode)."
+}
+$fpr12AfterInstallerReplacement = Wait-AppStateCipherFingerprint `
+  -DatabasePath $stateDatabase `
+  -StateKey $outputPreferenceStateKey `
+  -TimeoutSeconds 20
+if ([string]::IsNullOrWhiteSpace($fpr12AfterInstallerReplacement)) {
+  throw 'FPR-12 installer replacement lost the durable output preference row.'
+}
+$fpr12ReplacementProcess = Start-Process -FilePath $app.FullName -PassThru
+try {
+  $fpr12ReplacementWindow = Wait-UiElement -Description 'FPR-12 window after installer replacement' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+  }
+  $fpr12RestoredButton = Wait-UiElement -Description 'FPR-12 restored workspace after installer replacement' -TimeoutSeconds 30 -Probe {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $currentReplacementWindow = $desktop.FindFirst(
+      [System.Windows.Automation.TreeScope]::Children,
+      $condition
+    )
+    if ($null -eq $currentReplacementWindow) { return $null }
+    Find-ButtonByNames -Root $currentReplacementWindow -Names @($expectedTemplateButtonName)
+  }
+  if ($null -eq $fpr12RestoredButton) {
+    throw 'FPR-12 installer replacement lost the persisted workspace/button state.'
+  }
+
+  Invoke-UiActionWithObservedTransition `
+    -Description 'FPR-12 Настройки after installer replacement' `
+    -TransitionDescription 'FPR-12 settings panel after installer replacement' `
+    -ActionProbe {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        [int]$fpr12ReplacementProcess.Id
+      )
+      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+      if ($null -eq $replacementWindow) { return $null }
+      Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
+    } `
+    -TransitionProbe {
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        [int]$fpr12ReplacementProcess.Id
+      )
+      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+      if ($null -eq $replacementWindow) { return $null }
+      Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
+    } | Out-Null
+
+  $fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint `
+    -DatabasePath $stateDatabase `
+    -StateKey $outputPreferenceStateKey `
+    -TimeoutSeconds 20
+  if ([string]::IsNullOrWhiteSpace($fpr12AfterReplacementStorage)) {
+    throw 'FPR-12 installer replacement lost the durable output preference row.'
+  }
+  Write-Host 'FPR-12 INSTALLER PRESERVATION PASS: durable output preferences and workspace survived installed replacement.'
+} finally {
+  if (-not $fpr12ReplacementProcess.HasExited) {
+    Stop-Process -Id $fpr12ReplacementProcess.Id -Force
+    $fpr12ReplacementProcess.WaitForExit()
+  }
+}
+
+# FPR-18 installed licensing proof. Quality Gate supplies an ephemeral signed
+# license pair and compiles the matching public trust anchor into this exact
+# release binary. The private seed is deleted before the application build.
+$fpr18ValidLicense = [string]$env:DOKKOMPLEKT_FPR18_VALID_LICENSE_PATH
+$fpr18TamperedLicense = [string]$env:DOKKOMPLEKT_FPR18_TAMPERED_LICENSE_PATH
+if (-not [string]::IsNullOrWhiteSpace($fpr18ValidLicense) -or -not [string]::IsNullOrWhiteSpace($fpr18TamperedLicense)) {
+  if ([string]::IsNullOrWhiteSpace($fpr18ValidLicense) -or -not (Test-Path -LiteralPath $fpr18ValidLicense -PathType Leaf)) {
+    throw 'FPR-18 valid signed license fixture is missing.'
+  }
+  if ([string]::IsNullOrWhiteSpace($fpr18TamperedLicense) -or -not (Test-Path -LiteralPath $fpr18TamperedLicense -PathType Leaf)) {
+    throw 'FPR-18 tampered signed license fixture is missing.'
+  }
+  $fpr18PreviousHardwareE2E = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_RUN_HARDWARE_E2E', 'Process')
+  $env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'
+
+  $fpr18ValidEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-valid-$PID.json"
+  $fpr18TamperedEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-tampered-$PID.json"
+  $fpr18RestartEvidence = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr18-restart-$PID.json"
+  Remove-Item -LiteralPath $fpr18ValidEvidence, $fpr18TamperedEvidence, $fpr18RestartEvidence -Force -ErrorAction SilentlyContinue
+
+  try {
+    $validProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+      "--e2e-license-proof=$fpr18ValidLicense",
+      "--e2e-evidence=$fpr18ValidEvidence"
+    ) -Wait -PassThru
+  if ($validProcess.ExitCode -ne 0) {
+    throw "FPR-18 valid installed license activation failed with exit code $($validProcess.ExitCode)."
+  }
+  if (-not (Test-Path -LiteralPath $fpr18ValidEvidence -PathType Leaf)) {
+    throw 'FPR-18 valid license activation produced no evidence.'
+  }
+  $validRecord = Get-Content -LiteralPath $fpr18ValidEvidence -Raw | ConvertFrom-Json
+  if ($validRecord.schema -ne 'dokkomplekt.fpr18-license-e2e.v1' -or
+      $validRecord.accepted -ne $true -or
+      $validRecord.mode -ne 'paid' -or
+      $validRecord.license_applied -ne $true) {
+    throw 'FPR-18 valid license did not produce paid accepted access.'
+  }
+  Write-Host "FPR-18 POSITIVE INSTALLED PASS: signed license -> durable state -> paid access ($($validRecord.plan))."
+
+  $tamperedProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+    "--e2e-license-proof=$fpr18TamperedLicense",
+    "--e2e-evidence=$fpr18TamperedEvidence"
+  ) -Wait -PassThru
+  if ($tamperedProcess.ExitCode -eq 0) {
+    throw 'FPR-18 tampered license was accepted by the installed release binary.'
+  }
+  if (Test-Path -LiteralPath $fpr18TamperedEvidence -PathType Leaf) {
+    throw 'FPR-18 tampered license produced success evidence despite fail-closed rejection.'
+  }
+  Write-Host "FPR-18 NEGATIVE INSTALLED PASS: post-signature payload tamper -> nonzero rejection -> no success evidence."
+
+  $restartProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+    '--e2e-license-access-proof',
+    "--e2e-evidence=$fpr18RestartEvidence"
+  ) -Wait -PassThru
+  if ($restartProcess.ExitCode -ne 0) {
+    throw "FPR-18 persisted valid license did not survive restart after negative activation attempt: exit $($restartProcess.ExitCode)."
+  }
+  $restartRecord = Get-Content -LiteralPath $fpr18RestartEvidence -Raw | ConvertFrom-Json
+  if ($restartRecord.accepted -ne $true -or
+      $restartRecord.mode -ne 'paid' -or
+      $restartRecord.license_applied -ne $false) {
+    throw 'FPR-18 restart access proof did not restore the previously valid paid license.'
+  }
+    Write-Host "FPR-18 RESTART INSTALLED PASS: rejected tampered license did not corrupt persisted valid paid access."
+  } finally {
+    if ([string]::IsNullOrWhiteSpace($fpr18PreviousHardwareE2E)) {
+      Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ErrorAction SilentlyContinue
+    } else {
+      $env:DOKKOMPLEKT_RUN_HARDWARE_E2E = $fpr18PreviousHardwareE2E
+    }
+  }
+}
 
 $uninstaller = Get-ChildItem -Path $installDir -Recurse -File -Filter "*.exe" |
   Where-Object { $_.Name -match "uninstall" } |

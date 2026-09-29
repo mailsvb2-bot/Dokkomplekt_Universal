@@ -48,6 +48,10 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "workflow-document-date" in source
     assert "Создать документы" in source
     assert "Invoke-UiElementPhysically" in source
+    assert "[double]::IsInfinity([double]$value)" in source
+    assert "[double]::IsNaN([double]$value)" in source
+    assert "[double]::IsInfinity([double]$clickPoint.X)" in source
+    assert "[double]::IsInfinity([double]$clickPoint.Y)" in source
     assert "Invoke-UiActionWithObservedTransition" in source
     assert "function Invoke-UiActionPhysicallyFromProbe" in source
     assert "Never poll the same WebView2 AutomationElement" in source
@@ -96,6 +100,14 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "Installed sick_leave_vk generation did not render the current protocol number" in source
     assert "Installed sick_leave_vk generation left medical.sick_leave_vk.position unresolved" in source
     assert "Installed end-to-end document generation OK" in source
+    assert "FPR-08 restart source dialog closed after submit" in source
+    assert "exact commit identity is verified by downstream physical output" in source
+    restart_section = source[source.index("# Quality Gate uses the blank discharge donor"):source.index("# Canon v2 E2 installed proof")]
+    assert "NameProperty,\n        'Источник принят'" not in restart_section
+    assert "FPR-08 restart source committed" not in restart_section
+    assert "IsExpandCollapsePatternAvailable" in source
+    assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
+    assert "FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion." in source
 
 
 def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> None:
@@ -156,5 +168,8 @@ def test_e2_installed_learning_timeout_emits_fail_only_ui_diagnostic() -> None:
     assert "-TransitionSeconds 8" in source
     assert "E2 learning action remained idle after UIA and physical retry; using one focused WebView keyboard Space fallback." in source
     assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
-    assert "publishable held-out learning result after focused Space fallback" in source
+    assert "E2 learning window disappeared before Enter fallback." in source
+    assert "E2 learning action disappeared before Enter fallback." in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')" in source
+    assert "publishable held-out learning result after focused keyboard fallback" in source
 

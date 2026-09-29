@@ -130,3 +130,49 @@ def test_linux_ready_title_requires_successful_frontend_tauri_ipc() -> None:
     assert "Failed to signal rendered native window" in frontend
     assert "Failed to access rendered native window" in frontend
     assert '"core:window:allow-set-title"' in capability
+
+
+def test_windows_restart_source_commit_is_bound_to_physical_output_identity() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "$restartSourceName = [System.IO.Path]::GetFileName($restartMedicalSource)" in source
+    assert "FPR-08 restart source dialog closed after submit" in source
+    assert "exact commit identity is verified by downstream physical output" in source
+    restart_block = source[source.index("$restartSourceName ="):source.index("$restartGenerationAction = $null")]
+    assert "$restartSourceName" in restart_block
+    assert "Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Заменить исходный файл')" not in restart_block
+    assert "$exactSource =" not in restart_block
+
+def test_windows_file_dialog_submit_requires_native_window_closure() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "function Submit-OpenFileDialog" in source
+    assert "UIA InvokePattern returning successfully is not evidence" in source
+    assert "DokkomplektNativeMouse]::IsWindow($dialogHandle)" in source
+    assert "0x0111" in source
+    assert "[IntPtr]1" in source
+    assert "SendWait('{ENTER}')" in source
+    assert "Native OpenFileDialog remained open after UIA, WM_COMMAND(IDOK), and Enter." in source
+
+
+def test_windows_physical_input_is_native_and_window_bounded() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "public static extern bool SetCursorPos(int x, int y);" in source
+    assert "function Test-BaselineElementPhysicallyVisible" in source
+    assert "remains outside the installed app window after bounded recovery" in source
+    assert "produced a click point outside the installed app window" in source
+    assert "DokkomplektNativeMouse]::SetCursorPos($x, $y)" in source
+    assert "System.Windows.Forms.Cursor]::Position" not in source
+
+
+def test_fpr09_expanded_learning_controls_use_bounded_viewport_navigation() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "$fpr09SourceControl = $null" in source
+    assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++)" in source
+    assert "Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{PGDN}')" in source
+    assert "IsExpandCollapsePatternAvailable" in source
+    assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
+    assert "after confirmed expansion and bounded viewport navigation" in source

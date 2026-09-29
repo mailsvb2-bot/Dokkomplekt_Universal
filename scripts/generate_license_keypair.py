@@ -16,8 +16,11 @@ license verification in such builds fails closed by design.
 """
 from __future__ import annotations
 
+import argparse
 import base64
+import json
 import sys
+from pathlib import Path
 
 try:
     from ed25519_compat import SigningKey
@@ -27,9 +30,32 @@ except ImportError:  # pragma: no cover
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="Write the generated keypair to a JSON file instead of stdout.",
+    )
+    args = parser.parse_args()
+
     signing_key = SigningKey.generate()
     public_b64 = base64.b64encode(bytes(signing_key.verify_key)).decode()
     private_b64 = base64.b64encode(bytes(signing_key)).decode()
+
+    if args.json_output is not None:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(
+            json.dumps(
+                {
+                    "public_key_b64": public_b64,
+                    "private_key_b64": private_b64,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return 0
+
     print("DOKKOMPLEKT_LICENSE_PUBKEY_B64 (bake into the desktop build):")
     print(f"  {public_b64}")
     print()

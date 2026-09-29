@@ -32,3 +32,13 @@ def test_output_root_collision_requires_the_real_recovery_alert() -> None:
     assert "Не удалось восстановить проверенную папку результата:" in source
     assert "Application silently replaced the deliberate output-root collision file." in source
     assert "Output-root path collision crashed the application." in source
+
+def test_fpr11_installed_folder_naming_and_collision_proof_is_locked() -> None:
+    source = WINDOWS_CONTRACT.read_text(encoding="utf-8")
+
+    assert "FPR-11 NAMING PASS" in source
+    assert "$fpr11ExpectedFolderName = '2222 26.08.2026'" in source
+    assert "FPR-11 COLLISION PASS" in source
+    assert "Get-FileHash -LiteralPath $fpr11FirstOutputPath -Algorithm SHA256" in source
+    assert "collision rewrote the original published document" in source
+

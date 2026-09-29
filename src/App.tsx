@@ -23,6 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { useTemplateTransfer } from './hooks/useTemplateTransfer'; import { useTemplateVersionSelection } from './hooks/useTemplateVersionSelection';
 import { useDocumentSelectionPersistence } from './hooks/useDocumentSelectionPersistence';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
 import { watcherForegroundCaseActive, useWatcherResultIsolation } from './hooks/useWatcherResultIsolation';
@@ -37,14 +38,11 @@ import {
   loadPrintCopyPreferences, newDocumentId, normalizeCopyCount, preserveSelectedDocumentIds, promptToPopupField, readFileBytes,
   replaceAllLiteral, semanticPreviewFromParsedSource, withPendingTemplateDomain, type GuidedScannerState, type PendingTemplate,
 } from './lib/appSupport';
-export function App() {
-  return <AppDialogProvider><AppContent /></AppDialogProvider>;
-}
+export function App() { return <AppDialogProvider><AppContent /></AppDialogProvider>; }
 function AppContent() {
   const dialogs = useAppDialog();
   const [theme, setTheme] = useState<ThemeState>(() => loadTheme());
   useEffect(() => { applyTheme(buildTheme(theme)); saveTheme(theme); }, [theme]);
-
   const [documents, setDocuments] = useState<DocumentTemplateSpec[]>([]);
   const [activeDoc, setActiveDoc] = useState<string | null>(null);
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
@@ -53,14 +51,14 @@ function AppContent() {
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
-
+  const chooseActiveTemplateVersion = useTemplateVersionSelection({ activeDocumentId: activeDoc, documents, dialogs, run, setDocuments, setStatus });
+  const { exportTemplates, importTemplates } = useTemplateTransfer({ run, setDocuments, setStatus });
   useDocumentSelectionPersistence({
     ready: workspaceStateReady,
     selectedDocumentIds: selectedDocIds,
     setSelectedDocumentIds: setSelectedDocIds,
     setStatus,
   });
-
   const [sourceText, setSourceText] = useState('');
   const [sourceFileName, setSourceFileName] = useState<string | null>(null);
   const [sourceFilePath, setSourceFilePath] = useState<string | null>(null);
@@ -81,10 +79,8 @@ function AppContent() {
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({}); const [skippedAnswers, setSkippedAnswers] = useState<Record<string, boolean>>({});
   const [sickLeave, setSickLeave] = useState(false);
-
   const [activeTemplateText, setActiveTemplateText] = useState('');
   const [preview, setPreview] = useState<{ text: string; missing: number; label: string } | null>(null);
-
   const [setupOpen, setSetupOpen] = useState(false);
   const [templateText, setTemplateText] = useState('');
   const [buttonLabel, setButtonLabel] = useState('');
@@ -607,7 +603,7 @@ function AppContent() {
   const loadWorkflowPlan = (documentIds: string[], sickLeaveEnabled = sickLeave, parts = folderParts) => documentIds.length === 1 ? getWorkflowPlan(documentIds[0], sickLeaveEnabled, parts) : getWorkflowPlanBatch(documentIds, sickLeaveEnabled, parts);
   const { generationPreflightOpen, generationDocumentIds, generationError, generationValidationFieldId, closeGenerationPreflight, openGenerationPreflight, confirmGenerationPreflight } = useGenerationPreflight({
     selectedDocumentIds: selectedDocIds, sickLeaveEnabled: sickLeave, folderParts, outputRoot, documentRevisionTokens: generationDocumentRevisionTokens(documents, selectedDocIds), autoPrint, printCopies,
-    preflightPlan, preflightLoading, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
+    preflightPlan, preflightLoading, shortcutEnabled: !setupOpen && !busy, requiresExplicitReview: showSickLeaveOption, answers, skippedAnswers, setPreflightPlan, setStatus,
     requestWorkflowPlan: (snapshot) => run(snapshot.documentIds.length === 1 ? 'get_workflow_plan' : 'get_workflow_plan_batch', () => loadWorkflowPlan(snapshot.documentIds, snapshot.sickLeaveEnabled, snapshot.folderParts)),
     applyAnswers: (snapshot, payload) => snapshot.documentIds.length === 1
       ? run('apply_popup', () => applyPopup(snapshot.documentIds[0], snapshot.sickLeaveEnabled, payload, snapshot.folderParts))
@@ -1375,8 +1371,11 @@ function AppContent() {
             onScanTemplate={startGuidedExistingTemplateScanner}
             onRemove={removeActiveDocument}
             onApprove={approveActiveTemplate}
+            onVersions={chooseActiveTemplateVersion}
             onAdd={openTemplateSetup}
             onAddFromText={openTextTemplateSetup}
+            onExportTemplates={exportTemplates}
+            onImportTemplates={importTemplates}
             onToggleUtilities={() => setUtilityOpen((value) => !value)}
           />
         </div>
@@ -1441,7 +1440,7 @@ function AppContent() {
 
         {backgroundNotice && <div className="backgroundNotice" role="status"><span>{backgroundNotice}</span><button type="button" className="textBtn" onClick={dismissBackgroundNotice}>Скрыть</button></div>}
         <footer className="statusBar">
-          <span className={busy ? 'dot busy' : 'dot'} aria-hidden="true" /><span>{status}</span>
+          <span className={busy ? 'dot busy' : 'dot'} aria-hidden="true" /><span id="app-status" role="status">{status}</span>
           {recognitionProof.length > 0 && <span aria-label={`Происхождение данных подтверждено: ${recognitionProof.map((item) => `${item.field_id}:${item.source}/${item.source_kind}/${item.extractor}`).join(', ')}`} title="Приложение сохранило техническую трассу происхождения распознанных полей без вывода значений.">Происхождение данных подтверждено: {recognitionProof.length}.</span>}
         </footer>
       </div>

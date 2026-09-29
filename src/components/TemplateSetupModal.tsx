@@ -435,27 +435,38 @@ function DomainOverrideEditor(props: {
     : typeof props.value === 'string'
       ? props.value
       : 'auto';
+  const options: Array<{ value: string; label: string }> = [
+    { value: 'auto', label: 'Профиль: автоматически' },
+    { value: 'Generic', label: 'Универсальный документооборот' },
+    { value: 'Medical', label: 'Медицина' },
+    { value: 'Legal', label: 'Юридическая работа' },
+    { value: 'Hr', label: 'Кадровая работа' },
+    { value: 'Accounting', label: 'Бухгалтерия' },
+    { value: 'Education', label: 'Образование' },
+    { value: 'custom', label: 'Своя профессия / профиль' },
+  ];
   return (
     <div className="inlineInput">
-      <select
-        aria-label={`Профиль для ${props.label}`}
-        value={selectedValue}
-        onChange={(event) => {
-          const value = event.target.value;
-          if (value === 'auto') props.onChange(null);
-          else if (value === 'custom') props.onChange({ Custom: customValue ?? '' });
-          else props.onChange(value as DomainKind);
-        }}
-      >
-        <option value="auto">Профиль: автоматически</option>
-        <option value="Generic">Универсальный документооборот</option>
-        <option value="Medical">Медицина</option>
-        <option value="Legal">Юридическая работа</option>
-        <option value="Hr">Кадровая работа</option>
-        <option value="Accounting">Бухгалтерия</option>
-        <option value="Education">Образование</option>
-        <option value="custom">Своя профессия / профиль</option>
-      </select>
+      <fieldset className="domainChoiceGroup" aria-label={`Профиль для ${props.label}`}>
+        <legend>Профиль</legend>
+        {options.map((option) => (
+          <label key={option.value} className="domainChoice">
+            <input
+              type="radio"
+              name={`domain-${props.label}`}
+              value={option.value}
+              checked={selectedValue === option.value}
+              aria-label={`${option.label} для ${props.label}`}
+              onChange={() => {
+                if (option.value === 'auto') props.onChange(null);
+                else if (option.value === 'custom') props.onChange({ Custom: customValue ?? '' });
+                else props.onChange(option.value as DomainKind);
+              }}
+            />
+            <span>{option.label}</span>
+          </label>
+        ))}
+      </fieldset>
       {customValue !== null ? (
         <input
           aria-label={`Своя профессия / профиль для ${props.label}`}

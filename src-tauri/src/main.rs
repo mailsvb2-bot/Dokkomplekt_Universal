@@ -2070,6 +2070,7 @@ include!("subsystems/source_intake_commands.rs");
 include!("subsystems/startup_state.rs");
 include!("subsystems/manual_publication_identity.rs");
 include!("subsystems/document_commands.rs");
+include!("subsystems/template_transfer.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
 #[cfg(test)]
@@ -2092,6 +2093,13 @@ fn main() {
             .map(str::to_string)
     });
     let e2e_uninstall_watcher = args.iter().any(|arg| arg == "--e2e-uninstall-watcher");
+    let e2e_export_pdf_source = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--e2e-export-pdf=").map(PathBuf::from));
+    let e2e_license_proof = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--e2e-license-proof=").map(PathBuf::from));
+    let e2e_license_access = args.iter().any(|arg| arg == "--e2e-license-access-proof");
     let e2e_evidence_path = args
         .iter()
         .find_map(|arg| arg.strip_prefix("--e2e-evidence=").map(PathBuf::from));
@@ -2115,6 +2123,9 @@ fn main() {
                 if !background_watch
                     && !e2e_uninstall_watcher
                     && e2e_install_watch_folder.is_none()
+                    && e2e_export_pdf_source.is_none()
+                    && e2e_license_proof.is_none()
+                    && !e2e_license_access
                 {
                     if let Ok(db_path) = default_state_db_path(&handle) {
                         if !db_path.exists() {
@@ -2205,6 +2216,9 @@ fn main() {
             if !background_watch
                 && !e2e_uninstall_watcher
                 && e2e_install_watch_folder.is_none()
+                && e2e_export_pdf_source.is_none()
+                    && e2e_license_proof.is_none()
+                    && !e2e_license_access
             {
                 ensure_startup_output_root(&handle).map_err(|error| {
                     std::io::Error::other(format!(
@@ -2212,11 +2226,16 @@ fn main() {
                     ))
                 })?;
             }
-            if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() {
+            if e2e_uninstall_watcher
+                || e2e_install_watch_folder.is_some()
+                || e2e_export_pdf_source.is_some()
+                || e2e_license_proof.is_some()
+                || e2e_license_access
+            {
                 if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
-                        "E2E watcher commands require DOKKOMPLEKT_RUN_HARDWARE_E2E=1",
+                        "E2E commands require DOKKOMPLEKT_RUN_HARDWARE_E2E=1",
                     )
                     .into());
                 }
@@ -2229,7 +2248,16 @@ fn main() {
                 if let Some(parent) = evidence_path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let payload = if e2e_uninstall_watcher {
+                let payload = if let Some(license_path) = e2e_license_proof.as_deref() {
+                    run_fpr18_license_e2e(&handle, &state, Some(license_path))
+                        .map_err(std::io::Error::other)?
+                } else if e2e_license_access {
+                    run_fpr18_license_e2e(&handle, &state, None)
+                        .map_err(std::io::Error::other)?
+                } else if let Some(source) = e2e_export_pdf_source.clone() {
+                    run_fpr17_pdf_export_e2e(&source, &evidence_path)
+                        .map_err(std::io::Error::other)?
+                } else if e2e_uninstall_watcher {
                     let (removed, warnings) = remove_autostart_entries();
                     if let Ok(config_path) = watcher_config_path(&handle) {
                         if config_path.exists() {
@@ -2439,7 +2467,10 @@ fn main() {
             get_quality_telemetry,
             get_process_blueprints,
             select_process_blueprint,
-            import_template_file
+            import_template_file,
+            export_template_transfer,
+            pick_template_transfer_file,
+            import_template_transfer
         ])
         .run(tauri::generate_context!());
     if let Err(error) = run_result {

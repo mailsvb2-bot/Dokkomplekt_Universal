@@ -56,3 +56,50 @@ describe('Workspace linked medical diary prompts', () => {
     expect(screen.queryByText('Коррекция лечения')).toBeNull();
   });
 });
+
+describe('Workspace source explanation', () => {
+  it('shows the exact current-case source context for a reviewed recognized value', () => {
+    const props = {
+      busy: false, documents: [], selectedDocumentIds: ['accounting'], watchFolder: '', watcherOpenUiOnDrop: false, intakeSource: '',
+      intakeResult: null, lastOutput: null, autoPrint: false, printCopies: {},
+      sourceText: 'АКТ ОКАЗАННЫХ УСЛУГ № E1-17 от 13.09.2026',
+      sourceFileName: 'accounting.docx', sourceFilePath: 'C:/accounting.docx', webSourceUrl: '',
+      intakeCapabilities: [], scannerField: '', scannerText: '', parsed: { title: 'Акт', count: 1, warnings: [] },
+      modelOutput: '',
+      semantic: {
+        fields: [{
+          field_id: 'document.number',
+          value: 'E1-17',
+          confidence: 0.91,
+          method: 'Scanner',
+          source: 'Scanner',
+          evidence: ['E1-17'],
+        }],
+        warnings: [],
+        model_applied: false,
+        prompt: 'deterministic',
+      },
+      plan: { document_id: 'accounting', prompts: [], blocked: false, block_reasons: [] },
+      planLoading: false, selectedDocumentCount: 1, activeDocumentLabel: 'Акт',
+      showSickLeaveOption: false, sickLeaveEnabled: false, answers: {}, skippedAnswers: {}, preview: null,
+      setAnswers: noop, setSkippedAnswers: noop, setIntakeSource: noop, setAutoPrint: noop, setSourceText: noop,
+      setSourceFileName: noop, setWebSourceUrl: noop, setScannerField: noop, setScannerText: noop, setModelOutput: noop,
+      onPickWatchFolder: noop, onInstallWatcher: noop, onUninstallWatcher: noop, setWatcherOpenUiOnDrop: noop,
+      onSickLeaveChange: noop, onRunZeroTouch: noop, onOpenLastOutput: noop, onPrintLastOutput: noop,
+      onExportLastOutputPdf: noop, onExportLastOutputPdfa: noop, onExportLastOutputKedo: noop,
+      onPickSourceFile: noop, onDropSourceFile: noop, onLoadWebSource: noop, onResetCase: noop, onParseSource: noop,
+      onStartGuidedSourceScanner: noop, onReportSemanticError: noop, onApplyScannerSelection: noop,
+      onApplyScannerAndQuestion: noop, onPrintCopyChange: noop, onUnderstand: noop, onPinField: noop,
+      onPreview: noop, onCreateSelected: noop,
+    } as ComponentProps<typeof Workspace>;
+
+    render(<Workspace {...props} />);
+    fireEvent.click(screen.getByText('Расширенные инструменты'));
+    fireEvent.click(screen.getByText('Сверить'));
+
+    expect(screen.getByLabelText('Сверка источника для document.number')).toBeTruthy();
+    expect(screen.getByLabelText('Фрагмент источника для document.number').textContent).toContain('E1-17');
+    expect(screen.getByLabelText('Распознанное значение для document.number: E1-17').textContent).toContain('E1-17');
+  });
+});
+

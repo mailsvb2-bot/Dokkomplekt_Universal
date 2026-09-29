@@ -282,6 +282,41 @@ jobs:
           set -o pipefail
           bash scripts/prepackage_rust_gate.sh 2>&1 | tee "packaging-rust-${{ runner.os }}.log"
       - run: npm ci
+      - name: Install FPR-18 Python crypto dependency
+        if: runner.os == 'Windows'
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Prepare FPR-18 ephemeral signed license fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $keypair = Join-Path $env:RUNNER_TEMP ("fpr18-keypair-" + [Guid]::NewGuid().ToString('N') + '.json')
+          $privateKey = Join-Path $env:RUNNER_TEMP ("fpr18-private-" + [Guid]::NewGuid().ToString('N') + '.txt')
+          $valid = Join-Path $env:RUNNER_TEMP ("fpr18-valid-" + [Guid]::NewGuid().ToString('N') + '.json')
+          $tampered = Join-Path $env:RUNNER_TEMP ("fpr18-tampered-" + [Guid]::NewGuid().ToString('N') + '.json')
+          try {
+            python scripts/generate_license_keypair.py --json-output $keypair
+            $keys = Get-Content -LiteralPath $keypair -Raw | ConvertFrom-Json
+            if ([string]::IsNullOrWhiteSpace($keys.public_key_b64) -or [string]::IsNullOrWhiteSpace($keys.private_key_b64)) {
+              throw 'FPR-18 ephemeral keypair generation returned incomplete material.'
+            }
+            [IO.File]::WriteAllText($privateKey, [string]$keys.private_key_b64, [Text.UTF8Encoding]::new($false))
+            cargo run --quiet --manifest-path crates/dokkomplekt-license-server/Cargo.toml --bin issue_e2e_license -- "--private-key-file=$privateKey" "--output=$valid"
+            if ($LASTEXITCODE -ne 0) { throw 'FPR-18 canonical Rust fixture issuer failed.' }
+
+            $tamperedDocument = Get-Content -LiteralPath $valid -Raw | ConvertFrom-Json
+            $tamperedDocument.license.payload.owner_name = 'FPR-18 tampered after signature'
+            $tamperedDocument | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $tampered -Encoding utf8
+
+            "DOKKOMPLEKT_LICENSE_PUBKEY_B64=$($keys.public_key_b64)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "DOKKOMPLEKT_FPR18_VALID_LICENSE_PATH=$valid" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "DOKKOMPLEKT_FPR18_TAMPERED_LICENSE_PATH=$tampered" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "DOKKOMPLEKT_RUN_HARDWARE_E2E=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } finally {
+            Remove-Item -LiteralPath $privateKey, $keypair -Force -ErrorAction SilentlyContinue
+          }
+          if (Test-Path -LiteralPath $privateKey) { throw 'FPR-18 ephemeral private key cleanup failed.' }
+          Write-Host 'FPR-18 fixture preparation PASS: canonical Rust issuer used; private key removed before application build.'
       - name: Require clean Windows release artifact boundary
         if: runner.os == 'Windows'
         shell: pwsh

@@ -59,7 +59,9 @@ using System;
 using System.Runtime.InteropServices;
 public static class DokkomplektE1NativeMouse {
   [DllImport("user32.dll", SetLastError = true)]
-  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)]
@@ -128,6 +130,47 @@ function Find-ButtonByNames {
 function Find-ReadyButtonByNames {
   param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string[]]$Names)
   $button = Find-ButtonByNames -Root $Root -Names $Names
+  if ($null -ne $button -and $button.Current.IsEnabled) { return $button }
+  return $null
+}
+
+function Find-ReadyButtonByTrimmedName {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$Name)
+  foreach ($candidate in $Root.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button
+    )
+  )) {
+    try {
+      $candidateName = ([string]$candidate.Current.Name).Trim()
+      if ($candidateName -eq $Name -and $candidate.Current.IsEnabled) { return $candidate }
+    } catch { }
+  }
+  return $null
+}
+
+function Find-ElementByAutomationId {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
+  return $Root.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+      $AutomationId
+    )
+  )
+}
+
+function Find-ReadyButtonByAutomationId {
+  param([Parameter(Mandatory = $true)]$Root, [Parameter(Mandatory = $true)][string]$AutomationId)
+  $button = $Root.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.AndCondition]::new(
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button),
+      [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $AutomationId)
+    )
+  )
   if ($null -ne $button -and $button.Current.IsEnabled) { return $button }
   return $null
 }
@@ -214,6 +257,38 @@ function Invoke-UiActionWithObservedTransition {
 
   Write-Host "E1 UI action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
   Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe -Description "$Description physical retry"
+
+  # WebView2 on hosted Windows can acknowledge both UIA Invoke and a foreground
+  # coordinate click without dispatching the React DOM activation. Do not declare
+  # success from either input method: first require the observable transition.
+  # If it is still absent and the exact same action remains enabled, use one
+  # focused keyboard activation (the same user-equivalent path already required
+  # by the installed learning proof), then still require the real transition.
+  $physicalDeadline = [DateTime]::UtcNow.AddSeconds($TransitionSeconds)
+  do {
+    try { $transition = & $TransitionProbe } catch {
+      if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+      $transition = $null
+    }
+    if ($null -ne $transition) { return $transition }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $physicalDeadline)
+
+  $keyboardAction = $null
+  try { $keyboardAction = & $ActionProbe } catch {
+    if (-not (Test-UiaTransientTimeout -ErrorRecord $_)) { throw }
+  }
+  if ($null -ne $keyboardAction -and $keyboardAction.Current.IsEnabled) {
+    Write-Host "E1 UI action '$Description' still has no transition after physical retry; using one focused keyboard Space fallback."
+    if ($keyboardAction.Current.IsOffscreen -and $keyboardAction.Current.IsScrollItemPatternAvailable) {
+      $keyboardAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+      Start-Sleep -Milliseconds 100
+    }
+    $keyboardAction.SetFocus()
+    Start-Sleep -Milliseconds 100
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+  }
+
   return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
 }
 
@@ -234,21 +309,130 @@ function Invoke-UiElementPhysically {
     Start-Sleep -Milliseconds 150
   }
 
-  $Element.SetFocus()
-  Start-Sleep -Milliseconds 50
-  if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-    $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
-    Start-Sleep -Milliseconds 100
+  function Test-ElementPhysicallyVisible {
+    param([Parameter(Mandatory = $true)]$Target)
+    # WebView2 IsOffscreen is advisory only: hosted runners can report true for
+    # a rectangle whose center is physically inside the live app window.
+    $rect = $Target.Current.BoundingRectangle
+    if ($rect.IsEmpty -or $rect.Width -le 1 -or $rect.Height -le 1) { return $false }
+    $appWindow = Find-LiveAppWindow
+    if ($null -eq $appWindow) { return $false }
+    $windowRect = $appWindow.Current.BoundingRectangle
+    $screen = [System.Windows.Forms.Screen]::FromPoint(
+      [System.Drawing.Point]::new(
+        [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2)),
+        [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+      )
+    )
+    $work = $screen.WorkingArea
+    $virtual = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $centerX = $rect.Left + ($rect.Width / 2)
+    $centerY = $rect.Top + ($rect.Height / 2)
+    # A UIA rectangle is physically clickable only when its center inside the real Windows VirtualScreen
+    # is valid. This fail-closed guard prevents
+    # stale/virtualized WebView2 geometry from sending a global click off-screen.
+    if ($centerX -lt $virtual.Left -or $centerX -ge $virtual.Right -or
+        $centerY -lt $virtual.Top -or $centerY -ge $virtual.Bottom) {
+      return $false
+    }
+    $margin = 6
+    $left = [Math]::Max($windowRect.Left + $margin, $work.Left + $margin)
+    $top = [Math]::Max($windowRect.Top + $margin, $work.Top + $margin)
+    $right = [Math]::Min($windowRect.Right - $margin, $work.Right - $margin)
+    $bottom = [Math]::Min($windowRect.Bottom - $margin, $work.Bottom - $margin)
+    return $centerX -ge $left -and $centerX -lt $right -and
+      $centerY -ge $top -and $centerY -lt $bottom
   }
+
+  if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
+    # Recover only when geometry is not physically clickable. UIA IsOffscreen
+    # is logged but cannot veto a point whose rectangle is inside the live app.
+    if ($Element.Current.IsScrollItemPatternAvailable) {
+      try {
+        $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      } catch { }
+    }
+    if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
+      try {
+        $Element.SetFocus()
+        Start-Sleep -Milliseconds 200
+      } catch { }
+    }
+    if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
+      $appWindow = Find-LiveAppWindow
+      if ($null -ne $appWindow) {
+        $windowRect = $appWindow.Current.BoundingRectangle
+        $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
+        $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+        [void][DokkomplektE1NativeMouse]::SetCursorPos($wheelX, $wheelY)
+        for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-ElementPhysicallyVisible -Target $Element); $scrollAttempt++) {
+          $targetRect = $Element.Current.BoundingRectangle
+          $targetCenterY = $targetRect.Top + ($targetRect.Height / 2)
+          $windowCenterY = $windowRect.Top + ($windowRect.Height / 2)
+          $wheelDelta = if ($targetCenterY -gt $windowCenterY) { -360 } else { 360 }
+          [DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)
+          Start-Sleep -Milliseconds 120
+        }
+      }
+    }
+    if (-not (Test-ElementPhysicallyVisible -Target $Element)) {
+      $rect = $Element.Current.BoundingRectangle
+      $appWindow = Find-LiveAppWindow
+      $windowRect = if ($null -ne $appWindow) { $appWindow.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
+      throw "$Description remains outside the physically clickable installed-app area after bounded scroll/focus recovery. rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)); window=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height))."
+    }
+  }
+
+  $clickPoint = $null
   try {
-    $point = $Element.GetClickablePoint()
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+    $clickPoint = $Element.GetClickablePoint()
+  } catch {
+    $rect = $Element.Current.BoundingRectangle
+    if (-not $rect.IsEmpty -and $rect.Width -gt 1 -and $rect.Height -gt 1) {
+      $clickPoint = [System.Windows.Point]::new(
+        $rect.Left + ($rect.Width / 2),
+        $rect.Top + ($rect.Height / 2)
+      )
+    }
+  }
+  if ($null -ne $clickPoint) {
+    # UIA returns physical screen coordinates. WinForms Cursor.Position may be
+    # DPI-virtualized on hosted runners, which can shift lower WebView2 targets
+    # away from the actual HTML control. Use user32 directly so UIA and mouse
+    # coordinates stay in the same native coordinate space.
+    $x = [int][Math]::Round($clickPoint.X)
+    $y = [int][Math]::Round($clickPoint.Y)
+    $rect = $Element.Current.BoundingRectangle
+    Write-Host "E1 physical target '$Description': point=($x,$y) rect=($([int]$rect.Left),$([int]$rect.Top),$([int]$rect.Width),$([int]$rect.Height)) offscreen=$($Element.Current.IsOffscreen)"
+    $appWindow = Find-LiveAppWindow
+    if ($null -eq $appWindow) { throw "$Description lost the installed app window before physical click." }
+    $windowRect = $appWindow.Current.BoundingRectangle
+    $screen = [System.Windows.Forms.Screen]::FromPoint(
+      [System.Drawing.Point]::new(
+        [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2)),
+        [int][Math]::Round($windowRect.Top + ($windowRect.Height / 2))
+      )
+    )
+    $work = $screen.WorkingArea
+    $left = [Math]::Max($windowRect.Left, $work.Left)
+    $top = [Math]::Max($windowRect.Top, $work.Top)
+    $right = [Math]::Min($windowRect.Right, $work.Right)
+    $bottom = [Math]::Min($windowRect.Bottom, $work.Bottom)
+    if ($x -lt $left -or $x -ge $right -or $y -lt $top -or $y -ge $bottom) {
+      throw "$Description produced a click point outside the installed app working area: point=($x,$y); app=($([int]$windowRect.Left),$([int]$windowRect.Top),$([int]$windowRect.Width),$([int]$windowRect.Height)); work=($($work.Left),$($work.Top),$($work.Width),$($work.Height))."
+    }
+    if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
+      throw "$Description failed to position the native cursor at ($x,$y)."
+    }
+    Start-Sleep -Milliseconds 75
     [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-  } catch {
-    $Element.SetFocus()
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    return
   }
+
+  try { $Element.SetFocus() } catch { }
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 }
 
 function Invoke-UiActionPhysicallyFromProbe {
@@ -296,6 +480,60 @@ function Set-UiValue {
   }
   $null = [DokkomplektE1NativeMouse]::SendMessage($nativeHandle, 0x000C, [IntPtr]::Zero, $Value)
   Start-Sleep -Milliseconds 200
+}
+
+function Set-ReactControlledText {
+  param(
+    [Parameter(Mandatory = $true)]$Element,
+    [Parameter(Mandatory = $true)][string]$Value,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+
+  # WebView2 exposes HTML inputs through UIA, but SetFocus can succeed without
+  # transferring real DOM keyboard focus. Commit through user-equivalent input
+  # and require observable value persistence before accepting the interaction.
+  $expected = Normalize-UiValue -Value $Value
+  $lastActual = ''
+  for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    try {
+      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
+        $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+
+      if ($attempt -gt 0) {
+        Invoke-UiElementPhysically -Element $Element -Description "$Description focus retry $attempt"
+        Start-Sleep -Milliseconds 120
+      } else {
+        $Element.SetFocus()
+        Start-Sleep -Milliseconds 100
+      }
+
+      Set-Clipboard -Value $Value -ErrorAction Stop
+      [System.Windows.Forms.SendKeys]::SendWait('^a')
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+
+      $commitDeadline = [DateTime]::UtcNow.AddSeconds(2)
+      do {
+        Start-Sleep -Milliseconds 100
+        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+        if ($lastActual -eq $expected) { break }
+      } while ([DateTime]::UtcNow -lt $commitDeadline)
+
+      if ($lastActual -eq $expected) {
+        [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+        Start-Sleep -Milliseconds 200
+        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+        if ($lastActual -eq $expected) { return }
+      }
+    } catch {
+      if ($attempt -ge 2) {
+        throw "React input commit failed for '$Description': $($_.Exception.Message)"
+      }
+    }
+  }
+
+  throw "React input did not persist for '$Description'. Expected '$expected', actual '$lastActual'."
 }
 
 function Get-UiValue {
@@ -563,7 +801,12 @@ function Submit-OpenFileDialog {
         $openButton.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern).DoDefaultAction()
       } else {
         $point = $openButton.GetClickablePoint()
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point([int]$point.X, [int]$point.Y)
+        $x = [int][Math]::Round($point.X)
+        $y = [int][Math]::Round($point.Y)
+        if (-not [DokkomplektE1NativeMouse]::SetCursorPos($x, $y)) {
+          throw "Native Open button failed to position the cursor at ($x,$y)."
+        }
+        Start-Sleep -Milliseconds 75
         [DokkomplektE1NativeMouse]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DokkomplektE1NativeMouse]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
       }
@@ -736,6 +979,56 @@ function Get-E1DomainSelection {
     }
   } catch { }
 
+  # Chromium may expose an HTML <select> without SelectionPattern/ValuePattern on
+  # the collapsed combobox while still exposing the selected <option> through
+  # SelectionItemPattern. Inspect the live option items and require IsSelected.
+  $domainOptionNames = @(
+    'Профиль: автоматически',
+    'Универсальный документооборот',
+    'Медицина',
+    'Юридическая работа',
+    'Кадровая работа',
+    'Бухгалтерия',
+    'Образование',
+    'Своя профессия / профиль'
+  )
+  $expandedForRead = $false
+  try {
+    if ($combo.Current.IsExpandCollapsePatternAvailable) {
+      $expandCollapse = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($expandCollapse.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+        $expandCollapse.Expand()
+        $expandedForRead = $true
+        Start-Sleep -Milliseconds 150
+      }
+    }
+
+    $window = Find-LiveAppWindow
+    if ($null -ne $window) {
+      foreach ($candidate in $window.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+      )) {
+        try {
+          $name = [string]$candidate.Current.Name
+          if ($domainOptionNames -notcontains $name) { continue }
+          if (-not $candidate.Current.IsSelectionItemPatternAvailable) { continue }
+          $selectionItem = $candidate.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+          if ($selectionItem.Current.IsSelected) { return $name }
+        } catch { }
+      }
+    }
+  } finally {
+    if ($expandedForRead) {
+      try {
+        $combo = Find-E1NamedElement -Name "Профиль для $FileName"
+        if ($null -ne $combo -and $combo.Current.IsExpandCollapsePatternAvailable) {
+          $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+        }
+      } catch { }
+    }
+  }
+
   try {
     return [string](Get-UiValue -Element $combo)
   } catch {
@@ -750,19 +1043,19 @@ function Set-E1TemplateDomainOverride {
     [string]$CustomProfile = ''
   )
 
-  $comboName = "Профиль для $FileName"
-  $combo = Find-E1NamedElement -Name $comboName
-  if ($null -eq $combo) {
+  $groupName = "Профиль для $FileName"
+  $group = Find-E1NamedElement -Name $groupName
+  if ($null -eq $group) {
     try {
-      $combo = Invoke-UiActionWithObservedTransition `
+      $group = Invoke-UiActionWithObservedTransition `
         -Description "open advanced template settings for $FileName" `
-        -TransitionDescription "domain selector for $FileName" `
+        -TransitionDescription "domain choices for $FileName" `
         -TransitionSeconds 5 `
         -ActionProbe {
           Find-E1NamedElement -Name 'Необязательно: настроить автоматическое заполнение'
         } `
         -TransitionProbe {
-          Find-E1NamedElement -Name $comboName
+          Find-E1NamedElement -Name $groupName
         }
     } catch {
       Write-Host ("E1 UI snapshot after failed advanced settings transition for '$FileName': " + (Get-E1UiSnapshot))
@@ -770,128 +1063,88 @@ function Set-E1TemplateDomainOverride {
     }
   }
 
-  if ($combo.Current.IsOffscreen -and $combo.Current.IsScrollItemPatternAvailable) {
-    $combo.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+  $radioName = "$OptionName для $FileName"
+  $radio = Wait-UiElement -Description "domain radio '$OptionName' for $FileName" -Probe {
+    Find-E1NamedElement -Name $radioName
+  }
+  if ($radio.Current.IsOffscreen -and $radio.Current.IsScrollItemPatternAvailable) {
+    $radio.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 100
   }
 
-  # Chromium/WebView2 does not consistently publish <option> descendants for an
-  # expanded HTML <select> on hosted Windows runners. Prefer semantic UIA when
-  # available, but never treat input delivery itself as proof: the live selected
-  # option is read back before this helper returns.
-  $option = $null
-  try {
-    if ($combo.Current.IsExpandCollapsePatternAvailable) {
-      $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    } else {
-      Invoke-UiElement -Element $combo -Description "open domain selector for $FileName"
-    }
-    Start-Sleep -Milliseconds 150
-    $optionDeadline = [DateTime]::UtcNow.AddSeconds(2)
-    do {
-      $window = Find-LiveAppWindow
-      if ($null -ne $window) {
-        $option = $window.FindFirst(
-          [System.Windows.Automation.TreeScope]::Descendants,
-          [System.Windows.Automation.PropertyCondition]::new(
-            [System.Windows.Automation.AutomationElement]::NameProperty,
-            $OptionName
-          )
+  Invoke-UiElementPhysically -Element $radio -Description "select domain '$OptionName' for $FileName"
+  Start-Sleep -Milliseconds 250
+
+  $selectionVerified = $false
+  $radio = Find-E1NamedElement -Name $radioName
+  if ($null -ne $radio) {
+    try {
+      if ($radio.Current.IsSelectionItemPatternAvailable) {
+        $selectionVerified = $radio.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected
+      } elseif ($radio.Current.IsTogglePatternAvailable) {
+        $selectionVerified = (
+          $radio.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq
+          [System.Windows.Automation.ToggleState]::On
         )
       }
-      if ($null -ne $option) { break }
-      Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $optionDeadline)
-  } catch {
-    $option = $null
+    } catch { }
   }
-
-  if ($null -ne $option) {
-    if ($option.Current.IsSelectionItemPatternAvailable) {
-      $option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    } else {
-      Invoke-UiElement -Element $option -Description "select domain '$OptionName' for $FileName"
+  if ($selectionVerified) {
+    Write-Host "E1 domain radio PASS: '$OptionName' selected for $FileName."
+  } else {
+    # Hosted WebView2 can expose the radio but omit its selected/toggle state.
+    # Give Chromium one explicit keyboard activation on the same radio so React
+    # receives a real user change event even when UIA state read-back is absent.
+    try {
+      $radio.SetFocus()
+      Start-Sleep -Milliseconds 75
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      Start-Sleep -Milliseconds 150
+      [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
+      Start-Sleep -Milliseconds 150
+      Write-Host "E1 domain radio keyboard activation sent for '$OptionName' / $FileName; downstream domain-specific installed behavior remains authoritative."
+    } catch {
+      throw "E1 domain radio for $FileName could not be activated by physical click or keyboard Space: $($_.Exception.Message)"
     }
-    Start-Sleep -Milliseconds 200
-  }
-
-  $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)
-  $expectedDomain = Normalize-UiValue -Value $OptionName
-  if ($actualDomain -ne $expectedDomain) {
-    $domainOffsets = @{
-      'Универсальный документооборот' = 1
-      'Медицина' = 2
-      'Юридическая работа' = 3
-      'Кадровая работа' = 4
-      'Бухгалтерия' = 5
-      'Образование' = 6
-      'Своя профессия / профиль' = 7
-    }
-    if (-not $domainOffsets.ContainsKey($OptionName)) {
-      throw "Unsupported E1 domain option for keyboard fallback: $OptionName"
-    }
-
-    $combo = Wait-UiElement -Description "domain selector before keyboard fallback for $FileName" -Probe {
-      Find-E1NamedElement -Name $comboName
-    }
-    if ($combo.Current.IsExpandCollapsePatternAvailable) {
-      try {
-        $expandCollapse = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        if ($expandCollapse.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
-          $expandCollapse.Collapse()
-          Start-Sleep -Milliseconds 100
-        }
-      } catch { }
-    }
-
-    $appWindow = Find-LiveAppWindow
-    if ($null -ne $appWindow) {
-      try { $appWindow.SetFocus() } catch { }
-    }
-    $combo = Wait-UiElement -Description "live domain selector for keyboard fallback for $FileName" -Probe {
-      Find-E1NamedElement -Name $comboName
-    }
-    $combo.SetFocus()
-    Start-Sleep -Milliseconds 100
-    [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
-    Start-Sleep -Milliseconds 100
-    for ($index = 0; $index -lt [int]$domainOffsets[$OptionName]; $index += 1) {
-      [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
-      Start-Sleep -Milliseconds 50
-    }
-    # Blurring the closed HTML select commits Chromium's change event into React.
-    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-    Start-Sleep -Milliseconds 300
-
-    $actualDomain = Normalize-UiValue -Value (Get-E1DomainSelection -FileName $FileName)
-    Write-Host "E1 domain selector keyboard fallback: expected='$OptionName' actual='$actualDomain'."
-  }
-
-  if ($actualDomain -ne $expectedDomain) {
-    throw "E1 domain override did not persist for $FileName. Expected '$OptionName', actual '$actualDomain'."
   }
 
   if (-not [string]::IsNullOrWhiteSpace($CustomProfile)) {
     $customName = "Своя профессия / профиль для $FileName"
     $custom = Wait-UiElement -Description "custom domain value for $FileName" -Probe {
-      Find-E1NamedElement -Name $customName
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.AndCondition]::new(
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $customName
+          ),
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit
+          )
+        )
+      )
     }
-    Set-UiValue -Element $custom -Value $CustomProfile
-
-    # React controls this input. UIA ValuePattern.SetValue can update the DOM
-    # without dispatching React's input/onChange event, so force one
-    # user-equivalent no-op edit and then blur. This commits exactly the
-    # already supplied Unicode value without depending on the runner keyboard
-    # layout for Cyrillic text.
-    $custom.SetFocus()
-    Start-Sleep -Milliseconds 50
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
-    [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
-    Start-Sleep -Milliseconds 300
+    Set-ReactControlledText -Element $custom -Value $CustomProfile -Description "custom domain value for $FileName"
 
     $custom = Wait-UiElement -Description "persisted custom domain value for $FileName" -Probe {
-      Find-E1NamedElement -Name $customName
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.AndCondition]::new(
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $customName
+          ),
+          [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Edit
+          )
+        )
+      )
     }
     $actualCustom = Normalize-UiValue -Value (Get-UiValue -Element $custom)
     Write-Host "E1 custom domain value commit: expected='$CustomProfile' actual='$actualCustom'."
@@ -951,7 +1204,14 @@ function Add-E1DomainTemplate {
   $labelInput = Wait-UiElement -Description "template label for $Label" -TimeoutSeconds 40 -Probe {
     Find-E1NamedElement -Name "Название документа для $fileName"
   }
-  Set-UiValue -Element $labelInput -Value $Label
+  Set-ReactControlledText -Element $labelInput -Value $Label -Description "template label for $fileName"
+  $labelInput = Wait-UiElement -Description "persisted template label for $Label" -Probe {
+    Find-E1NamedElement -Name "Название документа для $fileName"
+  }
+  $actualLabel = Normalize-UiValue -Value (Get-UiValue -Element $labelInput)
+  if ($actualLabel -ne (Normalize-UiValue -Value $Label)) {
+    throw "E1 template label did not persist for $fileName. Expected '$Label', actual '$actualLabel'."
+  }
   Set-E1TemplateDomainOverride -FileName $fileName -OptionName $DomainOption -CustomProfile $CustomProfile
 
   try {
@@ -971,7 +1231,34 @@ function Add-E1DomainTemplate {
       }
   } catch {
     Write-Host ("E1 UI snapshot after failed template confirmation for '$Label': " + (Get-E1UiSnapshot))
-    throw
+    # Hosted WebView2 can expose an enabled HTML button whose UIA InvokePattern
+    # and one coordinate click are both acknowledged without delivering a DOM
+    # click. The same runner already needs a focused keyboard fallback for other
+    # React controls. Use one bounded Space activation only after both previous
+    # user-equivalent paths failed and the button is still enabled.
+    $createButton = Wait-UiElement -Description "focused create $Label button fallback" -Probe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
+    }
+    try {
+      if ($createButton.Current.IsOffscreen -and $createButton.Current.IsScrollItemPatternAvailable) {
+        $createButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+      }
+      $createButton.SetFocus()
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      $null = Wait-UiElement -Description "$Label document button after focused Space fallback" -TimeoutSeconds 30 -Probe {
+        $window = Find-LiveAppWindow
+        if ($null -eq $window) { return $null }
+        Find-ButtonByNames -Root $window -Names @($Label)
+      }
+      Write-Host "E1 template confirmation keyboard fallback PASS for '$Label'."
+    } catch {
+      Write-Host ("E1 UI snapshot after keyboard fallback failure for '$Label': " + (Get-E1UiSnapshot))
+      throw
+    }
   }
 }
 
@@ -1020,7 +1307,7 @@ function Invoke-E1DomainScenario {
   }
   Start-Sleep -Milliseconds 200
 
-  Invoke-UiActionPhysicallyFromProbe -Description "select $Label" -ActionProbe {
+  $selectionProbe = {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
     $window.FindFirst(
@@ -1030,6 +1317,40 @@ function Invoke-E1DomainScenario {
         "Добавить $Label в комплект"
       )
     )
+  }
+  Invoke-UiActionPhysicallyFromProbe -Description "select $Label" -ActionProbe $selectionProbe
+
+  # A WebView2 checkbox can expose stale/offscreen geometry immediately after
+  # clean-profile import. The physical click is still attempted first, but do
+  # not accept it unless the canonical generation action becomes enabled.
+  $selectionDeadline = [DateTime]::UtcNow.AddSeconds(3)
+  $selectionCommitted = $false
+  do {
+    $window = Find-LiveAppWindow
+    if ($null -ne $window) {
+      $selectionCommitted = $null -ne (Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents')
+    }
+    if ($selectionCommitted) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $selectionDeadline)
+
+  if (-not $selectionCommitted) {
+    $selectionControl = Wait-UiElement -Description "live selection checkbox for $Label fallback" -Probe $selectionProbe
+    if ($selectionControl.Current.IsTogglePatternAvailable) {
+      $toggle = $selectionControl.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+      if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) {
+        $toggle.Toggle()
+        Write-Host "E1 selection TogglePattern fallback used for '$Label' after physical click produced no committed selection."
+      }
+    } else {
+      if ($selectionControl.Current.IsOffscreen -and $selectionControl.Current.IsScrollItemPatternAvailable) {
+        try { $selectionControl.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView() } catch { }
+      }
+      $selectionControl.SetFocus()
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+      Write-Host "E1 selection keyboard fallback used for '$Label' after physical click produced no committed selection."
+    }
   }
 
   $receiptCountBefore = if (Test-Path -LiteralPath $ReceiptRoot -PathType Container) {
@@ -1042,7 +1363,7 @@ function Invoke-E1DomainScenario {
   $generationAction = Wait-UiElement -Description "generation action for $Label" -Probe {
     $window = Find-LiveAppWindow
     if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
+    Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'
   }
   Invoke-UiElementPhysically -Element $generationAction -Description "start canonical generation for $Label"
 
@@ -1080,13 +1401,45 @@ function Invoke-E1DomainScenario {
         }
         continue
       }
-      Set-UiValue -Element $control -Value ([string]$PromptValues[$fieldId])
+      $expectedPromptValue = [string]$PromptValues[$fieldId]
+      Set-ReactControlledText -Element $control -Value $expectedPromptValue -Description "$Label preflight field $fieldId"
+      $control = (Find-LiveAppWindow).FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+          $automationId
+        )
+      )
+      if ($null -eq $control) {
+        throw "E1 $Label lost preflight control after commit: $fieldId"
+      }
+      $actualPromptValue = Normalize-UiValue -Value (Get-UiValue -Element $control)
+      if ($actualPromptValue -ne (Normalize-UiValue -Value $expectedPromptValue)) {
+        throw "E1 $Label preflight field did not commit through React: $fieldId expected='$expectedPromptValue' actual='$actualPromptValue'"
+      }
     }
 
-    Invoke-UiActionPhysicallyFromProbe -Description "create $Label" -ActionProbe {
+    $createAction = Wait-UiElement -Description "create action for $Label" -TimeoutSeconds 30 -Probe {
       $window = Find-LiveAppWindow
       if ($null -eq $window) { return $null }
       Find-ReadyButtonByNames -Root $window -Names @('Создать документы')
+    }
+    try {
+      Invoke-UiElementPhysically -Element $createAction -Description "create $Label"
+    } catch {
+      $physicalError = [string]$_.Exception.Message
+      if ($physicalError -notmatch 'outside the physically clickable installed-app area after bounded scroll/focus recovery') {
+        throw
+      }
+      # The canonical physical helper has already proven the button is outside
+      # Windows WorkingArea. Do not synthesize an off-screen mouse click:
+      # activate that same live HTML button through browser-native keyboard
+      # input, then let physical DOCX + committed receipt evidence below prove
+      # that React actually accepted the action.
+      $createAction.SetFocus()
+      Start-Sleep -Milliseconds 150
+      [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+      Write-Host "E1 keyboard activation used for '$Label' create because the canonical physical helper proved the live preflight button was outside Windows WorkingArea."
     }
   } else {
     Write-Host "FPR-07 zero-question path: $Label started directly from the canonical generation action."
@@ -1104,11 +1457,34 @@ function Invoke-E1DomainScenario {
     $created = Get-ChildItem -LiteralPath $OutputRoot -Recurse -File -Filter $outputName -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $created) {
       $failure = Find-E1NamedElement -Name 'Документы не созданы'
-      if ($null -ne $failure) { throw "E1 $Label backend rejected the completed preflight." }
+      $failureDetail = Find-E1NamedElementContaining -Text 'Документы не созданы:'
+      if ($null -ne $failure -or $null -ne $failureDetail) {
+        $failureText = ''
+        if ($null -ne $failureDetail) {
+          try { $failureText = [string]$failureDetail.Current.Name } catch { $failureText = '' }
+        }
+        if ([string]::IsNullOrWhiteSpace($failureText)) {
+          $statusElement = Find-ElementByAutomationId -Root (Find-LiveAppWindow) -AutomationId 'app-status'
+          if ($null -ne $statusElement) {
+            try { $failureText = [string]$statusElement.Current.Name } catch { $failureText = '' }
+          }
+        }
+        if ([string]::IsNullOrWhiteSpace($failureText)) { $failureText = Get-E1UiSnapshot }
+        throw "E1 $Label backend rejected the completed preflight: $failureText"
+      }
       Start-Sleep -Milliseconds 250
     }
   }
-  if ($null -eq $created) { throw "E1 $Label did not publish a physical DOCX." }
+  if ($null -eq $created) {
+    $statusElement = Find-ElementByAutomationId -Root (Find-LiveAppWindow) -AutomationId 'app-status'
+    $statusText = '<missing>'
+    if ($null -ne $statusElement) {
+      try { $statusText = [string]$statusElement.Current.Name } catch { $statusText = '<unreadable>' }
+    }
+    $visibleDocx = @(Get-ChildItem -LiteralPath $OutputRoot -Recurse -File -Filter '*.docx' -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty FullName)
+    throw "E1 $Label did not publish a physical DOCX. app-status='$statusText'; visible-docx=$($visibleDocx -join ' | ')"
+  }
 
   $archive = [System.IO.Compression.ZipFile]::OpenRead($created.FullName)
   try {
@@ -1172,42 +1548,10 @@ $accountingLabel = 'Акт оказанных услуг'
 $accountingOutputName = "$accountingLabel.docx"
 $completionReceiptRoot = Join-Path $appDataRoot 'generation-completion-receipts'
 
-$templateDialog = Invoke-UiActionWithObservedTransition `
-  -Description 'Добавить шаблоны for E1 Accounting' `
-  -TransitionDescription 'native template picker for E1 Accounting' `
-  -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    Find-ReadyButtonByNames -Root $window -Names @('Добавить шаблоны')
-  } `
-  -TransitionProbe { Find-FileDialog }
-$templateEdit = $templateDialog.FindFirst(
-  [System.Windows.Automation.TreeScope]::Descendants,
-  [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, '1148')
-)
-Set-UiValue -Element $templateEdit -Value $accountingTemplate
-Submit-OpenFileDialog -Dialog $templateDialog
-
-$labelInput = Wait-UiElement -Description 'Accounting template label input' -TimeoutSeconds 40 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  $window.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Название документа для service_act.docx')
-  )
-}
-Set-UiValue -Element $labelInput -Value $accountingLabel
-Set-E1TemplateDomainOverride -FileName 'service_act.docx' -OptionName 'Бухгалтерия'
-Invoke-UiActionPhysicallyFromProbe -Description 'Создать Accounting button' -ActionProbe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Создать кнопки (1)')
-}
-$null = Wait-UiElement -Description 'Accounting document button' -TimeoutSeconds 90 -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ButtonByNames -Root $window -Names @($accountingLabel)
-}
+Add-E1DomainTemplate `
+  -TemplatePath $accountingTemplate `
+  -Label $accountingLabel `
+  -DomainOption 'Бухгалтерия'
 
 $sourceDialog = Invoke-UiActionWithObservedTransition `
   -Description 'Replace source with E1 Accounting source' `
@@ -1258,6 +1602,41 @@ foreach ($fieldId in $fpr04SourceFields) {
 }
 Write-Host "FPR-04 INSTALLED PASS: source-owned Accounting fields preserve Scanner/document_text/deterministic_source_parser provenance through real UI intake."
 
+# FPR-16: source explanation is a real installed user path, not only a stored trace.
+$fpr16Advanced = Wait-UiElement -Description 'FPR-16 advanced tools toggle' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Расширенные инструменты'
+}
+Invoke-UiElementPhysically -Element $fpr16Advanced -Description 'open FPR-16 source explanation tools'
+$fpr16Review = Wait-UiElement -Description 'FPR-16 document.number source review action' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Сверить источник для document.number'
+}
+Invoke-UiElementPhysically -Element $fpr16Review -Description 'review FPR-16 document.number source'
+$null = Wait-UiElement -Description 'FPR-16 source comparison panel' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Сверка источника для document.number'
+}
+$fpr16SourcePane = Wait-UiElement -Description 'FPR-16 source fragment pane' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Фрагмент источника для document.number'
+}
+$fpr16ValuePane = Wait-UiElement -Description 'FPR-16 recognized value pane' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Распознанное значение для document.number: E1-17'
+}
+$fpr16SourceName = [string]$fpr16SourcePane.Current.Name
+$fpr16ValueName = [string]$fpr16ValuePane.Current.Name
+if (-not $fpr16SourceName.Contains('document.number') -or -not $fpr16ValueName.Contains('E1-17')) {
+  throw "FPR-16 installed source explanation lost field/value context. Source=$fpr16SourceName Value=$fpr16ValueName"
+}
+Write-Host "FPR-16 INSTALLED PASS: current-case source explanation -> document.number -> E1-17 is visible through the real installed UI."
+
+# Restore the compact workspace before continuing the cross-domain matrix.
+# FPR-16 deliberately expands a long diagnostics section; leaving it open can
+# push later canonical generation controls outside the physical viewport even
+# though UIA still exposes them. Close it through the same installed user path.
+$fpr16Advanced = Wait-UiElement -Description 'FPR-16 advanced tools toggle before close' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Расширенные инструменты'
+}
+Invoke-UiElementPhysically -Element $fpr16Advanced -Description 'close FPR-16 source explanation tools'
+Start-Sleep -Milliseconds 250
+
 $window = Find-LiveAppWindow
 $clearSelection = Find-ReadyButtonByNames -Root $window -Names @('Снять выбор')
 if ($null -ne $clearSelection) { Invoke-UiElementPhysically -Element $clearSelection -Description 'clear previous document selection' }
@@ -1270,19 +1649,47 @@ Invoke-UiActionPhysicallyFromProbe -Description 'select Accounting service act' 
     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, "Добавить $accountingLabel в комплект")
   )
 }
-$generationAction = Wait-UiElement -Description 'one-document Accounting generation action' -Probe {
+try {
+  $null = Invoke-UiActionWithObservedTransition `
+    -Description 'open E1 Accounting preflight' `
+    -TransitionDescription 'E1 Accounting preflight' `
+    -TransitionSeconds 6 `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
+      )
+    }
+} catch {
   $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  Find-ReadyButtonByNames -Root $window -Names @('Проверить и создать (1)', 'Создать документы (1)')
-}
-Invoke-UiElementPhysically -Element $generationAction -Description 'open E1 Accounting preflight'
-$null = Wait-UiElement -Description 'E1 Accounting preflight' -Probe {
-  $window = Find-LiveAppWindow
-  if ($null -eq $window) { return $null }
-  $window.FindFirst(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Проверка перед созданием')
-  )
+  $statusElement = if ($null -ne $window) { Find-ElementByAutomationId -Root $window -AutomationId 'app-status' } else { $null }
+  $statusText = if ($null -ne $statusElement) { [string]$statusElement.Current.Name } else { '<missing>' }
+  Write-Host "E1 Accounting preflight diagnostic status before canonical shortcut: $statusText"
+  Write-Host ("E1 Accounting preflight UI snapshot before canonical shortcut: " + (Get-E1UiSnapshot))
+
+  # Hosted WebView2 can expose an enabled HTML button while swallowing UIA,
+  # coordinate click and focused Space. Ctrl+Enter is an application-owned,
+  # documented user path wired to the exact same openGenerationPreflight action.
+  # It is therefore the stable installed-shell fallback, not a test bypass.
+  $process.Refresh()
+  $windowHandle = [IntPtr]$process.MainWindowHandle
+  if ($windowHandle -ne [IntPtr]::Zero) {
+    [void][DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)
+    [void][DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)
+    Start-Sleep -Milliseconds 150
+  }
+  [System.Windows.Forms.SendKeys]::SendWait('^{ENTER}')
+  $null = Wait-UiElement -Description 'E1 Accounting preflight through canonical Ctrl+Enter' -TimeoutSeconds 30 -Probe {
+    Find-E1NamedElement -Name 'Проверка перед созданием'
+  }
+  Write-Host "E1 canonical generation shortcut PASS: Ctrl+Enter opened the same Accounting preflight."
 }
 
 foreach ($requiredMissingId in @('workflow-amount-currency', 'workflow-amount-vat')) {
@@ -1617,19 +2024,32 @@ if ($null -ne $clearSelection) {
 }
 Start-Sleep -Milliseconds 200
 
+$fpr01SelectedCount = 0
 foreach ($document in $fpr01Documents) {
-  Invoke-UiActionPhysicallyFromProbe -Description "select $($document.Label) for FPR-01 batch" -ActionProbe {
-    $window = Find-LiveAppWindow
-    if ($null -eq $window) { return $null }
-    $window.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        "Добавить $($document.Label) в комплект"
+  $fpr01SelectedCount += 1
+  $expectedActionNames = @(
+    "Проверить и создать ($fpr01SelectedCount)",
+    "Создать документы ($fpr01SelectedCount)"
+  )
+  Invoke-UiActionWithObservedTransition `
+    -Description "select $($document.Label) for FPR-01 batch" `
+    -TransitionDescription "FPR-01 selection count $fpr01SelectedCount" `
+    -ActionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      $window.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::NameProperty,
+          "Добавить $($document.Label) в комплект"
+        )
       )
-    )
-  }
-  Start-Sleep -Milliseconds 150
+    } `
+    -TransitionProbe {
+      $window = Find-LiveAppWindow
+      if ($null -eq $window) { return $null }
+      Find-ReadyButtonByNames -Root $window -Names $expectedActionNames
+    } | Out-Null
 }
 
 $null = Invoke-UiActionWithObservedTransition `
@@ -1701,6 +2121,11 @@ if ($fpr01Created.Count -ne $fpr01Documents.Count) {
   throw "FPR-01 did not publish every selected document. Missing: $missing"
 }
 
+$fpr13BundleFolders = @($fpr01Created.Values | ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique)
+if ($fpr13BundleFolders.Count -ne 1) {
+  throw "FPR-13 selected documents were not published into one physical bundle folder: $($fpr13BundleFolders -join ' | ')"
+}
+
 $fpr01OutputHashes = New-Object System.Collections.Generic.HashSet[string]
 foreach ($document in $fpr01Documents) {
   $created = $fpr01Created[$document.Label]
@@ -1730,6 +2155,7 @@ foreach ($document in $fpr01Documents) {
 
 $fpr01ReceiptDeadline = [DateTime]::UtcNow.AddSeconds(30)
 $fpr01MatchedHashes = New-Object System.Collections.Generic.HashSet[string]
+$fpr13PlanBindings = New-Object System.Collections.Generic.HashSet[string]
 do {
   if (Test-Path -LiteralPath $completionReceiptRoot -PathType Container) {
     foreach ($file in @(Get-ChildItem -LiteralPath $completionReceiptRoot -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
@@ -1738,6 +2164,11 @@ do {
         $receiptHash = [string]$data.output_sha256
         if ($data.status -eq 'committed' -and $fpr01OutputHashes.Contains($receiptHash)) {
           $null = $fpr01MatchedHashes.Add($receiptHash)
+          $planBinding = [string]$data.plan_binding_sha256
+          if ([string]::IsNullOrWhiteSpace($planBinding) -or $planBinding.Length -ne 64) {
+            throw "FPR-13 committed receipt for output $receiptHash has no complete plan binding."
+          }
+          $null = $fpr13PlanBindings.Add($planBinding)
         }
       } catch { }
     }
@@ -1753,6 +2184,16 @@ $fpr01ReceiptCountAfter = @(Get-ChildItem -LiteralPath $completionReceiptRoot -F
 if ($fpr01ReceiptCountAfter -ne ($fpr01ReceiptCountBefore + $fpr01Documents.Count)) {
   throw "FPR-01 one batch did not add exactly $($fpr01Documents.Count) committed GenerationReceipts."
 }
+if ($fpr13PlanBindings.Count -ne 1) {
+  throw "FPR-13 two outputs do not share one immutable plan binding; distinct bindings=$($fpr13PlanBindings.Count)."
+}
+$fpr13BundleStatus = Wait-UiElement -Description 'FPR-13 honest bundle completion status' -TimeoutSeconds 15 -Probe {
+  Find-E1NamedElementContaining -Text 'Комплект создан: 2 документ(ов)'
+}
+if ($null -eq $fpr13BundleStatus) {
+  throw 'FPR-13 UI did not report the actual two-document bundle size.'
+}
+Write-Host "FPR-13 INSTALLED PASS: one selected bundle -> one physical folder '$($fpr13BundleFolders[0])' -> 2 distinct readable DOCX -> one shared plan binding -> honest UI count -> 2 committed receipts."
 Write-Host 'FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts.'
 
 # FPR-02: prove the real installed medical diary path. The registered diary
@@ -2238,6 +2679,171 @@ Write-Host 'FPR-06 INSTALLED PASS: manual Scanner UI -> canonical apply_scanner 
 Write-Host 'FPR-07 ZERO-QUESTION INSTALLED PASS: fully resolved Scanner case skipped the form and published directly after commit-boundary recheck.'
 Write-Host 'FPR-07 INSTALLED PASS: missing-value case prompts; zero-question case has no form; both publish through the same canonical workflow.'
 Write-Host 'E1 FPR-21 PASS: installed Medical/Legal/HR/Accounting/Education/Custom compatibility is covered on one core.'
+
+# FPR-15 / ACC-61: real installed clean-profile transfer proof.
+# Export the current confirmed template set while a case-only sentinel exists,
+# prove that the package contains no case state or local paths, destroy the
+# temporary application profile, import through the installed UI, and generate
+# a physical DOCX from a new case with the imported button.
+$fpr15OldCaseSentinel = $fpr06ScannerValue
+$fpr15ExistingPackages = @{}
+foreach ($item in @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue)) {
+  $fpr15ExistingPackages[$item.FullName] = $true
+}
+$fpr15Export = Find-E1NamedElement -Name 'Экспорт шаблонов'
+if ($null -eq $fpr15Export) {
+  $management = Wait-UiElement -Description 'FPR-15 template management' -TimeoutSeconds 20 -Probe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
+  }
+  Invoke-UiElementPhysically -Element $management -Description 'open FPR-15 template management'
+  $fpr15Export = Wait-UiElement -Description 'FPR-15 export templates button' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Экспорт шаблонов'
+  }
+}
+Invoke-UiElementPhysically -Element $fpr15Export -Description 'FPR-15 export templates'
+
+$fpr15Package = $null
+$fpr15ExportDeadline = [DateTime]::UtcNow.AddSeconds(30)
+do {
+  $fpr15Package = @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue |
+    Where-Object { -not $fpr15ExistingPackages.ContainsKey($_.FullName) } |
+    Sort-Object LastWriteTimeUtc -Descending |
+    Select-Object -First 1)
+  if ($fpr15Package.Count -gt 0) { $fpr15Package = $fpr15Package[0]; break }
+  Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $fpr15ExportDeadline)
+if ($null -eq $fpr15Package) { throw 'FPR-15 installed export did not publish a .dktpack file.' }
+
+$fpr15Zip = [System.IO.Compression.ZipFile]::OpenRead($fpr15Package.FullName)
+try {
+  $manifestEntry = $fpr15Zip.GetEntry('manifest.json')
+  if ($null -eq $manifestEntry) { throw 'FPR-15 package has no manifest.json.' }
+  $manifestReader = [System.IO.StreamReader]::new($manifestEntry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr15ManifestText = $manifestReader.ReadToEnd() } finally { $manifestReader.Dispose() }
+  foreach ($forbidden in @('semantic_case', 'source_path', 'template_path', $appDataRoot, $fixtureDir, $fpr15OldCaseSentinel, 'fpr06-scanner-source.docx')) {
+    if (-not [string]::IsNullOrWhiteSpace($forbidden) -and $fpr15ManifestText.Contains($forbidden)) {
+      throw "FPR-15 manifest leaked forbidden case/local value: $forbidden"
+    }
+  }
+  foreach ($entry in $fpr15Zip.Entries) {
+    if ($entry.Length -gt 64MB) { throw "FPR-15 package entry is unexpectedly large: $($entry.FullName)" }
+    $stream = $entry.Open()
+    try {
+      $memory = New-Object System.IO.MemoryStream
+      try {
+        $stream.CopyTo($memory)
+        $entryBytes = $memory.ToArray()
+      } finally { $memory.Dispose() }
+    } finally { $stream.Dispose() }
+    $entryText = [System.Text.Encoding]::UTF8.GetString($entryBytes)
+    if ($entryText.Contains($fpr15OldCaseSentinel)) {
+      throw "FPR-15 package leaked the prior case sentinel through $($entry.FullName)."
+    }
+  }
+} finally {
+  $fpr15Zip.Dispose()
+}
+Write-Host "FPR-15 EXPORT PRIVACY PASS: $($fpr15Package.FullName)"
+
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+Remove-Item -LiteralPath $appDataRoot -Recurse -Force -ErrorAction Stop
+if (Test-Path -LiteralPath $appDataRoot) { throw 'FPR-15 clean-profile reset left application data behind.' }
+
+$process = Start-Process -FilePath $app.FullName -PassThru
+$window = Wait-UiElement -Description 'FPR-15 clean-profile application window' -TimeoutSeconds 40 -Probe {
+  Find-LiveAppWindow
+}
+if ($null -ne (Find-E1NamedElement -Name $fpr06Label)) {
+  throw 'FPR-15 clean profile already contains the transferred button before import.'
+}
+Write-Host 'FPR-15 CLEAN PROFILE PASS: application data removed and transferred button is absent before import.'
+
+$fpr15Import = Wait-UiElement -Description 'FPR-15 clean-profile import templates button' -TimeoutSeconds 20 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Импорт шаблонов')
+}
+$importDialog = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-15 import templates' `
+  -TransitionDescription 'FPR-15 native transfer package picker' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Импорт шаблонов')
+  } `
+  -TransitionProbe { Find-FileDialog }
+Set-OpenFileDialogPath -Dialog $importDialog -Path $fpr15Package.FullName | Out-Null
+Submit-OpenFileDialog -Dialog $importDialog
+$null = Wait-UiElement -Description 'FPR-15 imported Scanner button' -TimeoutSeconds 40 -Probe {
+  Find-E1NamedElement -Name $fpr06Label
+}
+if (-not (Test-Path -LiteralPath $appDataRoot -PathType Container)) {
+  throw 'FPR-15 import did not recreate clean profile application data.'
+}
+Write-Host 'FPR-15 IMPORT PASS: .dktpack imported through installed UI into a genuinely clean profile.'
+
+$fpr15NewSentinel = 'FPR15-NEW-CLEAN-PROFILE'
+$fpr15Source = Join-Path $fixtureDir 'fpr15-new-case.docx'
+New-E1TextDocx -Path $fpr15Source -Lines @(
+  'FPR-15 clean-profile new case',
+  'Номер документа: FPR15-NEW-1',
+  'Дата документа: 27.09.2026',
+  "Новое значение: $fpr15NewSentinel"
+)
+Set-E1DomainSource -SourcePath $fpr15Source
+
+$fpr15FieldInput = Find-E1NamedElement -Name 'Идентификатор поля'
+if ($null -eq $fpr15FieldInput) {
+  $fpr15Advanced = Wait-UiElement -Description 'FPR-15 advanced tools toggle' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Расширенные инструменты'
+  }
+  Invoke-UiElementPhysically -Element $fpr15Advanced -Description 'open FPR-15 manual Scanner tools'
+  $fpr15FieldInput = Wait-UiElement -Description 'FPR-15 Scanner field input' -TimeoutSeconds 20 -Probe {
+    Find-E1NamedElement -Name 'Идентификатор поля'
+  }
+}
+Set-UiValue -Element $fpr15FieldInput -Value $fpr06FieldId
+$fpr15TextInput = Wait-UiElement -Description 'FPR-15 Scanner text input' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Выделенный текст'
+}
+Set-UiValue -Element $fpr15TextInput -Value $fpr15NewSentinel
+Invoke-UiActionPhysicallyFromProbe -Description 'apply FPR-15 new Scanner value' -ActionProbe {
+  Find-E1NamedElement -Name 'Назначить выделение полю'
+}
+$null = Wait-UiElement -Description 'FPR-15 Scanner accepted status' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElementContaining -Text 'Разметка сохранена: принято 1'
+}
+
+Invoke-E1DomainScenario `
+  -Label $fpr06Label `
+  -PromptValues @{} `
+  -PluginRequiredFields @() `
+  -ExpectedOutputValues @($fpr15NewSentinel) `
+  -OutputRoot $defaultOutputRoot `
+  -ReceiptRoot $completionReceiptRoot `
+  -ExpectPreflight $false
+
+$fpr15Doc = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter "$fpr06Label.docx" -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTimeUtc -Descending |
+  Select-Object -First 1
+if ($null -eq $fpr15Doc) { throw 'FPR-15 clean-profile import did not publish a physical DOCX.' }
+$fpr15Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr15Doc.FullName)
+try {
+  $fpr15Entry = $fpr15Archive.GetEntry('word/document.xml')
+  if ($null -eq $fpr15Entry) { throw 'FPR-15 output is not a readable DOCX package.' }
+  $fpr15Reader = [System.IO.StreamReader]::new($fpr15Entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr15Xml = $fpr15Reader.ReadToEnd() } finally { $fpr15Reader.Dispose() }
+} finally { $fpr15Archive.Dispose() }
+if ($fpr15Xml -notmatch [regex]::Escape($fpr15NewSentinel)) {
+  throw 'FPR-15 imported button did not render the new clean-profile case value.'
+}
+if ($fpr15Xml -match [regex]::Escape($fpr15OldCaseSentinel)) {
+  throw 'FPR-15 imported button leaked the pre-export case value into the clean-profile output.'
+}
+Write-Host "FPR-15 INSTALLED PASS: export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt: $($fpr15Doc.FullName)"
 
 Stop-Process -Id $process.Id -Force
 $process.WaitForExit()

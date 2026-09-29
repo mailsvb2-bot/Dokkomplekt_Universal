@@ -28,7 +28,12 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
 
     assert "preceding installed baseline smoke" in source
     assert "content-packs\\tier1-accounting-ru\\templates\\service_act.docx" in source
-    assert "Название документа для service_act.docx" in source
+    assert "Add-E1DomainTemplate" in source
+    assert "-TemplatePath $accountingTemplate" in source
+    assert "-Label $accountingLabel" in source
+    assert "-DomainOption 'Бухгалтерия'" in source
+    assert 'Find-E1NamedElement -Name "Название документа для $fileName"' in source
+    assert "persisted template label for $Label" in source
     assert "workflow-amount-currency" in source
     assert "workflow-amount-vat" in source
     assert "$sourceOwnedValues = [ordered]@{" in source
@@ -146,14 +151,72 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "GetWindowText(IntPtr hWnd" in source
     assert "neither ValuePattern, LegacyIAccessible value, nor a native HWND" in source
     assert "function Invoke-UiActionWithObservedTransition" in source
+    assert "function Find-ReadyButtonByAutomationId" in source
+    assert "create-selected-documents" in source
+    assert "public static extern bool SetCursorPos(int x, int y);" in source
+    assert "DokkomplektE1NativeMouse]::SetCursorPos($x, $y)" in source
+    assert "E1 physical target '$Description': point=" in source
+    assert "function Test-ElementPhysicallyVisible" in source
+    assert "WebView2 IsOffscreen is advisory only" in source
+    visible_fn = source[source.index("function Test-ElementPhysicallyVisible"):source.index("$clickPoint = $null")]
+    assert "if ($Target.Current.IsOffscreen) { return $false }" not in visible_fn
+    assert "Find-LiveAppWindow" in source
+    assert "remains outside the physically clickable installed-app area after bounded scroll/focus recovery" in source
+    assert "[System.Windows.Forms.Screen]::FromPoint" in source
+    assert ".WorkingArea" in source
+    assert "produced a click point outside the installed app working area" in source
+    assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and -not (Test-ElementPhysicallyVisible -Target $Element); $scrollAttempt++)" in source
+    assert "center inside the real Windows VirtualScreen" in source
+    assert "[DokkomplektE1NativeMouse]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)" in source
+    assert "public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);" in source
+    assert "System.Windows.Forms.Cursor]::Position" not in source
+    assert "app-status" in app_source
+    assert "Проверяем финальный план выбранного комплекта…" in (ROOT / "src" / "hooks" / "useGenerationPreflight.ts").read_text(encoding="utf-8")
+    assert "E1 Accounting preflight diagnostic status before canonical shortcut:" in source
+    assert "E1 canonical generation shortcut PASS: Ctrl+Enter opened the same Accounting preflight." in source
+    assert "SendKeys]::SendWait('^{ENTER}')" in source
+    assert "SendKeys]::SendWait('^({ENTER})')" not in source
+    preflight_hook = (ROOT / "src" / "hooks" / "useGenerationPreflight.ts").read_text(encoding="utf-8")
+    assert "onGenerationShortcut" in preflight_hook
+    assert "event.key !== 'Enter'" in preflight_hook
+    assert "void openGenerationPreflight()" in preflight_hook
+    assert "shortcutEnabled: !setupOpen && !busy" in app_source
+    assert 'title="Проверить и создать · Ctrl+Enter"' in (ROOT / "src" / "components" / "Workspace.tsx").read_text(encoding="utf-8")
+    styles = (ROOT / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".reviewActions { grid-column: 1 / -1; position: sticky; bottom: 0; z-index: 12;" in styles
+    assert "border-radius: var(--radius-card); overflow: clip;" in styles
+    assert "border-radius: var(--radius-card); overflow: hidden;" not in styles
+    assert source.count("Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'") >= 2
+    assert "function Set-ReactControlledText" in source
+    assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source
+    assert 'Set-ReactControlledText -Element $custom -Value $CustomProfile' in source
+    assert "[System.Windows.Automation.AutomationElement]::ControlTypeProperty" in source
+    assert "[System.Windows.Automation.ControlType]::Edit" in source
+    assert "$customName" in source
+    assert 'Set-ReactControlledText -Element $control -Value $expectedPromptValue -Description "$Label preflight field $fieldId"' in source
+    assert "preflight field did not commit through React" in source
+    assert "E1 keyboard activation used for \'$Label\' create because the canonical physical helper proved the live preflight button was outside Windows WorkingArea." in source
+    assert "E1 selection TogglePattern fallback used for \'$Label\' after physical click produced no committed selection." in source
+    assert "E1 selection keyboard fallback used for \'$Label\' after physical click produced no committed selection." in source
+    assert "create-selected-documents" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')" in source
+    assert "Find-E1NamedElementContaining -Text 'Документы не созданы:'" in source
+    assert "visible-docx=" in source
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
+    assert "still has no transition after physical retry; using one focused keyboard Space fallback." in source
+    assert "$keyboardAction.SetFocus()" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
     assert '$null = Invoke-UiActionWithObservedTransition `\n    -Description "reset case before $($scenario.Label)"' in source
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-01 main-document batch'" in source
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-02 diary proof'" in source
     assert '-Description "open advanced template settings for $FileName"' in source
     assert "after failed advanced settings transition" in source
     assert "[Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PluginRequiredFields" in source
-    assert "$templateDialog = Invoke-UiActionWithObservedTransition" in source
+    assert "function Add-E1DomainTemplate" in source
+    assert "-TemplatePath $accountingTemplate" in source
+    assert "-Label $accountingLabel" in source
+    assert "-DomainOption 'Бухгалтерия'" in source
+    assert "$dialog = Invoke-UiActionWithObservedTransition" in source
     assert "$sourceDialog = Invoke-UiActionWithObservedTransition" in source
     assert "-TransitionProbe { Find-FileDialog }" in source
     assert "FPR-01 INSTALLED PASS: one shared preflight -> 2 selected main documents -> 2 readable DOCX -> 2 committed receipts." in source

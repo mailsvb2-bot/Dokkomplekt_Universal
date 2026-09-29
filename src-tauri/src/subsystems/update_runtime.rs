@@ -819,7 +819,7 @@ fn apply_verified_update(
             ),
         };
         app.exit(0);
-        return Ok(response);
+        Ok(response)
     }
 
     #[cfg(not(target_os = "windows"))]

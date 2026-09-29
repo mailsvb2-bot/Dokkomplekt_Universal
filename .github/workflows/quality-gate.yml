@@ -301,7 +301,7 @@ jobs:
               throw 'FPR-18 ephemeral keypair generation returned incomplete material.'
             }
             [IO.File]::WriteAllText($privateKey, [string]$keys.private_key_b64, [Text.UTF8Encoding]::new($false))
-            cargo run --quiet -p dokkomplekt-license-server --bin issue_e2e_license -- "--private-key-file=$privateKey" "--output=$valid"
+            cargo run --quiet --manifest-path crates/dokkomplekt-license-server/Cargo.toml --bin issue_e2e_license -- "--private-key-file=$privateKey" "--output=$valid"
             if ($LASTEXITCODE -ne 0) { throw 'FPR-18 canonical Rust fixture issuer failed.' }
 
             $tamperedDocument = Get-Content -LiteralPath $valid -Raw | ConvertFrom-Json

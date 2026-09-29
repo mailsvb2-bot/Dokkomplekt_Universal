@@ -588,7 +588,7 @@
       "id": "FPR-18",
       "group": "Лицензирование",
       "status": "needs-runtime-proof",
-      "actual_state": "license core and access command are present; installed positive/negative proof pending",
+      "actual_state": "license core and access command are present; installed Windows proof path now covers canonical Rust issuance, release trust-anchor verification, durable paid access, tampered-signature rejection, and restart persistence after a rejected activation",
       "entry": [
         "src-tauri/src/main.rs#validate_product_access"
       ],
@@ -608,8 +608,13 @@
         "crates/dokkomplekt-license-core/src/lib.rs",
         "src-tauri/src/main.rs"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Installed positive/negative license evidence is required for final register closure."
+      "runtime_evidence": [
+        "src-tauri/src/subsystems/document_commands.rs#canonical signed-license persistence and FPR-18 installed proof helper",
+        "crates/dokkomplekt-license-server/src/bin/issue_e2e_license.rs#existing Rust issue_license fixture path",
+        "tests/installer/windows_installer_contract.ps1#FPR-18 positive/negative/restart installed proof",
+        "tests/test_fpr18_license_installed_contract.py#fail-closed regression lock"
+      ],
+      "runtime_gap": "Run the exact-head Windows Quality Gate and retain green FPR-18 POSITIVE, NEGATIVE, and RESTART INSTALLED PASS evidence before marking verified."
     },
     {
       "id": "FPR-19",

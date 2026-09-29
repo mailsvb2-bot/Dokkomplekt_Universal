@@ -51,9 +51,19 @@ def test_all_runtime_default_state_writes_use_transaction_boundary() -> None:
         "apply_popup",
         "apply_popup_batch",
         "apply_scanner",
-        "verify_rust_license_text",
     ]:
         assert "transact_default_state" in function_slice(document, command)
+
+    # License activation intentionally delegates signature validation + persistence
+    # to one canonical helper shared with the installed proof path. The wrapper
+    # must call only that helper, and the helper itself must retain the durable
+    # transaction boundary.
+    verify_license = function_slice(document, "verify_rust_license_text")
+    assert "persist_verified_license_text" in verify_license
+    assert "transact_default_state" not in verify_license
+    license_helper = function_slice(document, "persist_verified_license_text")
+    assert "verify_license_document_now" in license_helper
+    assert "transact_default_state" in license_helper
 
     intake = read("src-tauri/src/subsystems/source_intake_commands.rs")
     for command in ["reset_case", "parse_source", "parse_web_source"]:

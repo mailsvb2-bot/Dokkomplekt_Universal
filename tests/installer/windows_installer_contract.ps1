@@ -1956,24 +1956,15 @@ if ($adversarial -and $adversarialMedicalRole -eq 'discharge') {
   Set-UiValue -Element $restartSourceEdit -Value $restartMedicalSource
   Submit-OpenFileDialog -Dialog $restartSourceDialog
   $restartSourceName = [System.IO.Path]::GetFileName($restartMedicalSource)
-  Wait-UiElement -Description 'FPR-08 restart source committed' -TimeoutSeconds 40 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    $accepted = $currentAppWindow.FindFirst(
-      [System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::NameProperty,
-        'Источник принят'
-      )
-    )
-    if ($null -eq $accepted) { return $null }
-    return $accepted
+  Wait-UiElement -Description 'FPR-08 restart source dialog closed after submit' -TimeoutSeconds 40 -Probe {
+    if ($null -eq (Find-FileDialog)) { return $true }
+    return $null
   } | Out-Null
-  # The filename span itself is not a stable standalone WebView2 UIA node. Exact
-  # identity is proven below by generation from this source: the resulting
-  # physical folder/document must contain the second patient's 3333 / 27.08.2026
-  # semantics, so a stale pre-restart source cannot satisfy the end-to-end proof.
-  Write-Host "FPR-08 restart source commit PASS: source accepted after selecting '$restartSourceName'; exact identity is verified by downstream physical output."
+  # Do not gate on the short-lived «Источник принят» status node: WebView2 can
+  # remount it between UIA polls after restart. Exact source commit remains
+  # fail-closed below: the only accepted proof is a physical DOCX carrying the
+  # second patient's 3333 / 27.08.2026 semantics and no pre-restart patient data.
+  Write-Host "FPR-08 restart source submitted: '$restartSourceName'; exact commit identity is verified by downstream physical output."
 
   $restartGenerationAction = $null
   try {
@@ -2404,10 +2395,19 @@ $fpr09LabelInput = Wait-UiElement -Description 'FPR-09 primary setup modal' -Tim
 }
 Set-UiValue -Element $fpr09LabelInput -Value $fpr09ButtonLabel
 
-Invoke-UiActionPhysicallyFromProbe -Description 'FPR-09 expand primary automatic filling setup' -ActionProbe {
+$fpr09ExpandControl = Wait-UiElement -Description 'FPR-09 primary automatic filling setup control' -Probe {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+}
+if ($fpr09ExpandControl.Current.IsExpandCollapsePatternAvailable) {
+  $expandPattern = $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+  if ($expandPattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+    $expandPattern.Expand()
+    Write-Host 'FPR-09 setup expanded through UIA ExpandCollapsePattern.'
+  }
+} else {
+  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 expand primary automatic filling setup'
 }
 $fpr09SourceControl = $null
 for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {
@@ -2424,8 +2424,17 @@ for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceContro
 }
 if ($null -eq $fpr09SourceControl) {
   $currentAppWindow = Find-LiveAppWindow
-  if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
-  throw 'UI smoke timeout: FPR-09 primary learning source control after expanding setup and bounded viewport navigation'
+  if ($null -ne $currentAppWindow) {
+    $liveExpand = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+    if ($null -ne $liveExpand -and $liveExpand.Current.IsExpandCollapsePatternAvailable) {
+      $livePattern = $liveExpand.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($livePattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+        throw 'FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion.'
+      }
+    }
+    Write-E2LearningUiDiagnostic -Root $currentAppWindow
+  }
+  throw 'UI smoke timeout: FPR-09 primary learning source control after confirmed expansion and bounded viewport navigation'
 }
 
 Open-Fpr09MultiFileSelection -Label '1. Источники (4–10)' -Paths $fpr09Sources

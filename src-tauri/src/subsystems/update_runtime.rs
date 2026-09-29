@@ -787,6 +787,8 @@ fn apply_verified_update(
         last_error: None,
     };
     let recovery_path = write_update_recovery_state(&app, &recovery)?;
+    #[cfg(not(target_os = "windows"))]
+    let _ = &recovery_path;
 
     if let Ok(mut watcher) = state.watcher.lock() {
         if let Some(handle) = watcher.take() {

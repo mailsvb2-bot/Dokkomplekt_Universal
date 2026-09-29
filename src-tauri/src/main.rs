@@ -2096,6 +2096,10 @@ fn main() {
     let e2e_export_pdf_source = args
         .iter()
         .find_map(|arg| arg.strip_prefix("--e2e-export-pdf=").map(PathBuf::from));
+    let e2e_license_proof = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--e2e-license-proof=").map(PathBuf::from));
+    let e2e_license_access = args.iter().any(|arg| arg == "--e2e-license-access-proof");
     let e2e_evidence_path = args
         .iter()
         .find_map(|arg| arg.strip_prefix("--e2e-evidence=").map(PathBuf::from));
@@ -2120,6 +2124,8 @@ fn main() {
                     && !e2e_uninstall_watcher
                     && e2e_install_watch_folder.is_none()
                     && e2e_export_pdf_source.is_none()
+                    && e2e_license_proof.is_none()
+                    && !e2e_license_access
                 {
                     if let Ok(db_path) = default_state_db_path(&handle) {
                         if !db_path.exists() {
@@ -2211,6 +2217,8 @@ fn main() {
                 && !e2e_uninstall_watcher
                 && e2e_install_watch_folder.is_none()
                 && e2e_export_pdf_source.is_none()
+                    && e2e_license_proof.is_none()
+                    && !e2e_license_access
             {
                 ensure_startup_output_root(&handle).map_err(|error| {
                     std::io::Error::other(format!(
@@ -2218,7 +2226,12 @@ fn main() {
                     ))
                 })?;
             }
-            if e2e_uninstall_watcher || e2e_install_watch_folder.is_some() || e2e_export_pdf_source.is_some() {
+            if e2e_uninstall_watcher
+                || e2e_install_watch_folder.is_some()
+                || e2e_export_pdf_source.is_some()
+                || e2e_license_proof.is_some()
+                || e2e_license_access
+            {
                 if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
@@ -2235,7 +2248,13 @@ fn main() {
                 if let Some(parent) = evidence_path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let payload = if let Some(source) = e2e_export_pdf_source.clone() {
+                let payload = if let Some(license_path) = e2e_license_proof.as_deref() {
+                    run_fpr18_license_e2e(&handle, &state, Some(license_path))
+                        .map_err(std::io::Error::other)?
+                } else if e2e_license_access {
+                    run_fpr18_license_e2e(&handle, &state, None)
+                        .map_err(std::io::Error::other)?
+                } else if let Some(source) = e2e_export_pdf_source.clone() {
                     run_fpr17_pdf_export_e2e(&source, &evidence_path)
                         .map_err(std::io::Error::other)?
                 } else if e2e_uninstall_watcher {

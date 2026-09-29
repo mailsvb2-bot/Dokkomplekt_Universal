@@ -623,9 +623,11 @@
       "id": "FPR-19",
       "group": "Обновления",
       "status": "needs-runtime-proof",
-      "actual_state": "separate signed update runtime is present; upgrade/state preservation proof pending",
+      "actual_state": "signed update lifecycle now verifies and downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, snapshots local durable state, stops the watcher, persists a recovery marker and validates version/state on next startup; real previous-version installed upgrade/recovery proof is still pending",
       "entry": [
-        "src-tauri/src/main.rs#check_for_updates"
+        "src-tauri/src/main.rs#check_for_updates",
+        "src-tauri/src/main.rs#apply_verified_update",
+        "src-tauri/src/main.rs#get_update_recovery_status"
       ],
       "backend": [
         "src-tauri/src/subsystems/update_runtime.rs"
@@ -640,10 +642,12 @@
       "after": "installed_baseline",
       "evidence_paths": [
         "src-tauri/src/subsystems/update_runtime.rs",
+        "src/lib/api.ts",
+        "tests/test_fpr19_update_recovery_contract.py",
         ".github/workflows/build-installers.yml"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "Signed update/rollback installed evidence is required for final register closure."
+      "runtime_gap": "A real previous-version -> current-version installed upgrade must prove preserved settings/state, successful post-start verification, and recoverable installer failure/rollback before final register closure."
     },
     {
       "id": "FPR-20",

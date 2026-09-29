@@ -49,6 +49,9 @@ def test_fpr18_installed_positive_negative_and_restart_are_fail_closed() -> None
         assert marker in script
     assert "$tamperedProcess.ExitCode -eq 0" in script
     assert "$restartRecord.mode -ne 'paid'" in script
+    assert "$fpr18PreviousHardwareE2E" in script
+    assert "$env:DOKKOMPLEKT_RUN_HARDWARE_E2E = '1'" in script
+    assert "Remove-Item Env:DOKKOMPLEKT_RUN_HARDWARE_E2E" in script
 
 
 def test_fpr18_register_stays_open_until_installed_run_is_green() -> None:

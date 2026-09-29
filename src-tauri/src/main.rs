@@ -2111,6 +2111,10 @@ fn main() {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&data_dir);
 
+                if let Err(error) = reconcile_pending_update(&handle) {
+                    eprintln!("update recovery verification failed: {error}");
+                }
+
                 // A genuinely fresh interactive install has no durable state yet, so its
                 // output destination is unambiguously the canonical Desktop folder. Create
                 // that folder before any encrypted repository/privacy/recovery work: those
@@ -2430,6 +2434,8 @@ fn main() {
             validate_product_access,
             verify_rust_license_text,
             check_for_updates,
+            get_update_recovery_status,
+            apply_verified_update,
             get_background_watcher_state,
             install_background_watcher,
             update_background_watcher_preferences,

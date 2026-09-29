@@ -895,6 +895,8 @@ export const rustCommandNames = [
   'validate_product_access',
   'verify_rust_license_text',
   'check_for_updates',
+  'get_update_recovery_status',
+  'apply_verified_update',
   'get_background_watcher_state',
   'install_background_watcher',
   'update_background_watcher_preferences',

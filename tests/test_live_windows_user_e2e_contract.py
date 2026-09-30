@@ -49,10 +49,13 @@ def test_every_installed_registry_marker_exists_in_its_real_executor() -> None:
         )
 
 
-def test_live_harness_requires_real_windows11_x64_interactive_signed_install() -> None:
+def test_live_harness_requires_real_windows10_or_11_x64_interactive_signed_install() -> None:
     source = HARNESS.read_text(encoding="utf-8-sig")
     for marker in (
-        "Live E2E requires Windows 11",
+        "[ValidateSet('10', '11')]",
+        "ExpectedWindowsVersion",
+        "buildNumber -lt 22000",
+        "buildNumber -ge 22000",
         "[Environment]::Is64BitOperatingSystem",
         "real interactive user session",
         "Get-Service -Name 'actions.runner.*'",
@@ -65,6 +68,22 @@ def test_live_harness_requires_real_windows11_x64_interactive_signed_install() -
         "LIVE WINDOWS USER E2E INSTALLED LANES PASSED",
     ):
         assert marker in source
+
+
+def test_private_workflow_has_two_independent_windows_live_jobs() -> None:
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    hardware = workflow[workflow.index("  hardware-evidence:") :]
+    assert "strategy:" in hardware
+    assert "fail-fast: false" in hardware
+    assert "platform: windows-10" in hardware
+    assert "expected_windows_version: '10'" in hardware
+    assert "runner_label: dokkomplekt-win10-live" in hardware
+    assert "platform: windows-11" in hardware
+    assert "expected_windows_version: '11'" in hardware
+    assert "runner_label: dokkomplekt-win11-live" in hardware
+    assert "- ${{ matrix.runner_label }}" in hardware
+    assert "ExpectedWindowsVersion '${{ matrix.expected_windows_version }}'" in hardware
+    assert "Dokkomplekt-Windows-Hardware-E2E-${{ matrix.artifact_suffix }}" in hardware
 
 
 def test_private_workflow_runs_live_suite_after_signed_handoff_verification() -> None:
@@ -82,12 +101,15 @@ def test_private_workflow_runs_live_suite_after_signed_handoff_verification() ->
     )
 
 
-def test_hardware_host_is_pinned_to_windows11_x64() -> None:
+def test_hardware_host_is_pinned_to_requested_windows10_or_11_x64() -> None:
     source = HOST_PREFLIGHT.read_text(encoding="utf-8")
+    assert "[ValidateSet('10', '11')]" in source
+    assert "ExpectedWindowsVersion" in source
     assert "Get-CimInstance Win32_OperatingSystem" in source
-    assert "Add-Check -Name 'windows-11'" in source
+    assert "buildNumber -lt 22000" in source
+    assert "buildNumber -ge 22000" in source
+    assert 'Add-Check -Name "windows-$ExpectedWindowsVersion"' in source
     assert "Add-Check -Name 'windows-x64'" in source
-    assert "Windows 11" in source
 
 
 def test_update_live_lane_is_real_previous_signed_gui_update() -> None:

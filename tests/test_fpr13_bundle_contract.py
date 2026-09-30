@@ -18,8 +18,14 @@ def test_fpr13_installed_bundle_proof_is_physical_and_shared() -> None:
         assert marker in source
 
 
-def test_fpr13_register_names_installed_evidence_without_overclaiming_before_ci() -> None:
-    source = REGISTER.read_text(encoding="utf-8")
-    assert '"id": "FPR-13"' in source
-    assert "tests/installer/windows_e1_accounting_contract.ps1#FPR-13" in source
-    assert "Physical multi-document bundle evidence is implemented; a green installed Windows run is still required for final closure." in source
+def test_fpr13_register_closes_only_with_exact_green_installed_evidence() -> None:
+    register = __import__("json").loads(REGISTER.read_text(encoding="utf-8"))
+    feature = next(item for item in register["features"] if item["id"] == "FPR-13")
+    assert feature["status"] == "verified"
+    assert feature["runtime_gap"] == ""
+    assert any(
+        "Quality Gate run 36621254590" in evidence
+        and "commit 87809e6bb54931569470b8350eddd25393f1bd44" in evidence
+        and "FPR-13 INSTALLED PASS" in evidence
+        for evidence in feature["runtime_evidence"]
+    )

@@ -429,8 +429,8 @@
     {
       "id": "FPR-13",
       "group": "Комплекты",
-      "status": "needs-runtime-proof",
-      "actual_state": "batch document command and output engine are present; installed physical two-document bundle proof is implemented and awaiting a green Windows run",
+      "status": "verified",
+      "actual_state": "batch document command/output engine are present and the exact main candidate proved one installed two-document bundle in one physical folder with shared plan binding, honest UI count and two committed receipts",
       "entry": [
         "src/components/DocumentRail.tsx"
       ],
@@ -452,9 +452,10 @@
       ],
       "runtime_evidence": [
         "tests/installer/windows_e1_accounting_contract.ps1#FPR-13 one folder + two readable DOCX + shared plan binding + honest UI count + two committed receipts",
-        "tests/test_fpr13_bundle_contract.py#FPR-13 regression lock"
+        "tests/test_fpr13_bundle_contract.py#FPR-13 regression lock",
+        "GitHub Actions Quality Gate run 36621254590 / job 109589102445 / commit 87809e6bb54931569470b8350eddd25393f1bd44#FPR-13 INSTALLED PASS: one selected bundle -> one physical folder -> 2 distinct readable DOCX -> one shared plan binding -> honest UI count -> 2 committed receipts"
       ],
-      "runtime_gap": "Physical multi-document bundle evidence is implemented; a green installed Windows run is still required for final closure."
+      "runtime_gap": ""
     },
     {
       "id": "FPR-14",
@@ -525,7 +526,7 @@
       "id": "FPR-16",
       "group": "Просмотр",
       "status": "verified",
-      "actual_state": "preview and source-explanation UI are wired; stable field-scoped accessibility identities and installed Windows source/value comparison proof are implemented and awaiting a green installed run",
+      "actual_state": "preview/source-explanation UI are wired and the exact main candidate proved the installed current-case source/value comparison through the real Windows UI",
       "entry": [
         "src/App.tsx"
       ],
@@ -549,9 +550,10 @@
       "runtime_evidence": [
         "src/components/Workspace.workflow.test.tsx#current-case source explanation component proof",
         "tests/installer/windows_e1_accounting_contract.ps1#FPR-16 current-case source explanation -> document.number -> E1-17",
-        "tests/test_fpr16_source_explanation_contract.py#FPR-16 regression lock"
+        "tests/test_fpr16_source_explanation_contract.py#FPR-16 regression lock",
+        "GitHub Actions Quality Gate run 36621254590 / job 109589102445 / commit 87809e6bb54931569470b8350eddd25393f1bd44#FPR-16 INSTALLED PASS: current-case source explanation -> document.number -> E1-17 through the real installed UI"
       ],
-      "runtime_gap": "Installed source-explanation proof is implemented; a green Windows E1 run is still required for final register closure."
+      "runtime_gap": ""
     },
     {
       "id": "FPR-17",
@@ -711,7 +713,7 @@
       "id": "FPR-22",
       "group": "Audit и privacy",
       "status": "needs-runtime-proof",
-      "actual_state": "privacy runtime and audit storage paths are present; receipt/log leakage proof pending",
+      "actual_state": "privacy runtime and audit storage paths are present; installed Windows proof now validates a strict committed-receipt schema with opaque IDs/hashes only and captures ordinary application stdout/stderr to reject source paths and case values; green exact-candidate runtime evidence is pending",
       "entry": [
         "src/App.tsx"
       ],
@@ -729,10 +731,16 @@
       "after": "installed_baseline",
       "evidence_paths": [
         "src-tauri/src/privacy_runtime.rs",
-        "crates/dokkomplekt-storage/src/lib.rs"
+        "src-tauri/src/generation_publication.rs",
+        "crates/dokkomplekt-storage/src/lib.rs",
+        "tests/installer/windows_e1_accounting_contract.ps1",
+        "tests/test_fpr22_audit_privacy_contract.py"
       ],
-      "runtime_evidence": [],
-      "runtime_gap": "Receipt/log privacy evidence is required for final register closure."
+      "runtime_evidence": [
+        "src-tauri/src/generation_publication.rs#committed GenerationReceipt non-PII unit contract",
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-22 strict receipt schema + installed stdout/stderr leakage proof"
+      ],
+      "runtime_gap": "Run the exact candidate Windows E1 installed path and retain green FPR-22 RECEIPT PRIVACY PASS plus FPR-22 DIAGNOSTIC PRIVACY PASS evidence before marking verified."
     },
     {
       "id": "FPR-23",

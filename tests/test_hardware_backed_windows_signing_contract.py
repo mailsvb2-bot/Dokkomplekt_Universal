@@ -117,6 +117,27 @@ def test_release_hardware_gate_routes_only_through_private_dispatcher() -> None:
     assert "release-installers" in hardware
 
 
+def test_release_publisher_requires_both_windows_matrix_evidence_sets() -> None:
+    public = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")
+    for marker in (
+        'Dokkomplekt-Windows-Hardware-E2E-$platform-prepare-$request_id-prepare-',
+        'Dokkomplekt-Windows-Hardware-E2E-$platform-verify-$request_id-prepare-$prepare_run_id',
+        'private-release/evidence/prepare/win10',
+        'private-release/evidence/prepare/win11',
+        'private-release/evidence/verify/win10',
+        'private-release/evidence/verify/win11',
+        "LIVE_USER_E2E-win10.json",
+        "LIVE_USER_E2E-win11.json",
+        "FPR19_LIVE_UPDATE-win10.json",
+        "FPR19_LIVE_UPDATE-win11.json",
+        "WINDOWS_REBOOT_E2E_RAW-win10.json",
+        "WINDOWS_REBOOT_E2E_RAW-win11.json",
+        'test "${#evidence_manifests[@]}" -eq 2',
+        'test "${#evidence_signatures[@]}" -eq 2',
+    ):
+        assert marker in public, marker
+
+
 def test_prepare_verify_and_publication_share_one_canonical_windows_handoff() -> None:
     private = (ROOT / "ops/private-hardware-validation/windows-hardware-e2e.yml").read_text("utf-8")
     public = (ROOT / ".github/workflows/build-installers.yml").read_text("utf-8")

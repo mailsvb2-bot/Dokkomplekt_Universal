@@ -56,6 +56,9 @@ class Fpr09PrimaryLearningContracts(unittest.TestCase):
         self.assertIn("Find-E2NamedElement -Root $currentAppWindow -Name 'Добавление шаблонов'", smoke)
         self.assertIn("[System.Windows.Automation.ScrollPattern]::Pattern", smoke)
         self.assertIn("[System.Windows.Automation.ScrollAmount]::LargeIncrement", smoke)
+        self.assertIn("FPR-09 observable expanded setup child", smoke)
+        self.assertIn("Открыть Word и показать место", smoke)
+        self.assertIn("FPR-09 physically expand automatic filling setup", smoke)
 
     def test_feature_register_closes_fpr09_with_installed_evidence(self) -> None:
         register = json.loads(project_text("docs/CANON_FEATURE_PRESERVATION_REGISTER.json"))

@@ -33,6 +33,10 @@ on:
       - 'scripts/verify_rustsec_advisory_pin.py'
       - 'verification/security/rustsec-advisory-db.json'
       - 'tests/windows/windows_hardware_e2e.ps1'
+      - 'tests/windows/windows_live_user_e2e.ps1'
+      - 'verification/e2e/LIVE_USER_SCENARIOS.json'
+      - 'tests/test_live_windows_user_e2e_contract.py'
+      - 'docs/LIVE_WINDOWS_E2E.md'
       - 'tests/windows/prepare_reboot_evidence.ps1'
       - 'tests/windows/verify_reboot_evidence.ps1'
       - 'tests/test_two_runner_trust_boundary.py'
@@ -136,3 +140,4 @@ jobs:
           tests/test_windows_runtime_app_parity.py
           tests/test_rustsec_advisory_pin.py
           tests/test_v18_1_1_offline_runtime.py
+          tests/test_live_windows_user_e2e_contract.py

@@ -33,6 +33,22 @@ def test_live_registry_is_exhaustive_for_every_fpr() -> None:
         assert item["evidence_marker"]
 
 
+def test_every_installed_registry_marker_exists_in_its_real_executor() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    executor_cache: dict[str, str] = {}
+    for item in payload["scenarios"]:
+        if item["lane"] not in {"installed-baseline", "installed-e1"}:
+            continue
+        executor = item["executor"]
+        if executor not in executor_cache:
+            executor_cache[executor] = (
+                ROOT / "tests" / "installer" / executor
+            ).read_text(encoding="utf-8-sig")
+        assert item["evidence_marker"] in executor_cache[executor], (
+            f"{item['id']} marker is not emitted by {executor}: {item['evidence_marker']}"
+        )
+
+
 def test_live_harness_requires_real_windows11_x64_interactive_signed_install() -> None:
     source = HARNESS.read_text(encoding="utf-8-sig")
     for marker in (

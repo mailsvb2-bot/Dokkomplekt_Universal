@@ -1,6 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string] $PreviousInstaller = $env:DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER,
+    [ValidateSet('10', '11')] [string] $ExpectedWindowsVersion = '11',
     [string] $OutputPath = 'verification/release/FPR19_LIVE_UPDATE.json'
 )
 

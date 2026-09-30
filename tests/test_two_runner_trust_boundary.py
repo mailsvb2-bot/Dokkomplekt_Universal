@@ -26,7 +26,12 @@ def test_private_workflow_separates_hosted_signing_and_hardware_trust_domains() 
     assert "runs-on: windows-latest" in runtime
     assert "runs-on: [self-hosted" not in runtime
     assert "environment: windows-production-signing" in runtime
-    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" in hardware
+    assert "platform: windows-10" in hardware
+    assert "runner_label: dokkomplekt-win10-live" in hardware
+    assert "platform: windows-11" in hardware
+    assert "runner_label: dokkomplekt-win11-live" in hardware
+    assert "fail-fast: false" in hardware
+    assert "- ${{ matrix.runner_label }}" in hardware
     assert "environment: windows-hardware-validation" in hardware
     assert "needs: signed-runtime-build" in hardware
 
@@ -90,11 +95,12 @@ def test_documented_boundary_matches_workflow_invariant() -> None:
     for marker in (
         "GitHub-hosted",
         "windows-production-signing",
-        "dokkomplekt-hardware",
+        "dokkomplekt-win10-live",
+        "dokkomplekt-win11-live",
         "windows-hardware-validation",
         "SIGNED_HANDOFF.json",
         "no production signing/private-key secrets",
-        "one physical Windows machine",
+        "two independent",
     ):
         assert marker in text
-    assert "two physically separate self-hosted" not in text
+    assert "one physical Windows machine" not in text

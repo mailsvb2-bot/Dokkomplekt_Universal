@@ -88,7 +88,7 @@ fn run_template_version_installer_e2e(
 }
 
 #[cfg(test)]
-mod tests {
+mod template_version_e2e_tests {
     #[test]
     fn installer_fixture_environment_is_explicitly_named_and_opt_in() {
         let source = include_str!("template_version_e2e.rs");

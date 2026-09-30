@@ -4,7 +4,7 @@ import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, pickLearningFiles, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  applyVerifiedUpdate, checkForUpdates, getUpdateRecoveryStatus, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -51,6 +51,23 @@ function AppContent() {
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
+  useEffect(() => {
+    if (!workspaceStateReady) return;
+    let alive = true;
+    void getUpdateRecoveryStatus()
+      .then((recovery) => {
+        if (!alive || !recovery) return;
+        if (recovery.status === 'verified') {
+          setStatus(`Обновление до версии ${recovery.target_version} установлено и локальное состояние проверено.`);
+        } else if (recovery.status === 'recoverable_failure') {
+          setStatus(`Обновление не завершено: ${recovery.last_error ?? 'установщик не подтвердил новую версию'}. Резервная копия сохранена: ${recovery.backup_dir}.`);
+        } else if (recovery.status === 'prepared' || recovery.status === 'installer_started') {
+          setStatus(`Обновление до версии ${recovery.target_version} требует завершения. Recovery marker сохранён.`);
+        }
+      })
+      .catch(() => { /* update recovery status must never block normal workspace startup */ });
+    return () => { alive = false; };
+  }, [workspaceStateReady]);
   const chooseActiveTemplateVersion = useTemplateVersionSelection({ activeDocumentId: activeDoc, documents, dialogs, run, setDocuments, setStatus });
   const { exportTemplates, importTemplates } = useTemplateTransfer({ run, setDocuments, setStatus });
   useDocumentSelectionPersistence({
@@ -1214,11 +1231,33 @@ function AppContent() {
   async function checkUpdates() {
     const result = await run('check_for_updates', () => checkForUpdates());
     if (!result) return;
-    if (result.available) {
-      setStatus(`Доступна версия ${result.latest_version}. Проверенный пакет сохранён: ${result.verified_package_path ?? 'путь не указан'}.`);
-    } else {
+    if (!result.available) {
       setStatus(`${result.message}: ${result.current_version}.`);
+      return;
     }
+    if (!result.verified_package_path || !result.sha256 || !result.size_bytes) {
+      setStatus(`Доступна версия ${result.latest_version}, но проверенный пакет неполон. Установка не запущена.`);
+      return;
+    }
+
+    setStatus(`Доступна версия ${result.latest_version}. Подпись manifest, размер и SHA-256 пакета проверены.`);
+    const confirmed = await dialogs.confirm({
+      title: `Установить обновление ${result.latest_version}?`,
+      message: 'Программа сохранит резервную копию локального состояния, повторно проверит пакет, запустит подписанный NSIS и завершит работу. После установки откройте Доккомплект снова.',
+      confirmLabel: 'Установить и перезапустить',
+    });
+    if (!confirmed) {
+      setStatus(`Обновление ${result.latest_version} проверено и скачано, но установка отменена пользователем.`);
+      return;
+    }
+
+    const applied = await run('apply_verified_update', () => applyVerifiedUpdate(
+      result.verified_package_path!,
+      result.latest_version,
+      result.sha256!,
+      result.size_bytes!,
+    ));
+    if (applied) setStatus(applied.message);
   }
 
   async function runZeroTouch() {

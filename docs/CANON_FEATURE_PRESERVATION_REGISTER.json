@@ -461,7 +461,7 @@
       "id": "FPR-14",
       "group": "Версии",
       "status": "needs-runtime-proof",
-      "actual_state": "template snapshot/version boundary and saved-version rollback commands are present; installed Windows proof now prepares v1/v2 history with the installed binary, selects superseded v1 through the real Versions UI, and requires a physical DOCX read-back that contains the v1-only marker and excludes the v2-only marker; green exact-candidate evidence is pending",
+      "actual_state": "template snapshot/version boundary and saved-version rollback commands are present; installed Windows proof now prepares v1/v2 history through an explicitly opt-in isolated installed-binary E2E subsystem, selects superseded v1 through the real Versions UI, and requires a physical DOCX read-back that contains the v1-only marker and excludes the v2-only marker; green exact-candidate evidence is pending",
       "entry": [
         "src/App.tsx#chooseActiveTemplateVersion",
         "src/components/DocumentRail.tsx#Версии шаблона"
@@ -482,7 +482,7 @@
         "src/components/DocumentRail.tsx",
         "src-tauri/src/template_snapshot.rs",
         "src-tauri/src/subsystems/document_commands.rs",
-        "src-tauri/src/main.rs",
+        "src-tauri/src/subsystems/template_version_e2e.rs",
         "tests/installer/windows_e1_accounting_contract.ps1",
         "tests/test_fpr14_template_version_installed_contract.py"
       ],

@@ -44,12 +44,15 @@ def test_fpr14_fixture_is_guarded_and_uses_installed_application_state() -> None
     assert "dokkomplekt.template-version-fixture.v1" in source
 
 
-def test_fpr14_register_waits_for_exact_green_installed_evidence() -> None:
+def test_fpr14_register_is_closed_by_exact_green_installed_evidence() -> None:
     register = json.loads(REGISTER.read_text(encoding="utf-8"))
     feature = next(item for item in register["features"] if item["id"] == "FPR-14")
-    assert feature["status"] == "needs-runtime-proof"
-    assert "FPR-14 INSTALLED PASS" in feature["runtime_gap"]
+    assert feature["status"] == "verified"
+    assert feature["runtime_gap"] == ""
     assert any(
-        "real Versions UI" in evidence and "physical DOCX marker proof" in evidence
+        "36773444973" in evidence
+        and "110090785030" in evidence
+        and "60ff0ae39dc399ab4e3fd1925fb946fa7a423f7e" in evidence
+        and "FPR-14 INSTALLED PASS:" in evidence
         for evidence in feature["runtime_evidence"]
     )

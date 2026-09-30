@@ -460,8 +460,8 @@
     {
       "id": "FPR-14",
       "group": "Версии",
-      "status": "needs-runtime-proof",
-      "actual_state": "template snapshot/version boundary and saved-version rollback commands are present; installed Windows proof now prepares v1/v2 history through an explicitly opt-in isolated installed-binary E2E subsystem, selects superseded v1 through the real Versions UI, and requires a physical DOCX read-back that contains the v1-only marker and excludes the v2-only marker; green exact-candidate evidence is pending",
+      "status": "verified",
+      "actual_state": "exact-candidate installed Windows proof completed: v1/v2 history was prepared through the guarded installed-binary fixture, superseded v1 was selected through the real Versions UI, and the generated physical DOCX contained the archived v1-only marker while excluding the v2-only marker",
       "entry": [
         "src/App.tsx#chooseActiveTemplateVersion",
         "src/components/DocumentRail.tsx#Версии шаблона"
@@ -490,9 +490,10 @@
         "src/components/DocumentRail.test.tsx#saved template version selection UI",
         "src-tauri/src/subsystems/document_commands.rs#rollback_template_version",
         "src-tauri/src/template_snapshot.rs#immutable generation snapshot",
-        "tests/installer/windows_e1_accounting_contract.ps1#FPR-14 v1 -> v2 fixture -> real Versions UI -> superseded v1 -> physical DOCX marker proof"
+        "tests/installer/windows_e1_accounting_contract.ps1#FPR-14 v1 -> v2 fixture -> real Versions UI -> superseded v1 -> physical DOCX marker proof",
+        "GitHub Actions Quality Gate run 36773444973 / job 110090785030 / commit 60ff0ae39dc399ab4e3fd1925fb946fa7a423f7e#FPR-14 INSTALLED PASS: v1 -> v2 -> real Versions UI selected superseded v1 -> physical DOCX rendered FPR14-V1-SNAPSHOT and excluded FPR14-V2-SNAPSHOT"
       ],
-      "runtime_gap": "Run the exact candidate Windows E1 installed path and retain green FPR-14 INSTALLED PASS evidence before marking verified."
+      "runtime_gap": ""
     },
     {
       "id": "FPR-15",

@@ -105,9 +105,8 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     restart_section = source[source.index("# Quality Gate uses the blank discharge donor"):source.index("# Canon v2 E2 installed proof")]
     assert "NameProperty,\n        'Источник принят'" not in restart_section
     assert "FPR-08 restart source committed" not in restart_section
-    assert "IsExpandCollapsePatternAvailable" in source
-    assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
-    assert "FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion." in source
+    assert "FPR-09 observable expanded setup child" in source
+    assert "FPR-09 setup expansion proved by observable child control after real user activation." in source
 
 
 def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> None:

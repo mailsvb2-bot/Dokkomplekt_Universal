@@ -54,6 +54,8 @@ jobs:
       DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL: ${{ vars.DOKKOMPLEKT_RUNTIME_BUNDLE_APPROVAL_SIGNATURE_URL }}
       DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_LOCK_APPROVAL_PUBKEY_PEM_B64 }}
       DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
+      DOKKOMPLEKT_EXPECTED_WINDOWS_VERSION: ${{ matrix.expected_windows_version }}
+      DOKKOMPLEKT_LIVE_PLATFORM: ${{ matrix.platform }}
       DOKKOMPLEKT_GATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_GATE_PUBKEY_B64 }}
       DOKKOMPLEKT_LICENSE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_LICENSE_PUBKEY_B64 }}
       DOKKOMPLEKT_UPDATE_PUBKEY_B64: ${{ vars.DOKKOMPLEKT_UPDATE_PUBKEY_B64 }}
@@ -267,13 +269,29 @@ jobs:
           if-no-files-found: error
 
   hardware-evidence:
-    name: Word / printer / reboot evidence
+    name: ${{ matrix.platform }} / Word / printer / reboot evidence
     needs: signed-runtime-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-10
+            expected_windows_version: '10'
+            runner_label: dokkomplekt-win10-live
+            artifact_suffix: win10
+          - platform: windows-11
+            expected_windows_version: '11'
+            runner_label: dokkomplekt-win11-live
+            artifact_suffix: win11
     if: >-
       always() && github.ref == 'refs/heads/main' &&
       ((inputs.reboot_phase == 'prepare' && needs.signed-runtime-build.result == 'success') ||
        inputs.reboot_phase == 'verify')
-    runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - ${{ matrix.runner_label }}
     environment: windows-hardware-validation
     timeout-minutes: 180
     defaults:
@@ -331,7 +349,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Prove hardware-only host
         shell: pwsh
-        run: scripts/verify_windows_hardware_evidence_host.ps1 -PrinterName $env:DOKKOMPLEKT_TEST_PRINTER -RebootEvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -OutputPath verification/release/HARDWARE_RUNNER_HOST.json
+        run: scripts/verify_windows_hardware_evidence_host.ps1 -PrinterName $env:DOKKOMPLEKT_TEST_PRINTER -RebootEvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -ExpectedWindowsVersion '${{ matrix.expected_windows_version }}' -OutputPath verification/release/HARDWARE_RUNNER_HOST-${{ matrix.artifact_suffix }}.json
       - name: Verify signed handoff before using any payload
         shell: pwsh
         run: |
@@ -378,14 +396,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          tests/windows/windows_live_user_e2e.ps1 -InstallerRoot signed-handoff/release-installers/offline -ScenarioRegistry verification/e2e/LIVE_USER_SCENARIOS.json -OutputPath verification/release/LIVE_USER_E2E.json
+          tests/windows/windows_live_user_e2e.ps1 -InstallerRoot signed-handoff/release-installers/offline -ExpectedWindowsVersion '${{ matrix.expected_windows_version }}' -ScenarioRegistry verification/e2e/LIVE_USER_SCENARIOS.json -OutputPath verification/release/LIVE_USER_E2E-${{ matrix.artifact_suffix }}.json
 
       - name: Execute previous-version signed update/recovery live scenario
         if: inputs.reboot_phase == 'prepare'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          tests/windows/windows_live_update_e2e.ps1 -PreviousInstaller $env:DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER -OutputPath verification/release/FPR19_LIVE_UPDATE.json
+          tests/windows/windows_live_update_e2e.ps1 -PreviousInstaller $env:DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER -ExpectedWindowsVersion '${{ matrix.expected_windows_version }}' -OutputPath verification/release/FPR19_LIVE_UPDATE-${{ matrix.artifact_suffix }}.json
 
       - name: Prepare real reboot E2E state
         if: inputs.reboot_phase == 'prepare'
@@ -395,7 +413,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ([string]::IsNullOrWhiteSpace($env:DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT)) { throw 'reboot source document is required' }
-          $persistentRoot = Join-Path $env:ProgramData 'DokkomplektE2E\prepare-${{ inputs.release_sha }}'
+          $persistentRoot = Join-Path $env:ProgramData 'DokkomplektE2E\${{ matrix.artifact_suffix }}\prepare-${{ inputs.release_sha }}'
           if (Test-Path -LiteralPath $persistentRoot) { throw "reboot preparation already exists: $persistentRoot" }
           New-Item -ItemType Directory -Force -Path $persistentRoot | Out-Null
           $env:DOKKOMPLEKT_REBOOT_PREP_ROOT = $persistentRoot
@@ -412,7 +430,9 @@ jobs:
           $pending = Join-Path $env:ProgramData 'DokkomplektE2E\pending-reboot.json'
           if (-not (Test-Path -LiteralPath $pending -PathType Leaf)) { throw 'pending reboot plan not created' }
           [ordered]@{
-            schema = 'dokkomplekt.windows-reboot-prepare-workflow.v2'
+            schema = 'dokkomplekt.windows-reboot-prepare-workflow.v3'
+            platform = '${{ matrix.platform }}'
+            expected_windows_version = '${{ matrix.expected_windows_version }}'
             release_sha = '${{ inputs.release_sha }}'
             request_id = '${{ inputs.request_id }}'
             signed_handoff_manifest_sha256 = (Get-FileHash signed-handoff/SIGNED_HANDOFF.json -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -420,7 +440,7 @@ jobs:
             persistent_root = $persistentRoot
             pending_reboot_plan = $pending
             reboot_evidence_path = $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH
-          } | ConvertTo-Json -Depth 5 | Set-Content verification/release/WINDOWS_REBOOT_PREPARED.json -Encoding utf8
+          } | ConvertTo-Json -Depth 5 | Set-Content verification/release/WINDOWS_REBOOT_PREPARED-${{ matrix.artifact_suffix }}.json -Encoding utf8
           Write-Host 'PREPARE PHASE PASSED. Perform a real Windows restart and log back into the dedicated hardware runner account.'
       - name: Execute hardware E2E and verify reboot evidence
         if: inputs.reboot_phase == 'verify'
@@ -431,8 +451,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force verification/release | Out-Null
-          Copy-Item -LiteralPath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -Destination verification/release/WINDOWS_REBOOT_E2E_RAW.json -Force
-          scripts/cleanup_windows_reboot_preparation.ps1 -EvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -OutputPath verification/release/REBOOT_PREPARATION_CLEANUP.json -RemoveRawEvidence
+          Copy-Item -LiteralPath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -Destination verification/release/WINDOWS_REBOOT_E2E_RAW-${{ matrix.artifact_suffix }}.json -Force
+          scripts/cleanup_windows_reboot_preparation.ps1 -EvidencePath $env:DOKKOMPLEKT_REBOOT_EVIDENCE_PATH -OutputPath verification/release/REBOOT_PREPARATION_CLEANUP-${{ matrix.artifact_suffix }}.json -RemoveRawEvidence
       - name: Bind final hardware evidence to signed handoff
         if: inputs.reboot_phase == 'verify'
         shell: pwsh
@@ -443,7 +463,7 @@ jobs:
           Copy-Item signed-handoff/SIGNED_HANDOFF.json.sig verification/release/SIGNED_HANDOFF.json.sig -Force
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
         with:
-          name: Dokkomplekt-Windows-Hardware-E2E-${{ inputs.reboot_phase }}-${{ inputs.request_id }}-prepare-${{ inputs.prepare_run_id }}
+          name: Dokkomplekt-Windows-Hardware-E2E-${{ matrix.artifact_suffix }}-${{ inputs.reboot_phase }}-${{ inputs.request_id }}-prepare-${{ inputs.prepare_run_id }}
           path: |
             source/verification/release/**
             source/.release-gate/**

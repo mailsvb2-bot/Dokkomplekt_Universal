@@ -2070,6 +2070,7 @@ include!("subsystems/source_intake_commands.rs");
 include!("subsystems/startup_state.rs");
 include!("subsystems/manual_publication_identity.rs");
 include!("subsystems/document_commands.rs");
+include!("subsystems/template_version_e2e.rs");
 include!("subsystems/template_transfer.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
@@ -2100,10 +2101,6 @@ fn main() {
         .iter()
         .find_map(|arg| arg.strip_prefix("--e2e-license-proof=").map(PathBuf::from));
     let e2e_license_access = args.iter().any(|arg| arg == "--e2e-license-access-proof");
-    let e2e_template_version_fixture = args.iter().find_map(|arg| {
-        arg.strip_prefix("--e2e-update-template-version=")
-            .map(PathBuf::from)
-    });
     let e2e_evidence_path = args
         .iter()
         .find_map(|arg| arg.strip_prefix("--e2e-evidence=").map(PathBuf::from));
@@ -2134,7 +2131,6 @@ fn main() {
                     && e2e_export_pdf_source.is_none()
                     && e2e_license_proof.is_none()
                     && !e2e_license_access
-                    && e2e_template_version_fixture.is_none()
                 {
                     if let Ok(db_path) = default_state_db_path(&handle) {
                         if !db_path.exists() {
@@ -2218,6 +2214,11 @@ fn main() {
                 eprintln!("Восстановление рабочего набора требует внимания: {error}");
             }
 
+            if run_template_version_installer_e2e(&handle, &state).map_err(std::io::Error::other)? {
+                handle.exit(0);
+                return Ok(());
+            }
+
             // Output-root availability is a native desktop startup invariant, not a
             // WebView/React side effect. Prepare it before creating the window so a
             // slow or failed frontend bootstrap can never leave a live process without
@@ -2228,7 +2229,6 @@ fn main() {
                 && e2e_export_pdf_source.is_none()
                     && e2e_license_proof.is_none()
                     && !e2e_license_access
-                    && e2e_template_version_fixture.is_none()
             {
                 ensure_startup_output_root(&handle).map_err(|error| {
                     std::io::Error::other(format!(
@@ -2241,17 +2241,8 @@ fn main() {
                 || e2e_export_pdf_source.is_some()
                 || e2e_license_proof.is_some()
                 || e2e_license_access
-                || e2e_template_version_fixture.is_some()
             {
-                if e2e_template_version_fixture.is_some() {
-                    if std::env::var("DOKKOMPLEKT_RUN_INSTALLER_E2E").ok().as_deref() != Some("1") {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            "Template-version E2E fixture requires DOKKOMPLEKT_RUN_INSTALLER_E2E=1",
-                        )
-                        .into());
-                    }
-                } else if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {
+                if std::env::var("DOKKOMPLEKT_RUN_HARDWARE_E2E").ok().as_deref() != Some("1") {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
                         "E2E commands require DOKKOMPLEKT_RUN_HARDWARE_E2E=1",
@@ -2267,57 +2258,7 @@ fn main() {
                 if let Some(parent) = evidence_path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let payload = if let Some(request_path) = e2e_template_version_fixture.as_deref() {
-                    let request_bytes = std::fs::read(request_path)?;
-                    let request: serde_json::Value =
-                        serde_json::from_slice(&request_bytes).map_err(std::io::Error::other)?;
-                    let button_label = request
-                        .get("button_label")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| std::io::Error::other("template-version fixture requires button_label"))?;
-                    let template_path = request
-                        .get("template_path")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| std::io::Error::other("template-version fixture requires template_path"))?;
-                    let document_id = {
-                        let pack = state
-                            .pack
-                            .lock()
-                            .map_err(|_| std::io::Error::other("state lock failed"))?;
-                        pack.documents
-                            .iter()
-                            .find(|document| document.button_label == button_label)
-                            .map(|document| document.id.clone())
-                            .ok_or_else(|| std::io::Error::other(format!(
-                                "template-version fixture document not found for button: {button_label}"
-                            )))?
-                    };
-                    let pack = update_document_template(
-                        UpdateDocumentTemplateRequest {
-                            document_id: document_id.clone(),
-                            template_path: template_path.to_string(),
-                            acknowledge_regressions: true,
-                            learning_validation_id: None,
-                        },
-                        state,
-                        handle.clone(),
-                    )
-                    .map_err(std::io::Error::other)?;
-                    let versions = repository_for(&default_state_db_path(&handle)?)?
-                        .list_template_versions(&document_id)
-                        .map_err(std::io::Error::other)?;
-                    serde_json::json!({
-                        "schema": "dokkomplekt.template-version-fixture.v1",
-                        "button_label": button_label,
-                        "document_id": document_id,
-                        "document_count": pack.documents.len(),
-                        "versions": versions,
-                    })
-                } else if let Some(license_path) = e2e_license_proof.as_deref() {
+                let payload = if let Some(license_path) = e2e_license_proof.as_deref() {
                     run_fpr18_license_e2e(&handle, &state, Some(license_path))
                         .map_err(std::io::Error::other)?
                 } else if e2e_license_access {

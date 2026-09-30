@@ -1,0 +1,275 @@
+{
+  "schema": "dokkomplekt.live-user-scenarios.v1",
+  "policy": {
+    "platform": "Windows 11 x64",
+    "runner": "persistent self-hosted interactive user session",
+    "evidence": "real installed signed/offline application; mocked IPC is not accepted",
+    "exhaustive_rule": "Every FPR-01..FPR-23 and every release lifecycle scenario must have a live executor and evidence binding."
+  },
+  "scenarios": [
+    {
+      "id": "FPR-01",
+      "title": "Two main documents in one batch",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-01 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-02",
+      "title": "Medical diaries from Dates/Texts through discharge",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-02 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-03",
+      "title": "Source picker and retained source snapshot",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-03 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-04",
+      "title": "Recognition provenance",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-04 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-05",
+      "title": "ICD-10 search and selection",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-05 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-06",
+      "title": "Manual Scanner to physical DOCX",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-06 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-07",
+      "title": "Preflight missing-value and zero-question paths",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-07 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-08",
+      "title": "Created document buttons persist after restart",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-08 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-09",
+      "title": "Template learning through real UI",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-09 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-10",
+      "title": "Background folder automation",
+      "lane": "reboot-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "watcher_started_after_reboot",
+      "required": true
+    },
+    {
+      "id": "FPR-11",
+      "title": "Output folder naming and collision handling",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-11",
+      "required": true
+    },
+    {
+      "id": "FPR-12",
+      "title": "Settings persistence across restart/replacement",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-12 INSTALLER PRESERVATION PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-13",
+      "title": "Selected document bundle semantics",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-13 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-14",
+      "title": "Archived template version selected via Versions UI",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-14 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-15",
+      "title": "Export/import templates into clean profile",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-15 INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-16",
+      "title": "Installed preview/read-back",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-16",
+      "required": true
+    },
+    {
+      "id": "FPR-17",
+      "title": "Installed PDF conversion and physical print completion",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "print_spooler_completion_observed",
+      "required": true
+    },
+    {
+      "id": "FPR-18",
+      "title": "License allow/deny/tamper paths",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-18",
+      "required": true
+    },
+    {
+      "id": "FPR-19",
+      "title": "Signed update apply/recovery lifecycle",
+      "lane": "update-live",
+      "executor": "windows_live_update_e2e.ps1",
+      "evidence_marker": "FPR-19 LIVE UPDATE PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-20",
+      "title": "Offline runtime without developer toolchain",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "offline-runtime-probe.log",
+      "required": true
+    },
+    {
+      "id": "FPR-21",
+      "title": "Cross-domain plugins",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "E1 CROSS-DOMAIN PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-22",
+      "title": "Diagnostics/receipt privacy",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-22 DIAGNOSTIC PRIVACY PASS:",
+      "required": true
+    },
+    {
+      "id": "FPR-23",
+      "title": "Exact-SHA release infrastructure evidence",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "WINDOWS_HARDWARE_E2E_PASSED.json",
+      "required": true
+    },
+    {
+      "id": "UX-INSTALL-SILENT",
+      "title": "Silent NSIS install",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "NSIS",
+      "required": true
+    },
+    {
+      "id": "UX-FIRST-RUN",
+      "title": "First-run template picker and button creation",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "first-run",
+      "required": true
+    },
+    {
+      "id": "UX-RESTART",
+      "title": "Application restart with persisted state",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "restart",
+      "required": true
+    },
+    {
+      "id": "UX-INVALID-SOURCE",
+      "title": "Corrupt oversized and cancelled source negative flows",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "adversarial",
+      "required": true
+    },
+    {
+      "id": "UX-WORD-PDF",
+      "title": "Word-backed PDF export",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "pdf_signature_valid",
+      "required": true
+    },
+    {
+      "id": "UX-PRINT",
+      "title": "Real printer completion Event 307",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "PRINT_EVENT_307.json",
+      "required": true
+    },
+    {
+      "id": "UX-WATCHER-INSTALL",
+      "title": "Background watcher registration",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "WATCHER_INSTALL.json",
+      "required": true
+    },
+    {
+      "id": "UX-REBOOT",
+      "title": "Real OS reboot and logon recovery",
+      "lane": "reboot-live",
+      "executor": "verify_reboot_evidence.ps1",
+      "evidence_marker": "WINDOWS_REBOOT_E2E_PASSED.json",
+      "required": true
+    },
+    {
+      "id": "UX-WATCHER-EXACTLY-ONCE",
+      "title": "Post-reboot watched case exactly-once",
+      "lane": "reboot-live",
+      "executor": "verify_reboot_evidence.ps1",
+      "evidence_marker": "post_reboot_case_completed",
+      "required": true
+    },
+    {
+      "id": "UX-UNINSTALL",
+      "title": "Silent uninstall and watcher cleanup",
+      "lane": "hardware-live",
+      "executor": "windows_hardware_e2e.ps1",
+      "evidence_marker": "silent_uninstall_passed",
+      "required": true
+    }
+  ]
+}

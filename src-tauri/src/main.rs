@@ -2085,7 +2085,6 @@ include!("subsystems/processing_guard.rs");
 include!("subsystems/shared_completion_guards.rs");
 include!("subsystems/automation_dedup.rs");
 include!("subsystems/automation_runtime.rs");
-
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     let background_watch = args.iter().any(|arg| arg == "--background-watch");
@@ -2218,7 +2217,6 @@ fn main() {
                 handle.exit(0);
                 return Ok(());
             }
-
             // Output-root availability is a native desktop startup invariant, not a
             // WebView/React side effect. Prepare it before creating the window so a
             // slow or failed frontend bootstrap can never leave a live process without

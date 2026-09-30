@@ -19,7 +19,9 @@ def test_shared_bootstrap_pins_private_repo_and_distinct_roles() -> None:
     assert "https://github.com/mailsvb2-bot/Dokkomplekt_Universal" in text
     assert "Production runners may register only to" in text
     assert "dokkomplekt-runtime" in text
-    assert "dokkomplekt-hardware" in text
+    assert "dokkomplekt-win10-live" in text
+    assert "dokkomplekt-win11-live" in text
+    assert "HardwareWindowsVersion" in text
     assert "C:\\actions-runner-runtime" in text
     assert "C:\\actions-runner-hardware" in text
     assert "New-ScheduledTaskTrigger -AtLogOn" in text
@@ -106,4 +108,6 @@ def test_secure_entrypoints_do_not_cross_role_parameters() -> None:
     assert "PrinterName" not in runtime
     assert "-Role hardware" in hardware
     assert "PrinterName" in hardware
+    assert "[ValidateSet('10', '11')]" in hardware
+    assert "HardwareWindowsVersion" in hardware
     assert "SidecarManifestPath" not in hardware

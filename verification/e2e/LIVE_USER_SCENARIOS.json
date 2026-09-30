@@ -82,9 +82,9 @@
     {
       "id": "FPR-10",
       "title": "Background folder automation",
-      "lane": "reboot-live",
-      "executor": "windows_hardware_e2e.ps1",
-      "evidence_marker": "watcher_started_after_reboot",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-10 IDEMPOTENCY PASS:",
       "required": true
     },
     {
@@ -92,7 +92,7 @@
       "title": "Output folder naming and collision handling",
       "lane": "installed-baseline",
       "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "FPR-11",
+      "evidence_marker": "FPR-11 NAMING PASS:",
       "required": true
     },
     {
@@ -130,9 +130,9 @@
     {
       "id": "FPR-16",
       "title": "Installed preview/read-back",
-      "lane": "installed-baseline",
-      "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "FPR-16",
+      "lane": "installed-e1",
+      "executor": "windows_e1_accounting_contract.ps1",
+      "evidence_marker": "FPR-16 INSTALLED PASS:",
       "required": true
     },
     {
@@ -148,7 +148,7 @@
       "title": "License allow/deny/tamper paths",
       "lane": "installed-baseline",
       "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "FPR-18",
+      "evidence_marker": "FPR-18 POSITIVE INSTALLED PASS:",
       "required": true
     },
     {
@@ -196,7 +196,7 @@
       "title": "Silent NSIS install",
       "lane": "installed-baseline",
       "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "NSIS",
+      "evidence_marker": "FPR-12 INSTALLER PRESERVATION PASS:",
       "required": true
     },
     {
@@ -204,7 +204,7 @@
       "title": "First-run template picker and button creation",
       "lane": "installed-baseline",
       "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "first-run",
+      "evidence_marker": "Native first-run template picker OK:",
       "required": true
     },
     {
@@ -212,7 +212,7 @@
       "title": "Application restart with persisted state",
       "lane": "installed-baseline",
       "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "restart",
+      "evidence_marker": "Persisted template button survived application restart.",
       "required": true
     },
     {
@@ -220,7 +220,7 @@
       "title": "Corrupt oversized and cancelled source negative flows",
       "lane": "installed-baseline",
       "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "adversarial",
+      "evidence_marker": "ADVERSARIAL OK:",
       "required": true
     },
     {
@@ -269,6 +269,38 @@
       "lane": "hardware-live",
       "executor": "windows_hardware_e2e.ps1",
       "evidence_marker": "silent_uninstall_passed",
+      "required": true
+    },
+    {
+      "id": "UX-FOLDER-COLLISION",
+      "title": "Repeated generation preserves original and publishes distinct version",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-11 COLLISION PASS:",
+      "required": true
+    },
+    {
+      "id": "UX-WATCHER-CLOSED-UI",
+      "title": "Watcher stays hidden and handles source without foreground UI",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-10 CLOSED-UI PASS:",
+      "required": true
+    },
+    {
+      "id": "UX-LICENSE-TAMPER",
+      "title": "Tampered signed-license payload is rejected",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-18 NEGATIVE INSTALLED PASS:",
+      "required": true
+    },
+    {
+      "id": "UX-LICENSE-RESTART",
+      "title": "Rejected tampered license does not corrupt valid persisted access",
+      "lane": "installed-baseline",
+      "executor": "windows_installer_contract.ps1",
+      "evidence_marker": "FPR-18 RESTART INSTALLED PASS:",
       "required": true
     }
   ]

@@ -2051,17 +2051,24 @@ $fpr14Evidence = Join-Path $fixtureDir 'fpr14-version-evidence.json'
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fpr14Request -Encoding UTF8
 Remove-Item -LiteralPath $fpr14Evidence -Force -ErrorAction SilentlyContinue
 $previousInstallerE2E = $env:DOKKOMPLEKT_RUN_INSTALLER_E2E
+$previousVersionRequest = $env:DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST
+$previousEvidencePath = $env:DOKKOMPLEKT_E2E_EVIDENCE_PATH
 $env:DOKKOMPLEKT_RUN_INSTALLER_E2E = '1'
+$env:DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST = $fpr14Request
+$env:DOKKOMPLEKT_E2E_EVIDENCE_PATH = $fpr14Evidence
 try {
-  $fixtureProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
-    "--e2e-update-template-version=$fpr14Request",
-    "--e2e-evidence=$fpr14Evidence"
-  ) -Wait -PassThru
+  $fixtureProcess = Start-Process -FilePath $app.FullName -Wait -PassThru
 } finally {
-  if ($null -eq $previousInstallerE2E) {
-    Remove-Item Env:DOKKOMPLEKT_RUN_INSTALLER_E2E -ErrorAction SilentlyContinue
-  } else {
-    $env:DOKKOMPLEKT_RUN_INSTALLER_E2E = $previousInstallerE2E
+  foreach ($item in @(
+    @{ Name = 'DOKKOMPLEKT_RUN_INSTALLER_E2E'; Value = $previousInstallerE2E },
+    @{ Name = 'DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST'; Value = $previousVersionRequest },
+    @{ Name = 'DOKKOMPLEKT_E2E_EVIDENCE_PATH'; Value = $previousEvidencePath }
+  )) {
+    if ($null -eq $item.Value) {
+      Remove-Item ("Env:" + $item.Name) -ErrorAction SilentlyContinue
+    } else {
+      Set-Item ("Env:" + $item.Name) -Value $item.Value
+    }
   }
 }
 if ($fixtureProcess.ExitCode -ne 0) {

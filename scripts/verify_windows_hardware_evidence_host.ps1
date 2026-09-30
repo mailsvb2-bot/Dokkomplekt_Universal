@@ -96,13 +96,14 @@ if ([string]::IsNullOrWhiteSpace($RebootEvidencePath)) {
 
 $os = Get-CimInstance Win32_OperatingSystem
 $buildNumber = [int]$os.BuildNumber
+$workstation = [int]$os.ProductType -eq 1
 $expectedOs = if ($ExpectedWindowsVersion -eq '10') {
-    $buildNumber -lt 22000
+    $workstation -and $buildNumber -ge 10240 -and $buildNumber -lt 22000
 } else {
-    $buildNumber -ge 22000
+    $workstation -and $buildNumber -ge 22000
 }
 $x64Os = [Environment]::Is64BitOperatingSystem -and ([string]$os.OSArchitecture -match '64')
-Add-Check -Name "windows-$ExpectedWindowsVersion" -Ok $expectedOs -Detail "caption=$($os.Caption); version=$($os.Version); build=$buildNumber"
+Add-Check -Name "windows-$ExpectedWindowsVersion" -Ok $expectedOs -Detail "caption=$($os.Caption); version=$($os.Version); build=$buildNumber; product_type=$($os.ProductType)"
 Add-Check -Name 'windows-x64' -Ok $x64Os -Detail "architecture=$($os.OSArchitecture)"
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

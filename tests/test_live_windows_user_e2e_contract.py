@@ -88,6 +88,22 @@ def test_private_workflow_has_two_independent_windows_live_jobs() -> None:
     assert "Dokkomplekt-Windows-Hardware-E2E-${{ matrix.artifact_suffix }}" in hardware
 
 
+def test_windows_matrix_keeps_device_configuration_local_to_each_runner() -> None:
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    hardware = workflow[workflow.index("  hardware-evidence:") :]
+    for shared_value in (
+        "vars.DOKKOMPLEKT_TEST_PRINTER",
+        "vars.DOKKOMPLEKT_TEST_DUPLEX",
+        "vars.DOKKOMPLEKT_TEST_TRAY",
+        "vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH",
+        "vars.DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT",
+    ):
+        assert shared_value not in hardware
+    preflight = HOST_PREFLIGHT.read_text(encoding="utf-8")
+    assert "hardware-config.cmd" in preflight
+    assert "Publish-GitHubEnvironmentValue" in preflight
+
+
 def test_private_workflow_runs_live_suite_after_signed_handoff_verification() -> None:
     workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
     hardware = workflow[workflow.index("  hardware-evidence:") :]

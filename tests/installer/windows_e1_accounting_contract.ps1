@@ -85,6 +85,21 @@ $fpr22Stderr = Join-Path $env:RUNNER_TEMP "dokkomplekt-fpr22-stderr-$PID.log"
 Remove-Item -LiteralPath $fpr22Stdout, $fpr22Stderr -Force -ErrorAction SilentlyContinue
 $process = Start-Process -FilePath $app.FullName -PassThru -RedirectStandardOutput $fpr22Stdout -RedirectStandardError $fpr22Stderr
 
+trap {
+  $failure = $_
+  if ($null -ne $process) {
+    try {
+      $process.Refresh()
+      if (-not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        try { $process.WaitForExit(5000) | Out-Null } catch { }
+      }
+    } catch { }
+  }
+  Write-Error -ErrorRecord $failure
+  exit 1
+}
+
 function Test-UiaTransientTimeout {
   param([Parameter(Mandatory = $true)]$ErrorRecord)
   return ([string]$ErrorRecord.Exception.Message) -match 'Operation timed out|0x80131505'
@@ -2100,10 +2115,10 @@ $process = Start-Process -FilePath $app.FullName -PassThru -RedirectStandardOutp
 $null = Wait-UiElement -Description 'installed application after FPR-14 version fixture' -TimeoutSeconds 40 -Probe {
   Find-LiveAppWindow
 }
-$fpr14Button = Wait-UiElement -Description 'FPR-14 document button after fixture restart' -TimeoutSeconds 30 -Probe {
+$fpr14Button = Wait-UiElement -Description 'enabled FPR-14 document button after fixture restart' -TimeoutSeconds 30 -Probe {
   $window = Find-LiveAppWindow
   if ($null -eq $window) { return $null }
-  Find-ButtonByNames -Root $window -Names @($fpr14Label)
+  Find-ReadyButtonByNames -Root $window -Names @($fpr14Label)
 }
 Invoke-UiElementPhysically -Element $fpr14Button -Description 'open FPR-14 versioned document'
 

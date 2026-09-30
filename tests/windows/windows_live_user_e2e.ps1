@@ -1,6 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $InstallerRoot,
+    [ValidateSet('10', '11')] [string] $ExpectedWindowsVersion = '11',
     [string] $ScenarioRegistry = 'verification/e2e/LIVE_USER_SCENARIOS.json',
     [string] $OutputPath = 'verification/release/LIVE_USER_E2E.json'
 )
@@ -12,7 +13,9 @@ if ($env:DOKKOMPLEKT_RUN_HARDWARE_E2E -ne '1') { throw 'Live Windows user E2E is
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Live E2E requires Windows x64.' }
 
 $os = Get-CimInstance Win32_OperatingSystem
-if ([string]$os.Caption -notmatch 'Windows 11') { throw "Live E2E requires Windows 11; detected: $($os.Caption)" }
+$buildNumber = [int]$os.BuildNumber
+$expectedOs = if ($ExpectedWindowsVersion -eq '10') { $buildNumber -lt 22000 } else { $buildNumber -ge 22000 }
+if (-not $expectedOs) { throw "Live E2E expected Windows $ExpectedWindowsVersion but detected caption=$($os.Caption) build=$buildNumber." }
 if ([string]$os.OSArchitecture -notmatch '64') { throw "Live E2E requires a 64-bit OS; detected: $($os.OSArchitecture)" }
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -81,8 +84,10 @@ $report = [ordered]@{
     computer = $env:COMPUTERNAME
     user = $identity.Name
     session_id = $sessionId
+    expected_windows_version = $ExpectedWindowsVersion
     os_caption = [string]$os.Caption
     os_version = [string]$os.Version
+    os_build_number = $buildNumber
     os_architecture = [string]$os.OSArchitecture
     installer = $installer[0].Name
     installer_sha256 = (Get-FileHash $installer[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -95,4 +100,4 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
 Copy-Item -LiteralPath $baselineLog -Destination (Join-Path $evidenceRoot 'LIVE_USER_E2E_BASELINE.log') -Force
 Copy-Item -LiteralPath $e1Log -Destination (Join-Path $evidenceRoot 'LIVE_USER_E2E_E1.log') -Force
-Write-Host "LIVE WINDOWS USER E2E INSTALLED LANES PASSED: $($results.Count)/$($results.Count) scenarios on $($os.Caption) x64 interactive session."
+Write-Host "LIVE WINDOWS USER E2E INSTALLED LANES PASSED: Windows $ExpectedWindowsVersion; $($results.Count)/$($results.Count) scenarios; $($os.Caption) build $buildNumber x64 interactive session."

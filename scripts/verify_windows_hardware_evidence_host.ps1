@@ -3,6 +3,7 @@ param(
     [string] $PrinterName = '',
     [string] $RebootEvidencePath = '',
     [string] $RunnerRoot = '',
+    [ValidateSet('10', '11')] [string] $ExpectedWindowsVersion = '11',
     [string] $OutputPath = 'verification/release/HARDWARE_RUNNER_HOST.json'
 )
 
@@ -94,9 +95,14 @@ if ([string]::IsNullOrWhiteSpace($RebootEvidencePath)) {
 }
 
 $os = Get-CimInstance Win32_OperatingSystem
-$windows11 = ([string]$os.Caption -match 'Windows 11')
+$buildNumber = [int]$os.BuildNumber
+$expectedOs = if ($ExpectedWindowsVersion -eq '10') {
+    $buildNumber -lt 22000
+} else {
+    $buildNumber -ge 22000
+}
 $x64Os = [Environment]::Is64BitOperatingSystem -and ([string]$os.OSArchitecture -match '64')
-Add-Check -Name 'windows-11' -Ok $windows11 -Detail "caption=$($os.Caption); version=$($os.Version)"
+Add-Check -Name "windows-$ExpectedWindowsVersion" -Ok $expectedOs -Detail "caption=$($os.Caption); version=$($os.Version); build=$buildNumber"
 Add-Check -Name 'windows-x64' -Ok $x64Os -Detail "architecture=$($os.OSArchitecture)"
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -183,8 +189,10 @@ Add-Check -Name 'power-plan-readable' -Ok (-not [string]::IsNullOrWhiteSpace($po
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 $report = [ordered]@{
-    schema = 'dokkomplekt.hardware-evidence-host-preflight.v3'
+    schema = 'dokkomplekt.hardware-evidence-host-preflight.v4'
     created_at_utc = [DateTime]::UtcNow.ToString('o')
+    expected_windows_version = $ExpectedWindowsVersion
+    windows_build_number = $buildNumber
     computer = $env:COMPUTERNAME
     user = $identity.Name
     session_id = $sessionId

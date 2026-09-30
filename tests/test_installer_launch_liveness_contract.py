@@ -173,6 +173,7 @@ def test_fpr09_expanded_learning_controls_use_bounded_viewport_navigation() -> N
     assert "for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++)" in source
     assert "Find-E2NamedElement -Root $currentAppWindow -Name '1. Источники (4–10)'" in source
     assert "[System.Windows.Forms.SendKeys]::SendWait('{PGDN}')" in source
-    assert "IsExpandCollapsePatternAvailable" in source
-    assert "FPR-09 setup expanded through UIA ExpandCollapsePattern." in source
+    assert "FPR-09 observable expanded setup child" in source
+    assert "FPR-09 setup expansion proved by observable child control after real user activation." in source
+    assert "FPR-09 physically expand automatic filling setup" in source
     assert "after confirmed expansion and bounded viewport navigation" in source

@@ -106,6 +106,10 @@ function Wait-UiElement {
     if ($process.HasExited) { throw "Application exited while waiting for $Description" }
     Start-Sleep -Milliseconds 150
   } while ([DateTime]::UtcNow -lt $deadline)
+  if ($null -ne $process -and -not $process.HasExited) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    try { $process.WaitForExit(5000) | Out-Null } catch { }
+  }
   throw "E1 UI timeout: $Description"
 }
 
@@ -2102,7 +2106,9 @@ $fpr14Button = Wait-UiElement -Description 'FPR-14 document button after fixture
 Invoke-UiElementPhysically -Element $fpr14Button -Description 'open FPR-14 versioned document'
 
 $fpr14Management = Wait-UiElement -Description 'FPR-14 button management' -TimeoutSeconds 20 -Probe {
-  Find-E1NamedElement -Name 'Управление кнопками'
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'
 }
 try {
   if ($fpr14Management.Current.IsExpandCollapsePatternAvailable) {

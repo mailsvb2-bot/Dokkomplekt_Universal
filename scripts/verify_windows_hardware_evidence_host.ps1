@@ -92,6 +92,12 @@ if ([string]::IsNullOrWhiteSpace($RebootEvidencePath)) {
     $RebootEvidencePath = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_REBOOT_EVIDENCE_PATH', 'Process')
 }
 
+$os = Get-CimInstance Win32_OperatingSystem
+$windows11 = ([string]$os.Caption -match 'Windows 11')
+$x64Os = [Environment]::Is64BitOperatingSystem -and ([string]$os.OSArchitecture -match '64')
+Add-Check -Name 'windows-11' -Ok $windows11 -Detail "caption=$($os.Caption); version=$($os.Version)"
+Add-Check -Name 'windows-x64' -Ok $x64Os -Detail "architecture=$($os.OSArchitecture)"
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sessionId = (Get-Process -Id $PID).SessionId
 $interactive = (-not $identity.IsSystem) -and $sessionId -ne 0

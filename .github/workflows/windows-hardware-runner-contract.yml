@@ -90,6 +90,8 @@ jobs:
             'scripts/cleanup_windows_reboot_preparation.ps1',
             'scripts/prepare_windows_production_runtime.ps1',
             'tests/windows/windows_hardware_e2e.ps1',
+            'tests/windows/windows_live_user_e2e.ps1',
+            'tests/windows/windows_live_update_e2e.ps1',
             'tests/windows/prepare_reboot_evidence.ps1',
             'tests/windows/verify_reboot_evidence.ps1'
           )

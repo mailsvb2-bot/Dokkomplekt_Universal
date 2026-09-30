@@ -2400,15 +2400,55 @@ $fpr09ExpandControl = Wait-UiElement -Description 'FPR-09 primary automatic fill
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
 }
-if ($fpr09ExpandControl.Current.IsExpandCollapsePatternAvailable) {
-  $expandPattern = $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-  if ($expandPattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
-    $expandPattern.Expand()
-    Write-Host 'FPR-09 setup expanded through UIA ExpandCollapsePattern.'
-  }
-} else {
-  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 expand primary automatic filling setup'
+
+function Find-Fpr09ExpandedObservableChild {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-E2NamedElement -Root $window -Name 'Открыть Word и показать место'
 }
+
+$fpr09ExpandedChild = Find-Fpr09ExpandedObservableChild
+if ($null -eq $fpr09ExpandedChild) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before automatic filling expansion.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($fpr09ExpandControl.Current.IsOffscreen -and $fpr09ExpandControl.Current.IsScrollItemPatternAvailable) {
+    $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+    Start-Sleep -Milliseconds 150
+  }
+  $fpr09ExpandControl.SetFocus()
+  Start-Sleep -Milliseconds 120
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Start-Sleep -Milliseconds 250
+  $fpr09ExpandedChild = Find-Fpr09ExpandedObservableChild
+}
+if ($null -eq $fpr09ExpandedChild) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before Space expansion fallback.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  $fpr09ExpandControl = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+  if ($null -eq $fpr09ExpandControl) { throw 'FPR-09 expansion control disappeared before Space fallback.' }
+  $fpr09ExpandControl.SetFocus()
+  Start-Sleep -Milliseconds 120
+  [System.Windows.Forms.SendKeys]::SendWait(' ')
+  Start-Sleep -Milliseconds 250
+  $fpr09ExpandedChild = Find-Fpr09ExpandedObservableChild
+}
+if ($null -eq $fpr09ExpandedChild) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before physical expansion fallback.' }
+  $fpr09ExpandControl = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+  if ($null -eq $fpr09ExpandControl) { throw 'FPR-09 expansion control disappeared before physical fallback.' }
+  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 physically expand automatic filling setup'
+  $fpr09ExpandedChild = Wait-UiElement -Description 'FPR-09 observable expanded setup child' -TimeoutSeconds 10 -Probe {
+    Find-Fpr09ExpandedObservableChild
+  }
+}
+if ($null -eq $fpr09ExpandedChild) {
+  throw 'FPR-09 automatic filling setup did not expose its observable child after keyboard and physical activation.'
+}
+Write-Host 'FPR-09 setup expansion proved by observable child control after real user activation.'
+
 $fpr09SourceControl = $null
 for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {
   $currentAppWindow = Find-LiveAppWindow
@@ -2436,12 +2476,8 @@ for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceContro
 if ($null -eq $fpr09SourceControl) {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -ne $currentAppWindow) {
-    $liveExpand = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
-    if ($null -ne $liveExpand -and $liveExpand.Current.IsExpandCollapsePatternAvailable) {
-      $livePattern = $liveExpand.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-      if ($livePattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
-        throw 'FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion.'
-      }
+    if ($null -eq (Find-Fpr09ExpandedObservableChild)) {
+      Write-Host 'FPR-09 diagnostic: observable expanded child is absent at source-control timeout.'
     }
     Write-E2LearningUiDiagnostic -Root $currentAppWindow
   }

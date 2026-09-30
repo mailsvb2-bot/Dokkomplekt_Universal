@@ -178,7 +178,12 @@ if ($Role -eq 'hardware') {
     }
     $os = Get-CimInstance Win32_OperatingSystem
     $buildNumber = [int]$os.BuildNumber
-    $matchesExpectedWindows = if ($HardwareWindowsVersion -eq '10') { $buildNumber -lt 22000 } else { $buildNumber -ge 22000 }
+    $workstation = [int]$os.ProductType -eq 1
+    $matchesExpectedWindows = if ($HardwareWindowsVersion -eq '10') {
+        $workstation -and $buildNumber -ge 10240 -and $buildNumber -lt 22000
+    } else {
+        $workstation -and $buildNumber -ge 22000
+    }
     if (-not $matchesExpectedWindows) {
         throw "Hardware runner requested Windows $HardwareWindowsVersion but detected caption=$($os.Caption) build=$buildNumber."
     }

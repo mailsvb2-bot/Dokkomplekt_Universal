@@ -8,6 +8,7 @@ REGISTRY = ROOT / "verification" / "e2e" / "LIVE_USER_SCENARIOS.json"
 HARNESS = ROOT / "tests" / "windows" / "windows_live_user_e2e.ps1"
 PRIVATE_WORKFLOW = ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
 HOST_PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_evidence_host.ps1"
+LIVE_UPDATE = ROOT / "tests" / "windows" / "windows_live_update_e2e.ps1"
 QUALITY = ROOT / ".github" / "workflows" / "quality-gate.yml"
 
 
@@ -71,6 +72,27 @@ def test_hardware_host_is_pinned_to_windows11_x64() -> None:
     assert "Add-Check -Name 'windows-11'" in source
     assert "Add-Check -Name 'windows-x64'" in source
     assert "Windows 11" in source
+
+
+def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
+    source = LIVE_UPDATE.read_text(encoding="utf-8-sig")
+    for marker in (
+        "DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER",
+        "Get-AuthenticodeSignature",
+        "Проверить обновления",
+        "Установить и перезапустить",
+        "update-recovery.json",
+        "recovery.status -ne 'verified'",
+        "FPR-19 LIVE UPDATE PASS:",
+    ):
+        assert marker in source
+    preflight = HOST_PREFLIGHT.read_text(encoding="utf-8")
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    assert "previous-signed-installer-configured" in preflight
+    assert "windows_live_update_e2e.ps1" in workflow
+    assert workflow.index("Execute full installed live user scenario suite") < workflow.index(
+        "Execute previous-version signed update/recovery live scenario"
+    )
 
 
 def test_mocked_browser_lane_is_not_the_live_evidence_lane() -> None:

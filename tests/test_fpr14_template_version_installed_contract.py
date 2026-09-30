@@ -18,6 +18,8 @@ def test_fpr14_installed_flow_selects_superseded_version_and_reads_physical_docx
         "FPR14-V2-SNAPSHOT",
         "Версии шаблона",
         "Использовать версию 1?",
+        "Find-ReadyButtonByTrimmedName -Root $window -Name 'Управление кнопками'",
+        "Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue",
         "DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST",
         "rollback output did not contain the archived v1 marker",
         "rollback output incorrectly rendered the superseded-current v2 marker",

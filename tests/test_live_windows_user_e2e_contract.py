@@ -94,6 +94,7 @@ def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
     source = LIVE_UPDATE.read_text(encoding="utf-8-sig")
     for marker in (
         "DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER",
+        "DokkomplektHardwareRunner\\hardware-config.cmd",
         "Get-AuthenticodeSignature",
         "Проверить обновления",
         "Установить и перезапустить",

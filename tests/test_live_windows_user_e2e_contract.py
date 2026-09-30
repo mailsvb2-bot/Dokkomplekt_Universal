@@ -92,7 +92,7 @@ def test_private_workflow_runs_live_suite_after_signed_handoff_verification() ->
     assert "windows_signed_handoff.py verify" in hardware
     assert "Execute full installed live user scenario suite" in hardware
     assert "windows_live_user_e2e.ps1" in hardware
-    assert "LIVE_USER_E2E.json" in hardware
+    assert "LIVE_USER_E2E-${{ matrix.artifact_suffix }}.json" in hardware
     assert hardware.index("windows_signed_handoff.py verify") < hardware.index(
         "Execute full installed live user scenario suite"
     )

@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 UPDATE_RUNTIME = ROOT / "src-tauri" / "src" / "subsystems" / "update_runtime.rs"
 MAIN_RS = ROOT / "src-tauri" / "src" / "main.rs"
 API_TS = ROOT / "src" / "lib" / "api.ts"
+APP_TSX = ROOT / "src" / "App.tsx"
+LIVE_UPDATE = ROOT / "tests" / "windows" / "windows_live_update_e2e.ps1"
 REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
 
 
@@ -40,6 +42,25 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
     assert "callRust('apply_verified_update'" in api
     assert "'get_update_recovery_status'," in api
     assert "'apply_verified_update'," in api
+
+
+def test_fpr19_user_update_ui_closes_check_apply_recovery_loop() -> None:
+    app = APP_TSX.read_text(encoding="utf-8")
+    live = LIVE_UPDATE.read_text(encoding="utf-8-sig")
+    for marker in (
+        "applyVerifiedUpdate",
+        "getUpdateRecoveryStatus",
+        "Установить обновление",
+        "Установить и перезапустить",
+        "apply_verified_update",
+        "recoverable_failure",
+        "Обновление до версии",
+    ):
+        assert marker in app, marker
+    assert "Проверить обновления" in live
+    assert "Установить и перезапустить" in live
+    assert "recovery.status -ne 'verified'" in live
+    assert "FPR-19 LIVE UPDATE PASS:" in live
 
 
 def test_fpr19_register_stays_open_until_installed_upgrade_and_recovery_proof() -> None:

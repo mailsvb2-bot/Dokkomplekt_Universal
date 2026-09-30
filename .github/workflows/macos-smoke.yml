@@ -44,17 +44,15 @@ jobs:
           set -euo pipefail
           : > macos-tauri-build.log
 
-          npx tauri build --bundles app 2>&1 | tee -a macos-tauri-build.log
-
-          dmg_ok=0
+          bundle_ok=0
           for attempt in 1 2; do
-            echo "DMG packaging attempt $attempt/2" | tee -a macos-tauri-build.log
-            if npx tauri build --bundles dmg 2>&1 | tee -a macos-tauri-build.log; then
-              dmg_ok=1
+            echo "macOS app+DMG packaging attempt $attempt/2" | tee -a macos-tauri-build.log
+            if npx tauri build --bundles app,dmg 2>&1 | tee -a macos-tauri-build.log; then
+              bundle_ok=1
               break
             fi
 
-            echo "DMG packaging attempt $attempt failed; collecting disk-image state and cleaning stale bundle state before retry." | tee -a macos-tauri-build.log
+            echo "macOS app+DMG packaging attempt $attempt failed; collecting disk-image state and cleaning stale DMG state before retry." | tee -a macos-tauri-build.log
             hdiutil info 2>&1 | tee -a macos-tauri-build.log || true
             while IFS= read -r device; do
               [[ -n "$device" ]] || continue
@@ -64,8 +62,8 @@ jobs:
             sleep 3
           done
 
-          if [[ "$dmg_ok" -ne 1 ]]; then
-            echo "DMG packaging failed after 2 bounded attempts." >&2
+          if [[ "$bundle_ok" -ne 1 ]]; then
+            echo "macOS app+DMG packaging failed after 2 bounded attempts." >&2
             exit 1
           fi
       - name: Validate application bundle structure and signature envelope

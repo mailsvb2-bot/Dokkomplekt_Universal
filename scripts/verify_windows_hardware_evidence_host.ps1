@@ -68,7 +68,8 @@ function Import-LocalHardwareConfiguration {
         'DOKKOMPLEKT_TEST_TRAY',
         'DOKKOMPLEKT_REBOOT_EVIDENCE_PATH',
         'DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT',
-        'DOKKOMPLEKT_WORD_PATH'
+        'DOKKOMPLEKT_WORD_PATH',
+        'DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER'
     )
     foreach ($line in Get-Content -LiteralPath $configPath) {
         if ($line -notmatch '^\s*set\s+"(?<name>DOKKOMPLEKT_[A-Z0-9_]+)=(?<value>.*)"\s*$') { continue }
@@ -165,6 +166,16 @@ Add-Check -Name 'reboot-evidence-path-absolute' -Ok $rebootPathOk -Detail $reboo
 $rebootSourceDocument = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT', 'Process')
 $rebootSourceOk = (-not [string]::IsNullOrWhiteSpace($rebootSourceDocument)) -and (Test-Path -LiteralPath $rebootSourceDocument -PathType Leaf) -and ([IO.Path]::GetExtension($rebootSourceDocument) -ieq '.docx')
 Add-Check -Name 'reboot-source-docx-configured' -Ok $rebootSourceOk -Detail (if ([string]::IsNullOrWhiteSpace($rebootSourceDocument)) { 'missing' } else { $rebootSourceDocument })
+
+$previousInstaller = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER', 'Process')
+$previousInstallerOk = (-not [string]::IsNullOrWhiteSpace($previousInstaller)) -and (Test-Path -LiteralPath $previousInstaller -PathType Leaf)
+$previousInstallerDetail = if ($previousInstallerOk) { $previousInstaller } else { 'missing previous production-signed NSIS path' }
+if ($previousInstallerOk) {
+    $previousInstallerSignature = Get-AuthenticodeSignature -FilePath $previousInstaller
+    $previousInstallerOk = $previousInstallerSignature.Status -eq 'Valid'
+    $previousInstallerDetail = "$previousInstaller; Authenticode=$($previousInstallerSignature.Status)"
+}
+Add-Check -Name 'previous-signed-installer-configured' -Ok $previousInstallerOk -Detail $previousInstallerDetail
 
 $powerState = (& powercfg /getactivescheme 2>$null) -join ' '
 Add-Check -Name 'power-plan-readable' -Ok (-not [string]::IsNullOrWhiteSpace($powerState)) -Detail $powerState

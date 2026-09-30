@@ -72,11 +72,15 @@ export function useUpdateLifecycle({
       return;
     }
 
+    const verifiedPackagePath = result.verified_package_path;
+    const verifiedSha256 = result.sha256;
+    const verifiedSizeBytes = result.size_bytes;
+    const targetVersion = result.latest_version;
     const applied = await run('apply_verified_update', () => applyVerifiedUpdate(
-      result.verified_package_path,
-      result.latest_version,
-      result.sha256,
-      result.size_bytes,
+      verifiedPackagePath,
+      targetVersion,
+      verifiedSha256,
+      verifiedSizeBytes,
     ));
     if (applied) setStatus(applied.message);
   }

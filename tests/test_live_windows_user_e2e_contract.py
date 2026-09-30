@@ -54,8 +54,10 @@ def test_live_harness_requires_real_windows10_or_11_x64_interactive_signed_insta
     for marker in (
         "[ValidateSet('10', '11')]",
         "ExpectedWindowsVersion",
+        "buildNumber -ge 10240",
         "buildNumber -lt 22000",
         "buildNumber -ge 22000",
+        "ProductType",
         "[Environment]::Is64BitOperatingSystem",
         "real interactive user session",
         "Get-Service -Name 'actions.runner.*'",
@@ -106,8 +108,10 @@ def test_hardware_host_is_pinned_to_requested_windows10_or_11_x64() -> None:
     assert "[ValidateSet('10', '11')]" in source
     assert "ExpectedWindowsVersion" in source
     assert "Get-CimInstance Win32_OperatingSystem" in source
+    assert "buildNumber -ge 10240" in source
     assert "buildNumber -lt 22000" in source
     assert "buildNumber -ge 22000" in source
+    assert "ProductType" in source
     assert 'Add-Check -Name "windows-$ExpectedWindowsVersion"' in source
     assert "Add-Check -Name 'windows-x64'" in source
 

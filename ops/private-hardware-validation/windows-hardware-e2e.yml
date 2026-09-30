@@ -373,6 +373,13 @@ jobs:
       - name: Validate hardware-only trust boundary
         shell: pwsh
         run: python scripts/release_environment_preflight.py --mode windows-hardware --json-report verification/release/hardware-preflight.json
+      - name: Execute full installed live user scenario suite
+        if: inputs.reboot_phase == 'prepare'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          tests/windows/windows_live_user_e2e.ps1 -InstallerRoot signed-handoff/release-installers/offline -ScenarioRegistry verification/e2e/LIVE_USER_SCENARIOS.json -OutputPath verification/release/LIVE_USER_E2E.json
+
       - name: Prepare real reboot E2E state
         if: inputs.reboot_phase == 'prepare'
         shell: pwsh

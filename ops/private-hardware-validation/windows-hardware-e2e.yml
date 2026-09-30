@@ -299,11 +299,9 @@ jobs:
         working-directory: source
     env:
       DOKKOMPLEKT_RUN_HARDWARE_E2E: '1'
-      DOKKOMPLEKT_TEST_PRINTER: ${{ vars.DOKKOMPLEKT_TEST_PRINTER }}
-      DOKKOMPLEKT_TEST_DUPLEX: ${{ vars.DOKKOMPLEKT_TEST_DUPLEX }}
-      DOKKOMPLEKT_TEST_TRAY: ${{ vars.DOKKOMPLEKT_TEST_TRAY }}
-      DOKKOMPLEKT_REBOOT_EVIDENCE_PATH: ${{ vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH }}
-      DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT: ${{ vars.DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT }}
+      # Device-specific printer/reboot/update values are imported from each
+      # runner's local hardware-config.cmd by the fail-closed host preflight.
+      # Keeping them out of shared GitHub vars preserves platform independence.
       DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64: ${{ vars.DOKKOMPLEKT_RUNTIME_TRUSTED_PUBKEY_PEM_B64 }}
     steps:
       - name: Validate dispatch identity

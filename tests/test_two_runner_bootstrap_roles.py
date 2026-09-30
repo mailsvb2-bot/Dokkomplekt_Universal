@@ -22,6 +22,10 @@ def test_shared_bootstrap_pins_private_repo_and_distinct_roles() -> None:
     assert "dokkomplekt-win10-live" in text
     assert "dokkomplekt-win11-live" in text
     assert "HardwareWindowsVersion" in text
+    assert "ProductType" in text
+    assert "buildNumber -ge 10240" in text
+    assert "buildNumber -lt 22000" in text
+    assert "buildNumber -ge 22000" in text
     assert "C:\\actions-runner-runtime" in text
     assert "C:\\actions-runner-hardware" in text
     assert "New-ScheduledTaskTrigger -AtLogOn" in text

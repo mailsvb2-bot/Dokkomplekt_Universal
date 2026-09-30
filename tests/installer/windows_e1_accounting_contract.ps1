@@ -318,8 +318,10 @@ function Invoke-UiElementPhysically {
 
   function Test-ElementPhysicallyVisible {
     param([Parameter(Mandatory = $true)]$Target)
-    # WebView2 IsOffscreen is advisory only: hosted runners can report true for
-    # a rectangle whose center is physically inside the live app window.
+    # A WebView2 element reported as offscreen is not safe for coordinate input,
+    # even when stale/virtualized geometry happens to place its rectangle inside
+    # the app window. It must first be scrolled into the live viewport.
+    if ($Target.Current.IsOffscreen) { return $false }
     $rect = $Target.Current.BoundingRectangle
     if ($rect.IsEmpty -or $rect.Width -le 1 -or $rect.Height -le 1) { return $false }
     $appWindow = Find-LiveAppWindow

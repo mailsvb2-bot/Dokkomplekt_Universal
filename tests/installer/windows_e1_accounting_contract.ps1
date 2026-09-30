@@ -2004,6 +2004,203 @@ foreach ($scenario in $domainScenarios) {
     -OutputRoot $defaultOutputRoot `
     -ReceiptRoot $completionReceiptRoot
 }
+
+# FPR-14: create a real saved-version history, then use the installed UI to
+# select the superseded v1 and prove generation renders that archived snapshot.
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case before FPR-14 template-version proof' `
+  -TransitionDescription 'empty case before FPR-14 template-version proof' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
+
+$fpr14Label = 'FPR14 Версионный документ'
+$fpr14V1 = Join-Path $fixtureDir 'fpr14-version-v1.docx'
+$fpr14V2 = Join-Path $fixtureDir 'fpr14-version-v2.docx'
+New-E1TextDocx -Path $fpr14V1 -Lines @(
+  'FPR14-V1-SNAPSHOT',
+  'Документ № {{document.number}}',
+  'Дата документа: {{document.date}}'
+)
+New-E1TextDocx -Path $fpr14V2 -Lines @(
+  'FPR14-V2-SNAPSHOT',
+  'Документ № {{document.number}}',
+  'Дата документа: {{document.date}}'
+)
+Add-E1DomainTemplate `
+  -TemplatePath $fpr14V1 `
+  -Label $fpr14Label `
+  -DomainOption 'Универсальный документооборот'
+
+# Prepare v2 through the installed binary itself. This is fixture setup only:
+# the behavior under proof below is the user's real Versions UI + generation.
+Stop-Process -Id $process.Id -Force
+$process.WaitForExit()
+$fpr14Request = Join-Path $fixtureDir 'fpr14-version-request.json'
+$fpr14Evidence = Join-Path $fixtureDir 'fpr14-version-evidence.json'
+@{
+  button_label = $fpr14Label
+  template_path = $fpr14V2
+} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fpr14Request -Encoding UTF8
+Remove-Item -LiteralPath $fpr14Evidence -Force -ErrorAction SilentlyContinue
+$previousInstallerE2E = $env:DOKKOMPLEKT_RUN_INSTALLER_E2E
+$env:DOKKOMPLEKT_RUN_INSTALLER_E2E = '1'
+try {
+  $fixtureProcess = Start-Process -FilePath $app.FullName -ArgumentList @(
+    "--e2e-update-template-version=$fpr14Request",
+    "--e2e-evidence=$fpr14Evidence"
+  ) -Wait -PassThru
+} finally {
+  if ($null -eq $previousInstallerE2E) {
+    Remove-Item Env:DOKKOMPLEKT_RUN_INSTALLER_E2E -ErrorAction SilentlyContinue
+  } else {
+    $env:DOKKOMPLEKT_RUN_INSTALLER_E2E = $previousInstallerE2E
+  }
+}
+if ($fixtureProcess.ExitCode -ne 0) {
+  throw "FPR-14 installed fixture failed with exit code $($fixtureProcess.ExitCode)."
+}
+if (-not (Test-Path -LiteralPath $fpr14Evidence -PathType Leaf)) {
+  throw 'FPR-14 installed fixture produced no evidence.'
+}
+$fpr14Fixture = (Get-Content -LiteralPath $fpr14Evidence -Raw) | ConvertFrom-Json
+$fpr14Versions = @($fpr14Fixture.versions | Sort-Object version_number)
+if ($fpr14Versions.Count -ne 2) {
+  throw "FPR-14 fixture expected exactly v1/v2 before rollback, found $($fpr14Versions.Count)."
+}
+if ($fpr14Versions[0].version_number -ne 1 -or $fpr14Versions[0].status -ne 'superseded') {
+  throw 'FPR-14 fixture did not preserve v1 as a superseded archived version.'
+}
+if ($fpr14Versions[1].version_number -ne 2 -or $fpr14Versions[1].status -ne 'published') {
+  throw 'FPR-14 fixture did not publish v2 as the current version.'
+}
+
+Remove-Item -LiteralPath $fpr22Stdout, $fpr22Stderr -Force -ErrorAction SilentlyContinue
+$process = Start-Process -FilePath $app.FullName -PassThru -RedirectStandardOutput $fpr22Stdout -RedirectStandardError $fpr22Stderr
+$null = Wait-UiElement -Description 'installed application after FPR-14 version fixture' -TimeoutSeconds 40 -Probe {
+  Find-LiveAppWindow
+}
+$fpr14Button = Wait-UiElement -Description 'FPR-14 document button after fixture restart' -TimeoutSeconds 30 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ButtonByNames -Root $window -Names @($fpr14Label)
+}
+Invoke-UiElementPhysically -Element $fpr14Button -Description 'open FPR-14 versioned document'
+
+$fpr14Management = Wait-UiElement -Description 'FPR-14 button management' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Управление кнопками'
+}
+try {
+  if ($fpr14Management.Current.IsExpandCollapsePatternAvailable) {
+    $pattern = $fpr14Management.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    if ($pattern.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+      $pattern.Expand()
+    }
+  } else {
+    Invoke-UiElementPhysically -Element $fpr14Management -Description 'expand FPR-14 button management'
+  }
+} catch {
+  Invoke-UiElementPhysically -Element $fpr14Management -Description 'expand FPR-14 button management fallback'
+}
+
+$fpr14VersionsButton = Wait-UiElement -Description 'FPR-14 template versions action' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Версии шаблона'
+}
+Invoke-UiElementPhysically -Element $fpr14VersionsButton -Description 'open FPR-14 template versions'
+
+$null = Wait-UiElement -Description 'FPR-14 versions prompt' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Версии шаблона'
+}
+$fpr14VersionInput = Wait-UiElement -Description 'FPR-14 version number input' -TimeoutSeconds 20 -Probe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  foreach ($element in $window.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Edit
+    )
+  )) {
+    try {
+      $name = [string]$element.Current.Name
+      if ($name.Contains('Номер версии для использования')) { return $element }
+    } catch { }
+  }
+  return $null
+}
+Set-ReactControlledText -Element $fpr14VersionInput -Value '1' -Description 'FPR-14 select saved version 1'
+Invoke-UiActionPhysicallyFromProbe -Description 'submit FPR-14 saved version 1' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Использовать версию')
+}
+$null = Wait-UiElement -Description 'FPR-14 rollback confirmation' -TimeoutSeconds 20 -Probe {
+  Find-E1NamedElement -Name 'Использовать версию 1?'
+}
+Invoke-UiActionPhysicallyFromProbe -Description 'confirm FPR-14 saved version 1' -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByNames -Root $window -Names @('Использовать версию')
+}
+$null = Wait-UiElement -Description 'FPR-14 rollback completion status' -TimeoutSeconds 30 -Probe {
+  Find-E1NamedElementContaining -Text 'Версия 1 выбрана'
+}
+
+# Generate through the normal user path and prove the physical DOCX came from
+# the archived v1 bytes, not from the formerly-current v2.
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'reset case after FPR-14 rollback' `
+  -TransitionDescription 'empty case after FPR-14 rollback' `
+  -ActionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Новый комплект', 'Новый пациент / дело')
+  } `
+  -TransitionProbe {
+    $window = Find-LiveAppWindow
+    if ($null -eq $window) { return $null }
+    Find-ReadyButtonByNames -Root $window -Names @('Выбрать исходный файл')
+  }
+Set-E1DomainSource -SourcePath $crossDomainSource
+Invoke-E1DomainScenario `
+  -Label $fpr14Label `
+  -PromptValues ([ordered]@{
+    'document.number' = 'FPR14-ARCHIVE-1'
+    'document.date' = '19.09.2026'
+  }) `
+  -PluginRequiredFields @() `
+  -ExpectedOutputValues @('FPR14-V1-SNAPSHOT', 'FPR14-ARCHIVE-1', '19.09.2026') `
+  -OutputRoot $defaultOutputRoot `
+  -ReceiptRoot $completionReceiptRoot
+
+$fpr14Output = Get-ChildItem -LiteralPath $defaultOutputRoot -Recurse -File -Filter "$fpr14Label.docx" -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTimeUtc -Descending |
+  Select-Object -First 1
+if ($null -eq $fpr14Output) { throw 'FPR-14 generated output is missing after rollback.' }
+$fpr14Archive = [System.IO.Compression.ZipFile]::OpenRead($fpr14Output.FullName)
+try {
+  $fpr14Entry = $fpr14Archive.GetEntry('word/document.xml')
+  if ($null -eq $fpr14Entry) { throw 'FPR-14 generated output is not a readable DOCX.' }
+  $fpr14Reader = [System.IO.StreamReader]::new($fpr14Entry.Open(), [System.Text.Encoding]::UTF8)
+  try { $fpr14Xml = $fpr14Reader.ReadToEnd() } finally { $fpr14Reader.Dispose() }
+} finally {
+  $fpr14Archive.Dispose()
+}
+if (-not $fpr14Xml.Contains('FPR14-V1-SNAPSHOT')) {
+  throw 'FPR-14 rollback output did not contain the archived v1 marker.'
+}
+if ($fpr14Xml.Contains('FPR14-V2-SNAPSHOT')) {
+  throw 'FPR-14 rollback output incorrectly rendered the superseded-current v2 marker.'
+}
+Write-Host "FPR-14 INSTALLED PASS: v1 -> v2 -> real Versions UI selected superseded v1 -> physical DOCX rendered FPR14-V1-SNAPSHOT and excluded FPR14-V2-SNAPSHOT."
+
 # FPR-01: prove the installed main-document batch boundary, not merely a
 # sequence of single-document generations. Two ordinary Universal templates are
 # selected together, share one preflight, and must each produce a readable

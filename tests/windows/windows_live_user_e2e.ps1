@@ -14,7 +14,12 @@ if (-not [Environment]::Is64BitOperatingSystem) { throw 'Live E2E requires Windo
 
 $os = Get-CimInstance Win32_OperatingSystem
 $buildNumber = [int]$os.BuildNumber
-$expectedOs = if ($ExpectedWindowsVersion -eq '10') { $buildNumber -lt 22000 } else { $buildNumber -ge 22000 }
+$workstation = [int]$os.ProductType -eq 1
+$expectedOs = if ($ExpectedWindowsVersion -eq '10') {
+    $workstation -and $buildNumber -ge 10240 -and $buildNumber -lt 22000
+} else {
+    $workstation -and $buildNumber -ge 22000
+}
 if (-not $expectedOs) { throw "Live E2E expected Windows $ExpectedWindowsVersion but detected caption=$($os.Caption) build=$buildNumber." }
 if ([string]$os.OSArchitecture -notmatch '64') { throw "Live E2E requires a 64-bit OS; detected: $($os.OSArchitecture)" }
 

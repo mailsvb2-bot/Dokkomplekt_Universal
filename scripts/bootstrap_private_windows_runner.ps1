@@ -11,6 +11,7 @@ param(
     [string] $RunnerRoot = '',
     [string] $RunnerName = '',
     [string] $RunnerTaskName = '',
+    [string] $HardwareWindowsVersion = '',
     [switch] $InstallPrerequisites
 )
 
@@ -23,7 +24,15 @@ $ExpectedRuntimeRoot = 'C:\ProgramData\DokkomplektRuntime'
 $RuntimeServiceAccount = 'NT AUTHORITY\NETWORK SERVICE'
 $RuntimeServiceSid = 'S-1-5-20'
 $RuntimeAclEvidencePath = 'C:\ProgramData\DokkomplektE2E\RUNTIME_SERVICE_ACL.json'
-$RunnerLabel = if ($Role -eq 'runtime') { 'dokkomplekt-runtime' } else { 'dokkomplekt-hardware' }
+$RunnerLabel = if ($Role -eq 'runtime') {
+    'dokkomplekt-runtime'
+} elseif ($HardwareWindowsVersion -eq '10') {
+    'dokkomplekt-win10-live'
+} elseif ($HardwareWindowsVersion -eq '11') {
+    'dokkomplekt-win11-live'
+} else {
+    'dokkomplekt-hardware'
+}
 if ([string]::IsNullOrWhiteSpace($RunnerRoot)) { $RunnerRoot = if ($Role -eq 'runtime') { 'C:\actions-runner-runtime' } else { 'C:\actions-runner-hardware' } }
 if ([string]::IsNullOrWhiteSpace($RunnerTaskName)) { $RunnerTaskName = if ($Role -eq 'runtime') { 'Dokkomplekt Runtime Actions Runner' } else { 'Dokkomplekt Hardware Actions Runner' } }
 if ([string]::IsNullOrWhiteSpace($RunnerName)) { $RunnerName = "dokkomplekt-$Role-$env:COMPUTERNAME" }
@@ -163,6 +172,17 @@ if ($RepositoryUrl -ine $PrivateRepositoryUrl) { throw "Production runners may r
 if ($RegistrationToken -match '\s' -or $RegistrationToken.Length -lt 20) { throw 'RegistrationToken does not look valid.' }
 $interactive = Assert-AdministratorAndInteractive
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 is required.' }
+if ($Role -eq 'hardware') {
+    if ($HardwareWindowsVersion -notin @('10', '11')) {
+        throw 'Role=hardware requires HardwareWindowsVersion 10 or 11 so the runner label cannot be ambiguous.'
+    }
+    $os = Get-CimInstance Win32_OperatingSystem
+    $buildNumber = [int]$os.BuildNumber
+    $matchesExpectedWindows = if ($HardwareWindowsVersion -eq '10') { $buildNumber -lt 22000 } else { $buildNumber -ge 22000 }
+    if (-not $matchesExpectedWindows) {
+        throw "Hardware runner requested Windows $HardwareWindowsVersion but detected caption=$($os.Caption) build=$buildNumber."
+    }
+}
 
 $runnerServices = @(Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue)
 if ($Role -eq 'hardware' -and $runnerServices.Count -gt 0) { throw 'Remove Actions runner Windows services from the hardware host; Word/printer validation must remain interactive.' }
@@ -237,6 +257,7 @@ $evidencePath = Join-Path $evidenceRoot ("RUNNER_BOOTSTRAP_$($Role.ToUpperInvari
     public_repository_forbidden=$PublicRepositoryUrl
     runner_name=$RunnerName
     runner_label=$RunnerLabel
+    hardware_windows_version=if ($Role -eq 'hardware') { $HardwareWindowsVersion } else { '' }
     runner_root=$RunnerRoot
     execution_mode=$executionMode
     task_name=if ($Role -eq 'hardware') { $RunnerTaskName } else { '' }

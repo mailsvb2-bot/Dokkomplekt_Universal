@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "tests" / "installer" / "windows_e1_accounting_contract.ps1"
 MAIN_RS = ROOT / "src-tauri" / "src" / "main.rs"
+FIXTURE_RS = ROOT / "src-tauri" / "src" / "subsystems" / "template_version_e2e.rs"
 REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
 
 
@@ -17,7 +18,7 @@ def test_fpr14_installed_flow_selects_superseded_version_and_reads_physical_docx
         "FPR14-V2-SNAPSHOT",
         "Версии шаблона",
         "Использовать версию 1?",
-        "--e2e-update-template-version=",
+        "DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST",
         "rollback output did not contain the archived v1 marker",
         "rollback output incorrectly rendered the superseded-current v2 marker",
     ):
@@ -25,9 +26,13 @@ def test_fpr14_installed_flow_selects_superseded_version_and_reads_physical_docx
 
 
 def test_fpr14_fixture_is_guarded_and_uses_installed_application_state() -> None:
-    source = MAIN_RS.read_text(encoding="utf-8")
-    assert "--e2e-update-template-version=" in source
+    main = MAIN_RS.read_text(encoding="utf-8")
+    source = FIXTURE_RS.read_text(encoding="utf-8")
+    assert 'include!("subsystems/template_version_e2e.rs");' in main
+    assert "run_template_version_installer_e2e(&handle, &state)" in main
     assert "DOKKOMPLEKT_RUN_INSTALLER_E2E" in source
+    assert "DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST" in source
+    assert "DOKKOMPLEKT_E2E_EVIDENCE_PATH" in source
     assert "update_document_template(" in source
     assert "template-version fixture document not found for button" in source
     assert "dokkomplekt.template-version-fixture.v1" in source

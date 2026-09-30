@@ -1,8 +1,12 @@
 # Hosted-signing / hardware production trust boundary
 
-Dokkomplekt Windows production acceptance uses **two trust domains but only one physical self-hosted Windows machine**.
+Dokkomplekt Windows production acceptance uses **two trust domains**: one ephemeral hosted signing/build domain and one private hardware-validation domain. The hardware-validation domain contains **two independent live Windows instances** so platform evidence is not conflated.
 
-The first domain is an ephemeral GitHub-hosted Windows signing/build job. The second is the private physical `dokkomplekt-hardware` runner used only for Word, printer, watcher and reboot evidence.
+The first domain is an ephemeral GitHub-hosted Windows signing/build job. The second domain is a private two-row live matrix:
+- Windows 10 x64 runner `dokkomplekt-win10-live`;
+- Windows 11 x64 runner `dokkomplekt-win11-live`.
+
+Both hardware rows receive the same exact signed handoff, but execute in separate interactive Windows sessions with separate local state and evidence.
 
 ## Hosted runtime/signing domain
 
@@ -27,17 +31,27 @@ The offline approval private key is not stored in GitHub Actions. Therefore prod
 
 ## Hardware evidence runner
 
-Labels: `self-hosted`, `Windows`, `X64`, `dokkomplekt-hardware`.
+Labels:
+- `self-hosted`, `Windows`, `X64`, `dokkomplekt-win10-live`;
+- `self-hosted`, `Windows`, `X64`, `dokkomplekt-win11-live`.
 
 Environment: `windows-hardware-validation`.
 
-This is the one physical Windows machine. It receives **no production signing/private-key secrets** and no runner-owned runtime manifest. It provides the representative interactive Windows desktop, licensed Microsoft Word, WebView2, a dedicated real printer queue, PrintService Operational logging and persistent reboot state.
+Each live runner receives **no production signing/private-key secrets** and no runner-owned runtime manifest. Each provides an independent interactive Windows desktop, licensed Microsoft Word, WebView2, a dedicated real printer queue, PrintService Operational logging and persistent reboot state. A platform failure does not cancel the other row because the matrix is configured with `fail-fast: false`.
 
 Audited registration entrypoint:
 
 ```powershell
+# Windows 10 x64 instance
 .\scripts\register_windows_hardware_evidence_runner.ps1 `
   -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
+  -WindowsVersion 10 `
+  -InstallPrerequisites
+
+# Windows 11 x64 instance
+.\scripts\register_windows_hardware_evidence_runner.ps1 `
+  -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
+  -WindowsVersion 11 `
   -InstallPrerequisites
 ```
 
@@ -65,6 +79,6 @@ GitHub artifact transport itself is not the trust anchor. The signed manifest an
 
 ## Acceptance invariant
 
-A production hardware verdict is valid only when private `prepare` builds/signs the canonical handoff on GitHub-hosted Windows under `windows-production-signing`, prepare hardware evidence uses that handoff, private `verify` re-downloads that exact handoff by `prepare_run_id` instead of rebuilding it, hardware execution occurs only on the private `dokkomplekt-hardware` runner under `windows-hardware-validation`, the hardware job has no production signing secret references, and the public publisher later re-verifies and publishes those exact handoff bytes.
+A production hardware verdict is valid only when private `prepare` builds/signs the canonical handoff on GitHub-hosted Windows under `windows-production-signing`, both Windows 10 and Windows 11 prepare rows consume that same handoff, private `verify` re-downloads that exact handoff by `prepare_run_id` instead of rebuilding it, both live rows complete independently under `windows-hardware-validation`, neither hardware row has production signing secret references, and the public publisher later re-verifies and publishes those exact handoff bytes.
 
 The legacy `dokkomplekt-runtime` service scripts remain only for backward compatibility and regression coverage. They are not required by current release/hardware validation.

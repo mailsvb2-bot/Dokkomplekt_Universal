@@ -1,10 +1,14 @@
 {
   "schema": "dokkomplekt.live-user-scenarios.v1",
   "policy": {
-    "platform": "Windows 11 x64",
-    "runner": "persistent self-hosted interactive user session",
+    "runner": "two independent persistent self-hosted interactive user sessions, one per supported Windows major version",
     "evidence": "real installed signed/offline application; mocked IPC is not accepted",
-    "exhaustive_rule": "Every FPR-01..FPR-23 and every release lifecycle scenario must have a live executor and evidence binding."
+    "exhaustive_rule": "Every FPR-01..FPR-23 and every release lifecycle scenario must have a live executor and evidence binding.",
+    "platforms": [
+      "Windows 10 x64",
+      "Windows 11 x64"
+    ],
+    "matrix_rule": "Every required live scenario is release evidence only after independent Windows 10 and Windows 11 jobs both pass for the same exact signed handoff."
   },
   "scenarios": [
     {

@@ -54,9 +54,13 @@ def test_completion_receipt_contract_stores_only_opaque_audit_identity() -> None
         assert forbidden not in source[struct_start:struct_end], forbidden
 
 
-def test_feature_register_requires_green_runtime_before_fpr22_verification() -> None:
+def test_feature_register_records_exact_green_runtime_for_fpr22_verification() -> None:
     register = json.loads(REGISTER.read_text(encoding="utf-8"))
     feature = next(item for item in register["features"] if item["id"] == "FPR-22")
-    assert feature["status"] == "needs-runtime-proof"
-    assert "FPR-22 RECEIPT PRIVACY PASS" in feature["runtime_gap"]
-    assert "FPR-22 DIAGNOSTIC PRIVACY PASS" in feature["runtime_gap"]
+    assert feature["status"] == "verified"
+    assert feature["runtime_gap"] == ""
+    evidence = "\n".join(feature["runtime_evidence"])
+    assert "FPR-22 RECEIPT PRIVACY PASS" in evidence
+    assert "FPR-22 DIAGNOSTIC PRIVACY PASS" in evidence
+    assert "36667461131" in evidence
+    assert "75e0a914b12dcdbef46eb7082cc1fc71d19715bb" in evidence

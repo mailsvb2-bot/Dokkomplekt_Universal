@@ -2400,14 +2400,30 @@ $fpr09ExpandControl = Wait-UiElement -Description 'FPR-09 primary automatic fill
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
 }
-if ($fpr09ExpandControl.Current.IsExpandCollapsePatternAvailable) {
-  $expandPattern = $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-  if ($expandPattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
-    $expandPattern.Expand()
-    Write-Host 'FPR-09 setup expanded through UIA ExpandCollapsePattern.'
+
+# Do not trust WebView2's ExpandCollapseState by itself. Hosted WebView2 can
+# report <details> as Expanded while its descendants are still absent from the
+# accessibility tree. Success is defined by an observable child control.
+if ($fpr09ExpandControl.Current.IsScrollItemPatternAvailable) {
+  try {
+    $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+    Start-Sleep -Milliseconds 150
+  } catch { }
+}
+$fpr09ExpandedChild = $null
+try {
+  $fpr09ExpandedChild = Find-E2NamedElement -Root (Find-LiveAppWindow) -Name 'Открыть Word и показать место'
+} catch { }
+if ($null -eq $fpr09ExpandedChild) {
+  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 physically expand automatic filling setup'
+  $fpr09ExpandedChild = Wait-UiElement -Description 'FPR-09 observable expanded setup child' -TimeoutSeconds 10 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Открыть Word и показать место'
   }
+  Write-Host 'FPR-09 setup expansion proved by observable child control after physical summary activation.'
 } else {
-  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 expand primary automatic filling setup'
+  Write-Host 'FPR-09 setup expansion already observable through child control.'
 }
 $fpr09SourceControl = $null
 for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {

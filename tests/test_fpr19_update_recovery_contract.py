@@ -9,6 +9,7 @@ UPDATE_RUNTIME = ROOT / "src-tauri" / "src" / "subsystems" / "update_runtime.rs"
 MAIN_RS = ROOT / "src-tauri" / "src" / "main.rs"
 API_TS = ROOT / "src" / "lib" / "api.ts"
 APP_TSX = ROOT / "src" / "App.tsx"
+UPDATE_HOOK = ROOT / "src" / "hooks" / "useUpdateLifecycle.ts"
 LIVE_UPDATE = ROOT / "tests" / "windows" / "windows_live_update_e2e.ps1"
 REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
 
@@ -46,7 +47,10 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
 
 def test_fpr19_user_update_ui_closes_check_apply_recovery_loop() -> None:
     app = APP_TSX.read_text(encoding="utf-8")
+    hook = UPDATE_HOOK.read_text(encoding="utf-8")
     live = LIVE_UPDATE.read_text(encoding="utf-8-sig")
+    assert "useUpdateLifecycle" in app
+    assert "checkAndApplyUpdate: checkUpdates" in app
     for marker in (
         "applyVerifiedUpdate",
         "getUpdateRecoveryStatus",
@@ -56,7 +60,7 @@ def test_fpr19_user_update_ui_closes_check_apply_recovery_loop() -> None:
         "recoverable_failure",
         "Обновление до версии",
     ):
-        assert marker in app, marker
+        assert marker in hook, marker
     assert "Проверить обновления" in live
     assert "Установить и перезапустить" in live
     assert "recovery.status -ne 'verified'" in live

@@ -2070,6 +2070,7 @@ include!("subsystems/source_intake_commands.rs");
 include!("subsystems/startup_state.rs");
 include!("subsystems/manual_publication_identity.rs");
 include!("subsystems/document_commands.rs");
+include!("subsystems/template_version_e2e.rs");
 include!("subsystems/template_transfer.rs");
 include!("subsystems/created_documents_intake.rs");
 include!("subsystems/business_registry.rs");
@@ -2084,7 +2085,6 @@ include!("subsystems/processing_guard.rs");
 include!("subsystems/shared_completion_guards.rs");
 include!("subsystems/automation_dedup.rs");
 include!("subsystems/automation_runtime.rs");
-
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     let background_watch = args.iter().any(|arg| arg == "--background-watch");
@@ -2213,6 +2213,10 @@ fn main() {
                 eprintln!("Восстановление рабочего набора требует внимания: {error}");
             }
 
+            if run_template_version_installer_e2e(&handle, &state).map_err(std::io::Error::other)? {
+                handle.exit(0);
+                return Ok(());
+            }
             // Output-root availability is a native desktop startup invariant, not a
             // WebView/React side effect. Prepare it before creating the window so a
             // slow or failed frontend bootstrap can never leave a live process without

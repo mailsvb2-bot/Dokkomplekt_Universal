@@ -41,8 +41,31 @@ jobs:
           npm run build
       - name: Build native macOS application and DMG
         run: |
-          set -o pipefail
-          npx tauri build --bundles app,dmg 2>&1 | tee macos-tauri-build.log
+          set -euo pipefail
+          : > macos-tauri-build.log
+
+          bundle_ok=0
+          for attempt in 1 2; do
+            echo "macOS app+DMG packaging attempt $attempt/2" | tee -a macos-tauri-build.log
+            if npx tauri build --bundles app,dmg 2>&1 | tee -a macos-tauri-build.log; then
+              bundle_ok=1
+              break
+            fi
+
+            echo "macOS app+DMG packaging attempt $attempt failed; collecting disk-image state and cleaning stale DMG state before retry." | tee -a macos-tauri-build.log
+            hdiutil info 2>&1 | tee -a macos-tauri-build.log || true
+            while IFS= read -r device; do
+              [[ -n "$device" ]] || continue
+              hdiutil detach "$device" -force 2>&1 | tee -a macos-tauri-build.log || true
+            done < <(hdiutil info | awk '/Dokkomplekt Universal/ { print $1 }' | sort -u)
+            rm -rf target/release/bundle/dmg
+            sleep 3
+          done
+
+          if [[ "$bundle_ok" -ne 1 ]]; then
+            echo "macOS app+DMG packaging failed after 2 bounded attempts." >&2
+            exit 1
+          fi
       - name: Validate application bundle structure and signature envelope
         shell: bash
         run: |

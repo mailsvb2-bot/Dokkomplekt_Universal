@@ -2400,14 +2400,30 @@ $fpr09ExpandControl = Wait-UiElement -Description 'FPR-09 primary automatic fill
   if ($null -eq $currentAppWindow) { return $null }
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
 }
-if ($fpr09ExpandControl.Current.IsExpandCollapsePatternAvailable) {
-  $expandPattern = $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-  if ($expandPattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
-    $expandPattern.Expand()
-    Write-Host 'FPR-09 setup expanded through UIA ExpandCollapsePattern.'
+
+# Do not trust WebView2's ExpandCollapseState by itself. Hosted WebView2 can
+# report <details> as Expanded while its descendants are still absent from the
+# accessibility tree. Success is defined by an observable child control.
+if ($fpr09ExpandControl.Current.IsScrollItemPatternAvailable) {
+  try {
+    $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+    Start-Sleep -Milliseconds 150
+  } catch { }
+}
+$fpr09ExpandedChild = $null
+try {
+  $fpr09ExpandedChild = Find-E2NamedElement -Root (Find-LiveAppWindow) -Name 'Открыть Word и показать место'
+} catch { }
+if ($null -eq $fpr09ExpandedChild) {
+  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 physically expand automatic filling setup'
+  $fpr09ExpandedChild = Wait-UiElement -Description 'FPR-09 observable expanded setup child' -TimeoutSeconds 10 -Probe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-E2NamedElement -Root $currentAppWindow -Name 'Открыть Word и показать место'
   }
+  Write-Host 'FPR-09 setup expansion proved by observable child control after physical summary activation.'
 } else {
-  Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 expand primary automatic filling setup'
+  Write-Host 'FPR-09 setup expansion already observable through child control.'
 }
 $fpr09SourceControl = $null
 for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {
@@ -2421,16 +2437,32 @@ for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceContro
 
   # WebView2 can report the native <details> as Expanded while keeping lower
   # descendants out of the UIA tree until the actual modal viewport is scrolled.
-  # PgDn is focus-dependent and can target the host window instead of the modal,
-  # so move the pointer inside the live app and scroll the rendered viewport
-  # physically. Re-resolve the control on every iteration because WebView2 may
-  # recreate accessibility nodes as content enters the viewport.
-  Activate-LiveAppWindow -Window $currentAppWindow
-  $windowRect = $currentAppWindow.Current.BoundingRectangle
-  $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
-  $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height * 0.70))
-  [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
-  [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, -480, [UIntPtr]::Zero)
+  # Scroll the actual template-setup dialog first; scrolling the host window is
+  # not equivalent and can leave the modal viewport untouched on hosted runners.
+  $setupDialog = Find-E2NamedElement -Root $currentAppWindow -Name 'Добавление шаблонов'
+  $scrolledModal = $false
+  if ($null -ne $setupDialog -and $setupDialog.Current.IsScrollPatternAvailable) {
+    try {
+      $scrollPattern = $setupDialog.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+      if ($scrollPattern.Current.VerticallyScrollable) {
+        $scrollPattern.Scroll(
+          [System.Windows.Automation.ScrollAmount]::NoAmount,
+          [System.Windows.Automation.ScrollAmount]::LargeIncrement
+        )
+        $scrolledModal = $true
+      }
+    } catch { }
+  }
+
+  if (-not $scrolledModal) {
+    # Fallback only when WebView2 does not expose ScrollPattern for the dialog.
+    Activate-LiveAppWindow -Window $currentAppWindow
+    $dialogRect = if ($null -ne $setupDialog) { $setupDialog.Current.BoundingRectangle } else { $currentAppWindow.Current.BoundingRectangle }
+    $wheelX = [int][Math]::Round($dialogRect.Left + ($dialogRect.Width / 2))
+    $wheelY = [int][Math]::Round($dialogRect.Top + ($dialogRect.Height * 0.70))
+    [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
+    [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, -480, [UIntPtr]::Zero)
+  }
   Start-Sleep -Milliseconds 250
 }
 if ($null -eq $fpr09SourceControl) {

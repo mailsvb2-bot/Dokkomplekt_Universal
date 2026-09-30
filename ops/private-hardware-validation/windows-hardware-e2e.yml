@@ -380,6 +380,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           tests/windows/windows_live_user_e2e.ps1 -InstallerRoot signed-handoff/release-installers/offline -ScenarioRegistry verification/e2e/LIVE_USER_SCENARIOS.json -OutputPath verification/release/LIVE_USER_E2E.json
 
+      - name: Execute previous-version signed update/recovery live scenario
+        if: inputs.reboot_phase == 'prepare'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          tests/windows/windows_live_update_e2e.ps1 -PreviousInstaller $env:DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER -OutputPath verification/release/FPR19_LIVE_UPDATE.json
+
       - name: Prepare real reboot E2E state
         if: inputs.reboot_phase == 'prepare'
         shell: pwsh

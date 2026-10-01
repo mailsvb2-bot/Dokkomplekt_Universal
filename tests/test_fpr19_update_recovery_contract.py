@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UPDATE_RUNTIME = ROOT / "src-tauri" / "src" / "subsystems" / "update_runtime.rs"
+STORAGE = ROOT / "crates" / "dokkomplekt-storage" / "src" / "lib.rs"
 MAIN_RS = ROOT / "src-tauri" / "src" / "main.rs"
 API_TS = ROOT / "src" / "lib" / "api.ts"
 APP_TSX = ROOT / "src" / "App.tsx"
@@ -16,6 +17,7 @@ REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
 
 def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
     runtime = UPDATE_RUNTIME.read_text(encoding="utf-8")
+    storage = STORAGE.read_text(encoding="utf-8")
     main = MAIN_RS.read_text(encoding="utf-8")
     api = API_TS.read_text(encoding="utf-8")
 
@@ -46,6 +48,11 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
     assert apply.index(".spawn()") < apply.index("watcher.take()")
     assert "Installer запущен, но не удалось зафиксировать installer_started" in apply
     assert "app.exit(1)" in apply
+
+    assert "pub fn backup_snapshot(&self, target: &Path)" in storage
+    assert 'VACUUM main INTO ?1' in storage
+    assert "repo.backup_snapshot(&backup_db)" in runtime
+    assert "copy_update_backup_file(&db_path, &backup_dir)" not in runtime
 
     assert "reconcile_pending_update(&handle)" in main
     assert main.index("reconcile_pending_update(&handle)") < main.index("ensure_default_state_loaded(&handle, &state)")

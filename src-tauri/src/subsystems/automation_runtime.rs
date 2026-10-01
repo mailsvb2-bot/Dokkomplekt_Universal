@@ -233,7 +233,7 @@ fn zero_touch_template_admission_blockers(
             blockers.push(ZeroTouchTemplateAdmissionBlocker {
                 document_id: document.id.clone(),
                 button_label: document.button_label.clone(),
-                code: "validated_manual_only".into(),
+                code: "automatic_validation_missing".into(),
                 reason: "кнопка разрешена для ручной работы, но не имеет ValidatedAutomatic proof для watcher/zero-touch".into(),
             });
             continue;

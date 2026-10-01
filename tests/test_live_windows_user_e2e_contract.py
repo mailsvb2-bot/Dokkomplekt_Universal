@@ -74,6 +74,10 @@ def test_live_harness_requires_real_windows10_or_11_x64_interactive_signed_insta
 
 def test_private_workflow_has_two_independent_windows_live_jobs() -> None:
     workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    signed_build = workflow[
+        workflow.index("  signed-runtime-build:") : workflow.index("  hardware-evidence:")
+    ]
+    assert "matrix." not in signed_build
     hardware = workflow[workflow.index("  hardware-evidence:") :]
     assert "strategy:" in hardware
     assert "fail-fast: false" in hardware
@@ -137,6 +141,13 @@ def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
     for marker in (
         "DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER",
         "DokkomplektHardwareRunner\\hardware-config.cmd",
+        "[ValidateSet('10', '11')]",
+        "ExpectedWindowsVersion",
+        "buildNumber -ge 10240",
+        "buildNumber -lt 22000",
+        "buildNumber -ge 22000",
+        "ProductType",
+        "OSArchitecture",
         "Get-AuthenticodeSignature",
         "Проверить обновления",
         "Установить и перезапустить",
@@ -145,6 +156,7 @@ def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
         "FPR-19 LIVE UPDATE PASS:",
     ):
         assert marker in source
+    assert "requires Windows 11" not in source
     preflight = HOST_PREFLIGHT.read_text(encoding="utf-8")
     workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
     assert "previous-signed-installer-configured" in preflight

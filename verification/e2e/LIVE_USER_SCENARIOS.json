@@ -101,10 +101,10 @@
     },
     {
       "id": "FPR-12",
-      "title": "Settings persistence across restart/replacement",
-      "lane": "installed-baseline",
-      "executor": "windows_installer_contract.ps1",
-      "evidence_marker": "FPR-12 INSTALLER PRESERVATION PASS:",
+      "title": "Settings persistence across real previous-version upgrade",
+      "lane": "update-live",
+      "executor": "windows_live_update_e2e.ps1",
+      "evidence_marker": "FPR-12 LIVE UPGRADE STORAGE PASS:",
       "required": true
     },
     {

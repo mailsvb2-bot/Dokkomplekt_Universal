@@ -632,7 +632,7 @@
       "id": "FPR-19",
       "group": "Обновления",
       "status": "needs-runtime-proof",
-      "actual_state": "signed update lifecycle verifies/downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, keeps the watcher alive until successful installer spawn, snapshots mandatory local DB/key state, persists recovery state, verifies successful post-start upgrades, and automatically restores pre-update DB/key/WAL/SHM before workspace load when an installer started but the application returns in the previous version; physical previous-version success + forced installer-failure rollback proof is still pending",
+      "actual_state": "signed update lifecycle verifies/downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, keeps the watcher alive until successful installer spawn, creates a SQLite-owned consistent snapshot via VACUUM INTO plus an обязательный local-key backup, persists recovery state, verifies successful post-start upgrades, and automatically restores the pre-update DB/key before workspace load when an installer started but the application returns in the previous version; physical previous-version success + forced installer-failure rollback proof is still pending",
       "entry": [
         "src-tauri/src/main.rs#check_for_updates",
         "src-tauri/src/main.rs#apply_verified_update",
@@ -655,10 +655,11 @@
         "tests/test_fpr19_update_recovery_contract.py",
         ".github/workflows/build-installers.yml",
         "src/hooks/useUpdateLifecycle.ts",
-        "tests/windows/windows_live_update_e2e.ps1"
+        "tests/windows/windows_live_update_e2e.ps1",
+        "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "A real previous-version -> current-version installed run must prove preserved settings/state and successful post-start verification, and a forced real installer failure must prove automatic pre-workspace rollback on both Windows 10 and Windows 11 before final register closure."
+      "runtime_gap": "A real previous-version -> current-version installed run must prove preserved settings/state and successful post-start verification, and a forced real installer failure must prove automatic pre-workspace rollback from the consistent SQLite snapshot on both Windows 10 and Windows 11 before final register closure."
     },
     {
       "id": "FPR-20",

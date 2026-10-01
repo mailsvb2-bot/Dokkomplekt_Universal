@@ -52,6 +52,8 @@ def test_noncanonical_origins_fail_closed(origin: str) -> None:
 
 
 def test_current_checkout_identity_comes_from_git_head_and_origin() -> None:
+    if not (ROOT / ".git").exists():
+        pytest.skip("release identity requires a real Git checkout; clean source archives intentionally omit .git")
     module = load_module()
     identity = module.resolve_identity(ROOT)
     expected_head = subprocess.check_output(

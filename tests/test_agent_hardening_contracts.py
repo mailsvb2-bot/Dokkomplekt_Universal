@@ -177,6 +177,10 @@ def test_source_archive_excludes_virtual_environments_and_ascii_launchers_exist(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert {".venv", "venv", ".tox", ".nox"} <= module.EXCLUDED_DIRS
+    registry_parts = ("verification", "e2e", "LIVE_USER_SCENARIOS.json")
+    assert registry_parts in module.ALLOWED_FILES_UNDER_EXCLUDED_DIRS
+    assert module.is_excluded(ROOT / "verification" / "ci" / "generated.json") is True
+    assert module.is_excluded(ROOT / "verification" / "e2e" / "LIVE_USER_SCENARIOS.json") is False
     assert (ROOT / "CHECK_PROJECT.bat").is_file()
     assert (ROOT / "BUILD_EXE.bat").is_file()
     assert not (ROOT / "ПРОВЕРИТЬ_ПРОЕКТ.bat").exists()

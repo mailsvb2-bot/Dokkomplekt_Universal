@@ -52,9 +52,8 @@ use dokkomplekt_docx::{
     extract_docx_text, extract_docx_text_from_bytes, inject_docx_images,
     insert_text_paragraph_before_first_matching_file, inspect_docx_capabilities_file,
     inspect_docx_structure, render_docx_file_with_watermark_proof, validate_safe_template_file,
-    RenderedDocxProof,
-    TemplateLearningMapField, TemplateLearningMapReport, TemplateMarkupReplacement,
-    TemplateMarkupReport, TemplateRegressionReport,
+    RenderedDocxProof, TemplateLearningMapField, TemplateLearningMapReport,
+    TemplateMarkupReplacement, TemplateMarkupReport, TemplateRegressionReport,
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,

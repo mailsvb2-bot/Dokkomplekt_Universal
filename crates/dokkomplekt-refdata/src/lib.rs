@@ -215,11 +215,11 @@ mod tests {
     }
 
     #[test]
-    fn complete_2025_and_2026_calendars_are_loaded() {
+    fn complete_2025_through_2027_calendars_are_loaded() {
         let calendar = production_calendar_ru().expect("bundled calendar");
         assert!(calendar.is_year_complete(2025));
         assert!(calendar.is_year_complete(2026));
-        assert!(!calendar.is_year_complete(2027));
+        assert!(calendar.is_year_complete(2027));
         assert_eq!(
             calendar.listed_years().collect::<Vec<_>>(),
             vec![2025, 2026, 2027]
@@ -236,6 +236,12 @@ mod tests {
             (2026, 1, 8),
             (2026, 3, 9),
             (2026, 5, 11),
+            (2027, 2, 22),
+            (2027, 5, 3),
+            (2027, 5, 10),
+            (2027, 6, 14),
+            (2027, 11, 5),
+            (2027, 12, 31),
         ] {
             assert_eq!(
                 calendar.is_working_day(NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap()),
@@ -248,6 +254,10 @@ mod tests {
         );
         assert_eq!(
             calendar.is_working_day(NaiveDate::from_ymd_opt(2026, 1, 9).unwrap()),
+            Ok(true)
+        );
+        assert_eq!(
+            calendar.is_working_day(NaiveDate::from_ymd_opt(2027, 2, 20).unwrap()),
             Ok(true)
         );
     }
@@ -266,22 +276,28 @@ mod tests {
             add_working_days_ru(NaiveDate::from_ymd_opt(2026, 5, 8).unwrap(), 1).unwrap(),
             NaiveDate::from_ymd_opt(2026, 5, 12).unwrap()
         );
+        assert_eq!(
+            add_working_days_ru(NaiveDate::from_ymd_opt(2027, 2, 19).unwrap(), 1).unwrap(),
+            NaiveDate::from_ymd_opt(2027, 2, 20).unwrap()
+        );
+        assert_eq!(
+            add_working_days_ru(NaiveDate::from_ymd_opt(2027, 11, 3).unwrap(), 1).unwrap(),
+            NaiveDate::from_ymd_opt(2027, 11, 8).unwrap()
+        );
     }
 
     #[test]
     fn unsupported_year_fails_closed_instead_of_using_weekends_only() {
-        let error = add_working_days_ru(NaiveDate::from_ymd_opt(2027, 12, 30).unwrap(), 3)
-            .expect_err(
-                "2027 must remain blocked until the official transfer calendar is complete",
-            );
-        assert_eq!(error, CalendarError::UnsupportedYear(2027));
+        let error = add_working_days_ru(NaiveDate::from_ymd_opt(2028, 12, 30).unwrap(), 3)
+            .expect_err("2028 must remain blocked until its official transfer calendar is complete");
+        assert_eq!(error, CalendarError::UnsupportedYear(2028));
     }
 
     #[test]
     fn crossing_into_an_unconfirmed_year_fails_closed() {
-        let error = add_working_days_ru(NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(), 1)
+        let error = add_working_days_ru(NaiveDate::from_ymd_opt(2027, 12, 31).unwrap(), 1)
             .expect_err("cross-year calculation must validate the destination year");
-        assert_eq!(error, CalendarError::UnsupportedYear(2027));
+        assert_eq!(error, CalendarError::UnsupportedYear(2028));
     }
 
     #[test]

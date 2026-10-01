@@ -606,32 +606,41 @@ fn copy_update_backup_file(source: &Path, target_dir: &Path) -> Result<Option<Pa
 
 fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<PathBuf, String> {
     let db_path = default_state_db_path(app)?;
-    {
-        let repo = repository_for(&db_path)?;
-        repo.quick_integrity_check()
-            .map_err(|error| format!("Локальная база не прошла integrity check: {error}"))?;
-    }
     let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let backup_dir = data_dir
         .join("update-backups")
         .join(format!("{}-{}", target_version, Uuid::new_v4()));
     std::fs::create_dir_all(&backup_dir).map_err(|error| error.to_string())?;
 
-    if copy_update_backup_file(&db_path, &backup_dir)?.is_none() {
-        return Err("Не удалось создать обязательный backup локальной базы".to_string());
+    let result = (|| -> Result<(), String> {
+        let repo = repository_for(&db_path)?;
+        repo.quick_integrity_check()
+            .map_err(|error| format!("Локальная база не прошла integrity check: {error}"))?;
+        let backup_db = backup_dir.join(
+            db_path
+                .file_name()
+                .ok_or_else(|| "Не удалось определить имя локальной базы".to_string())?,
+        );
+        repo.backup_snapshot(&backup_db)
+            .map_err(|error| format!("Не удалось создать консистентный SQLite snapshot: {error}"))?;
+
+        let key_path = db_path.with_file_name(format!(
+            "{}.key",
+            db_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(DEFAULT_STATE_DB)
+        ));
+        if copy_update_backup_file(&key_path, &backup_dir)?.is_none() {
+            return Err("Не удалось создать обязательный backup локального ключа".to_string());
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&backup_dir);
+        return Err(error);
     }
-    let key_path = db_path.with_file_name(format!(
-        "{}.key",
-        db_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(DEFAULT_STATE_DB)
-    ));
-    if copy_update_backup_file(&key_path, &backup_dir)?.is_none() {
-        return Err("Не удалось создать обязательный backup локального ключа".to_string());
-    }
-    copy_update_backup_file(&PathBuf::from(format!("{}-wal", db_path.display())), &backup_dir)?;
-    copy_update_backup_file(&PathBuf::from(format!("{}-shm", db_path.display())), &backup_dir)?;
     Ok(backup_dir)
 }
 

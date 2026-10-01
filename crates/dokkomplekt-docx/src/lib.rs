@@ -539,15 +539,7 @@ fn validate_safe_template_archive<R: Read + Seek>(mut archive: ZipArchive<R>) ->
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum DocxCapabilityLevel {
@@ -600,10 +592,7 @@ fn xml_contains_element(xml: &str, element: &str) -> bool {
 fn inspect_docx_capabilities_archive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
 ) -> DocxResult<DocxCapabilityManifest> {
-    let mut required = BTreeSet::from([
-        DocxCapabilityLevel::Read,
-        DocxCapabilityLevel::Preserve,
-    ]);
+    let mut required = BTreeSet::from([DocxCapabilityLevel::Read, DocxCapabilityLevel::Preserve]);
     let mut detected = BTreeSet::<String>::new();
     let mut blocking = BTreeSet::<String>::new();
     let mut total_uncompressed = 0_u64;
@@ -4675,24 +4664,22 @@ mod tests {
         let manifest =
             inspect_docx_capabilities_file(&path).expect("inspect supported template capabilities");
         assert!(manifest.publishable());
-        assert!(manifest.required_levels.contains(&DocxCapabilityLevel::Read));
-        assert!(
-            manifest
-                .required_levels
-                .contains(&DocxCapabilityLevel::Preserve)
-        );
-        assert!(manifest.required_levels.contains(&DocxCapabilityLevel::Patch));
-        assert!(
-            manifest
-                .required_levels
-                .contains(&DocxCapabilityLevel::StructuralEdit)
-        );
+        assert!(manifest
+            .required_levels
+            .contains(&DocxCapabilityLevel::Read));
+        assert!(manifest
+            .required_levels
+            .contains(&DocxCapabilityLevel::Preserve));
+        assert!(manifest
+            .required_levels
+            .contains(&DocxCapabilityLevel::Patch));
+        assert!(manifest
+            .required_levels
+            .contains(&DocxCapabilityLevel::StructuralEdit));
         assert!(manifest.detected_constructs.contains(&"table".into()));
-        assert!(
-            manifest
-                .detected_constructs
-                .contains(&"template_structural_edit".into())
-        );
+        assert!(manifest
+            .detected_constructs
+            .contains(&"template_structural_edit".into()));
         assert!(!manifest.layout_verified);
         let _ = std::fs::remove_dir_all(&dir);
     }

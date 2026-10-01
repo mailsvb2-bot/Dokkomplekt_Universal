@@ -63,7 +63,7 @@ def test_zero_touch_requires_validated_automatic_template_proof() -> None:
     assert '"validation_level": "validated_automatic"' in learning
     assert "fn learning_validation_allows_zero_touch(" in automation
     assert 'level == "validated_automatic"' in automation
-    assert '"validated_manual_only"' in automation
+    assert '"automatic_validation_missing"' in automation
     assert '"template_automation_admission"' in automation
     assert '"intake_blocked_template_admission"' in automation
     assert '"required_level": "validated_automatic"' in automation

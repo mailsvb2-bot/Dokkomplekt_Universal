@@ -54,3 +54,22 @@ def test_legacy_template_migration_preserves_non_learning_version_contract() -> 
     call = legacy[call_start:call_end]
     assert "None," in call
     assert "Some(" not in call
+
+
+def test_zero_touch_requires_validated_automatic_template_proof() -> None:
+    learning = read("src-tauri/src/subsystems/template_learning_commands.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+
+    assert '"validation_level": "validated_automatic"' in learning
+    assert "fn learning_validation_allows_zero_touch(" in automation
+    assert 'level == "validated_automatic"' in automation
+    assert '"validated_manual_only"' in automation
+    assert '"template_automation_admission"' in automation
+    assert '"intake_blocked_template_admission"' in automation
+    assert '"required_level": "validated_automatic"' in automation
+    assert '"template_admission_contract": "validated-automatic-v1"' in automation
+
+    selection = automation.index("let selected_document_ids = bundle_decision")
+    admission = automation.index("zero_touch_template_admission_blockers(", selection)
+    configured = automation.index("let mut configured = Vec::new();", admission)
+    assert selection < admission < configured

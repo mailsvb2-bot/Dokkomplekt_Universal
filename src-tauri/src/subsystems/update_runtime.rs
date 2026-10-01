@@ -720,6 +720,21 @@ fn reconcile_pending_update(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn record_recoverable_update_failure(
+    app: &tauri::AppHandle,
+    recovery: &mut UpdateRecoveryState,
+    detail: String,
+) -> String {
+    recovery.status = "recoverable_failure".to_string();
+    recovery.last_error = Some(detail.clone());
+    match write_update_recovery_state(app, recovery) {
+        Ok(_) => detail,
+        Err(marker_error) => format!(
+            "{detail}; дополнительно не удалось записать recovery marker: {marker_error}"
+        ),
+    }
+}
+
 #[tauri::command]
 fn get_update_recovery_status(
     app: tauri::AppHandle,
@@ -790,23 +805,56 @@ fn apply_verified_update(
     #[cfg(not(target_os = "windows"))]
     let _ = &recovery_path;
 
-    if let Ok(mut watcher) = state.watcher.lock() {
-        if let Some(handle) = watcher.take() {
-            handle.stop.store(true, Ordering::SeqCst);
+    let mut watcher = match state.watcher.lock() {
+        Ok(watcher) => watcher,
+        Err(_) => {
+            let detail = "Не удалось заблокировать watcher перед запуском обновления".to_string();
+            return Err(record_recoverable_update_failure(
+                &app,
+                &mut recovery,
+                detail,
+            ));
         }
-    }
+    };
 
-    verify_downloaded_package(&canonical_package, &recovery.package_sha256, size_bytes)?;
+    if let Err(error) =
+        verify_downloaded_package(&canonical_package, &recovery.package_sha256, size_bytes)
+    {
+        return Err(record_recoverable_update_failure(
+            &app,
+            &mut recovery,
+            error,
+        ));
+    }
 
     #[cfg(target_os = "windows")]
     {
-        let child = std::process::Command::new(&canonical_package)
+        let child = match std::process::Command::new(&canonical_package)
             .arg("/S")
             .spawn()
-            .map_err(|error| format!("Не удалось запустить проверенный installer: {error}"))?;
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let detail = format!("Не удалось запустить проверенный installer: {error}");
+                return Err(record_recoverable_update_failure(
+                    &app,
+                    &mut recovery,
+                    detail,
+                ));
+            }
+        };
+        if let Some(handle) = watcher.take() {
+            handle.stop.store(true, Ordering::SeqCst);
+        }
         recovery.status = "installer_started".to_string();
         recovery.last_error = None;
-        write_update_recovery_state(&app, &recovery)?;
+        if let Err(marker_error) = write_update_recovery_state(&app, &recovery) {
+            state.persistence_blocked.store(true, Ordering::SeqCst);
+            app.exit(1);
+            return Err(format!(
+                "Installer запущен, но не удалось зафиксировать installer_started: {marker_error}. Приложение аварийно завершает работу, чтобы не конкурировать с installer."
+            ));
+        }
         state.persistence_blocked.store(true, Ordering::SeqCst);
         let response = UpdateApplyResponse {
             prepared: true,
@@ -824,6 +872,7 @@ fn apply_verified_update(
 
     #[cfg(not(target_os = "windows"))]
     {
+        drop(watcher);
         recovery.status = "prepared".to_string();
         recovery.last_error = Some(
             "Автоматическое применение пакета пока разрешено только для Windows NSIS; backup сохранён."

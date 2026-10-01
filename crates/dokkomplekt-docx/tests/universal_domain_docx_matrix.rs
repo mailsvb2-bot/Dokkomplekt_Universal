@@ -146,11 +146,7 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
     ]
 }
 
-fn create_table_loop_docx(
-    output_path: &std::path::Path,
-    left_field: &str,
-    right_field: &str,
-) {
+fn create_table_loop_docx(output_path: &std::path::Path, left_field: &str, right_field: &str) {
     const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
         <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
@@ -242,10 +238,8 @@ fn e3_collections_clone_real_word_rows_across_professions_and_unknown_profile() 
             ["Рекс", "Осмотр"],
         ),
     ];
-    let root = std::env::temp_dir().join(format!(
-        "dokkomplekt-e3-collections-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("dokkomplekt-e3-collections-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("create E3 collection root");
 
@@ -277,7 +271,10 @@ fn e3_collections_clone_real_word_rows_across_professions_and_unknown_profile() 
                 "{name}: read-back missed {expected:?}: {text}"
             );
         }
-        assert!(!text.contains("{{"), "{name}: technical marker leaked: {text}");
+        assert!(
+            !text.contains("{{"),
+            "{name}: technical marker leaked: {text}"
+        );
         let xml = main_document_xml(&output);
         assert_eq!(
             xml.matches("<w:tr>").count(),

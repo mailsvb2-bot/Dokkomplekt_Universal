@@ -35,6 +35,15 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
     for marker in required_runtime_markers:
         assert marker in runtime, marker
 
+    apply_start = runtime.index("fn apply_verified_update(")
+    apply = runtime[apply_start:]
+    assert "fn record_recoverable_update_failure" in runtime
+    assert "Не удалось заблокировать watcher перед запуском обновления" in apply
+    assert "record_recoverable_update_failure" in apply
+    assert apply.index(".spawn()") < apply.index("watcher.take()")
+    assert "Installer запущен, но не удалось зафиксировать installer_started" in apply
+    assert "app.exit(1)" in apply
+
     assert "reconcile_pending_update(&handle)" in main
     assert "get_update_recovery_status," in main
     assert "apply_verified_update," in main

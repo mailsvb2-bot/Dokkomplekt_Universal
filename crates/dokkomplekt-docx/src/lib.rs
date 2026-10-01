@@ -634,16 +634,12 @@ fn rewrite_xml_without_custom_xml_references(
     loop {
         match reader.read_event() {
             Ok(Event::Start(_)) if skipped_depth > 0 => skipped_depth += 1,
-            Ok(Event::Start(element))
-                if custom_xml_reference_element(&element, content_types) =>
-            {
+            Ok(Event::Start(element)) if custom_xml_reference_element(&element, content_types) => {
                 removed += 1;
                 skipped_depth = 1;
             }
             Ok(Event::Empty(_)) if skipped_depth > 0 => {}
-            Ok(Event::Empty(element))
-                if custom_xml_reference_element(&element, content_types) =>
-            {
+            Ok(Event::Empty(element)) if custom_xml_reference_element(&element, content_types) => {
                 removed += 1;
             }
             Ok(Event::End(_)) if skipped_depth > 0 => skipped_depth -= 1,

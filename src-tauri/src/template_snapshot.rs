@@ -122,7 +122,7 @@ impl TemplateSnapshot {
         let (bytes, proof) = dokkomplekt_docx::sanitize_docx_hidden_custom_xml_bytes(self.path())
             .map_err(|error| {
                 format!(
-                    "Не удалось безопасно очистить скрытые Custom XML данные шаблона «{}»: {error}",
+                "Не удалось безопасно очистить скрытые Custom XML данные шаблона «{}»: {error}",
                     self.label
                 )
             })?;

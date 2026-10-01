@@ -635,6 +635,26 @@ fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<P
     Ok(backup_dir)
 }
 
+fn rollback_transaction_path(
+    target: &Path,
+    transaction_id: Uuid,
+    suffix: &str,
+) -> Result<PathBuf, String> {
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Некорректное имя файла rollback".to_string())?;
+    Ok(target.with_file_name(format!("{name}.rollback-{transaction_id}.{suffix}")))
+}
+
+fn restore_renamed_originals(originals: &[(PathBuf, Option<PathBuf>)]) {
+    for (target, old) in originals.iter().rev() {
+        if let Some(old) = old {
+            let _ = std::fs::rename(old, target);
+        }
+    }
+}
+
 fn restore_update_backup_files(db_path: &Path, backup_dir: &Path) -> Result<(), String> {
     let key_path = db_path.with_file_name(format!(
         "{}.key",
@@ -679,7 +699,7 @@ fn restore_update_backup_files(db_path: &Path, backup_dir: &Path) -> Result<(), 
                 if metadata.file_type().is_symlink() || !metadata.is_file() {
                     return Err(format!("Backup-файл имеет небезопасный тип: {}", source.display()));
                 }
-                let temp = target.with_extension(format!("rollback-{transaction_id}.tmp"));
+                let temp = rollback_transaction_path(target, transaction_id, "tmp")?;
                 std::fs::copy(&source, &temp).map_err(|error| {
                     format!(
                         "Не удалось подготовить rollback {} -> {}: {error}",
@@ -706,6 +726,7 @@ fn restore_update_backup_files(db_path: &Path, backup_dir: &Path) -> Result<(), 
         match std::fs::symlink_metadata(target) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    restore_renamed_originals(&originals);
                     for (_, temp) in &staged {
                         if let Some(temp) = temp {
                             let _ = std::fs::remove_file(temp);
@@ -713,16 +734,26 @@ fn restore_update_backup_files(db_path: &Path, backup_dir: &Path) -> Result<(), 
                     }
                     return Err(format!("Текущий файл состояния имеет небезопасный тип: {}", target.display()));
                 }
-                let old = target.with_extension(format!("rollback-{transaction_id}.old"));
-                std::fs::rename(target, &old).map_err(|error| {
-                    format!("Не удалось отложить текущий файл состояния {}: {error}", target.display())
-                })?;
+                let old = rollback_transaction_path(target, transaction_id, "old")?;
+                if let Err(error) = std::fs::rename(target, &old) {
+                    restore_renamed_originals(&originals);
+                    for (_, temp) in &staged {
+                        if let Some(temp) = temp {
+                            let _ = std::fs::remove_file(temp);
+                        }
+                    }
+                    return Err(format!(
+                        "Не удалось отложить текущий файл состояния {}: {error}",
+                        target.display()
+                    ));
+                }
                 originals.push((target.clone(), Some(old)));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 originals.push((target.clone(), None));
             }
             Err(error) => {
+                restore_renamed_originals(&originals);
                 for (_, temp) in &staged {
                     if let Some(temp) = temp {
                         let _ = std::fs::remove_file(temp);
@@ -751,11 +782,7 @@ fn restore_update_backup_files(db_path: &Path, backup_dir: &Path) -> Result<(), 
         for target in &targets {
             let _ = std::fs::remove_file(target);
         }
-        for (target, old) in originals.iter().rev() {
-            if let Some(old) = old {
-                let _ = std::fs::rename(old, target);
-            }
-        }
+        restore_renamed_originals(&originals);
         for (_, temp) in &staged {
             if let Some(temp) = temp {
                 let _ = std::fs::remove_file(temp);
@@ -1091,6 +1118,7 @@ mod fpr19_update_lifecycle_tests {
         }
         std::fs::copy(&db, backup.join(DEFAULT_STATE_DB)).unwrap();
         std::fs::copy(&key, backup.join(format!("{DEFAULT_STATE_DB}.key"))).unwrap();
+        std::fs::write(backup.join(format!("{DEFAULT_STATE_DB}-wal")), b"backup wal").unwrap();
         let original_db = std::fs::read(&db).unwrap();
         let original_key = std::fs::read(&key).unwrap();
 
@@ -1103,7 +1131,7 @@ mod fpr19_update_lifecycle_tests {
 
         assert_eq!(std::fs::read(&db).unwrap(), original_db);
         assert_eq!(std::fs::read(&key).unwrap(), original_key);
-        assert!(!wal.exists());
+        assert_eq!(std::fs::read(&wal).unwrap(), b"backup wal");
         assert!(!shm.exists());
         repository_for(&db).unwrap().quick_integrity_check().unwrap();
         let _ = std::fs::remove_dir_all(root);

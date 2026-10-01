@@ -454,6 +454,36 @@ fn confirm_template_setup(
     rows.retain(|row| accepted_document_ids.contains(&row.document_id));
     template_snapshots.retain(|document_id, _| accepted_document_ids.contains(document_id));
 
+    for row in &rows {
+        let snapshot = template_snapshots
+            .get(&row.document_id)
+            .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
+        let capability_manifest = inspect_docx_capabilities_file(snapshot.path()).map_err(|error| {
+            format!(
+                "Не удалось проверить capabilities шаблона «{}»: {error}",
+                row.editable_button_label
+            )
+        })?;
+        if !capability_manifest.publishable() {
+            return Err(format!(
+                "Шаблон «{}» пока нельзя опубликовать: обнаружены неподдерживаемые скрытые или активные конструкции: {}. Удалите их в Word либо сохраните очищенную копию DOCX и повторите обучение.",
+                row.editable_button_label,
+                capability_manifest.blocking_issues.join(", ")
+            ));
+        }
+        append_audit_event(
+            &app,
+            "template_capability_admission_passed",
+            snapshot.sha256(),
+            &serde_json::json!({
+                "document_id": &row.document_id,
+                "button_label": &row.editable_button_label,
+                "template_sha256": snapshot.sha256(),
+                "manifest": capability_manifest,
+            }),
+        )?;
+    }
+
     let mut incoming = create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack;
     for document in &incoming.documents {
         validate_registered_medical_template_output_contract(&app, document)?;

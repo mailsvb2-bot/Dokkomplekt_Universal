@@ -16,6 +16,8 @@ on:
       - 'scripts/release_environment_preflight.py'
       - 'scripts/verify_windows_hardware_runner.ps1'
       - 'scripts/verify_windows_hardware_evidence_host.ps1'
+      - 'scripts/read_app_state_fingerprint.py'
+      - 'tests/test_app_state_fingerprint_helper.py'
       - 'scripts/cleanup_windows_reboot_preparation.ps1'
       - 'scripts/dispatch_private_hardware_validation.py'
       - 'scripts/windows_signed_handoff.py'
@@ -144,4 +146,5 @@ jobs:
           tests/test_rustsec_advisory_pin.py
           tests/test_v18_1_1_offline_runtime.py
           tests/test_fpr19_update_recovery_contract.py
+          tests/test_app_state_fingerprint_helper.py
           tests/test_live_windows_user_e2e_contract.py

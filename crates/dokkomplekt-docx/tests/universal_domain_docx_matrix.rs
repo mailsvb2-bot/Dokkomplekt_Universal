@@ -3,6 +3,8 @@ use dokkomplekt_core::{
     DomainKind, PopupAnswer, SemanticCase, WorkflowFlags,
 };
 use dokkomplekt_docx::{create_docx_from_text, extract_docx_text, render_docx_file};
+use std::io::{Read, Write};
+use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
 #[test]
 fn real_docx_renderer_accepts_fields_from_multiple_domains() {
@@ -142,6 +144,174 @@ fn profession_scenarios() -> Vec<ProfessionScenario> {
             ],
         },
     ]
+}
+
+fn create_table_loop_docx(
+    output_path: &std::path::Path,
+    left_field: &str,
+    right_field: &str,
+) {
+    const CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+        <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+        <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+        <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
+        </Types>";
+    const ROOT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+        <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
+        </Relationships>";
+    let document_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+         <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+         <w:body><w:tbl>\
+         <w:tr><w:tc><w:p><w:r><w:t>Поле 1</w:t></w:r></w:p></w:tc>\
+         <w:tc><w:p><w:r><w:t>Поле 2</w:t></w:r></w:p></w:tc></w:tr>\
+         <w:tr><w:tc><w:p><w:r><w:t>{{{{#each items}}}}{{{{item.{left_field}}}}}</w:t></w:r></w:p></w:tc>\
+         <w:tc><w:p><w:r><w:t>{{{{item.{right_field}}}}}{{{{/each}}}}</w:t></w:r></w:p></w:tc></w:tr>\
+         </w:tbl><w:sectPr/></w:body></w:document>"
+    );
+    let file = std::fs::File::create(output_path).expect("create structured DOCX");
+    let mut writer = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    writer
+        .start_file("[Content_Types].xml", options)
+        .expect("start content types");
+    writer
+        .write_all(CONTENT_TYPES.as_bytes())
+        .expect("write content types");
+    writer
+        .start_file("_rels/.rels", options)
+        .expect("start root rels");
+    writer
+        .write_all(ROOT_RELS.as_bytes())
+        .expect("write root rels");
+    writer
+        .start_file("word/document.xml", options)
+        .expect("start document XML");
+    writer
+        .write_all(document_xml.as_bytes())
+        .expect("write document XML");
+    writer.finish().expect("finish structured DOCX");
+}
+
+fn main_document_xml(path: &std::path::Path) -> String {
+    let file = std::fs::File::open(path).expect("open rendered DOCX");
+    let mut archive = ZipArchive::new(file).expect("open rendered DOCX ZIP");
+    let mut entry = archive
+        .by_name("word/document.xml")
+        .expect("rendered document.xml");
+    let mut xml = String::new();
+    entry.read_to_string(&mut xml).expect("read rendered XML");
+    xml
+}
+
+#[test]
+fn e3_collections_clone_real_word_rows_across_professions_and_unknown_profile() {
+    let scenarios = [
+        (
+            "accounting",
+            "Наименование\tЦена\nАудит\t1500\nМонтаж\t2500",
+            "name",
+            "price",
+            ["Аудит", "1500"],
+            ["Монтаж", "2500"],
+        ),
+        (
+            "hr",
+            "Сотрудник\tДолжность\nИванов Иван\tИнженер\nПетрова Анна\tЮрист",
+            "сотрудник",
+            "должность",
+            ["Иванов Иван", "Инженер"],
+            ["Петрова Анна", "Юрист"],
+        ),
+        (
+            "education",
+            "Студент\tОценка\nСмирнова Анна\t5\nОрлов Олег\t4",
+            "студент",
+            "оценка",
+            ["Смирнова Анна", "5"],
+            ["Орлов Олег", "4"],
+        ),
+        (
+            "unknown-veterinary",
+            "Питомец\tПроцедура\nБарсик\tВакцинация\nРекс\tОсмотр",
+            "питомец",
+            "процедура",
+            ["Барсик", "Вакцинация"],
+            ["Рекс", "Осмотр"],
+        ),
+    ];
+    let root = std::env::temp_dir().join(format!(
+        "dokkomplekt-e3-collections-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create E3 collection root");
+
+    for (index, (name, source, left_field, right_field, first, second)) in
+        scenarios.into_iter().enumerate()
+    {
+        let (case, report) = parse_source_text(source, 2026);
+        assert!(
+            report
+                .filled_fields
+                .iter()
+                .any(|field| field == "collection.items"),
+            "{name}: source table did not become a collection"
+        );
+        let template = root.join(format!("{index}-{name}-template.docx"));
+        let output = root.join(format!("{index}-{name}-output.docx"));
+        create_table_loop_docx(&template, left_field, right_field);
+        let rendered = render_docx_file(&template, &output, &case, true)
+            .unwrap_or_else(|error| panic!("{name}: structural render failed: {error}"));
+        assert!(rendered.missing_fields.is_empty(), "{name}: {rendered:?}");
+        assert!(rendered.unknown_fields.is_empty(), "{name}: {rendered:?}");
+        assert!(rendered.template_errors.is_empty(), "{name}: {rendered:?}");
+
+        let text = extract_docx_text(&output)
+            .unwrap_or_else(|error| panic!("{name}: read-back failed: {error}"));
+        for expected in first.into_iter().chain(second) {
+            assert!(
+                text.contains(expected),
+                "{name}: read-back missed {expected:?}: {text}"
+            );
+        }
+        assert!(!text.contains("{{"), "{name}: technical marker leaked: {text}");
+        let xml = main_document_xml(&output);
+        assert_eq!(
+            xml.matches("<w:tr>").count(),
+            3,
+            "{name}: expected header plus two physically cloned rows"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn e3_legal_condition_is_resolved_before_physical_docx_readback() {
+    let source = "Договор № Ю-77\nСторона 1: ООО Альфа\nСторона 2: ООО Бета";
+    let (case, _) = parse_source_text(source, 2026);
+    let root = std::env::temp_dir().join(format!(
+        "dokkomplekt-e3-legal-condition-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("create legal condition root");
+    let template = root.join("template.docx");
+    let output = root.join("output.docx");
+    create_docx_from_text(
+        &template,
+        "{{#if contract.party_b}}Согласовано с {{contract.party_b}}{{else}}Вторая сторона не задана{{/if}}",
+    )
+    .expect("create legal conditional template");
+    render_docx_file(&template, &output, &case, true).expect("render legal condition");
+    let text = extract_docx_text(&output).expect("read legal condition output");
+    assert!(text.contains("Согласовано с ООО Бета"));
+    assert!(!text.contains("Вторая сторона не задана"));
+    assert!(!text.contains("{{"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

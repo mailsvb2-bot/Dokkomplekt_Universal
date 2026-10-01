@@ -3,6 +3,8 @@ include!("document_selection.rs");
 // Template analysis and setup preparation are isolated from publication/generation commands.
 include!("template_analysis_commands.rs");
 
+include!("template_capability_admission.rs");
+
 // E2 Template Intelligence commands stay in this module scope via include!,
 // but live separately to keep the desktop command owner below the god-module limit.
 include!("template_learning_commands.rs");
@@ -352,31 +354,16 @@ fn confirm_template_setup(
 
     for row in &rows {
         let snapshot = template_snapshots
-            .get(&row.document_id)
+            .get_mut(&row.document_id)
             .ok_or_else(|| format!("Не найден snapshot шаблона {}.", row.document_id))?;
-        let capability_manifest = inspect_docx_capabilities_file(snapshot.path()).map_err(|error| {
-            format!(
-                "Не удалось проверить capabilities шаблона «{}»: {error}",
-                row.editable_button_label
-            )
-        })?;
-        if !capability_manifest.publishable() {
-            return Err(format!(
-                "Шаблон «{}» пока нельзя опубликовать: обнаружены неподдерживаемые скрытые или активные конструкции: {}. Удалите их в Word либо сохраните очищенную копию DOCX и повторите обучение.",
-                row.editable_button_label,
-                capability_manifest.blocking_issues.join(", ")
-            ));
-        }
-        append_audit_event(
+        admit_template_capabilities_for_publication(
             &app,
-            "template_capability_admission_passed",
-            snapshot.sha256(),
-            &serde_json::json!({
-                "document_id": &row.document_id,
-                "button_label": &row.editable_button_label,
-                "template_sha256": snapshot.sha256(),
-                "manifest": capability_manifest,
-            }),
+            snapshot,
+            &row.document_id,
+            &row.editable_button_label,
+            learning_validation_ids
+                .get(&row.document_id)
+                .map(String::as_str),
         )?;
     }
 
@@ -392,8 +379,8 @@ fn confirm_template_setup(
         drafts.push(prepare_template_version_draft(
             &app,
             &row.document_id,
-            snapshot.path(),
-            snapshot.sha256(),
+            snapshot.publication_path(),
+            snapshot.publication_sha256(),
             "Первичная публикация пользовательского шаблона.",
             learning_validation_ids.get(&row.document_id).cloned(),
         )?);

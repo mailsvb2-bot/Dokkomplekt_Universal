@@ -11,7 +11,7 @@ use dokkomplekt_core::{
     RenderResult, SemanticCase, StructuralAnchorMode,
 };
 use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::{Reader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
@@ -572,6 +572,205 @@ pub fn inspect_docx_capabilities_file(path: &Path) -> DocxResult<DocxCapabilityM
     validate_safe_template_file(path)?;
     let archive = ZipArchive::new(File::open(path)?)?;
     inspect_docx_capabilities_archive(archive)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DocxHiddenCarrierSanitization {
+    pub removed_parts: Vec<String>,
+    pub rewritten_parts: Vec<String>,
+    pub story_sha256: BTreeMap<String, String>,
+}
+
+fn custom_xml_reference_element(
+    element: &quick_xml::events::BytesStart<'_>,
+    content_types: bool,
+) -> bool {
+    let element_name = String::from_utf8_lossy(element.name().as_ref()).to_ascii_lowercase();
+    if content_types {
+        if !element_name.ends_with("override") {
+            return false;
+        }
+        return element.attributes().flatten().any(|attribute| {
+            let key = String::from_utf8_lossy(attribute.key.as_ref()).to_ascii_lowercase();
+            if !key.ends_with("partname") {
+                return false;
+            }
+            String::from_utf8_lossy(attribute.value.as_ref())
+                .replace('\\', "/")
+                .trim_start_matches('/')
+                .to_ascii_lowercase()
+                .starts_with("customxml/")
+        });
+    }
+    if !element_name.ends_with("relationship") {
+        return false;
+    }
+    let mut relationship_type = String::new();
+    let mut target = String::new();
+    for attribute in element.attributes().flatten() {
+        let key = String::from_utf8_lossy(attribute.key.as_ref()).to_ascii_lowercase();
+        let value = String::from_utf8_lossy(attribute.value.as_ref()).to_string();
+        if key.ends_with("type") {
+            relationship_type = value.to_ascii_lowercase();
+        } else if key.ends_with("target") {
+            target = value.replace('\\', "/").to_ascii_lowercase();
+        }
+    }
+    relationship_type.contains("/customxml") || target.contains("customxml/")
+}
+
+fn rewrite_xml_without_custom_xml_references(
+    part_name: &str,
+    payload: &[u8],
+    content_types: bool,
+) -> DocxResult<(Vec<u8>, usize)> {
+    let xml = String::from_utf8(payload.to_vec())?;
+    let mut reader = Reader::from_str(&xml);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::with_capacity(payload.len())));
+    let mut skipped_depth = 0usize;
+    let mut removed = 0usize;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(_)) if skipped_depth > 0 => skipped_depth += 1,
+            Ok(Event::Start(element))
+                if custom_xml_reference_element(&element, content_types) =>
+            {
+                removed += 1;
+                skipped_depth = 1;
+            }
+            Ok(Event::Empty(_)) if skipped_depth > 0 => {}
+            Ok(Event::Empty(element))
+                if custom_xml_reference_element(&element, content_types) =>
+            {
+                removed += 1;
+            }
+            Ok(Event::End(_)) if skipped_depth > 0 => skipped_depth -= 1,
+            Ok(Event::Eof) => break,
+            Ok(event) if skipped_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(|_| DocxError::RelationshipPart(part_name.to_string()))?,
+            Ok(_) => {}
+            Err(_) => return Err(DocxError::RelationshipPart(part_name.to_string())),
+        }
+    }
+
+    Ok((writer.into_inner().into_inner(), removed))
+}
+
+fn docx_story_sha256<R: Read + Seek>(
+    mut archive: ZipArchive<R>,
+) -> DocxResult<BTreeMap<String, String>> {
+    use sha2::{Digest as _, Sha256};
+
+    let mut hashes = BTreeMap::new();
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().replace('\\', "/");
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+        if !is_text_bearing_word_part(&name) {
+            continue;
+        }
+        ensure_text_part_size(&name, entry.size())?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        hashes.insert(name, hex::encode(Sha256::digest(&bytes)));
+    }
+    Ok(hashes)
+}
+
+/// Removes only hidden Custom XML package carriers from a derived publication copy.
+///
+/// The caller keeps the original source snapshot and its SHA-256 for provenance and
+/// TOCTOU checks. This sanitizer never rewrites Word text-bearing stories; it removes
+/// `customXml/*` parts plus their package relationships/content-type overrides and
+/// then proves every visible story SHA-256 stayed byte-identical.
+pub fn sanitize_docx_hidden_custom_xml_bytes(
+    path: &Path,
+) -> DocxResult<(Vec<u8>, DocxHiddenCarrierSanitization)> {
+    validate_safe_template_file(path)?;
+    let story_sha256 = docx_story_sha256(ZipArchive::new(File::open(path)?)?)?;
+
+    let mut archive = ZipArchive::new(File::open(path)?)?;
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut writer = ZipWriter::new(cursor);
+    let mut removed_parts = Vec::new();
+    let mut rewritten_parts = Vec::new();
+    let mut total_uncompressed = 0_u64;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let raw_name = entry.name().to_string();
+        let name = raw_name.replace('\\', "/");
+        let lower_name = name.to_ascii_lowercase();
+        add_uncompressed_size(&mut total_uncompressed, &name, entry.size())?;
+
+        if lower_name.starts_with("customxml/") {
+            removed_parts.push(name);
+            continue;
+        }
+
+        let options = SimpleFileOptions::default().compression_method(entry.compression());
+        if entry.is_dir() {
+            writer.add_directory(raw_name, options)?;
+            continue;
+        }
+
+        let mut payload = Vec::new();
+        entry.read_to_end(&mut payload)?;
+        let (output, removed_refs) = if lower_name == "[content_types].xml" {
+            rewrite_xml_without_custom_xml_references(&name, &payload, true)?
+        } else if lower_name.ends_with(".rels") {
+            rewrite_xml_without_custom_xml_references(&name, &payload, false)?
+        } else {
+            (payload, 0)
+        };
+        if removed_refs > 0 {
+            rewritten_parts.push(name);
+        }
+        writer.start_file(raw_name, options)?;
+        writer.write_all(&output)?;
+    }
+
+    let bytes = writer.finish()?.into_inner();
+    if removed_parts.is_empty() {
+        return Err(DocxError::UnsafeActiveContent(
+            "customXml sanitization requested but the package contains no customXml parts".into(),
+        ));
+    }
+    removed_parts.sort();
+    rewritten_parts.sort();
+
+    let sanitized_story_sha256 =
+        docx_story_sha256(ZipArchive::new(Cursor::new(bytes.as_slice()))?)?;
+    if sanitized_story_sha256 != story_sha256 {
+        return Err(DocxError::ArchiveChanged(
+            "hidden-carrier sanitization changed a Word text-bearing story".into(),
+        ));
+    }
+
+    let manifest =
+        inspect_docx_capabilities_archive(ZipArchive::new(Cursor::new(bytes.as_slice()))?)?;
+    if manifest
+        .blocking_issues
+        .iter()
+        .any(|issue| issue == "custom_xml_requires_explicit_sanitization_policy")
+    {
+        return Err(DocxError::UnsafeActiveContent(
+            "customXml carrier survived sanitization".into(),
+        ));
+    }
+
+    Ok((
+        bytes,
+        DocxHiddenCarrierSanitization {
+            removed_parts,
+            rewritten_parts,
+            story_sha256,
+        },
+    ))
 }
 
 fn xml_contains_element(xml: &str, element: &str) -> bool {
@@ -4722,6 +4921,77 @@ mod tests {
                 "missing blocker {expected}: {manifest:?}"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_xml_only_template_is_sanitized_without_touching_word_story_bytes() {
+        let dir = std::env::temp_dir().join("dokkomplekt-custom-xml-sanitization-test");
+        let path = dir.join("custom-xml-reference.docx");
+        std::fs::create_dir_all(&dir).expect("create sanitizer test dir");
+        let document = br#"<w:document><w:body><w:p><w:r><w:t>{{org.name}}</w:t></w:r></w:p></w:body></w:document>"#;
+        let bytes = build_test_docx(&[
+            (
+                "[Content_Types].xml",
+                br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/customXml/itemProps1.xml" ContentType="application/vnd.openxmlformats-officedocument.customXmlProperties+xml"/></Types>"#,
+            ),
+            ("word/document.xml", document),
+            (
+                "word/_rels/document.xml.rels",
+                br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rCustom" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/item1.xml"/></Relationships>"#,
+            ),
+            ("customXml/item1.xml", br#"<secret>old hidden case data</secret>"#),
+            ("customXml/itemProps1.xml", br#"<props/>"#),
+            (
+                "customXml/_rels/item1.xml.rels",
+                br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rProps" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps" Target="itemProps1.xml"/></Relationships>"#,
+            ),
+        ]);
+        std::fs::write(&path, bytes).expect("write customXml fixture");
+
+        let before = inspect_docx_capabilities_file(&path).expect("inspect customXml fixture");
+        assert_eq!(
+            before.blocking_issues,
+            vec!["custom_xml_requires_explicit_sanitization_policy"]
+        );
+
+        let (sanitized, proof) =
+            sanitize_docx_hidden_custom_xml_bytes(&path).expect("sanitize customXml-only fixture");
+        assert_eq!(
+            proof.removed_parts,
+            vec![
+                "customXml/_rels/item1.xml.rels".to_string(),
+                "customXml/item1.xml".to_string(),
+                "customXml/itemProps1.xml".to_string(),
+            ]
+        );
+        assert_eq!(
+            proof.story_sha256.get("word/document.xml"),
+            Some(&hex::encode(sha2::Sha256::digest(document)))
+        );
+
+        let mut archive = ZipArchive::new(Cursor::new(sanitized.as_slice())).unwrap();
+        assert!((0..archive.len()).all(|index| {
+            !archive
+                .by_index(index)
+                .unwrap()
+                .name()
+                .to_ascii_lowercase()
+                .starts_with("customxml/")
+        }));
+        let mut document_after = Vec::new();
+        archive
+            .by_name("word/document.xml")
+            .unwrap()
+            .read_to_end(&mut document_after)
+            .unwrap();
+        assert_eq!(document_after, document);
+
+        let after = inspect_docx_capabilities_archive(
+            ZipArchive::new(Cursor::new(sanitized.as_slice())).unwrap(),
+        )
+        .expect("inspect sanitized package");
+        assert!(after.publishable(), "{after:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

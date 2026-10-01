@@ -1,12 +1,21 @@
 use crate::{resolve_user_path, universal_intake, MAX_DOCX_BYTES};
+use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tauri::Manager as _;
 
 #[derive(Debug)]
+struct PublicationSnapshot {
+    _session: universal_intake::UploadedSourceSession,
+    path: PathBuf,
+    sha256: String,
+}
+
+#[derive(Debug)]
 pub(crate) struct TemplateSnapshot {
     live_path: PathBuf,
     snapshot: universal_intake::StableSourceSnapshot,
+    publication: Option<PublicationSnapshot>,
     label: String,
 }
 
@@ -75,6 +84,7 @@ impl TemplateSnapshot {
         Ok(Self {
             live_path: live_path.to_path_buf(),
             snapshot,
+            publication: None,
             label: label.to_string(),
         })
     }
@@ -89,6 +99,52 @@ impl TemplateSnapshot {
 
     pub(crate) fn sha256(&self) -> &str {
         self.snapshot.sha256()
+    }
+
+    pub(crate) fn publication_path(&self) -> &Path {
+        self.publication
+            .as_ref()
+            .map(|snapshot| snapshot.path.as_path())
+            .unwrap_or_else(|| self.path())
+    }
+
+    pub(crate) fn publication_sha256(&self) -> &str {
+        self.publication
+            .as_ref()
+            .map(|snapshot| snapshot.sha256.as_str())
+            .unwrap_or_else(|| self.sha256())
+    }
+
+    pub(crate) fn sanitize_hidden_custom_xml_for_publication(
+        &mut self,
+        app: &tauri::AppHandle,
+    ) -> Result<dokkomplekt_docx::DocxHiddenCarrierSanitization, String> {
+        let (bytes, proof) = dokkomplekt_docx::sanitize_docx_hidden_custom_xml_bytes(self.path())
+            .map_err(|error| {
+                format!(
+                    "Не удалось безопасно очистить скрытые Custom XML данные шаблона «{}»: {error}",
+                    self.label
+                )
+            })?;
+        let workspace = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("template-publication-sanitized-work");
+        let file_name = self
+            .live_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("template.docx");
+        let session = universal_intake::materialize_sensitive_file(file_name, &bytes, &workspace)?;
+        let path = session.original_path()?;
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        self.publication = Some(PublicationSnapshot {
+            _session: session,
+            path,
+            sha256,
+        });
+        Ok(proof)
     }
 
     pub(crate) fn ensure_current(&self) -> Result<(), String> {

@@ -2965,11 +2965,15 @@ Invoke-UiElementPhysically -Element $fpr15Export -Description 'FPR-15 export tem
 $fpr15Package = $null
 $fpr15ExportDeadline = [DateTime]::UtcNow.AddSeconds(30)
 do {
-  $fpr15Package = @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue |
+  # Keep the stable result variable null until a real package exists. Assigning
+  # @() directly to $fpr15Package makes a timeout look non-null in PowerShell
+  # and would later surface as ZipFile.OpenRead(path='') instead of the real
+  # export timeout.
+  $fpr15Candidate = @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue |
     Where-Object { -not $fpr15ExistingPackages.ContainsKey($_.FullName) } |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1)
-  if ($fpr15Package.Count -gt 0) { $fpr15Package = $fpr15Package[0]; break }
+  if ($fpr15Candidate.Count -gt 0) { $fpr15Package = $fpr15Candidate[0]; break }
   Start-Sleep -Milliseconds 200
 } while ([DateTime]::UtcNow -lt $fpr15ExportDeadline)
 if ($null -eq $fpr15Package) { throw 'FPR-15 installed export did not publish a .dktpack file.' }

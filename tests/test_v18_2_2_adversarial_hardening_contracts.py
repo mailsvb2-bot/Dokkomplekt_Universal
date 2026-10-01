@@ -124,6 +124,8 @@ class AdversarialHardeningContracts(unittest.TestCase):
         self.assertIn("CARGO_GATE_ATTESTATION.sig", evidence)
 
     def test_signed_gate_attestation_rejects_tampering(self) -> None:
+        if not (ROOT / ".git").exists():
+            self.skipTest("signed gate attestation requires a real Git checkout identity")
         gate_dir = ROOT / ".cargo-gate"
         shutil.rmtree(gate_dir, ignore_errors=True)
         with tempfile.TemporaryDirectory() as tmp:

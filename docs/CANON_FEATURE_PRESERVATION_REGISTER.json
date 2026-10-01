@@ -499,7 +499,7 @@
       "id": "FPR-15",
       "group": "Перенос шаблонов",
       "status": "verified",
-      "actual_state": "privacy-safe .dktpack export/import is implemented in Rust and exposed in template management UI; clean-profile installed proof is pending",
+      "actual_state": "privacy-safe .dktpack export/import is implemented in Rust and exposed in template management UI; exact-candidate installed proof completed export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt",
       "entry": [
         "src/hooks/useTemplateTransfer.ts",
         "src/components/DocumentRail.tsx#Экспорт шаблонов / Импорт шаблонов"

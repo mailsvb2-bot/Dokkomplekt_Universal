@@ -28,8 +28,18 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 }
 
 $os = Get-CimInstance Win32_OperatingSystem
-if ([string]$os.Caption -notmatch 'Windows 11') {
-    throw "FPR-19 live update requires Windows 11; detected $($os.Caption)."
+$buildNumber = [int]$os.BuildNumber
+$workstation = [int]$os.ProductType -eq 1
+$expectedOs = if ($ExpectedWindowsVersion -eq '10') {
+    $workstation -and $buildNumber -ge 10240 -and $buildNumber -lt 22000
+} else {
+    $workstation -and $buildNumber -ge 22000
+}
+if (-not $expectedOs) {
+    throw "FPR-19 live update expected Windows $ExpectedWindowsVersion but detected caption=$($os.Caption) build=$buildNumber."
+}
+if ([string]$os.OSArchitecture -notmatch '64') {
+    throw "FPR-19 live update requires a 64-bit OS; detected: $($os.OSArchitecture)"
 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sessionId = (Get-Process -Id $PID).SessionId
@@ -268,7 +278,10 @@ if (-not [string]::IsNullOrWhiteSpace($parent)) {
     updated_application_sha256 = (Get-FileHash -LiteralPath $app.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     recovery_status = [string]$recovery.status
     backup_dir = [string]$recovery.backup_dir
+    expected_windows_version = $ExpectedWindowsVersion
     windows = [string]$os.Caption
+    windows_build_number = $buildNumber
+    os_architecture = [string]$os.OSArchitecture
     session_id = $sessionId
 } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputPath -Encoding utf8
 

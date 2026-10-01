@@ -80,7 +80,7 @@ class CalendarContractTest(unittest.TestCase):
         self.assertIn("UnsupportedYear", source)
         self.assertNotIn("unwrap_or_else(|_|", source)
 
-    def test_known_2025_2026_transfers_are_present(self) -> None:
+    def test_known_2025_through_2027_transfers_are_present(self) -> None:
         _, _, holidays, working = self._calendar()
         for item in [
             date(2025, 5, 2),

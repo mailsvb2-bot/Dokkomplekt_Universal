@@ -907,22 +907,42 @@ fn reconcile_pending_update(app: &tauri::AppHandle) -> Result<(), String> {
         state.last_error = None;
         write_update_recovery_state(app, &state)?;
     } else if state.status == "installer_started" {
-        match restore_update_backup(app, &state) {
+        let live_state = repository_for(&default_state_db_path(app)?)
+            .and_then(|repo| {
+                repo.quick_integrity_check()
+                    .map_err(|error| error.to_string())
+            });
+        match live_state {
             Ok(()) => {
-                state.status = "rolled_back".to_string();
-                state.verified_at = Some(OffsetDateTime::now_utc().to_string());
+                state.status = "recoverable_failure".to_string();
                 state.last_error = Some(
-                    "Installer был запущен, но приложение стартовало в прежней версии; локальное состояние автоматически восстановлено из pre-update backup."
+                    "Installer был запущен, но приложение стартовало в прежней версии; текущая локальная база и ключ проверены и сохранены без отката, pre-update backup доступен для восстановления."
                         .to_string(),
                 );
             }
-            Err(error) => {
-                state.status = "recoverable_failure".to_string();
-                state.last_error = Some(format!(
-                    "Installer был запущен, но приложение стартовало в прежней версии; автоматический rollback не выполнен: {error}. Backup сохранён."
-                ));
-            }
+            Err(live_error) => match restore_update_backup(app, &state) {
+                Ok(()) => {
+                    state.status = "rolled_back".to_string();
+                    state.verified_at = Some(OffsetDateTime::now_utc().to_string());
+                    state.last_error = Some(format!(
+                        "Installer был запущен, приложение стартовало в прежней версии, а live state не прошёл проверку ({live_error}); локальное состояние автоматически восстановлено из pre-update backup."
+                    ));
+                }
+                Err(rollback_error) => {
+                    state.status = "recoverable_failure".to_string();
+                    state.last_error = Some(format!(
+                        "Installer был запущен, приложение стартовало в прежней версии; live state не прошёл проверку ({live_error}), автоматический rollback не выполнен: {rollback_error}. Backup сохранён."
+                    ));
+                }
+            },
         }
+        write_update_recovery_state(app, &state)?;
+    } else if state.status == "prepared" {
+        state.status = "recoverable_failure".to_string();
+        state.last_error = Some(
+            "Подготовка обновления была прервана до подтверждённого запуска installer; текущая локальная база не откатывалась, pre-update backup сохранён."
+                .to_string(),
+        );
         write_update_recovery_state(app, &state)?;
     }
     Ok(())

@@ -399,7 +399,7 @@
       "id": "FPR-12",
       "group": "Настройки",
       "status": "needs-runtime-proof",
-      "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence now proves durable output-preference presence and a physical post-restart DOCX published into the restored output root with the restored naming rule; same-version NSIS replacement preserves durable preferences and workspace; true previous-version to current-version migration evidence remains pending",
+      "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence proves restart routing/naming and exact same-version NSIS state preservation; the signed update-live executor now requires the exact output_preferences_v2 row to survive a real previous-version -> current-version installer apply before the new app starts, but Win10/Win11 cross-version evidence has not yet executed",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#save_state/load_state"
       ],
@@ -417,14 +417,19 @@
       "evidence_paths": [
         "src-tauri/src/subsystems/document_commands.rs",
         "src-tauri/src/state_transaction.rs",
-        "crates/dokkomplekt-storage/src/lib.rs"
+        "crates/dokkomplekt-storage/src/lib.rs",
+        "tests/windows/windows_live_update_e2e.ps1",
+        "scripts/read_app_state_fingerprint.py",
+        "tests/test_app_state_fingerprint_helper.py",
+        "tests/test_fpr12_settings_persistence_contract.py",
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [
         "tests/installer/windows_installer_contract.ps1#FPR-12 clean-restart physical output destination/naming proof",
         "tests/installer/windows_installer_contract.ps1#FPR-12 non-destructive NSIS replacement durable-state/workspace proof",
         "tests/test_fpr12_settings_persistence_contract.py#FPR-12 regression lock"
       ],
-      "runtime_gap": "A real previous-version -> current-version installed upgrade with preserved settings is still required for final register closure."
+      "runtime_gap": "Run the signed previous-version -> current-version update-live lane on both Windows 10 and Windows 11 and retain FPR-12 LIVE UPGRADE STORAGE PASS evidence for the exact release SHA before final register closure."
     },
     {
       "id": "FPR-13",

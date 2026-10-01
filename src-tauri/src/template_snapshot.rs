@@ -119,10 +119,8 @@ impl TemplateSnapshot {
         &mut self,
         app: &tauri::AppHandle,
     ) -> Result<dokkomplekt_docx::DocxHiddenCarrierSanitization, String> {
-        let snapshot_path = self.path();
-        let (bytes, proof) = match dokkomplekt_docx::sanitize_docx_hidden_custom_xml_bytes(
-            snapshot_path,
-        ) {
+        let sanitized = dokkomplekt_docx::sanitize_docx_hidden_custom_xml_bytes(self.path());
+        let (bytes, proof) = match sanitized {
             Ok(value) => value,
             Err(error) => {
                 return Err(format!(

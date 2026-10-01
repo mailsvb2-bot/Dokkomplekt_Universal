@@ -671,10 +671,7 @@ impl LocalRepository {
             )));
         }
         let parent = target.parent().ok_or_else(|| {
-            StorageError::InvalidPath(format!(
-                "backup target has no parent: {}",
-                target.display()
-            ))
+            StorageError::InvalidPath(format!("backup target has no parent: {}", target.display()))
         })?;
         std::fs::create_dir_all(parent)?;
         let target_text = target.to_str().ok_or_else(|| {
@@ -684,7 +681,10 @@ impl LocalRepository {
             ))
         })?;
 
-        if let Err(error) = self.conn.execute("VACUUM main INTO ?1", params![target_text]) {
+        if let Err(error) = self
+            .conn
+            .execute("VACUUM main INTO ?1", params![target_text])
+        {
             let _ = std::fs::remove_file(target);
             return Err(StorageError::Sqlite(error));
         }

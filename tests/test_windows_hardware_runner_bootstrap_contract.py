@@ -102,6 +102,12 @@ def test_new_hardware_evidence_preflight_is_side_effect_free_before_handoff_veri
         assert forbidden_secret in text
 
 
+def test_hardware_config_import_restores_literal_percent_escaping() -> None:
+    text = read(EVIDENCE_PREFLIGHT)
+    assert "DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER" in text
+    assert "$Matches.value.Replace('%%', '%')" in text
+
+
 def test_public_workflow_never_targets_self_hosted_runner() -> None:
     text = read(PUBLIC_WORKFLOW)
     assert "runs-on: ubuntu-latest" in text

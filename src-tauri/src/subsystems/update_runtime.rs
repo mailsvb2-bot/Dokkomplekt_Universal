@@ -617,7 +617,9 @@ fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<P
         .join(format!("{}-{}", target_version, Uuid::new_v4()));
     std::fs::create_dir_all(&backup_dir).map_err(|error| error.to_string())?;
 
-    copy_update_backup_file(&db_path, &backup_dir)?;
+    if copy_update_backup_file(&db_path, &backup_dir)?.is_none() {
+        return Err("Не удалось создать обязательный backup локальной базы".to_string());
+    }
     let key_path = db_path.with_file_name(format!(
         "{}.key",
         db_path
@@ -625,10 +627,169 @@ fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<P
             .and_then(|value| value.to_str())
             .unwrap_or(DEFAULT_STATE_DB)
     ));
-    copy_update_backup_file(&key_path, &backup_dir)?;
+    if copy_update_backup_file(&key_path, &backup_dir)?.is_none() {
+        return Err("Не удалось создать обязательный backup локального ключа".to_string());
+    }
     copy_update_backup_file(&PathBuf::from(format!("{}-wal", db_path.display())), &backup_dir)?;
     copy_update_backup_file(&PathBuf::from(format!("{}-shm", db_path.display())), &backup_dir)?;
     Ok(backup_dir)
+}
+
+fn restore_update_backup_files(db_path: &Path, backup_dir: &Path) -> Result<(), String> {
+    let key_path = db_path.with_file_name(format!(
+        "{}.key",
+        db_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(DEFAULT_STATE_DB)
+    ));
+    let targets = vec![
+        db_path.to_path_buf(),
+        key_path,
+        PathBuf::from(format!("{}-wal", db_path.display())),
+        PathBuf::from(format!("{}-shm", db_path.display())),
+    ];
+
+    let required = [&targets[0], &targets[1]];
+    for target in required {
+        let source = backup_dir.join(
+            target
+                .file_name()
+                .ok_or_else(|| "Некорректное имя файла rollback".to_string())?,
+        );
+        let metadata = std::fs::symlink_metadata(&source)
+            .map_err(|error| format!("Обязательный backup-файл недоступен {}: {error}", source.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("Обязательный backup-файл имеет небезопасный тип: {}", source.display()));
+        }
+    }
+
+    let transaction_id = Uuid::new_v4();
+    let mut staged = Vec::new();
+    let mut originals = Vec::new();
+
+    for target in &targets {
+        let source = backup_dir.join(
+            target
+                .file_name()
+                .ok_or_else(|| "Некорректное имя файла rollback".to_string())?,
+        );
+        match std::fs::symlink_metadata(&source) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(format!("Backup-файл имеет небезопасный тип: {}", source.display()));
+                }
+                let temp = target.with_extension(format!("rollback-{transaction_id}.tmp"));
+                std::fs::copy(&source, &temp).map_err(|error| {
+                    format!(
+                        "Не удалось подготовить rollback {} -> {}: {error}",
+                        source.display(),
+                        temp.display()
+                    )
+                })?;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&temp)
+                    .and_then(|file| file.sync_all())
+                    .map_err(|error| format!("Не удалось синхронизировать rollback-файл {}: {error}", temp.display()))?;
+                staged.push((target.clone(), Some(temp)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                staged.push((target.clone(), None));
+            }
+            Err(error) => return Err(format!("Не удалось проверить backup-файл {}: {error}", source.display())),
+        }
+    }
+
+    for target in &targets {
+        match std::fs::symlink_metadata(target) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    for (_, temp) in &staged {
+                        if let Some(temp) = temp {
+                            let _ = std::fs::remove_file(temp);
+                        }
+                    }
+                    return Err(format!("Текущий файл состояния имеет небезопасный тип: {}", target.display()));
+                }
+                let old = target.with_extension(format!("rollback-{transaction_id}.old"));
+                std::fs::rename(target, &old).map_err(|error| {
+                    format!("Не удалось отложить текущий файл состояния {}: {error}", target.display())
+                })?;
+                originals.push((target.clone(), Some(old)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                originals.push((target.clone(), None));
+            }
+            Err(error) => {
+                for (_, temp) in &staged {
+                    if let Some(temp) = temp {
+                        let _ = std::fs::remove_file(temp);
+                    }
+                }
+                return Err(format!("Не удалось проверить текущий файл состояния {}: {error}", target.display()));
+            }
+        }
+    }
+
+    let apply_result = (|| -> Result<(), String> {
+        for (target, temp) in &staged {
+            if let Some(temp) = temp {
+                std::fs::rename(temp, target).map_err(|error| {
+                    format!("Не удалось восстановить файл состояния {}: {error}", target.display())
+                })?;
+            }
+        }
+        let repo = repository_for(db_path)?;
+        repo.quick_integrity_check()
+            .map_err(|error| format!("Восстановленная база не прошла integrity check: {error}"))?;
+        Ok(())
+    })();
+
+    if let Err(error) = apply_result {
+        for target in &targets {
+            let _ = std::fs::remove_file(target);
+        }
+        for (target, old) in originals.iter().rev() {
+            if let Some(old) = old {
+                let _ = std::fs::rename(old, target);
+            }
+        }
+        for (_, temp) in &staged {
+            if let Some(temp) = temp {
+                let _ = std::fs::remove_file(temp);
+            }
+        }
+        return Err(error);
+    }
+
+    for (_, old) in originals {
+        if let Some(old) = old {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+    Ok(())
+}
+
+fn restore_update_backup(app: &tauri::AppHandle, state: &UpdateRecoveryState) -> Result<(), String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let trusted_root = app_data.join("update-backups");
+    let canonical_root = trusted_root
+        .canonicalize()
+        .map_err(|error| format!("Каталог update-backups недоступен: {error}"))?;
+    let backup_dir = PathBuf::from(&state.backup_dir)
+        .canonicalize()
+        .map_err(|error| format!("Каталог backup недоступен: {error}"))?;
+    if !backup_dir.starts_with(&canonical_root) {
+        return Err("Recovery marker указывает на backup вне доверенного update-backups".to_string());
+    }
+    let metadata = std::fs::symlink_metadata(&backup_dir)
+        .map_err(|error| format!("Не удалось проверить каталог backup: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("Каталог backup имеет небезопасный тип".to_string());
+    }
+    restore_update_backup_files(&default_state_db_path(app)?, &backup_dir)
 }
 
 fn ensure_no_active_case_runs(app: &tauri::AppHandle) -> Result<(), String> {
@@ -710,11 +871,22 @@ fn reconcile_pending_update(app: &tauri::AppHandle) -> Result<(), String> {
         state.last_error = None;
         write_update_recovery_state(app, &state)?;
     } else if state.status == "installer_started" {
-        state.status = "recoverable_failure".to_string();
-        state.last_error = Some(
-            "Installer был запущен, но приложение стартовало в прежней версии; backup сохранён."
-                .to_string(),
-        );
+        match restore_update_backup(app, &state) {
+            Ok(()) => {
+                state.status = "rolled_back".to_string();
+                state.verified_at = Some(OffsetDateTime::now_utc().to_string());
+                state.last_error = Some(
+                    "Installer был запущен, но приложение стартовало в прежней версии; локальное состояние автоматически восстановлено из pre-update backup."
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                state.status = "recoverable_failure".to_string();
+                state.last_error = Some(format!(
+                    "Installer был запущен, но приложение стартовало в прежней версии; автоматический rollback не выполнен: {error}. Backup сохранён."
+                ));
+            }
+        }
         write_update_recovery_state(app, &state)?;
     }
     Ok(())
@@ -900,6 +1072,62 @@ fn apply_verified_update(
 #[cfg(test)]
 mod fpr19_update_lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn rollback_restores_required_state_and_removes_files_absent_from_backup() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-update-rollback-{}", Uuid::new_v4()));
+        let live = root.join("live");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        let db = live.join(DEFAULT_STATE_DB);
+        let key = live.join(format!("{DEFAULT_STATE_DB}.key"));
+        let wal = PathBuf::from(format!("{}-wal", db.display()));
+        let shm = PathBuf::from(format!("{}-shm", db.display()));
+
+        {
+            let repo = repository_for(&db).unwrap();
+            repo.quick_integrity_check().unwrap();
+        }
+        std::fs::copy(&db, backup.join(DEFAULT_STATE_DB)).unwrap();
+        std::fs::copy(&key, backup.join(format!("{DEFAULT_STATE_DB}.key"))).unwrap();
+        let original_db = std::fs::read(&db).unwrap();
+        let original_key = std::fs::read(&key).unwrap();
+
+        std::fs::write(&db, b"corrupted database").unwrap();
+        std::fs::write(&key, b"corrupted key").unwrap();
+        std::fs::write(&wal, b"new wal").unwrap();
+        std::fs::write(&shm, b"new shm").unwrap();
+
+        restore_update_backup_files(&db, &backup).unwrap();
+
+        assert_eq!(std::fs::read(&db).unwrap(), original_db);
+        assert_eq!(std::fs::read(&key).unwrap(), original_key);
+        assert!(!wal.exists());
+        assert!(!shm.exists());
+        repository_for(&db).unwrap().quick_integrity_check().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rollback_refuses_missing_required_backup_before_touching_live_state() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-update-rollback-missing-{}", Uuid::new_v4()));
+        let live = root.join("live");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        let db = live.join(DEFAULT_STATE_DB);
+        let key = live.join(format!("{DEFAULT_STATE_DB}.key"));
+        std::fs::write(&db, b"live-db").unwrap();
+        std::fs::write(&key, b"live-key").unwrap();
+        std::fs::write(backup.join(DEFAULT_STATE_DB), b"backup-db").unwrap();
+
+        let error = restore_update_backup_files(&db, &backup).expect_err("missing backup key must fail closed");
+        assert!(error.contains("Обязательный backup-файл недоступен"), "{error}");
+        assert_eq!(std::fs::read(&db).unwrap(), b"live-db");
+        assert_eq!(std::fs::read(&key).unwrap(), b"live-key");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn downloaded_package_is_reverified_before_install() {

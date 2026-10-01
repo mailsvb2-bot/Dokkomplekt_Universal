@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { applyVerifiedUpdate, checkForUpdates, getUpdateRecoveryStatus } from '../lib/api';
+import { actionErrorMessage } from './useActionRunner';
 
 type RunAction = <T>(
   label: string,
@@ -39,10 +40,14 @@ export function useUpdateLifecycle({
           setStatus(`Обновление не завершено: ${recovery.last_error ?? 'установщик не подтвердил новую версию'}. Резервная копия сохранена: ${recovery.backup_dir}.`);
         } else if (recovery.status === 'prepared' || recovery.status === 'installer_started') {
           setStatus(`Обновление до версии ${recovery.target_version} требует завершения. Recovery marker сохранён.`);
+        } else {
+          setStatus(`Неизвестное состояние восстановления обновления «${recovery.status}». Автоматическое продолжение обновления не выполняется.`);
         }
       })
-      .catch(() => {
-        // Recovery inspection must never block normal workspace startup.
+      .catch((error) => {
+        if (!alive) return;
+        const detail = actionErrorMessage(error);
+        setStatus(`Не удалось проверить состояние восстановления обновления: ${detail}. Рабочий набор остаётся доступен; проверку обновления можно повторить вручную.`);
       });
     return () => {
       alive = false;

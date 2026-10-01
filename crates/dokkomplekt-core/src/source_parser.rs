@@ -2224,6 +2224,112 @@ mod tests {
     }
 
     #[test]
+    fn extracts_hr_collection_without_accounting_column_names() {
+        let text = "ШТАТНЫЙ СПИСОК
+Сотрудник\tДолжность\tПодразделение
+Иванов Иван\tИнженер\tПроизводство
+Петрова Анна\tЮрист\tПравовой отдел";
+        let (case, report) = parse_source_text(text, 2026);
+        let items = case.collection("items").expect("HR items collection");
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]
+                .get("сотрудник")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Иванов Иван")
+        );
+        assert_eq!(
+            items[1]
+                .get("должность")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Юрист")
+        );
+        assert!(report
+            .filled_fields
+            .contains(&"collection.items".to_string()));
+    }
+
+    #[test]
+    fn extracts_education_and_unknown_profession_collections_by_stable_header_ids() {
+        let education = "ВЕДОМОСТЬ
+Студент|Оценка
+Смирнова Анна|5
+Орлов Олег|4";
+        let (case, _) = parse_source_text(education, 2026);
+        let items = case.collection("items").expect("education items collection");
+        assert_eq!(
+            items[0]
+                .get("студент")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Смирнова Анна")
+        );
+        assert_eq!(
+            items[0]
+                .get("оценка")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("5")
+        );
+
+        let unknown = "КАРТА ПИТОМЦЕВ
+Питомец|Процедура|Доза
+Барсик|Вакцинация|1
+Рекс|Осмотр|2";
+        let (case, _) = parse_source_text(unknown, 2026);
+        let items = case
+            .collection("items")
+            .expect("unknown-profession items collection");
+        assert_eq!(
+            items[0]
+                .get("питомец")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Барсик")
+        );
+        assert_eq!(
+            items[1]
+                .get("процедура")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Осмотр")
+        );
+    }
+
+    #[test]
+    fn generic_table_keeps_accounting_ids_and_preserves_extra_and_duplicate_columns() {
+        let text = "СПЕЦИФИКАЦИЯ
+Наименование\tЦена\tКомментарий\tКомментарий
+Аудит\t1500\tПервый\tВторой";
+        let (case, _) = parse_source_text(text, 2026);
+        let items = case.collection("items").expect("items collection");
+        assert_eq!(items.len(), 1);
+        let row = &items[0];
+        assert_eq!(
+            row.get("name").map(SemanticAtom::as_text).as_deref(),
+            Some("Аудит")
+        );
+        assert_eq!(
+            row.get("price").map(SemanticAtom::as_text).as_deref(),
+            Some("1500")
+        );
+        assert_eq!(
+            row.get("комментарий")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Первый")
+        );
+        assert_eq!(
+            row.get("комментарий_2")
+                .map(SemanticAtom::as_text)
+                .as_deref(),
+            Some("Второй")
+        );
+    }
+
+    #[test]
     fn invalid_bank_account_is_rejected_after_bik_pair_check() {
         let text = "РЕКВИЗИТЫ
 БИК: 044525225

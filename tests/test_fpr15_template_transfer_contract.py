@@ -77,5 +77,8 @@ def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_
     ):
         assert marker in source
     assert source.index("FPR-15 CLEAN PROFILE PASS:") < source.index("FPR-15 IMPORT PASS:")
+    assert "$fpr15Candidate = @(" in source
+    assert "$fpr15Package = @(Get-ChildItem" not in source
+    assert "if ($fpr15Candidate.Count -gt 0) { $fpr15Package = $fpr15Candidate[0]; break }" in source
     assert "FPR-15 clean-profile template management" not in source
     assert source.index("FPR-15 IMPORT PASS:") < source.index("FPR-15 INSTALLED PASS:")

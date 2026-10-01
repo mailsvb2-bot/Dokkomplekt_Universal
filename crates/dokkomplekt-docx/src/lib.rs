@@ -4705,13 +4705,16 @@ mod tests {
         let bytes = build_test_docx(&[
             (
                 "word/document.xml",
-                br#"<w:document><w:body><w:sdt><w:sdtPr><w:dataBinding/></w:sdtPr><w:sdtContent><w:p><w:del><w:r><w:delText>Старое значение</w:delText></w:r></w:del></w:p></w:sdtContent></w:sdt></w:body></w:document>"#,
+                r#"<w:document><w:body><w:sdt><w:sdtPr><w:dataBinding/></w:sdtPr><w:sdtContent><w:p><w:del><w:r><w:delText>Старое значение</w:delText></w:r></w:del></w:p></w:sdtContent></w:sdt></w:body></w:document>"#.as_bytes(),
             ),
             (
                 "word/comments.xml",
-                br#"<w:comments><w:comment w:id="0"><w:p><w:r><w:t>Старый комментарий</w:t></w:r></w:p></w:comment></w:comments>"#,
+                r#"<w:comments><w:comment w:id="0"><w:p><w:r><w:t>Старый комментарий</w:t></w:r></w:p></w:comment></w:comments>"#.as_bytes(),
             ),
-            ("customXml/item1.xml", br#"<person>Старый человек</person>"#),
+            (
+                "customXml/item1.xml",
+                r#"<person>Старый человек</person>"#.as_bytes(),
+            ),
         ]);
         std::fs::write(&path, bytes).expect("write hidden-carrier fixture");
 

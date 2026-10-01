@@ -166,7 +166,7 @@ function installMock(calls: Call[], options: { componentInstalled?: boolean; com
       case 'verify_rust_license_text':
         return true as never;
       case 'check_for_updates':
-        return { current_version: '18.0.7', latest_version: '18.0.8', update_available: true, artifact_path: '/app-data/verified-updates/18.0.8/app.zip', release_notes: 'Security update' } as never;
+        return { available: false, current_version: '18.4.7', latest_version: '18.4.7', platform: 'windows-x86_64', message: 'Установлена актуальная версия', notes: null, verified_package_path: null, sha256: null, size_bytes: null } as never;
       case 'get_background_watcher_state':
         return { platform: 'windows', installed: false, migration_required: false } as never;
       case 'install_background_watcher':

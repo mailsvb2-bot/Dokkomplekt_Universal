@@ -40,6 +40,11 @@ EXCLUDED_DIRS = {
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 ZIP_TIMESTAMP = (2026, 7, 26, 0, 0, 0)
 EXCLUDED_PREFIXES = {("src-tauri", "resources", "tools")}
+ALLOWED_FILES_UNDER_EXCLUDED_DIRS = {
+    # Authored release/test contracts may live under verification, while generated
+    # verification output remains excluded from the clean source archive.
+    ("verification", "e2e", "LIVE_USER_SCENARIOS.json"),
+}
 ALLOWED_FILES_UNDER_EXCLUDED_PREFIXES = {
     ("src-tauri", "resources", "tools", "windows-x86_64", "sidecar-status.json"),
 }
@@ -60,7 +65,8 @@ def sha256_file(path: Path) -> str:
 def is_excluded(path: Path) -> bool:
     relative = path.relative_to(ROOT)
     if any(part in EXCLUDED_DIRS for part in relative.parts):
-        return True
+        if relative.parts not in ALLOWED_FILES_UNDER_EXCLUDED_DIRS:
+            return True
     if any(relative.parts[:len(prefix)] == prefix for prefix in EXCLUDED_PREFIXES):
         if relative.parts not in ALLOWED_FILES_UNDER_EXCLUDED_PREFIXES:
             return True
@@ -138,7 +144,8 @@ def verify_archive(output: Path, top_level: str, expected_manifest: bytes) -> No
             validate_member_name(name, top_level)
             member_parts = PurePosixPath(name).parts[1:]
             if any(part in EXCLUDED_DIRS for part in member_parts):
-                raise RuntimeError(f"Excluded directory leaked into ZIP: {name}")
+                if tuple(member_parts) not in ALLOWED_FILES_UNDER_EXCLUDED_DIRS:
+                    raise RuntimeError(f"Excluded directory leaked into ZIP: {name}")
             if any(member_parts[:len(prefix)] == prefix for prefix in EXCLUDED_PREFIXES):
                 if tuple(member_parts) not in ALLOWED_FILES_UNDER_EXCLUDED_PREFIXES:
                     raise RuntimeError(f"Generated sidecar staging leaked into source ZIP: {name}")
@@ -184,6 +191,9 @@ def main() -> int:
             "source_sha256_entries": "passed",
         },
         "excluded_directories": sorted(EXCLUDED_DIRS),
+        "allowed_files_under_excluded_directories": [
+            "/".join(parts) for parts in sorted(ALLOWED_FILES_UNDER_EXCLUDED_DIRS)
+        ],
         "excluded_prefixes": ["/".join(prefix) for prefix in sorted(EXCLUDED_PREFIXES)],
         "allowed_files_under_excluded_prefixes": [
             "/".join(parts) for parts in sorted(ALLOWED_FILES_UNDER_EXCLUDED_PREFIXES)

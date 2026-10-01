@@ -54,6 +54,14 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
     assert "repo.backup_snapshot(&backup_db)" in runtime
     assert "copy_update_backup_file(&db_path, &backup_dir)" not in runtime
 
+    reconcile_start = runtime.index("fn reconcile_pending_update(")
+    reconcile_end = runtime.index("#[tauri::command]\nfn get_update_recovery_status", reconcile_start)
+    reconcile = runtime[reconcile_start:reconcile_end]
+    assert "текущая локальная база и ключ проверены и сохранены без отката" in reconcile
+    assert "restore_update_backup(app, &state)" in reconcile
+    assert reconcile.index("quick_integrity_check") < reconcile.index("restore_update_backup(app, &state)")
+    assert "Подготовка обновления была прервана до подтверждённого запуска installer" in reconcile
+
     assert "reconcile_pending_update(&handle)" in main
     assert main.index("reconcile_pending_update(&handle)") < main.index("ensure_default_state_loaded(&handle, &state)")
     assert "get_update_recovery_status," in main

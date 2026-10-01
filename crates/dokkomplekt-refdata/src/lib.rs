@@ -289,7 +289,9 @@ mod tests {
     #[test]
     fn unsupported_year_fails_closed_instead_of_using_weekends_only() {
         let error = add_working_days_ru(NaiveDate::from_ymd_opt(2028, 12, 30).unwrap(), 3)
-            .expect_err("2028 must remain blocked until its official transfer calendar is complete");
+            .expect_err(
+                "2028 must remain blocked until its official transfer calendar is complete",
+            );
         assert_eq!(error, CalendarError::UnsupportedYear(2028));
     }
 

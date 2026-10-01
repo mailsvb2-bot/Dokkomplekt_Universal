@@ -36,6 +36,8 @@ export function useUpdateLifecycle({
         if (!alive || !recovery) return;
         if (recovery.status === 'verified') {
           setStatus(`Обновление до версии ${recovery.target_version} установлено и локальное состояние проверено.`);
+        } else if (recovery.status === 'rolled_back') {
+          setStatus(`Обновление до версии ${recovery.target_version} не завершено; локальное состояние автоматически восстановлено из резервной копии. ${recovery.last_error ?? ''}`.trim());
         } else if (recovery.status === 'recoverable_failure') {
           setStatus(`Обновление не завершено: ${recovery.last_error ?? 'установщик не подтвердил новую версию'}. Резервная копия сохранена: ${recovery.backup_dir}.`);
         } else if (recovery.status === 'prepared' || recovery.status === 'installer_started') {

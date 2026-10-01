@@ -73,3 +73,24 @@ def test_zero_touch_requires_validated_automatic_template_proof() -> None:
     admission = automation.index("zero_touch_template_admission_blockers(", selection)
     configured = automation.index("let mut configured = Vec::new();", admission)
     assert selection < admission < configured
+
+
+def test_new_template_publication_has_capability_manifest_gate() -> None:
+    docx = read("crates/dokkomplekt-docx/src/lib.rs")
+    commands = read("src-tauri/src/subsystems/document_commands.rs")
+
+    assert "pub struct DocxCapabilityManifest" in docx
+    assert "pub fn inspect_docx_capabilities_file(" in docx
+    assert '"custom_xml_requires_explicit_sanitization_policy"' in docx
+    assert '"data_binding_not_supported_for_published_reference"' in docx
+    assert '"revision_markup_requires_explicit_sanitization_policy"' in docx
+    assert '"comments_require_explicit_sanitization_policy"' in docx
+    assert "inspect_docx_capabilities_file(snapshot.path())" in commands
+    assert '"template_capability_admission_passed"' in commands
+
+    admission = commands.index("inspect_docx_capabilities_file(snapshot.path())")
+    pack_creation = commands.index(
+        'create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack',
+        admission,
+    )
+    assert admission < pack_creation

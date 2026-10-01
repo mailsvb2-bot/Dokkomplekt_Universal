@@ -49,6 +49,23 @@ def test_every_installed_registry_marker_exists_in_its_real_executor() -> None:
         )
 
 
+def test_every_update_live_registry_marker_exists_in_its_real_executor() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    executor_cache: dict[str, str] = {}
+    for item in payload["scenarios"]:
+        if item["lane"] != "update-live":
+            continue
+        executor = item["executor"]
+        if executor not in executor_cache:
+            executor_cache[executor] = (
+                ROOT / "tests" / "windows" / executor
+            ).read_text(encoding="utf-8-sig")
+        assert item["evidence_marker"] in executor_cache[executor], (
+            f"{item['id']} update-live marker is not emitted by {executor}: "
+            f"{item['evidence_marker']}"
+        )
+
+
 def test_live_harness_requires_real_windows10_or_11_x64_interactive_signed_install() -> None:
     source = HARNESS.read_text(encoding="utf-8-sig")
     for marker in (

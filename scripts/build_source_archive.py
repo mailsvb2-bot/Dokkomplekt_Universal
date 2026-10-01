@@ -43,7 +43,9 @@ EXCLUDED_PREFIXES = {("src-tauri", "resources", "tools")}
 ALLOWED_FILES_UNDER_EXCLUDED_DIRS = {
     # Authored release/test contracts may live under verification, while generated
     # verification output remains excluded from the clean source archive.
+    ("verification", "autopilot", "feature-matrix.json"),
     ("verification", "e2e", "LIVE_USER_SCENARIOS.json"),
+    ("verification", "security", "rustsec-advisory-db.json"),
 }
 ALLOWED_FILES_UNDER_EXCLUDED_PREFIXES = {
     ("src-tauri", "resources", "tools", "windows-x86_64", "sidecar-status.json"),

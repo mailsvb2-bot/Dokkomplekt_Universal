@@ -4926,6 +4926,8 @@ mod tests {
 
     #[test]
     fn custom_xml_only_template_is_sanitized_without_touching_word_story_bytes() {
+        use sha2::Digest as _;
+
         let dir = std::env::temp_dir().join("dokkomplekt-custom-xml-sanitization-test");
         let path = dir.join("custom-xml-reference.docx");
         std::fs::create_dir_all(&dir).expect("create sanitizer test dir");

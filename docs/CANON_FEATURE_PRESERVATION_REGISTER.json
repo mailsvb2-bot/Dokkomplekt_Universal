@@ -659,7 +659,7 @@
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "A real previous-version -> current-version installed run must prove preserved settings/state and successful post-start verification, and a forced real installer failure must prove automatic pre-workspace rollback from the consistent SQLite snapshot on both Windows 10 and Windows 11 before final register closure."
+      "runtime_gap": "A real previous-version -> current-version installed run must prove preserved settings/state and successful post-start verification, and a forced real recoverable installer failure must prove automatic pre-workspace rollback from the consistent SQLite snapshot on both Windows 10 and Windows 11 before final register closure."
     },
     {
       "id": "FPR-20",

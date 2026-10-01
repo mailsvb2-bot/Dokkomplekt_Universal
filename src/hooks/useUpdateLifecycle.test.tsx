@@ -77,6 +77,40 @@ describe('useUpdateLifecycle', () => {
     ));
   });
 
+  it('surfaces an automatic rollback without treating it as a successful update', async () => {
+    const setStatus = vi.fn();
+    __setInvokeForTests(async (command) => {
+      if (command === 'get_update_recovery_status') {
+        return {
+          schema: 'dokkomplekt.update-recovery.v1',
+          status: 'rolled_back',
+          from_version: '18.4.7',
+          target_version: '18.4.8',
+          package_path: 'C:/updates/18.4.8/Dokkomplekt.exe',
+          package_sha256: 'c'.repeat(64),
+          package_size_bytes: 321,
+          backup_dir: 'C:/backup',
+          created_at: '2026-10-01T10:00:00Z',
+          verified_at: '2026-10-01T10:01:00Z',
+          last_error: 'Installer failed; state restored.',
+        } as never;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    renderHook(() => useUpdateLifecycle({
+      workspaceStateReady: true,
+      run: runAction,
+      setStatus,
+      confirm: vi.fn(async () => false),
+    }));
+
+    await waitFor(() => expect(setStatus).toHaveBeenCalledWith(
+      expect.stringContaining('локальное состояние автоматически восстановлено из резервной копии'),
+    ));
+    expect(setStatus).not.toHaveBeenCalledWith(expect.stringContaining('установлено и локальное состояние проверено'));
+  });
+
   it('applies only the exact package metadata returned by the verified update check', async () => {
     const calls: Call[] = [];
     const setStatus = vi.fn();

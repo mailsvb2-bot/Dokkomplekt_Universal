@@ -16,6 +16,8 @@ def test_fpr12_installed_restart_and_installer_preservation_are_locked() -> None
     assert "FPR-12 INSTALLER PRESERVATION PASS" in source
     assert "$fpr12Replacement = Start-Process -FilePath $installer.FullName" in source
     assert "$fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint" in source
+    assert "$fpr12AfterInstallerReplacement -ne $fpr12BeforeInstallerReplacement" in source
+    assert "FPR-12 installer replacement mutated durable output preferences" in source
     assert "FPR-12 installer replacement lost the persisted workspace/button state." in source
 
 

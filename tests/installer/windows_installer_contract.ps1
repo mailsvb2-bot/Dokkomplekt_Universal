@@ -3471,6 +3471,9 @@ $fpr12AfterInstallerReplacement = Wait-AppStateCipherFingerprint `
 if ([string]::IsNullOrWhiteSpace($fpr12AfterInstallerReplacement)) {
   throw 'FPR-12 installer replacement lost the durable output preference row.'
 }
+if ($fpr12AfterInstallerReplacement -ne $fpr12BeforeInstallerReplacement) {
+  throw "FPR-12 installer replacement mutated durable output preferences: before=$fpr12BeforeInstallerReplacement after=$fpr12AfterInstallerReplacement"
+}
 $fpr12ReplacementProcess = Start-Process -FilePath $app.FullName -PassThru
 try {
   $fpr12ReplacementWindow = Wait-UiElement -Description 'FPR-12 window after installer replacement' -TimeoutSeconds 30 -Probe {

@@ -47,9 +47,11 @@
 2026-06-12	holiday
 2026-11-04	holiday
 
-# 2027 is listed for explicit coverage awareness, but is not marked complete:
-# the renderer must fail closed until the official transfer schedule is bundled.
-2027	provisional
+# 2027 official five-day production calendar.
+# Government Resolution of the Russian Federation dated 17.09.2026 No. 1187:
+# 02 Jan -> 05 Nov, 03 Jan -> 31 Dec, 20 Feb -> 22 Feb.
+2027	complete
+# New Year holidays and Christmas
 2027-01-01	holiday
 2027-01-02	holiday
 2027-01-03	holiday
@@ -58,9 +60,23 @@
 2027-01-06	holiday
 2027-01-07	holiday
 2027-01-08	holiday
+# Defender of the Fatherland Day transfer
+2027-02-20	working
+2027-02-22	holiday
 2027-02-23	holiday
+# International Women's Day
 2027-03-08	holiday
+# Spring and Labour Day + statutory substitute day
 2027-05-01	holiday
+2027-05-03	holiday
+# Victory Day + statutory substitute day
 2027-05-09	holiday
+2027-05-10	holiday
+# Russia Day + statutory substitute day
 2027-06-12	holiday
+2027-06-14	holiday
+# National Unity Day + transferred day off
 2027-11-04	holiday
+2027-11-05	holiday
+# Transferred New Year day
+2027-12-31	holiday

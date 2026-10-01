@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_CONTRACT = ROOT / "tests" / "installer" / "windows_installer_contract.ps1"
 LIVE_UPDATE = ROOT / "tests" / "windows" / "windows_live_update_e2e.ps1"
 REGISTER = ROOT / "docs" / "CANON_FEATURE_PRESERVATION_REGISTER.json"
+LIVE_REGISTRY = ROOT / "verification" / "e2e" / "LIVE_USER_SCENARIOS.json"
 
 
 def test_fpr12_installed_restart_and_installer_preservation_are_locked() -> None:
@@ -49,4 +50,18 @@ def test_fpr12_cross_version_executor_preserves_exact_native_state_before_new_ap
         source.index("Updated installed application is not validly signed."),
     )
     assert marker < updated_start
+
+def test_fpr12_remaining_live_evidence_is_cross_version_update() -> None:
+    registry = json.loads(LIVE_REGISTRY.read_text(encoding="utf-8"))
+    scenario = next(item for item in registry["scenarios"] if item["id"] == "FPR-12")
+    assert scenario["lane"] == "update-live"
+    assert scenario["executor"] == "windows_live_update_e2e.ps1"
+    assert scenario["evidence_marker"] == "FPR-12 LIVE UPGRADE STORAGE PASS:"
+
+    register = json.loads(REGISTER.read_text(encoding="utf-8"))
+    entry = next(item for item in register["features"] if item["id"] == "FPR-12")
+    assert entry["status"] == "needs-runtime-proof"
+    assert "Windows 10" in entry["runtime_gap"]
+    assert "Windows 11" in entry["runtime_gap"]
+    assert "FPR-12 LIVE UPGRADE STORAGE PASS" in entry["runtime_gap"]
 

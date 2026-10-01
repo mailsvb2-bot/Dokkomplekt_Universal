@@ -996,19 +996,24 @@ fn extract_items_table(text: &str) -> Option<(Vec<SemanticRecord>, Vec<String>)>
         let Some((delimiter, header_cells)) = split_table_line(line) else {
             continue;
         };
-        let mapped = header_cells
+        let known_mapped = header_cells
             .iter()
             .map(|header| item_column_id(header))
             .collect::<Vec<_>>();
-        let recognized = mapped.iter().filter(|value| value.is_some()).count();
-        let has_name = mapped.iter().any(|value| value.as_deref() == Some("name"));
-        let has_value_column = mapped.iter().any(|value| {
+        let recognized = known_mapped.iter().filter(|value| value.is_some()).count();
+        let has_name = known_mapped
+            .iter()
+            .any(|value| value.as_deref() == Some("name"));
+        let has_value_column = known_mapped.iter().any(|value| {
             matches!(
                 value.as_deref(),
                 Some("quantity" | "price" | "amount" | "unit")
             )
         });
-        if recognized < 2 || !has_name || !has_value_column {
+        let legacy_accounting_shape = recognized >= 2 && has_name && has_value_column;
+        let mapped = table_column_ids(&header_cells);
+        let generic_column_count = mapped.iter().filter(|value| value.is_some()).count();
+        if !legacy_accounting_shape && generic_column_count < 2 {
             continue;
         }
 
@@ -1056,11 +1061,16 @@ fn extract_items_table(text: &str) -> Option<(Vec<SemanticRecord>, Vec<String>)>
                 .get("name")
                 .map(SemanticAtom::as_text)
                 .is_some_and(|value| !value.trim().is_empty());
-            if has_row_name && record.len() >= 2 {
+            let row_is_usable = if legacy_accounting_shape {
+                has_row_name && record.len() >= 2
+            } else {
+                record.len() >= 2
+            };
+            if row_is_usable {
                 rows.push(record);
             } else if !record.is_empty() {
                 warnings.push(format!(
-                    "Строка таблицы {} пропущена: нет наименования или значений",
+                    "Строка таблицы {} пропущена: недостаточно распознанных значений",
                     header_index + offset + 2
                 ));
             } else if !rows.is_empty() {
@@ -1169,6 +1179,59 @@ fn item_column_id(header: &str) -> Option<String> {
         _ => return None,
     };
     Some(id.into())
+}
+
+fn generic_table_column_id(header: &str) -> Option<String> {
+    let trimmed = header.trim();
+    if trimmed.is_empty() || !trimmed.chars().any(char::is_alphabetic) {
+        return None;
+    }
+
+    let mut normalized = String::new();
+    let mut separator_pending = false;
+    for ch in trimmed.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            if separator_pending && !normalized.is_empty() {
+                normalized.push('_');
+            }
+            normalized.push(ch);
+            separator_pending = false;
+        } else if !normalized.is_empty() {
+            separator_pending = true;
+        }
+    }
+    let mut field_id = normalized.trim_matches('_').chars().take(32).collect::<String>();
+    if field_id.is_empty() {
+        return None;
+    }
+    if !field_id
+        .chars()
+        .next()
+        .is_some_and(char::is_alphabetic)
+    {
+        field_id = format!("column_{field_id}");
+    }
+    crate::is_valid_field_id(&field_id).then_some(field_id)
+}
+
+fn table_column_ids(headers: &[String]) -> Vec<Option<String>> {
+    let mut seen = std::collections::BTreeMap::<String, usize>::new();
+    headers
+        .iter()
+        .map(|header| {
+            let base = item_column_id(header).or_else(|| generic_table_column_id(header))?;
+            let occurrence = seen.entry(base.clone()).or_default();
+            *occurrence += 1;
+            if *occurrence == 1 {
+                return Some(base);
+            }
+            let suffix = format!("_{}", *occurrence);
+            let max_base_chars = 40usize.saturating_sub(suffix.chars().count());
+            let shortened = base.chars().take(max_base_chars).collect::<String>();
+            let unique = format!("{shortened}{suffix}");
+            crate::is_valid_field_id(&unique).then_some(unique)
+        })
+        .collect()
 }
 
 fn item_atom(field_id: &str, value: &str) -> SemanticAtom {

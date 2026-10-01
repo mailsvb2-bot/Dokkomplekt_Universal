@@ -59,6 +59,9 @@ if ($previousSignature.Status -ne 'Valid') {
 $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
 $targetVersion = [version]([string]$config.version)
 $identifier = [string]$config.identifier
+$appData = Join-Path ([Environment]::GetFolderPath('ApplicationData')) $identifier
+$stateDatabase = Join-Path $appData 'dokkomplekt-user-state.sqlite'
+$outputPreferenceStateKey = 'output_preferences_v2'
 $installDir = Join-Path $env:RUNNER_TEMP ("dokkomplekt-fpr19-" + [Guid]::NewGuid().ToString('N'))
 $process = $null
 
@@ -201,6 +204,15 @@ $settings = Wait-LiveElement -Description 'Settings button' -Probe {
 }
 Invoke-Button -Button $settings
 
+$previousOutputPreferencesRaw = & python scripts/read_app_state_fingerprint.py --database $stateDatabase --state-key $outputPreferenceStateKey --wait-seconds 30
+if ($LASTEXITCODE -ne 0) {
+    throw 'FPR-12 previous-version output_preferences_v2 row did not become readable.'
+}
+$previousOutputPreferencesFingerprint = ([string]$previousOutputPreferencesRaw).Trim().ToLowerInvariant()
+if ($previousOutputPreferencesFingerprint -notmatch '^[0-9a-f]{64}$') {
+    throw "FPR-12 previous-version state fingerprint is invalid: $previousOutputPreferencesFingerprint"
+}
+
 $check = Wait-LiveElement -Description 'Check updates button' -Probe {
     $window = Find-AppWindow
     if ($null -ne $window) { Find-Button -Root $window -Name 'Проверить обновления' }
@@ -240,13 +252,25 @@ if ((Get-AuthenticodeSignature -FilePath $app.FullName).Status -ne 'Valid') {
     throw 'Updated installed application is not validly signed.'
 }
 
+$updatedOutputPreferencesRaw = & python scripts/read_app_state_fingerprint.py --database $stateDatabase --state-key $outputPreferenceStateKey --wait-seconds 30
+if ($LASTEXITCODE -ne 0) {
+    throw 'FPR-12 updated output_preferences_v2 row did not remain readable after installer apply.'
+}
+$updatedOutputPreferencesFingerprint = ([string]$updatedOutputPreferencesRaw).Trim().ToLowerInvariant()
+if ($updatedOutputPreferencesFingerprint -notmatch '^[0-9a-f]{64}$') {
+    throw "FPR-12 updated state fingerprint is invalid: $updatedOutputPreferencesFingerprint"
+}
+if ($updatedOutputPreferencesFingerprint -ne $previousOutputPreferencesFingerprint) {
+    throw "FPR-12 cross-version installer mutated durable output preferences: before=$previousOutputPreferencesFingerprint after=$updatedOutputPreferencesFingerprint"
+}
+Write-Host 'FPR-12 LIVE UPGRADE STORAGE PASS: exact output_preferences_v2 row survived signed previous-version -> current-version installer apply.'
+
 $process = Start-Process -FilePath $app.FullName -PassThru
 $null = Wait-LiveElement -Description 'updated application window' -Probe { Find-AppWindow }
 $null = Wait-LiveElement -Description 'verified update recovery status' -TimeoutSeconds 45 -Probe {
     Find-StatusContaining -Text "Обновление до версии $targetVersion установлено"
 }
 
-$appData = Join-Path ([Environment]::GetFolderPath('ApplicationData')) $identifier
 $recoveryPath = Join-Path $appData 'update-recovery.json'
 if (-not (Test-Path -LiteralPath $recoveryPath -PathType Leaf)) {
     throw 'FPR-19 update recovery marker is missing after updated restart.'
@@ -278,6 +302,9 @@ if (-not [string]::IsNullOrWhiteSpace($parent)) {
     updated_application_sha256 = (Get-FileHash -LiteralPath $app.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     recovery_status = [string]$recovery.status
     backup_dir = [string]$recovery.backup_dir
+    output_preferences_state_key = $outputPreferenceStateKey
+    previous_output_preferences_sha256 = $previousOutputPreferencesFingerprint
+    post_installer_output_preferences_sha256 = $updatedOutputPreferencesFingerprint
     expected_windows_version = $ExpectedWindowsVersion
     windows = [string]$os.Caption
     windows_build_number = $buildNumber

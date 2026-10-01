@@ -1147,7 +1147,6 @@ mod fpr19_update_lifecycle_tests {
         }
         std::fs::copy(&db, backup.join(DEFAULT_STATE_DB)).unwrap();
         std::fs::copy(&key, backup.join(format!("{DEFAULT_STATE_DB}.key"))).unwrap();
-        std::fs::write(backup.join(format!("{DEFAULT_STATE_DB}-wal")), b"backup wal").unwrap();
         let original_db = std::fs::read(&db).unwrap();
         let original_key = std::fs::read(&key).unwrap();
 
@@ -1160,7 +1159,7 @@ mod fpr19_update_lifecycle_tests {
 
         assert_eq!(std::fs::read(&db).unwrap(), original_db);
         assert_eq!(std::fs::read(&key).unwrap(), original_key);
-        assert_eq!(std::fs::read(&wal).unwrap(), b"backup wal");
+        assert!(!wal.exists());
         assert!(!shm.exists());
         repository_for(&db).unwrap().quick_integrity_check().unwrap();
         let _ = std::fs::remove_dir_all(root);

@@ -805,7 +805,20 @@ fn apply_verified_update(
     #[cfg(not(target_os = "windows"))]
     let _ = &recovery_path;
 
+    #[cfg(target_os = "windows")]
     let mut watcher = match state.watcher.lock() {
+        Ok(watcher) => watcher,
+        Err(_) => {
+            let detail = "Не удалось заблокировать watcher перед запуском обновления".to_string();
+            return Err(record_recoverable_update_failure(
+                &app,
+                &mut recovery,
+                detail,
+            ));
+        }
+    };
+    #[cfg(not(target_os = "windows"))]
+    let watcher = match state.watcher.lock() {
         Ok(watcher) => watcher,
         Err(_) => {
             let detail = "Не удалось заблокировать watcher перед запуском обновления".to_string();

@@ -117,7 +117,8 @@ fn automation_plan_fingerprint(
         format!("bundled-calendar:{}", env!("CARGO_PKG_VERSION"))
     };
     let payload = serde_json::json!({
-        "schema": 2,
+        "schema": 3,
+        "template_admission_contract": "validated-automatic-v1",
         "engine_version": env!("CARGO_PKG_VERSION"),
         "templates": templates,
         "folder_parts": req.folder_parts.clone(),
@@ -138,6 +139,141 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hasher.update(b"\0");
     hasher.update(processing_fingerprint.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ZeroTouchTemplateAdmissionBlocker {
+    document_id: String,
+    button_label: String,
+    code: String,
+    reason: String,
+}
+
+fn learning_validation_allows_zero_touch(evidence_json: &str) -> bool {
+    let Ok(evidence) = serde_json::from_str::<serde_json::Value>(evidence_json) else {
+        return false;
+    };
+
+    // New proofs state the admission level explicitly. An explicit manual level
+    // must never be upgraded by inference from other fields.
+    if let Some(level) = evidence
+        .get("validation_level")
+        .and_then(serde_json::Value::as_str)
+    {
+        return level == "validated_automatic";
+    }
+
+    // Backward compatibility: every v2 proof produced before admission levels
+    // existed was issued only after 4-10 complete Source -> Correct Output pairs,
+    // with the last pair held out plus replay and intervention checks. Treat only
+    // that exact old proof shape as automatic; unknown/partial evidence fails closed.
+    if evidence.get("schema").and_then(serde_json::Value::as_str)
+        != Some("dokkomplekt.template-learning-validation.v2")
+    {
+        return false;
+    }
+    let validation = evidence.get("validation");
+    evidence
+        .get("holdout_pair_index")
+        .is_some_and(|value| !value.is_null())
+        && validation
+            .and_then(|value| value.get("passed"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && validation
+            .and_then(|value| value.get("replay_passed"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && validation
+            .and_then(|value| value.get("controlled_intervention_passed"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+}
+
+fn zero_touch_template_admission_blockers(
+    app: &tauri::AppHandle,
+    documents: &[DocumentTemplateSpec],
+    selected_document_ids: &BTreeSet<String>,
+    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+) -> Result<Vec<ZeroTouchTemplateAdmissionBlocker>, String> {
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    let mut blockers = Vec::new();
+
+    for document in documents {
+        if !selected_document_ids.contains(&document.id) {
+            continue;
+        }
+        let Some(version) = repo
+            .list_template_versions(&document.id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|version| version.status == "published")
+        else {
+            // Compatibility boundary for installations that predate template
+            // version metadata. They retain their existing watcher behavior;
+            // every newly published user template has a version record and is
+            // governed by the admission rules below.
+            continue;
+        };
+
+        let snapshot = template_snapshots.get(&document.id).ok_or_else(|| {
+            format!("Не найден snapshot шаблона «{}».", document.button_label)
+        })?;
+        if version.template_sha256 != snapshot.sha256() {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "published_version_mismatch".into(),
+                reason: "текущие байты шаблона не совпадают с опубликованной версией".into(),
+            });
+            continue;
+        }
+
+        let Some(validation_id) = version.learning_validation_id.as_deref() else {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "validated_manual_only".into(),
+                reason: "кнопка разрешена для ручной работы, но не имеет ValidatedAutomatic proof для watcher/zero-touch".into(),
+            });
+            continue;
+        };
+        let Some(validation) = repo
+            .template_learning_validation_by_id(validation_id)
+            .map_err(|error| error.to_string())?
+        else {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "validation_proof_missing".into(),
+                reason: "ссылка опубликованной версии на validation proof не разрешается".into(),
+            });
+            continue;
+        };
+
+        let proof_matches_template = validation.status == "published"
+            && validation.learned_template_sha256.as_deref()
+                == Some(version.template_sha256.as_str());
+        if !proof_matches_template {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "validation_proof_mismatch".into(),
+                reason: "validation proof не связан с точными байтами текущей опубликованной версии".into(),
+            });
+            continue;
+        }
+        if !learning_validation_allows_zero_touch(&validation.evidence_json) {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "automatic_admission_missing".into(),
+                reason: "validation proof не даёт уровня ValidatedAutomatic".into(),
+            });
+        }
+    }
+
+    Ok(blockers)
 }
 
 fn perform_created_documents_intake(
@@ -656,6 +792,73 @@ fn perform_created_documents_intake(
         bundle_decision.source,
         bundle_decision.confidence * 100.0
     ));
+
+    let template_admission_blockers = zero_touch_template_admission_blockers(
+        app,
+        &pack.documents,
+        &selected_document_ids,
+        &template_snapshots,
+    )?;
+    if !template_admission_blockers.is_empty() {
+        let report_path = attention_note_path(&source);
+        let mut attention = String::from(
+            "КОМПЛЕКТ НЕ СОЗДАН: шаблон не допущен к полностью автоматической генерации\n\n",
+        );
+        for blocker in &template_admission_blockers {
+            attention.push_str(&format!("- {}: {}\n", blocker.button_label, blocker.reason));
+        }
+        attention.push_str(
+            "\nОткройте Доккомплект и выполните доказательное обучение/проверку шаблона. Ручное создание кнопкой остаётся доступно.\n",
+        );
+        std::fs::write(
+            &report_path,
+            note_with_source_fingerprint(
+                &attention,
+                &source_sha256,
+                None,
+                None,
+                std::time::SystemTime::now(),
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        let details = serde_json::json!({
+            "blockers": &template_admission_blockers,
+            "selected_document_ids": &bundle_decision.document_ids,
+            "required_level": "validated_automatic",
+            "attention_file": report_path.display().to_string(),
+        });
+        create_automation_exception(
+            app,
+            "template_automation_admission",
+            &source.display().to_string(),
+            "Автоматическая генерация остановлена: один или несколько шаблонов не имеют ValidatedAutomatic proof.",
+            &details,
+        )?;
+        append_audit_event(
+            app,
+            "intake_blocked_template_admission",
+            &source_sha256,
+            &details,
+        )?;
+        increment_metric(app, "blocked_sources", 1);
+        case_run.finish(
+            "attention",
+            None,
+            &[],
+            &[],
+            Some("Template automation admission gate потребовал ValidatedAutomatic proof."),
+        )?;
+        return Ok(CreatedDocumentsIntakeResponse {
+            status: "attention".into(),
+            patient_folder: None,
+            created_files: Vec::new(),
+            created_documents: Vec::new(),
+            missing: Vec::new(),
+            attention_file: Some(report_path.display().to_string()),
+            print_triage: None,
+            message: "Автоматическая генерация остановлена: шаблон доступен вручную, но ещё не доказан для zero-touch.".into(),
+        });
+    }
 
     let mut configured = Vec::new();
     for doc in &pack.documents {
@@ -2949,5 +3152,78 @@ mod publication_completion_receipt_tests {
             local_completion_receipt(&root, &"d".repeat(64))
         );
         std::fs::remove_dir_all(root).expect("cleanup completion receipt test root");
+    }
+}
+
+
+#[cfg(test)]
+mod template_automation_admission_tests {
+    use super::learning_validation_allows_zero_touch;
+
+    fn legacy_evidence(
+        holdout: serde_json::Value,
+        passed: bool,
+        replay_passed: bool,
+        intervention_passed: bool,
+    ) -> String {
+        serde_json::json!({
+            "schema": "dokkomplekt.template-learning-validation.v2",
+            "holdout_pair_index": holdout,
+            "validation": {
+                "passed": passed,
+                "replay_passed": replay_passed,
+                "controlled_intervention_passed": intervention_passed
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn explicit_automatic_learning_level_allows_zero_touch() {
+        let evidence = serde_json::json!({
+            "schema": "dokkomplekt.template-learning-validation.v2",
+            "validation_level": "validated_automatic"
+        })
+        .to_string();
+        assert!(learning_validation_allows_zero_touch(&evidence));
+    }
+
+    #[test]
+    fn explicit_manual_learning_level_never_infers_automatic_admission() {
+        let evidence = serde_json::json!({
+            "schema": "dokkomplekt.template-learning-validation.v2",
+            "validation_level": "validated_manual",
+            "holdout_pair_index": 3,
+            "validation": {
+                "passed": true,
+                "replay_passed": true,
+                "controlled_intervention_passed": true
+            }
+        })
+        .to_string();
+        assert!(!learning_validation_allows_zero_touch(&evidence));
+    }
+
+    #[test]
+    fn legacy_v2_proof_requires_holdout_replay_and_intervention() {
+        assert!(learning_validation_allows_zero_touch(&legacy_evidence(
+            serde_json::json!(3),
+            true,
+            true,
+            true,
+        )));
+        assert!(!learning_validation_allows_zero_touch(&legacy_evidence(
+            serde_json::Value::Null,
+            true,
+            true,
+            true,
+        )));
+        assert!(!learning_validation_allows_zero_touch(&legacy_evidence(
+            serde_json::json!(3),
+            true,
+            false,
+            true,
+        )));
+        assert!(!learning_validation_allows_zero_touch("{broken-json"));
     }
 }

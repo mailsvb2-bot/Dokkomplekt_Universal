@@ -4662,6 +4662,80 @@ mod tests {
     }
 
     #[test]
+    fn capability_manifest_describes_patch_and_structural_edit_without_domain_branches() {
+        let dir = std::env::temp_dir().join("dokkomplekt-capability-manifest-test");
+        let path = dir.join("table-loop.docx");
+        std::fs::create_dir_all(&dir).expect("create capability test dir");
+        let bytes = build_test_docx(&[(
+            "word/document.xml",
+            br#"<w:document><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{{#each items}}{{item.name}}{{/each}}</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#,
+        )]);
+        std::fs::write(&path, bytes).expect("write capability fixture");
+
+        let manifest =
+            inspect_docx_capabilities_file(&path).expect("inspect supported template capabilities");
+        assert!(manifest.publishable());
+        assert!(manifest.required_levels.contains(&DocxCapabilityLevel::Read));
+        assert!(
+            manifest
+                .required_levels
+                .contains(&DocxCapabilityLevel::Preserve)
+        );
+        assert!(manifest.required_levels.contains(&DocxCapabilityLevel::Patch));
+        assert!(
+            manifest
+                .required_levels
+                .contains(&DocxCapabilityLevel::StructuralEdit)
+        );
+        assert!(manifest.detected_constructs.contains(&"table".into()));
+        assert!(
+            manifest
+                .detected_constructs
+                .contains(&"template_structural_edit".into())
+        );
+        assert!(!manifest.layout_verified);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capability_manifest_blocks_unresolved_hidden_case_carriers_before_publication() {
+        let dir = std::env::temp_dir().join("dokkomplekt-capability-hidden-carriers-test");
+        let path = dir.join("unsafe-reference.docx");
+        std::fs::create_dir_all(&dir).expect("create capability blocker test dir");
+        let bytes = build_test_docx(&[
+            (
+                "word/document.xml",
+                br#"<w:document><w:body><w:sdt><w:sdtPr><w:dataBinding/></w:sdtPr><w:sdtContent><w:p><w:del><w:r><w:delText>Старое значение</w:delText></w:r></w:del></w:p></w:sdtContent></w:sdt></w:body></w:document>"#,
+            ),
+            (
+                "word/comments.xml",
+                br#"<w:comments><w:comment w:id="0"><w:p><w:r><w:t>Старый комментарий</w:t></w:r></w:p></w:comment></w:comments>"#,
+            ),
+            ("customXml/item1.xml", br#"<person>Старый человек</person>"#),
+        ]);
+        std::fs::write(&path, bytes).expect("write hidden-carrier fixture");
+
+        let manifest =
+            inspect_docx_capabilities_file(&path).expect("inspect hidden-carrier template");
+        assert!(!manifest.publishable());
+        for expected in [
+            "custom_xml_requires_explicit_sanitization_policy",
+            "data_binding_not_supported_for_published_reference",
+            "revision_markup_requires_explicit_sanitization_policy",
+            "comments_require_explicit_sanitization_policy",
+        ] {
+            assert!(
+                manifest
+                    .blocking_issues
+                    .iter()
+                    .any(|issue| issue == expected),
+                "missing blocker {expected}: {manifest:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn macro_binary_parts_are_rejected_before_rendering_docm() {
         let dir = std::env::temp_dir().join("dokkomplekt-docm-rejection-test");
         let tpl = dir.join("macro-template.docm");

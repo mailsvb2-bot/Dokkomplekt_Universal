@@ -29,6 +29,9 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
         "quick_integrity_check",
         "handle.stop.store(true, Ordering::SeqCst)",
         "fn reconcile_pending_update",
+        "fn restore_update_backup_files",
+        "fn restore_update_backup",
+        "\"rolled_back\"",
         "fn apply_verified_update",
         "app.exit(0)",
     ]
@@ -45,6 +48,7 @@ def test_fpr19_update_lifecycle_is_single_fail_closed_path() -> None:
     assert "app.exit(1)" in apply
 
     assert "reconcile_pending_update(&handle)" in main
+    assert main.index("reconcile_pending_update(&handle)") < main.index("ensure_default_state_loaded(&handle, &state)")
     assert "get_update_recovery_status," in main
     assert "apply_verified_update," in main
 
@@ -67,6 +71,8 @@ def test_fpr19_user_update_ui_closes_check_apply_recovery_loop() -> None:
         "Установить и перезапустить",
         "apply_verified_update",
         "recoverable_failure",
+        "rolled_back",
+        "автоматически восстановлено",
         "Обновление до версии",
     ):
         assert marker in hook, marker

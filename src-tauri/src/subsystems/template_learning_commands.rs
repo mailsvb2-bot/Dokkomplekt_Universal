@@ -405,6 +405,7 @@ fn learn_template_from_examples_command(
         let mapping_sha256 = learning_map_sha256(&validated_fields)?;
         let evidence_json = serde_json::to_string(&serde_json::json!({
             "schema": "dokkomplekt.template-learning-validation.v2",
+            "validation_level": "validated_automatic",
             "blank_template_sha256": &blank_template_sha256,
             "candidate_mapping_sha256": &mapping_sha256,
             "source_sha256s": source_sha256s,
@@ -443,6 +444,7 @@ fn learn_template_from_examples_command(
             "requires_confirmation": report.requires_confirmation,
             "validation_verdict": report.validation.verdict,
             "publishable": report.validation.publishable,
+            "validation_level": validation_id.as_ref().map(|_| "validated_automatic"),
             "validation_id": &validation_id,
             "candidate_mapping_sha256": &candidate_mapping_sha256,
             "missing_source_field_count": report.validation.missing_source_field_ids.len(),

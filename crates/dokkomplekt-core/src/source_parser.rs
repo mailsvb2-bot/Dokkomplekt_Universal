@@ -1200,15 +1200,15 @@ fn generic_table_column_id(header: &str) -> Option<String> {
             separator_pending = true;
         }
     }
-    let mut field_id = normalized.trim_matches('_').chars().take(32).collect::<String>();
+    let mut field_id = normalized
+        .trim_matches('_')
+        .chars()
+        .take(32)
+        .collect::<String>();
     if field_id.is_empty() {
         return None;
     }
-    if !field_id
-        .chars()
-        .next()
-        .is_some_and(char::is_alphabetic)
-    {
+    if !field_id.chars().next().is_some_and(char::is_alphabetic) {
         field_id = format!("column_{field_id}");
     }
     crate::is_valid_field_id(&field_id).then_some(field_id)
@@ -2258,7 +2258,9 @@ mod tests {
 Смирнова Анна|5
 Орлов Олег|4";
         let (case, _) = parse_source_text(education, 2026);
-        let items = case.collection("items").expect("education items collection");
+        let items = case
+            .collection("items")
+            .expect("education items collection");
         assert_eq!(
             items[0]
                 .get("студент")
@@ -2267,10 +2269,7 @@ mod tests {
             Some("Смирнова Анна")
         );
         assert_eq!(
-            items[0]
-                .get("оценка")
-                .map(SemanticAtom::as_text)
-                .as_deref(),
+            items[0].get("оценка").map(SemanticAtom::as_text).as_deref(),
             Some("5")
         );
 
@@ -2316,9 +2315,7 @@ mod tests {
             Some("1500")
         );
         assert_eq!(
-            row.get("комментарий")
-                .map(SemanticAtom::as_text)
-                .as_deref(),
+            row.get("комментарий").map(SemanticAtom::as_text).as_deref(),
             Some("Первый")
         );
         assert_eq!(

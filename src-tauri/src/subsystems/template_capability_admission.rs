@@ -45,5 +45,6 @@ fn admit_template_capabilities_for_publication(
             "manifest": manifest,
             "hidden_custom_xml_sanitization": sanitization,
         }),
-    )
+    )?;
+    Ok(())
 }

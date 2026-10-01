@@ -78,6 +78,7 @@ def test_zero_touch_requires_validated_automatic_template_proof() -> None:
 def test_new_template_publication_has_capability_manifest_gate() -> None:
     docx = read("crates/dokkomplekt-docx/src/lib.rs")
     commands = read("src-tauri/src/subsystems/document_commands.rs")
+    admission_owner = read("src-tauri/src/subsystems/template_capability_admission.rs")
 
     assert "pub struct DocxCapabilityManifest" in docx
     assert "pub fn inspect_docx_capabilities_file(" in docx
@@ -85,10 +86,14 @@ def test_new_template_publication_has_capability_manifest_gate() -> None:
     assert '"data_binding_not_supported_for_published_reference"' in docx
     assert '"revision_markup_requires_explicit_sanitization_policy"' in docx
     assert '"comments_require_explicit_sanitization_policy"' in docx
-    assert "inspect_docx_capabilities_file(snapshot.path())" in commands
-    assert '"template_capability_admission_passed"' in commands
+    assert 'include!("template_capability_admission.rs");' in commands
+    assert "inspect_docx_capabilities_file(snapshot.path())" in admission_owner
+    assert '"template_capability_admission_passed"' in admission_owner
+    assert "custom_xml_only" in admission_owner
+    assert "learning_validation_id.is_none()" in admission_owner
+    assert "snapshot.sanitize_hidden_custom_xml_for_publication(app)?" in admission_owner
 
-    admission = commands.index("inspect_docx_capabilities_file(snapshot.path())")
+    admission = commands.index("admit_template_capabilities_for_publication(")
     pack_creation = commands.index(
         'create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack',
         admission,

@@ -119,13 +119,16 @@ impl TemplateSnapshot {
         &mut self,
         app: &tauri::AppHandle,
     ) -> Result<dokkomplekt_docx::DocxHiddenCarrierSanitization, String> {
-        let (bytes, proof) = dokkomplekt_docx::sanitize_docx_hidden_custom_xml_bytes(self.path())
-            .map_err(|error| {
-                format!(
-                "Не удалось безопасно очистить скрытые Custom XML данные шаблона «{}»: {error}",
-                    self.label
-                )
-            })?;
+        let (bytes, proof) =
+            match dokkomplekt_docx::sanitize_docx_hidden_custom_xml_bytes(self.path()) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(format!(
+                        "Не удалось безопасно очистить скрытые Custom XML данные шаблона «{}»: {error}",
+                        self.label
+                    ));
+                }
+            };
         let workspace = app
             .path()
             .app_data_dir()

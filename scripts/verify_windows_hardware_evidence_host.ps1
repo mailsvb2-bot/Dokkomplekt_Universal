@@ -78,7 +78,7 @@ function Import-LocalHardwareConfiguration {
         if ($allowedNames -notcontains $name) { continue }
         $existing = [Environment]::GetEnvironmentVariable($name, 'Process')
         if ([string]::IsNullOrWhiteSpace($existing)) {
-            Publish-GitHubEnvironmentValue -Name $name -Value $Matches.value
+            Publish-GitHubEnvironmentValue -Name $name -Value $Matches.value.Replace('%%', '%')
         }
     }
     return $configPath

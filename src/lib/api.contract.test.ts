@@ -38,6 +38,7 @@ import {
   pickComponentBundle,
   importComponentBundle,
   getPrivacyPreferences,
+  getTechnicalStorageStatus,
   updatePrivacyPreferences,
   runWorkspaceHygiene,
   listAutomationExceptions,
@@ -149,6 +150,7 @@ export const registeredBackendCommands = [
   'render_docx',
   'render_docx_batch',
   'get_privacy_preferences',
+  'get_technical_storage_status',
   'update_privacy_preferences',
   'run_workspace_hygiene',
   'list_automation_exceptions',
@@ -346,11 +348,12 @@ function installContractMock(calls: Call[]) {
       case 'render_docx_batch':
         return { output_folder: 'C:/Desktop/148_2026-06-01', created_files: ['C:/Desktop/148_2026-06-01/Документ.docx'], backup_folder: null } as never;
       case 'get_privacy_preferences': return { copy_source_to_output: true, write_trust_report: true, include_values_in_trust_report: false, temp_retention_hours: 24, archive_processed_sources: true, archive_folder_name: '_обработано', service_note_retention_days: 30, processed_marker_retention_days: 7, archived_source_retention_days: 0 } as never;
+      case 'get_technical_storage_status': return { total_bytes: 4096, retention_managed_bytes: 1536, categories: [{ key: 'intake-work', label: 'Временные исходники', bytes: 1536, retention_managed: true }, { key: 'other-app-data', label: 'Остальные локальные данные приложения', bytes: 2560, retention_managed: false }] } as never;
       case 'update_privacy_preferences': return (payload as { req?: { preferences?: unknown } })?.req?.preferences as never;
       case 'list_automation_exceptions': return [{ exception_id: 'ex-1', category: 'quality_gate', source_path: 'source.pdf', message: 'Проверить поле', details_json: '{}', status: 'open', created_at: 'now', updated_at: 'now' }] as never;
       case 'resolve_automation_exception': return true as never;
       case 'confirm_risk_exception_and_retry': return { status: 'processed', patient_folder: 'output', created_files: [], created_documents: [], missing: [], attention_file: null, message: 'confirmed' } as never;
-      case 'run_workspace_hygiene': return { archived_processed_sources: [], archived_service_files: [], removed_orphan_markers: [], removed_expired_archived_files: [], warnings: [] } as never;
+      case 'run_workspace_hygiene': return { removed_temp_sessions: 0, archived_processed_sources: [], archived_service_files: [], removed_orphan_markers: [], removed_expired_archived_files: [], removed_queue_receipts: [], recovered_finalizing_sources: [], removed_stale_staging_files: [], warnings: [] } as never;
       case 'list_case_runs': return [] as never;
       case 'retry_case_run': return { status: 'processed', patient_folder: 'output', created_files: [], created_documents: [], missing: [], attention_file: null, message: 'ok' } as never;
       case 'get_automation_metrics': return { processed_sources: 1, generated_documents: 2, blocked_sources: 1, failed_sources: 0, print_failures: 0, user_confirmations: 1 } as never;
@@ -588,6 +591,7 @@ describe('Tauri command DTO contracts', () => {
     const calls: Call[] = []; installContractMock(calls);
     const preferences = { copy_source_to_output: false, write_trust_report: true, include_values_in_trust_report: false, temp_retention_hours: 12, archive_processed_sources: true, archive_folder_name: '_обработано', service_note_retention_days: 30, processed_marker_retention_days: 7, archived_source_retention_days: 0 };
     await getPrivacyPreferences();
+    await getTechnicalStorageStatus();
     await updatePrivacyPreferences(preferences);
     await runWorkspaceHygiene();
     await listAutomationExceptions(true);
@@ -603,6 +607,7 @@ describe('Tauri command DTO contracts', () => {
     await listAuditEvents(25);
     expect(calls).toMatchObject([
       { command: 'get_privacy_preferences', payload: undefined },
+      { command: 'get_technical_storage_status', payload: undefined },
       { command: 'update_privacy_preferences', payload: { req: { preferences } } },
       { command: 'run_workspace_hygiene', payload: undefined },
       { command: 'list_automation_exceptions', payload: { req: { include_resolved: true } } },

@@ -28,6 +28,7 @@ requires() { [[ ",${required_bundles}," == *",$1,"* ]]; }
 
 cleanup_paths=()
 cleanup_pids=()
+rpm_cleanup_package=""
 
 process_is_running() {
   local pid="$1"
@@ -70,6 +71,15 @@ stop_process_group() {
 
 cleanup() {
   local pid path attempt
+  if [ -n "$rpm_cleanup_package" ] && command -v rpm >/dev/null 2>&1; then
+    if rpm -q "$rpm_cleanup_package" >/dev/null 2>&1; then
+      if [ "$(id -u)" -eq 0 ]; then
+        rpm --erase --nodeps "$rpm_cleanup_package" >/dev/null 2>&1 || true
+      elif command -v sudo >/dev/null 2>&1; then
+        sudo rpm --erase --nodeps "$rpm_cleanup_package" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
   for pid in "${cleanup_pids[@]:-}"; do
     [ -n "$pid" ] || continue
     stop_process_group "$pid"
@@ -400,8 +410,70 @@ run_deb_install_smoke() {
   printf -- '- deb install/render/uninstall smoke: OK (%s)\n' "$package_name"
 }
 
+run_rpm_install_smoke() {
+  [ "${DOKKOMPLEKT_SKIP_LINUX_INSTALL_SMOKE:-0}" != "1" ] || return 0
+  command -v rpm >/dev/null || { echo "rpm is required for install smoke" >&2; return 1; }
+
+  local package_name install_log remove_log package_files binary_path
+  package_name="$(rpm -qp --queryformat '%{NAME}' "$rpm_package")"
+  [ -n "$package_name" ] || { echo "rpm package name is empty" >&2; return 1; }
+  install_log="$(mktemp)"
+  remove_log="$(mktemp)"
+  cleanup_paths+=("$install_log" "$remove_log")
+
+  local -a privilege=()
+  if [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null || { echo "sudo is required for rpm install smoke" >&2; return 1; }
+    privilege=(sudo)
+  fi
+
+  cleanup_rpm_install() {
+    if rpm -q "$package_name" >/dev/null 2>&1; then
+      "${privilege[@]}" rpm --erase --nodeps "$package_name" >"$remove_log" 2>&1 || true
+    fi
+  }
+
+  cleanup_rpm_install
+  rpm_cleanup_package="$package_name"
+  if ! "${privilege[@]}" rpm --install --nodeps "$rpm_package" >"$install_log" 2>&1; then
+    cat "$install_log" >&2
+    echo "rpm install smoke failed" >&2
+    cleanup_rpm_install
+    rpm_cleanup_package=""
+    return 1
+  fi
+
+  package_files="$(rpm -ql "$package_name")"
+  binary_path="$(awk '/\/(usr\/)?bin\/[^/]*dokkomplekt/ { print; exit }' <<<"$package_files")"
+  if [ -z "$binary_path" ] || [ ! -x "$binary_path" ]; then
+    echo "installed executable was not found for RPM package $package_name" >&2
+    cleanup_rpm_install
+    rpm_cleanup_package=""
+    return 1
+  fi
+
+  if ! run_rendered_gui_smoke "$binary_path" "RPM installed application" "binary"; then
+    cleanup_rpm_install
+    rpm_cleanup_package=""
+    return 1
+  fi
+
+  cleanup_rpm_install
+  if rpm -q "$package_name" >/dev/null 2>&1; then
+    cat "$remove_log" >&2
+    echo "rpm uninstall smoke did not remove $package_name" >&2
+    return 1
+  fi
+  rpm_cleanup_package=""
+  printf -- '- rpm install/render/uninstall smoke: OK (%s)\n' "$package_name"
+}
+
 if requires deb; then
   run_deb_install_smoke
+fi
+
+if requires rpm; then
+  run_rpm_install_smoke
 fi
 
 printf 'Linux bundle validation OK (required: %s)\n' "$required_bundles"

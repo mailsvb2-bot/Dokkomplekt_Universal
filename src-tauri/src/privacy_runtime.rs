@@ -136,7 +136,12 @@ fn owned_path_size(path: &Path) -> Result<u64, String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(format!("Не удалось определить размер {}: {error}", path.display())),
+        Err(error) => {
+            return Err(format!(
+                "Не удалось определить размер {}: {error}",
+                path.display()
+            ))
+        }
     };
     if metadata.file_type().is_symlink() {
         return Ok(0);
@@ -148,9 +153,12 @@ fn owned_path_size(path: &Path) -> Result<u64, String> {
         return Ok(0);
     }
     let mut total = 0_u64;
-    for entry in std::fs::read_dir(path)
-        .map_err(|error| format!("Не удалось прочитать {} для подсчёта размера: {error}", path.display()))?
-    {
+    for entry in std::fs::read_dir(path).map_err(|error| {
+        format!(
+            "Не удалось прочитать {} для подсчёта размера: {error}",
+            path.display()
+        )
+    })? {
         let entry = entry.map_err(|error| error.to_string())?;
         total = total.saturating_add(owned_path_size(&entry.path())?);
     }
@@ -160,7 +168,10 @@ fn owned_path_size(path: &Path) -> Result<u64, String> {
 pub(crate) fn collect_technical_storage_status(
     app: &tauri::AppHandle,
 ) -> Result<TechnicalStorageStatus, String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     let managed = [
         ("intake-work", "Временные исходники"),
         ("template-learning-inputs", "Входы обучения шаблонов"),
@@ -230,7 +241,8 @@ mod tests {
 
     #[test]
     fn technical_storage_size_counts_owned_files_without_mutation() {
-        let root = std::env::temp_dir().join(format!("dokkomplekt-storage-size-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("dokkomplekt-storage-size-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("nested")).unwrap();
         std::fs::write(root.join("one.bin"), b"1234").unwrap();
         std::fs::write(root.join("nested").join("two.bin"), b"123456").unwrap();

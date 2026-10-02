@@ -52,6 +52,7 @@ MANDATORY_FEATURES = {
     "reboot-watcher",
     "authenticode",
     "installed-post-reboot-output",
+    "technical-storage-visibility",
 }
 HOSTED_WORKFLOWS = [
     ("quality-gate.yml", {}),

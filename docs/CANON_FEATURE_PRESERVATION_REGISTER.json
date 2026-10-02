@@ -664,13 +664,13 @@
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "Run the complete signed update-live executor on both Windows 10 and Windows 11 for the exact release SHA and retain FPR-19 LIVE RECOVERABLE FAILURE PASS, FPR-19 LIVE ROLLBACK PASS, FPR-12 LIVE UPGRADE STORAGE PASS, and FPR-19 LIVE UPDATE PASS evidence before final register closure."
+      "runtime_gap": "Run the complete signed previous-version -> current-version update-live executor on both Windows 10 and Windows 11 for the exact release SHA and retain FPR-19 LIVE RECOVERABLE FAILURE PASS, FPR-19 LIVE ROLLBACK PASS, FPR-12 LIVE UPGRADE STORAGE PASS, and FPR-19 LIVE UPDATE PASS evidence before final register closure."
     },
     {
       "id": "FPR-20",
       "group": "Runtime и упаковка",
       "status": "needs-runtime-proof",
-      "actual_state": "Windows/Linux packaging workflows are present; the protected Windows hardware executor now launches the installed signed application by absolute path with PATH reduced to Windows system directories, removes developer-toolchain environment, proves cargo/rustc/node/npm/python are unavailable, and requires a physical PDF through the packaged production converter plus offline-runtime-probe.log evidence; exact Windows 10/11 execution and declared Linux installed-package evidence remain pending",
+      "actual_state": "Windows/Linux packaging workflows are present. The protected Windows hardware executor launches the installed signed application by absolute path with PATH reduced to Windows system directories, removes developer-toolchain environment, proves cargo/rustc/node/npm/python are unavailable, and requires a physical PDF through the packaged production converter plus offline-runtime-probe.log evidence. Linux AppImage receives packaged rendered pixel-golden smoke, deb is physically installed/rendered/uninstalled, and the RPM lane now requires a real rpm install/render/uninstall smoke instead of package-file listing only; exact Windows 10/11 and Linux workflow execution for the final candidate remain evidence gates.",
       "entry": [
         "installed application"
       ],
@@ -693,7 +693,7 @@
         "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "Run the protected signed hardware-live FPR-20 probe on both Windows 10 and Windows 11 for the exact release SHA, and retain declared Linux installed-package evidence for the supported Linux scope, before final register closure."
+      "runtime_gap": "Run the protected signed FPR-20 probe on both Windows 10 and Windows 11 for the exact release SHA, and retain the final-candidate Linux AppImage/deb/rpm package runtime evidence from the linux-bundles workflow before final register closure."
     },
     {
       "id": "FPR-21",

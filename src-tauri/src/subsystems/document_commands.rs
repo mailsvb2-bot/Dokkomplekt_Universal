@@ -1103,7 +1103,7 @@ fn render_docx_batch(
         .as_ref()
         .map(universal_intake::RetainedUploadedSource::byte_len)
         .unwrap_or(0);
-    let _storage_estimate = privacy_runtime::ensure_manual_batch_storage_capacity(
+    privacy_runtime::ensure_manual_batch_storage_capacity(
         &stage_parent,
         &template_sizes,
         retained_source_bytes,

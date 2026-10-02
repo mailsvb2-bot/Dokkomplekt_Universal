@@ -62,7 +62,7 @@ const MANUAL_BATCH_OUTPUT_EXPANSION_FACTOR: u64 = 3;
 const MANUAL_BATCH_MIN_RECOVERY_RESERVE_BYTES: u64 = 64 * MIB;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ManualBatchStorageEstimate {
+struct ManualBatchStorageEstimate {
     pub(crate) staged_outputs_bytes: u64,
     pub(crate) transient_render_bytes: u64,
     pub(crate) retained_source_bytes: u64,
@@ -75,7 +75,7 @@ fn checked_capacity_add(left: u64, right: u64) -> Result<u64, String> {
         .ok_or_else(|| "Оценка требуемого места для комплекта переполнена.".to_string())
 }
 
-pub(crate) fn estimate_manual_batch_storage(
+fn estimate_manual_batch_storage(
     template_sizes: &[u64],
     retained_source_bytes: u64,
 ) -> Result<ManualBatchStorageEstimate, String> {
@@ -141,7 +141,7 @@ pub(crate) fn ensure_manual_batch_storage_capacity(
     stage_parent: &Path,
     template_sizes: &[u64],
     retained_source_bytes: u64,
-) -> Result<ManualBatchStorageEstimate, String> {
+) -> Result<(), String> {
     let estimate = estimate_manual_batch_storage(template_sizes, retained_source_bytes)?;
     let available_bytes = fs2::available_space(stage_parent).map_err(|error| {
         format!(
@@ -149,7 +149,7 @@ pub(crate) fn ensure_manual_batch_storage_capacity(
             stage_parent.display()
         )
     })?;
-    require_available_capacity(estimate, available_bytes)
+    require_available_capacity(estimate, available_bytes).map(|_| ())
 }
 
 impl Default for PrivacyPreferences {

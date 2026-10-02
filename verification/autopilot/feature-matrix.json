@@ -419,6 +419,19 @@
         "tests/windows/windows_hardware_e2e.ps1",
         "tests/windows/verify_reboot_evidence.ps1"
       ]
+    },
+    {
+      "id": "technical-storage-visibility",
+      "category": "resource-management",
+      "scope": "software",
+      "level": "integration",
+      "automated": true,
+      "evidence": [
+        "src-tauri/src/privacy_runtime.rs",
+        "src-tauri/src/subsystems/automation_management.rs",
+        "src/components/AutomationControlCenter.tsx",
+        "tests/test_learning_privacy_retention_contract.py"
+      ]
     }
   ]
 }

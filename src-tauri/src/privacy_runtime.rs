@@ -1,5 +1,6 @@
 use crate::{default_state_db_path, repository_for, universal_intake, WorkspaceRetentionPolicy};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager as _;
@@ -38,6 +39,21 @@ pub(crate) struct PrivacyPreferences {
     /// legacy fail-closed default.
     #[serde(default)]
     pub(crate) trust_report_explicit: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TechnicalStorageCategory {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) bytes: u64,
+    pub(crate) retention_managed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TechnicalStorageStatus {
+    pub(crate) total_bytes: u64,
+    pub(crate) retention_managed_bytes: u64,
+    pub(crate) categories: Vec<TechnicalStorageCategory>,
 }
 
 impl Default for PrivacyPreferences {
@@ -116,6 +132,66 @@ pub(crate) fn persist_privacy_preferences(
         .map_err(|error| error.to_string())
 }
 
+fn owned_path_size(path: &Path) -> Result<u64, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("Не удалось определить размер {}: {error}", path.display())),
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(0);
+    }
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+    let mut total = 0_u64;
+    for entry in std::fs::read_dir(path)
+        .map_err(|error| format!("Не удалось прочитать {} для подсчёта размера: {error}", path.display()))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        total = total.saturating_add(owned_path_size(&entry.path())?);
+    }
+    Ok(total)
+}
+
+pub(crate) fn collect_technical_storage_status(
+    app: &tauri::AppHandle,
+) -> Result<TechnicalStorageStatus, String> {
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let managed = [
+        ("intake-work", "Временные исходники"),
+        ("template-learning-inputs", "Входы обучения шаблонов"),
+        ("template-learning-work", "Рабочие данные обучения"),
+    ];
+    let mut categories = Vec::with_capacity(managed.len() + 1);
+    let mut retention_managed_bytes = 0_u64;
+    for (key, label) in managed {
+        let bytes = owned_path_size(&data_dir.join(key))?;
+        retention_managed_bytes = retention_managed_bytes.saturating_add(bytes);
+        categories.push(TechnicalStorageCategory {
+            key: key.into(),
+            label: label.into(),
+            bytes,
+            retention_managed: true,
+        });
+    }
+    let total_bytes = owned_path_size(&data_dir)?;
+    categories.push(TechnicalStorageCategory {
+        key: "other-app-data".into(),
+        label: "Остальные локальные данные приложения".into(),
+        bytes: total_bytes.saturating_sub(retention_managed_bytes),
+        retention_managed: false,
+    });
+    Ok(TechnicalStorageStatus {
+        total_bytes,
+        retention_managed_bytes,
+        categories,
+    })
+}
+
 pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, String> {
     let data_dir = app
         .path()
@@ -151,6 +227,18 @@ pub(crate) fn start_periodic_intake_cleanup(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn technical_storage_size_counts_owned_files_without_mutation() {
+        let root = std::env::temp_dir().join(format!("dokkomplekt-storage-size-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("one.bin"), b"1234").unwrap();
+        std::fs::write(root.join("nested").join("two.bin"), b"123456").unwrap();
+        assert_eq!(owned_path_size(&root).unwrap(), 10);
+        assert!(root.join("one.bin").exists());
+        assert!(root.join("nested").join("two.bin").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn dropped_primary_is_part_of_default_patient_folder_publication() {

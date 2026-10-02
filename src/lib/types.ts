@@ -901,11 +901,28 @@ export interface PrivacyPreferences {
   archived_source_retention_days: number;
 }
 
+export interface TechnicalStorageCategory {
+  key: string;
+  label: string;
+  bytes: number;
+  retention_managed: boolean;
+}
+
+export interface TechnicalStorageStatus {
+  total_bytes: number;
+  retention_managed_bytes: number;
+  categories: TechnicalStorageCategory[];
+}
+
 export interface WorkspaceHygieneReport {
+  removed_temp_sessions: number;
   archived_processed_sources: string[];
   archived_service_files: string[];
   removed_orphan_markers: string[];
   removed_expired_archived_files: string[];
+  removed_queue_receipts: string[];
+  recovered_finalizing_sources: string[];
+  removed_stale_staging_files: string[];
   warnings: string[];
 }
 

@@ -87,8 +87,9 @@ use generation_publication::{
     local_completion_receipt, local_completion_receipt_matches, mark_local_completion,
 };
 use privacy_runtime::{
-    cleanup_intake_workspace, load_privacy_preferences, lock_learning_workspace,
-    persist_privacy_preferences, start_periodic_intake_cleanup, PrivacyPreferences,
+    cleanup_intake_workspace, collect_technical_storage_status, load_privacy_preferences,
+    lock_learning_workspace, persist_privacy_preferences, start_periodic_intake_cleanup,
+    PrivacyPreferences, TechnicalStorageStatus,
 };
 use semantic_model::{
     LocalSemanticModelConfig, LocalSemanticModelStatus, LocalSemanticModelTransport,
@@ -2391,6 +2392,7 @@ fn main() {
             render_docx,
             render_docx_batch,
             get_privacy_preferences,
+            get_technical_storage_status,
             update_privacy_preferences,
             run_workspace_hygiene,
             list_automation_exceptions,

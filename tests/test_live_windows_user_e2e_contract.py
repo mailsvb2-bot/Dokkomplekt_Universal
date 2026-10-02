@@ -9,6 +9,7 @@ HARNESS = ROOT / "tests" / "windows" / "windows_live_user_e2e.ps1"
 PRIVATE_WORKFLOW = ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
 HOST_PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_evidence_host.ps1"
 LIVE_UPDATE = ROOT / "tests" / "windows" / "windows_live_update_e2e.ps1"
+HARDWARE_EXECUTOR = ROOT / "tests" / "windows" / "windows_hardware_e2e.ps1"
 QUALITY = ROOT / ".github" / "workflows" / "quality-gate.yml"
 
 
@@ -64,6 +65,38 @@ def test_every_update_live_registry_marker_exists_in_its_real_executor() -> None
             f"{item['id']} update-live marker is not emitted by {executor}: "
             f"{item['evidence_marker']}"
         )
+
+
+
+def test_every_hardware_and_reboot_registry_marker_exists_in_its_real_executor() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    executor_cache: dict[str, str] = {}
+    for item in payload["scenarios"]:
+        if item["lane"] not in {"hardware-live", "reboot-live"}:
+            continue
+        executor = item["executor"]
+        if executor not in executor_cache:
+            executor_cache[executor] = (
+                ROOT / "tests" / "windows" / executor
+            ).read_text(encoding="utf-8-sig")
+        assert item["evidence_marker"] in executor_cache[executor], (
+            f"{item['id']} {item['lane']} marker is not emitted by {executor}: "
+            f"{item['evidence_marker']}"
+        )
+
+
+def test_fpr20_hardware_probe_removes_developer_toolchain_from_runtime_path() -> None:
+    source = HARDWARE_EXECUTOR.read_text(encoding="utf-8-sig")
+    for marker in (
+        "offline-runtime-probe.log",
+        "FPR-20 OFFLINE RUNTIME PASS:",
+        "developer_toolchain_absent=true",
+        "'cargo','rustc','rustup','node','npm','npx','python','python3','pip','pip3'",
+        "$env:PATH = $systemOnlyPath",
+        "--e2e-export-pdf=$fpr17Source",
+        "fpr20_offline_runtime_verified = $true",
+    ):
+        assert marker in source
 
 
 def test_live_harness_requires_real_windows10_or_11_x64_interactive_signed_install() -> None:

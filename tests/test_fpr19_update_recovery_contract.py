@@ -94,6 +94,10 @@ def test_fpr19_user_update_ui_closes_check_apply_recovery_loop() -> None:
     assert "Проверить обновления" in live
     assert "Установить и перезапустить" in live
     assert "recovery.status -ne 'verified'" in live
+    assert "FPR-19 LIVE RECOVERABLE FAILURE PASS:" in live
+    assert "FPR-19 LIVE ROLLBACK PASS:" in live
+    assert "FPR19-CONTROLLED-CORRUPT-DATABASE" in live
+    assert "HoldInstalledExecutable" in live
     assert "FPR-19 LIVE UPDATE PASS:" in live
 
 
@@ -104,5 +108,6 @@ def test_fpr19_register_stays_open_until_installed_upgrade_and_recovery_proof() 
     assert entry["status"] == "needs-runtime-proof"
     assert entry["runtime_evidence"] == []
     assert "previous-version -> current-version" in entry["runtime_gap"]
-    assert "recoverable" in entry["runtime_gap"]
+    assert "FPR-19 LIVE RECOVERABLE FAILURE PASS" in entry["runtime_gap"]
+    assert "FPR-19 LIVE ROLLBACK PASS" in entry["runtime_gap"]
     assert "tests/test_fpr19_update_recovery_contract.py" in entry["evidence_paths"]

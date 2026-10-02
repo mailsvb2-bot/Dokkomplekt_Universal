@@ -1083,17 +1083,22 @@ fn render_docx_batch(
         .unwrap_or_else(|| output_root.clone());
     std::fs::create_dir_all(&stage_parent).map_err(|error| error.to_string())?;
     cleanup_stale_stage_directories(&stage_parent, Duration::from_secs(24 * 60 * 60))?;
-    let template_sizes = template_snapshots
+    let document_storage_inputs = template_snapshots
         .values()
         .map(|snapshot| {
-            std::fs::metadata(snapshot.path())
+            let template_bytes = std::fs::metadata(snapshot.path())
                 .map(|metadata| metadata.len())
                 .map_err(|error| {
                     format!(
                         "Не удалось определить размер snapshot шаблона {}: {error}",
                         snapshot.path().display()
                     )
-                })
+                })?;
+            let template_text =
+                extract_docx_text(snapshot.path()).map_err(|error| error.to_string())?;
+            let image_field_count = u64::try_from(template_image_requests(&template_text).len())
+                .map_err(|_| "Слишком много полей изображений в шаблоне.".to_string())?;
+            Ok((template_bytes, image_field_count))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let retained_source_bytes = state
@@ -1105,7 +1110,7 @@ fn render_docx_batch(
         .unwrap_or(0);
     privacy_runtime::ensure_manual_batch_storage_capacity(
         &stage_parent,
-        &template_sizes,
+        &document_storage_inputs,
         retained_source_bytes,
     )?;
     let labels = documents

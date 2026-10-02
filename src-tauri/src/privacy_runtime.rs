@@ -76,22 +76,30 @@ fn checked_capacity_add(left: u64, right: u64) -> Result<u64, String> {
 }
 
 fn estimate_manual_batch_storage(
-    template_sizes: &[u64],
+    documents: &[(u64, u64)],
     retained_source_bytes: u64,
 ) -> Result<ManualBatchStorageEstimate, String> {
-    if template_sizes.is_empty() {
+    if documents.is_empty() {
         return Err("Нельзя оценить место для пустого комплекта документов.".into());
     }
 
     let mut staged_outputs_bytes = 0_u64;
     let mut transient_render_bytes = 0_u64;
-    for template_bytes in template_sizes {
+    for (template_bytes, image_field_count) in documents {
         let expanded = template_bytes
             .checked_mul(MANUAL_BATCH_OUTPUT_EXPANSION_FACTOR)
             .ok_or_else(|| {
                 "Размер шаблона слишком велик для безопасной оценки места.".to_string()
             })?;
-        let estimated_output = expanded.max(MANUAL_BATCH_MIN_OUTPUT_BYTES_PER_DOCUMENT);
+        let image_budget = image_field_count
+            .checked_mul(dokkomplekt_docx::MAX_IMAGE_ASSET_BYTES)
+            .ok_or_else(|| {
+                "Количество изображений слишком велико для безопасной оценки места.".to_string()
+            })?;
+        let estimated_output = checked_capacity_add(
+            expanded.max(MANUAL_BATCH_MIN_OUTPUT_BYTES_PER_DOCUMENT),
+            image_budget,
+        )?;
         staged_outputs_bytes = checked_capacity_add(staged_outputs_bytes, estimated_output)?;
         transient_render_bytes = transient_render_bytes.max(estimated_output);
     }
@@ -139,10 +147,10 @@ fn require_available_capacity(
 
 pub(crate) fn ensure_manual_batch_storage_capacity(
     stage_parent: &Path,
-    template_sizes: &[u64],
+    documents: &[(u64, u64)],
     retained_source_bytes: u64,
 ) -> Result<(), String> {
-    let estimate = estimate_manual_batch_storage(template_sizes, retained_source_bytes)?;
+    let estimate = estimate_manual_batch_storage(documents, retained_source_bytes)?;
     let available_bytes = fs2::available_space(stage_parent).map_err(|error| {
         format!(
             "Не удалось проверить свободное место в {}: {error}. Комплект не создаётся без проверки диска.",
@@ -350,17 +358,18 @@ mod tests {
 
     #[test]
     fn manual_batch_storage_estimate_includes_render_peak_source_and_recovery() {
-        let estimate = estimate_manual_batch_storage(&[2 * MIB, 20 * MIB], 5 * MIB).unwrap();
-        assert_eq!(estimate.staged_outputs_bytes, 68 * MIB);
-        assert_eq!(estimate.transient_render_bytes, 60 * MIB);
+        let estimate =
+            estimate_manual_batch_storage(&[(2 * MIB, 0), (20 * MIB, 1)], 5 * MIB).unwrap();
+        assert_eq!(estimate.staged_outputs_bytes, 100 * MIB);
+        assert_eq!(estimate.transient_render_bytes, 92 * MIB);
         assert_eq!(estimate.retained_source_bytes, 5 * MIB);
         assert_eq!(estimate.recovery_reserve_bytes, 64 * MIB);
-        assert_eq!(estimate.required_free_bytes, 197 * MIB);
+        assert_eq!(estimate.required_free_bytes, 261 * MIB);
     }
 
     #[test]
     fn manual_batch_storage_gate_fails_closed_below_required_capacity() {
-        let estimate = estimate_manual_batch_storage(&[MIB], 0).unwrap();
+        let estimate = estimate_manual_batch_storage(&[(MIB, 0)], 0).unwrap();
         let error =
             require_available_capacity(estimate, estimate.required_free_bytes - 1).unwrap_err();
         assert!(error.contains("Недостаточно свободного места"));

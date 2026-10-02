@@ -393,7 +393,7 @@ pub fn extract_docx_text_from_bytes(bytes: &[u8]) -> DocxResult<String> {
 }
 
 const MAX_DOCX_TEXT_PART_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_IMAGE_ASSET_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_IMAGE_ASSET_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DOCX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 
 fn add_uncompressed_size(total: &mut u64, name: &str, size: u64) -> DocxResult<()> {

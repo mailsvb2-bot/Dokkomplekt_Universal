@@ -13,7 +13,8 @@ def test_manual_batch_capacity_preflight_happens_before_license_and_stage() -> N
     reserve = body.index("reserve_generation_access(")
     stage = body.index('let stage = stage_parent.join(format!(')
     assert capacity < reserve < stage
-    assert "template_sizes" in body
+    assert "document_storage_inputs" in body
+    assert "template_image_requests(&template_text)" in body
     assert "RetainedUploadedSource::byte_len" in body
 
 
@@ -25,6 +26,8 @@ def test_capacity_budget_is_cross_platform_and_fail_closed() -> None:
     assert 'fs2 = "0.4.3"' in root_cargo
     assert "fs2.workspace = true" in tauri_cargo
     assert "fs2::available_space(stage_parent)" in privacy
+    assert "dokkomplekt_docx::MAX_IMAGE_ASSET_BYTES" in privacy
+    assert "pub const MAX_IMAGE_ASSET_BYTES" in project_text("crates/dokkomplekt-docx/src/lib.rs")
     assert "MANUAL_BATCH_MIN_RECOVERY_RESERVE_BYTES" in privacy
     assert "transient_render_bytes" in privacy
     assert "retained_source_bytes" in privacy

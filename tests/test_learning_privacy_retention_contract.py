@@ -82,3 +82,30 @@ def test_learning_output_cannot_bypass_validation_via_manual_confirm() -> None:
     assert "template_learning_validation_by_output_sha256(snapshot.sha256())" in confirm
     assert "supplied != Some(validation.validation_id.as_str())" in confirm
     assert "validation proof" in confirm
+
+
+def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_temp_sessions() -> None:
+    privacy = read("src-tauri/src/privacy_runtime.rs")
+    management = read("src-tauri/src/subsystems/automation_management.rs")
+    main = read("src-tauri/src/main.rs")
+    api = read("src/lib/api.ts")
+    types = read("src/lib/types.ts")
+    ui = read("src/components/AutomationControlCenter.tsx")
+
+    assert "pub(crate) struct TechnicalStorageStatus" in privacy
+    assert '("intake-work", "Временные исходники")' in privacy
+    assert '("template-learning-inputs", "Входы обучения шаблонов")' in privacy
+    assert '("template-learning-work", "Рабочие данные обучения")' in privacy
+    assert 'key: "other-app-data".into()' in privacy
+    assert "retention_managed: false" in privacy
+    assert "fn get_technical_storage_status(" in management
+    assert "collect_technical_storage_status(&app)" in management
+    assert "cleanup_intake_workspace(&app)" in management
+    assert "get_technical_storage_status," in main
+    assert "getTechnicalStorageStatus" in api
+    assert "'get_technical_storage_status'" in api
+    assert "export interface TechnicalStorageStatus" in types
+    assert "Учтённые технические данные" in ui
+    assert "Под политикой хранения" in ui
+    assert "не удаляется этой очисткой" in ui
+    assert "Очистить сейчас" in ui

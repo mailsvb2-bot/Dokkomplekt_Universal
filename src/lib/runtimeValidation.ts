@@ -404,6 +404,7 @@ export const COMMAND_RESPONSE_KIND = {
   'get_print_triage': 'object',
   'get_printer_inventory': 'object',
   'get_privacy_preferences': 'object',
+  'get_technical_storage_status': 'object',
   'get_process_blueprints': 'object',
   'get_quality_telemetry': 'object',
   'get_queue_status': 'object',

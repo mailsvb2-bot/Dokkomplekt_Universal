@@ -70,6 +70,7 @@ pub struct ProcessedSourceArchiveResult {
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct WorkspaceHygieneReport {
+    pub removed_temp_sessions: usize,
     pub archived_processed_sources: Vec<String>,
     pub archived_service_files: Vec<String>,
     pub removed_orphan_markers: Vec<String>,

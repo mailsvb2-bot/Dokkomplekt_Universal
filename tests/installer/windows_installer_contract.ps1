@@ -465,7 +465,9 @@ function Invoke-UiActionWithObservedTransition {
     [Parameter(Mandatory = $true)][scriptblock]$TransitionProbe,
     [Parameter(Mandatory = $true)][string]$Description,
     [Parameter(Mandatory = $true)][string]$TransitionDescription,
-    [int]$TransitionSeconds = 5
+    [int]$TransitionSeconds = 5,
+    [int]$InFlightTransitionSeconds = 30,
+    [int]$PhysicalRetryTransitionSeconds = 30
   )
   Invoke-UiActionFromProbe -ActionProbe $ActionProbe -Description $Description
 
@@ -502,7 +504,7 @@ function Invoke-UiActionWithObservedTransition {
   } while ([DateTime]::UtcNow -lt $actionStateDeadline)
   if ($null -eq $retryAction) {
     Write-Host "UIA action '$Description' remained unavailable for 2 seconds and is treated as already in-flight; waiting for '$TransitionDescription' without a duplicate click."
-    return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+    return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds $InFlightTransitionSeconds -Probe $TransitionProbe
   }
 
   # If the same action is still independently actionable, WebView2 may have
@@ -511,7 +513,7 @@ function Invoke-UiActionWithObservedTransition {
   # product transition. A broken product therefore remains red.
   Write-Host "UIA action '$Description' produced no observable transition and remains actionable; retrying once with physical input."
   Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe -Description "$Description physical retry"
-  return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe
+  return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds $PhysicalRetryTransitionSeconds -Probe $TransitionProbe
 }
 
 function New-PlainDocxFixture {
@@ -2509,23 +2511,22 @@ try {
   if ($null -ne $currentAppWindow) { Write-E2LearningUiDiagnostic -Root $currentAppWindow }
   throw
 }
-$currentAppWindow = Find-LiveAppWindow
-if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before learning action.' }
-Activate-LiveAppWindow -Window $currentAppWindow
-if ($fpr09LearnButton.Current.IsOffscreen -and $fpr09LearnButton.Current.IsScrollItemPatternAvailable) {
-  $scroll = $fpr09LearnButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-  $scroll.ScrollIntoView()
-  Start-Sleep -Milliseconds 100
-}
-$fpr09LearnButton.SetFocus()
-Start-Sleep -Milliseconds 100
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-
-$fpr09MapButton = Wait-UiElement -Description 'FPR-09 explicit learned-map confirmation' -TimeoutSeconds 90 -Probe {
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
-}
+$fpr09MapButton = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-09 run learning from staged pairs' `
+  -TransitionDescription 'FPR-09 explicit learned-map confirmation' `
+  -TransitionSeconds 8 `
+  -InFlightTransitionSeconds 90 `
+  -PhysicalRetryTransitionSeconds 90 `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Обучить на 4 паре(ах)')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
+  }
 $currentAppWindow = Find-LiveAppWindow
 if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before map confirmation.' }
 Activate-LiveAppWindow -Window $currentAppWindow

@@ -244,6 +244,13 @@ fn get_privacy_preferences(app: tauri::AppHandle) -> Result<PrivacyPreferences, 
     load_privacy_preferences(&app)
 }
 
+#[tauri::command]
+fn get_technical_storage_status(
+    app: tauri::AppHandle,
+) -> Result<TechnicalStorageStatus, String> {
+    collect_technical_storage_status(&app)
+}
+
 #[derive(Debug, Deserialize)]
 struct UpdatePrivacyPreferencesRequest {
     preferences: PrivacyPreferences,
@@ -290,6 +297,10 @@ fn run_workspace_hygiene(
         }
     }
     let mut aggregate = WorkspaceHygieneReport::default();
+    match cleanup_intake_workspace(&app) {
+        Ok(removed) => aggregate.removed_temp_sessions = removed,
+        Err(error) => aggregate.warnings.push(format!("Временные данные: {error}")),
+    }
     let now = std::time::SystemTime::now();
     for root in roots {
         match workspace_hygiene::cleanup_workspace_folder(&root, &policy, now) {
@@ -302,6 +313,13 @@ fn run_workspace_hygiene(
                 aggregate
                     .removed_expired_archived_files
                     .extend(report.removed_expired_archived_files);
+                aggregate.removed_queue_receipts.extend(report.removed_queue_receipts);
+                aggregate
+                    .recovered_finalizing_sources
+                    .extend(report.recovered_finalizing_sources);
+                aggregate
+                    .removed_stale_staging_files
+                    .extend(report.removed_stale_staging_files);
                 aggregate.warnings.extend(report.warnings);
             }
             Err(error) => aggregate

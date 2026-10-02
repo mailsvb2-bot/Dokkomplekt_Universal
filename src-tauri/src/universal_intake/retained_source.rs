@@ -1,6 +1,6 @@
-use super::{safe_file_name, MAX_UPLOAD_BYTES};
 #[cfg(any(target_os = "windows", test))]
 use super::{materialize_sensitive_file, UploadedSourceSession};
+use super::{safe_file_name, MAX_UPLOAD_BYTES};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 

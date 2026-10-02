@@ -221,6 +221,18 @@ exec "${DOKKOMPLEKT_REAL_RM:?}" "$@"
     assert "Linux bundle validation OK" in result.stdout
 
 
+def test_linux_installer_contract_core_parses_with_bash() -> None:
+    core = ROOT / "tests" / "installer" / "linux_installer_contract_core.sh"
+    result = subprocess.run(
+        ["bash", "-n", str(core)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout
+
 def test_rpm_lane_requires_real_install_render_and_uninstall() -> None:
     core = (ROOT / "tests" / "installer" / "linux_installer_contract_core.sh").read_text(
         encoding="utf-8"

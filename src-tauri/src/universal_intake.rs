@@ -166,6 +166,10 @@ impl RetainedUploadedSource {
         format!("dokkomplekt-upload://current/{}", self.file_name)
     }
 
+    pub fn byte_len(&self) -> u64 {
+        self.bytes.len() as u64
+    }
+
     #[cfg(any(target_os = "windows", test))]
     pub fn materialize(&self, workspace: &Path) -> Result<UploadedSourceSession, String> {
         materialize_sensitive_file(&self.file_name, &self.bytes, workspace)

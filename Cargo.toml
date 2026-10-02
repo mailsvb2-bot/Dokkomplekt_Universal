@@ -53,6 +53,7 @@ aes = "0.8"
 cipher = "0.4"
 hmac = "0.12"
 getrandom = "0.2"
+fs2 = "0.4.3"
 notify = "8.2"
 # zip 2.x permits deflate64 releases that use newer/unstable Rust APIs.
 deflate64 = "=0.1.10"

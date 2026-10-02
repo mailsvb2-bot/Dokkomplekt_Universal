@@ -430,7 +430,10 @@
         "src-tauri/src/privacy_runtime.rs",
         "src-tauri/src/subsystems/automation_management.rs",
         "src/components/AutomationControlCenter.tsx",
-        "tests/test_learning_privacy_retention_contract.py"
+        "tests/test_learning_privacy_retention_contract.py",
+        "src-tauri/src/subsystems/document_commands.rs",
+        "src-tauri/src/universal_intake.rs",
+        "tests/test_e6_storage_capacity_contract.py"
       ]
     }
   ]

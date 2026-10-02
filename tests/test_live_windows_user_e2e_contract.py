@@ -170,6 +170,10 @@ def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
         "Установить и перезапустить",
         "update-recovery.json",
         "recovery.status -ne 'verified'",
+        "FPR-19 LIVE RECOVERABLE FAILURE PASS:",
+        "FPR-19 LIVE ROLLBACK PASS:",
+        "FPR19-CONTROLLED-CORRUPT-DATABASE",
+        "HoldInstalledExecutable",
         "FPR-19 LIVE UPDATE PASS:",
     ):
         assert marker in source
@@ -186,5 +190,7 @@ def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
 def test_mocked_browser_lane_is_not_the_live_evidence_lane() -> None:
     quality = QUALITY.read_text(encoding="utf-8")
     registry = REGISTRY.read_text(encoding="utf-8")
+    assert '"UX-UPDATE-RECOVERABLE"' in registry
+    assert '"UX-UPDATE-ROLLBACK"' in registry
     assert "Browser UI e2e (mocked Tauri IPC)" in quality
     assert "mocked IPC is not accepted" in registry

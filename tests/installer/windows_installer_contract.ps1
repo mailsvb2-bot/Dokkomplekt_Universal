@@ -3499,27 +3499,63 @@ try {
     throw 'FPR-12 installer replacement lost the persisted workspace/button state.'
   }
 
-  Invoke-UiActionWithObservedTransition `
-    -Description 'FPR-12 Настройки after installer replacement' `
-    -TransitionDescription 'FPR-12 settings panel after installer replacement' `
-    -ActionProbe {
-      $condition = [System.Windows.Automation.PropertyCondition]::new(
+  try {
+    Invoke-UiActionWithObservedTransition `
+      -Description 'FPR-12 Настройки after installer replacement' `
+      -TransitionDescription 'FPR-12 settings panel after installer replacement' `
+      -ActionProbe {
+        $condition = [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+          [int]$fpr12ReplacementProcess.Id
+        )
+        $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if ($null -eq $replacementWindow) { return $null }
+        Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
+      } `
+      -TransitionProbe {
+        $condition = [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+          [int]$fpr12ReplacementProcess.Id
+        )
+        $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if ($null -eq $replacementWindow) { return $null }
+        Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
+      } | Out-Null
+  } catch {
+    Write-Host "FPR-12 settings UIA/physical activation exhausted; trying one focused keyboard Enter fallback: $($_.Exception.Message)"
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $replacementWindow) {
+      throw 'FPR-12 replacement window disappeared before focused keyboard fallback.'
+    }
+    Activate-LiveAppWindow -Window $replacementWindow
+    $fpr12SettingsButton = Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
+    if ($null -eq $fpr12SettingsButton) {
+      throw 'FPR-12 settings button is unavailable before focused keyboard fallback.'
+    }
+    if ($fpr12SettingsButton.Current.IsOffscreen -and $fpr12SettingsButton.Current.IsScrollItemPatternAvailable) {
+      try {
+        $fpr12SettingsButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      } catch { }
+    }
+    $fpr12SettingsButton.SetFocus()
+    Start-Sleep -Milliseconds 150
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Wait-UiElement -Description 'FPR-12 settings panel after focused keyboard fallback' -TimeoutSeconds 30 -Probe {
+      $liveCondition = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
         [int]$fpr12ReplacementProcess.Id
       )
-      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-      if ($null -eq $replacementWindow) { return $null }
-      Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
-    } `
-    -TransitionProbe {
-      $condition = [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-        [int]$fpr12ReplacementProcess.Id
-      )
-      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-      if ($null -eq $replacementWindow) { return $null }
-      Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
+      $liveReplacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $liveCondition)
+      if ($null -eq $liveReplacementWindow) { return $null }
+      Find-ButtonByNames -Root $liveReplacementWindow -Names @('Проверить и сохранить папку')
     } | Out-Null
+    Write-Host 'FPR-12 SETTINGS KEYBOARD FALLBACK PASS: real focused Enter exposed the settings panel after installer replacement.'
+  }
 
   $fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint `
     -DatabasePath $stateDatabase `

@@ -21,6 +21,10 @@ def test_fpr12_installed_restart_and_installer_preservation_are_locked() -> None
     assert "$fpr12AfterInstallerReplacement -ne $fpr12BeforeInstallerReplacement" in source
     assert "FPR-12 installer replacement mutated durable output preferences" in source
     assert "FPR-12 installer replacement lost the persisted workspace/button state." in source
+    assert "FPR-12 settings UIA/physical activation exhausted; trying one focused keyboard Enter fallback" in source
+    assert "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')" in source
+    assert "FPR-12 settings panel after focused keyboard fallback" in source
+    assert "FPR-12 SETTINGS KEYBOARD FALLBACK PASS" in source
 
 
 def test_fpr12_register_does_not_overclaim_cross_version_upgrade() -> None:

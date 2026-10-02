@@ -29,6 +29,7 @@ requires() { [[ ",${required_bundles}," == *",$1,"* ]]; }
 cleanup_paths=()
 cleanup_pids=()
 rpm_cleanup_package=""
+rpm_cleanup_db=""
 
 process_is_running() {
   local pid="$1"
@@ -71,13 +72,20 @@ stop_process_group() {
 
 cleanup() {
   local pid path attempt
-  if [ -n "$rpm_cleanup_package" ] && command -v rpm >/dev/null 2>&1; then
-    if rpm -q "$rpm_cleanup_package" >/dev/null 2>&1; then
-      if [ "$(id -u)" -eq 0 ]; then
-        rpm --erase --nodeps "$rpm_cleanup_package" >/dev/null 2>&1 || true
-      elif command -v sudo >/dev/null 2>&1; then
-        sudo rpm --erase --nodeps "$rpm_cleanup_package" >/dev/null 2>&1 || true
+  if [ -n "$rpm_cleanup_package" ] && [ -n "$rpm_cleanup_db" ] && command -v rpm >/dev/null 2>&1; then
+    local -a rpm_privilege=()
+    if [ "$(id -u)" -ne 0 ]; then
+      if command -v sudo >/dev/null 2>&1; then
+        rpm_privilege=(sudo)
+      else
+        echo "WARNING: sudo is unavailable; RPM smoke cleanup cannot erase $rpm_cleanup_package" >&2
       fi
+    fi
+    if [ "$(id -u)" -eq 0 ] || [ "${#rpm_privilege[@]}" -gt 0 ]; then
+      if "${rpm_privilege[@]}" rpm --dbpath "$rpm_cleanup_db" -q "$rpm_cleanup_package" >/dev/null 2>&1; then
+        "${rpm_privilege[@]}" rpm --dbpath "$rpm_cleanup_db" --erase --nodeps "$rpm_cleanup_package" >/dev/null 2>&1 || true
+      fi
+      "${rpm_privilege[@]}" rm -rf -- "$rpm_cleanup_db" >/dev/null 2>&1 || true
     fi
   fi
   for pid in "${cleanup_pids[@]:-}"; do
@@ -414,57 +422,89 @@ run_rpm_install_smoke() {
   [ "${DOKKOMPLEKT_SKIP_LINUX_INSTALL_SMOKE:-0}" != "1" ] || return 0
   command -v rpm >/dev/null || { echo "rpm is required for install smoke" >&2; return 1; }
 
-  local package_name install_log remove_log package_files binary_path
-  package_name="$(rpm -qp --queryformat '%{NAME}' "$rpm_package")"
-  [ -n "$package_name" ] || { echo "rpm package name is empty" >&2; return 1; }
+  local package_name install_log remove_log query_log package_files binary_path rpm_db
   install_log="$(mktemp)"
   remove_log="$(mktemp)"
-  cleanup_paths+=("$install_log" "$remove_log")
+  query_log="$(mktemp)"
+  rpm_db="$(mktemp -d)"
+  cleanup_paths+=("$install_log" "$remove_log" "$query_log")
+
+  if ! package_name="$(rpm -qp --queryformat '%{NAME}\n' "$rpm_package" 2>"$query_log")"; then
+    cat "$query_log" >&2
+    echo "rpm package metadata query failed" >&2
+    rm -rf -- "$rpm_db" || true
+    return 1
+  fi
+  [ -n "$package_name" ] || {
+    cat "$query_log" >&2
+    echo "rpm package name is empty" >&2
+    rm -rf -- "$rpm_db" || true
+    return 1
+  }
 
   local -a privilege=()
   if [ "$(id -u)" -ne 0 ]; then
-    command -v sudo >/dev/null || { echo "sudo is required for rpm install smoke" >&2; return 1; }
+    command -v sudo >/dev/null || {
+      echo "sudo is required for rpm install smoke" >&2
+      rm -rf -- "$rpm_db" || true
+      return 1
+    }
     privilege=(sudo)
   fi
 
   cleanup_rpm_install() {
-    if rpm -q "$package_name" >/dev/null 2>&1; then
-      "${privilege[@]}" rpm --erase --nodeps "$package_name" >"$remove_log" 2>&1 || true
+    if "${privilege[@]}" rpm --dbpath "$rpm_db" -q "$package_name" >/dev/null 2>&1; then
+      "${privilege[@]}" rpm --dbpath "$rpm_db" --erase --nodeps "$package_name" >"$remove_log" 2>&1 || true
     fi
   }
 
-  cleanup_rpm_install
   rpm_cleanup_package="$package_name"
-  if ! "${privilege[@]}" rpm --install --nodeps "$rpm_package" >"$install_log" 2>&1; then
+  rpm_cleanup_db="$rpm_db"
+
+  if ! "${privilege[@]}" rpm --dbpath "$rpm_db" --initdb >"$install_log" 2>&1; then
     cat "$install_log" >&2
-    echo "rpm install smoke failed" >&2
-    cleanup_rpm_install
-    rpm_cleanup_package=""
+    echo "rpm smoke database initialization failed" >&2
     return 1
   fi
 
-  package_files="$(rpm -ql "$package_name")"
+  : >"$install_log"
+  if ! "${privilege[@]}" rpm --dbpath "$rpm_db" --install --nodeps "$rpm_package" >"$install_log" 2>&1; then
+    cat "$install_log" >&2
+    echo "rpm install smoke failed" >&2
+    cleanup_rpm_install
+    return 1
+  fi
+
+  if ! package_files="$("${privilege[@]}" rpm --dbpath "$rpm_db" -ql "$package_name" 2>"$query_log")"; then
+    cat "$query_log" >&2
+    echo "installed RPM file query failed for $package_name" >&2
+    cleanup_rpm_install
+    return 1
+  fi
   binary_path="$(awk '/\/(usr\/)?bin\/[^/]*dokkomplekt/ { print; exit }' <<<"$package_files")"
   if [ -z "$binary_path" ] || [ ! -x "$binary_path" ]; then
     echo "installed executable was not found for RPM package $package_name" >&2
     cleanup_rpm_install
-    rpm_cleanup_package=""
     return 1
   fi
 
   if ! run_rendered_gui_smoke "$binary_path" "RPM installed application" "binary"; then
     cleanup_rpm_install
-    rpm_cleanup_package=""
     return 1
   fi
 
   cleanup_rpm_install
-  if rpm -q "$package_name" >/dev/null 2>&1; then
+  if "${privilege[@]}" rpm --dbpath "$rpm_db" -q "$package_name" >/dev/null 2>&1; then
     cat "$remove_log" >&2
     echo "rpm uninstall smoke did not remove $package_name" >&2
     return 1
   fi
+  if ! "${privilege[@]}" rm -rf -- "$rpm_db"; then
+    echo "rpm smoke database cleanup failed: $rpm_db" >&2
+    return 1
+  fi
   rpm_cleanup_package=""
+  rpm_cleanup_db=""
   printf -- '- rpm install/render/uninstall smoke: OK (%s)\n' "$package_name"
 }
 

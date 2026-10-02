@@ -239,11 +239,15 @@ def test_rpm_lane_requires_real_install_render_and_uninstall() -> None:
     )
     for marker in (
         "run_rpm_install_smoke",
-        "rpm --install --nodeps",
+        'rpm --dbpath "$rpm_db" --initdb',
+        'rpm --dbpath "$rpm_db" --install --nodeps',
         'run_rendered_gui_smoke "$binary_path" "RPM installed application" "binary"',
-        "rpm --erase --nodeps",
+        'rpm --dbpath "$rpm_db" --erase --nodeps',
         "rpm install/render/uninstall smoke: OK",
         'rpm_cleanup_package="$package_name"',
+        'rpm_cleanup_db="$rpm_db"',
+        "rpm package metadata query failed",
+        "installed RPM file query failed",
     ):
         assert marker in core
 

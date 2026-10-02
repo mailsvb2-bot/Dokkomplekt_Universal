@@ -72,15 +72,15 @@ class CalendarContractTest(unittest.TestCase):
                 self.fail(f"unexpected calendar row: {line}")
         return complete, provisional, holidays, working
 
-    def test_supported_years_are_explicit_and_2027_is_fail_closed(self) -> None:
+    def test_supported_years_are_explicit_through_2027(self) -> None:
         complete, provisional, _, _ = self._calendar()
-        self.assertEqual(complete, {2025, 2026})
-        self.assertEqual(provisional, {2027})
+        self.assertEqual(complete, {2025, 2026, 2027})
+        self.assertEqual(provisional, set())
         source = text("crates/dokkomplekt-refdata/src/lib.rs")
         self.assertIn("UnsupportedYear", source)
         self.assertNotIn("unwrap_or_else(|_|", source)
 
-    def test_known_2025_2026_transfers_are_present(self) -> None:
+    def test_known_2025_through_2027_transfers_are_present(self) -> None:
         _, _, holidays, working = self._calendar()
         for item in [
             date(2025, 5, 2),
@@ -90,11 +90,18 @@ class CalendarContractTest(unittest.TestCase):
             date(2025, 12, 31),
             date(2026, 3, 9),
             date(2026, 5, 11),
+            date(2027, 2, 22),
+            date(2027, 5, 3),
+            date(2027, 5, 10),
+            date(2027, 6, 14),
+            date(2027, 11, 5),
+            date(2027, 12, 31),
         ]:
             self.assertIn(item, holidays)
         self.assertIn(date(2025, 11, 1), working)
+        self.assertIn(date(2027, 2, 20), working)
 
-    def test_calendar_probe_matches_expected_and_refuses_2027(self) -> None:
+    def test_calendar_probe_matches_expected_and_refuses_2028(self) -> None:
         complete, _, holidays, working = self._calendar()
 
         def add_working_days(start: date, amount: int) -> date:
@@ -115,8 +122,10 @@ class CalendarContractTest(unittest.TestCase):
             return current
 
         self.assertEqual(add_working_days(date(2025, 12, 31), 1), date(2026, 1, 9))
-        with self.assertRaisesRegex(ValueError, "2027"):
-            add_working_days(date(2027, 12, 30), 3)
+        self.assertEqual(add_working_days(date(2027, 2, 19), 1), date(2027, 2, 20))
+        self.assertEqual(add_working_days(date(2027, 11, 3), 1), date(2027, 11, 8))
+        with self.assertRaisesRegex(ValueError, "2028"):
+            add_working_days(date(2028, 12, 30), 3)
 
 
 class ValidationAndDateContractTest(unittest.TestCase):

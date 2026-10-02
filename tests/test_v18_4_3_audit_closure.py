@@ -66,7 +66,10 @@ def test_signing_workflow_is_private_approval_and_commit_pinned() -> None:
     assert "https://github.com/${{ inputs.source_repository }}.git" in workflow
     assert "runs-on: windows-latest" in workflow
     assert "self-hosted, Windows, X64, dokkomplekt-runtime" not in workflow
-    assert workflow.count("runs-on: [self-hosted") == 1
+    assert "fail-fast: false" in workflow
+    assert "runner_label: dokkomplekt-win10-live" in workflow
+    assert "runner_label: dokkomplekt-win11-live" in workflow
+    assert "- ${{ matrix.runner_label }}" in workflow
 
 
 def test_hardware_workflow_stages_runtime_and_preserves_release_evidence() -> None:

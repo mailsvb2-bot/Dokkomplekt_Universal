@@ -117,7 +117,8 @@ fn automation_plan_fingerprint(
         format!("bundled-calendar:{}", env!("CARGO_PKG_VERSION"))
     };
     let payload = serde_json::json!({
-        "schema": 2,
+        "schema": 3,
+        "template_admission_contract": "validated-automatic-v1",
         "engine_version": env!("CARGO_PKG_VERSION"),
         "templates": templates,
         "folder_parts": req.folder_parts.clone(),
@@ -138,6 +139,141 @@ fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> Stri
     hasher.update(b"\0");
     hasher.update(processing_fingerprint.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ZeroTouchTemplateAdmissionBlocker {
+    document_id: String,
+    button_label: String,
+    code: String,
+    reason: String,
+}
+
+fn learning_validation_allows_zero_touch(evidence_json: &str) -> bool {
+    let Ok(evidence) = serde_json::from_str::<serde_json::Value>(evidence_json) else {
+        return false;
+    };
+
+    // New proofs state the admission level explicitly. An explicit manual level
+    // must never be upgraded by inference from other fields.
+    if let Some(level) = evidence
+        .get("validation_level")
+        .and_then(serde_json::Value::as_str)
+    {
+        return level == "validated_automatic";
+    }
+
+    // Backward compatibility: every v2 proof produced before admission levels
+    // existed was issued only after 4-10 complete Source -> Correct Output pairs,
+    // with the last pair held out plus replay and intervention checks. Treat only
+    // that exact old proof shape as automatic; unknown/partial evidence fails closed.
+    if evidence.get("schema").and_then(serde_json::Value::as_str)
+        != Some("dokkomplekt.template-learning-validation.v2")
+    {
+        return false;
+    }
+    let validation = evidence.get("validation");
+    evidence
+        .get("holdout_pair_index")
+        .is_some_and(|value| !value.is_null())
+        && validation
+            .and_then(|value| value.get("passed"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && validation
+            .and_then(|value| value.get("replay_passed"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && validation
+            .and_then(|value| value.get("controlled_intervention_passed"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+}
+
+fn zero_touch_template_admission_blockers(
+    app: &tauri::AppHandle,
+    documents: &[DocumentTemplateSpec],
+    selected_document_ids: &BTreeSet<String>,
+    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
+) -> Result<Vec<ZeroTouchTemplateAdmissionBlocker>, String> {
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    let mut blockers = Vec::new();
+
+    for document in documents {
+        if !selected_document_ids.contains(&document.id) {
+            continue;
+        }
+        let Some(version) = repo
+            .list_template_versions(&document.id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|version| version.status == "published")
+        else {
+            // Compatibility boundary for installations that predate template
+            // version metadata. They retain their existing watcher behavior;
+            // every newly published user template has a version record and is
+            // governed by the admission rules below.
+            continue;
+        };
+
+        let snapshot = template_snapshots.get(&document.id).ok_or_else(|| {
+            format!("Не найден snapshot шаблона «{}».", document.button_label)
+        })?;
+        if version.template_sha256 != snapshot.sha256() {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "published_version_mismatch".into(),
+                reason: "текущие байты шаблона не совпадают с опубликованной версией".into(),
+            });
+            continue;
+        }
+
+        let Some(validation_id) = version.learning_validation_id.as_deref() else {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "automatic_validation_missing".into(),
+                reason: "кнопка разрешена для ручной работы, но не имеет ValidatedAutomatic proof для watcher/zero-touch".into(),
+            });
+            continue;
+        };
+        let Some(validation) = repo
+            .template_learning_validation_by_id(validation_id)
+            .map_err(|error| error.to_string())?
+        else {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "validation_proof_missing".into(),
+                reason: "ссылка опубликованной версии на validation proof не разрешается".into(),
+            });
+            continue;
+        };
+
+        let proof_matches_template = validation.status == "published"
+            && validation.learned_template_sha256.as_deref()
+                == Some(version.template_sha256.as_str());
+        if !proof_matches_template {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "validation_proof_mismatch".into(),
+                reason: "validation proof не связан с точными байтами текущей опубликованной версии".into(),
+            });
+            continue;
+        }
+        if !learning_validation_allows_zero_touch(&validation.evidence_json) {
+            blockers.push(ZeroTouchTemplateAdmissionBlocker {
+                document_id: document.id.clone(),
+                button_label: document.button_label.clone(),
+                code: "automatic_admission_missing".into(),
+                reason: "validation proof не даёт уровня ValidatedAutomatic".into(),
+            });
+        }
+    }
+
+    Ok(blockers)
 }
 
 fn perform_created_documents_intake(
@@ -656,6 +792,73 @@ fn perform_created_documents_intake(
         bundle_decision.source,
         bundle_decision.confidence * 100.0
     ));
+
+    let template_admission_blockers = zero_touch_template_admission_blockers(
+        app,
+        &pack.documents,
+        &selected_document_ids,
+        &template_snapshots,
+    )?;
+    if !template_admission_blockers.is_empty() {
+        let report_path = attention_note_path(&source);
+        let mut attention = String::from(
+            "КОМПЛЕКТ НЕ СОЗДАН: шаблон не допущен к полностью автоматической генерации\n\n",
+        );
+        for blocker in &template_admission_blockers {
+            attention.push_str(&format!("- {}: {}\n", blocker.button_label, blocker.reason));
+        }
+        attention.push_str(
+            "\nОткройте Доккомплект и выполните доказательное обучение/проверку шаблона. Ручное создание кнопкой остаётся доступно.\n",
+        );
+        std::fs::write(
+            &report_path,
+            note_with_source_fingerprint(
+                &attention,
+                &source_sha256,
+                None,
+                None,
+                std::time::SystemTime::now(),
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        let details = serde_json::json!({
+            "blockers": &template_admission_blockers,
+            "selected_document_ids": &bundle_decision.document_ids,
+            "required_level": "validated_automatic",
+            "attention_file": report_path.display().to_string(),
+        });
+        create_automation_exception(
+            app,
+            "template_automation_admission",
+            &source.display().to_string(),
+            "Автоматическая генерация остановлена: один или несколько шаблонов не имеют ValidatedAutomatic proof.",
+            &details,
+        )?;
+        append_audit_event(
+            app,
+            "intake_blocked_template_admission",
+            &source_sha256,
+            &details,
+        )?;
+        increment_metric(app, "blocked_sources", 1);
+        case_run.finish(
+            "attention",
+            None,
+            &[],
+            &[],
+            Some("Template automation admission gate потребовал ValidatedAutomatic proof."),
+        )?;
+        return Ok(CreatedDocumentsIntakeResponse {
+            status: "attention".into(),
+            patient_folder: None,
+            created_files: Vec::new(),
+            created_documents: Vec::new(),
+            missing: Vec::new(),
+            attention_file: Some(report_path.display().to_string()),
+            print_triage: None,
+            message: "Автоматическая генерация остановлена: шаблон доступен вручную, но ещё не доказан для zero-touch.".into(),
+        });
+    }
 
     let mut configured = Vec::new();
     for doc in &pack.documents {
@@ -1622,321 +1825,8 @@ fn perform_created_documents_intake(
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ListCaseRunsRequest {
-    #[serde(default = "default_case_run_limit")]
-    limit: usize,
-}
-
-fn default_case_run_limit() -> usize {
-    100
-}
-
-#[tauri::command]
-fn list_case_runs(
-    req: ListCaseRunsRequest,
-    app: tauri::AppHandle,
-) -> Result<Vec<CaseRunRecord>, String> {
-    repository_for(&default_state_db_path(&app)?)?
-        .list_case_runs(req.limit)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn get_queue_status() -> central_queue::QueueStatus {
-    central_queue::status()
-}
-
-#[derive(Debug, Serialize)]
-struct CorpusStatusResponse {
-    recording_enabled: bool,
-    entry_count: u64,
-    privacy_mode: String,
-    message: String,
-}
-
-#[tauri::command]
-fn get_corpus_status(app: tauri::AppHandle) -> Result<CorpusStatusResponse, String> {
-    let config = load_semantic_model_config(&app)?;
-    let entry_count = repository_for(&default_state_db_path(&app)?)?
-        .corpus_entry_count()
-        .map_err(|error| error.to_string())?;
-    Ok(CorpusStatusResponse {
-        recording_enabled: config.corpus_recording_enabled,
-        entry_count,
-        privacy_mode: "encrypted-hashed-no-raw-values".into(),
-        message: if config.corpus_recording_enabled {
-            format!(
-                "Сбор обезличенного корпуса включён с согласия пилота. Завершённых записей: {entry_count}."
-            )
-        } else {
-            format!(
-                "Сбор корпуса выключен. Ранее сохранённых обезличенных записей: {entry_count}."
-            )
-        },
-    })
-}
-
-
-#[derive(Debug, Deserialize)]
-struct LearnedKitDecisionRequest {
-    domain: DomainKind,
-    cluster_id: String,
-    #[serde(default)]
-    pack_id: Option<String>,
-}
-
-#[tauri::command]
-fn get_learned_kit_decision(
-    req: LearnedKitDecisionRequest,
-    app: tauri::AppHandle,
-) -> Result<Option<KitLearningDecision>, String> {
-    let cluster_id = req.cluster_id.trim();
-    if cluster_id.is_empty() {
-        return Err("cluster_id is required".into());
-    }
-    let entries = repository_for(&default_state_db_path(&app)?)?
-        .list_corpus_entries(10_000)
-        .map_err(|error| error.to_string())?;
-    let key = KitRuleKey {
-        domain: req.domain,
-        cluster_id: cluster_id.to_string(),
-        pack_id: req.pack_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
-    };
-    Ok(decision_for_key(&entries, &key, KitPromotionPolicy::default()))
-}
-
-#[derive(Debug, Deserialize)]
-struct ExportCorpusRequest {
-    output_path: String,
-    #[serde(default = "default_corpus_export_limit")]
-    limit: usize,
-}
-
-fn default_corpus_export_limit() -> usize {
-    10_000
-}
-
-#[derive(Debug, Serialize)]
-struct CorpusExportItem {
-    entry: CorpusEntry,
-    metrics: CorpusEntryMetrics,
-}
-
-#[derive(Debug, Serialize)]
-struct CorpusExportResponse {
-    output_path: String,
-    entry_count: usize,
-    schema: String,
-}
-
-#[tauri::command]
-fn export_corpus(
-    req: ExportCorpusRequest,
-    app: tauri::AppHandle,
-) -> Result<CorpusExportResponse, String> {
-    let output = resolve_user_path(&app, req.output_path.trim())?;
-    if output.extension().and_then(|value| value.to_str()) != Some("json") {
-        return Err("Экспорт обезличенного корпуса должен иметь расширение .json".into());
-    }
-    if output.exists() {
-        return Err("Файл экспорта уже существует. Укажите новое имя, чтобы не перезаписать доказательный корпус.".into());
-    }
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let entries = repository_for(&default_state_db_path(&app)?)?
-        .list_corpus_entries(req.limit.clamp(1, 10_000))
-        .map_err(|error| error.to_string())?;
-    if entries.is_empty() {
-        return Err("Обезличенный корпус пока пуст: завершите хотя бы одно дело с добровольно включённой записью корпуса.".into());
-    }
-    let items = entries
-        .into_iter()
-        .map(|entry| CorpusExportItem {
-            metrics: corpus_entry_metrics(&entry),
-            entry,
-        })
-        .collect::<Vec<_>>();
-    let payload = serde_json::json!({
-        "schema": "dokkomplekt.ground-truth-corpus.v1",
-        "exported_at": chrono::Utc::now().to_rfc3339(),
-        "privacy": {
-            "raw_source_text": false,
-            "raw_field_values": false,
-            "storage_at_rest": "encrypted",
-            "comparison_values": "installation-keyed-hmac-sha256"
-        },
-        "entries": items,
-    });
-    let temporary = output.with_extension(format!("json.{}.tmp", Uuid::new_v4()));
-    let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
-    let write_result = (|| -> Result<(), String> {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|error| error.to_string())?;
-        file.write_all(&bytes).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
-        std::fs::rename(&temporary, &output).map_err(|error| error.to_string())
-    })();
-    if let Err(error) = write_result {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
-    append_audit_event(
-        &app,
-        "ground_truth_corpus_exported",
-        "",
-        &serde_json::json!({
-            "entry_count": payload["entries"].as_array().map(Vec::len).unwrap_or_default(),
-            "schema": "dokkomplekt.ground-truth-corpus.v1",
-            "raw_values_exported": false,
-        }),
-    )?;
-    Ok(CorpusExportResponse {
-        output_path: output.display().to_string(),
-        entry_count: payload["entries"].as_array().map(Vec::len).unwrap_or_default(),
-        schema: "dokkomplekt.ground-truth-corpus.v1".into(),
-    })
-}
-
-#[derive(Debug, Deserialize)]
-struct RetryCaseRunRequest {
-    case_id: String,
-}
-
-#[tauri::command]
-fn retry_case_run(
-    req: RetryCaseRunRequest,
-    state: State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
-    let repo = repository_for(&default_state_db_path(&app)?)?;
-    let record = repo
-        .case_run_by_id(req.case_id.trim())
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "Дело не найдено.".to_string())?;
-    let mut intake: CreatedDocumentsIntakeRequest = serde_json::from_str(&record.request_json)
-        .map_err(|error| format!("Сохранённый план дела повреждён: {error}"))?;
-    let original = PathBuf::from(&record.source_path);
-    let source = if original.exists() {
-        original
-    } else {
-        let file_name = original
-            .file_name()
-            .ok_or_else(|| "Не удалось определить имя исходника дела.".to_string())?;
-        record
-            .patient_folder
-            .as_deref()
-            .map(PathBuf::from)
-            .map(|folder| folder.join(file_name))
-            .filter(|candidate| candidate.exists())
-            .ok_or_else(|| {
-                "Исходник дела не найден ни в архиве, ни в готовом комплекте. Переиздание невозможно без исходного файла.".to_string()
-            })?
-    };
-    intake.source_path = source.display().to_string();
-    if record.status == "completed" {
-        intake.force_reissue = true;
-        intake.preserve_source_after_success = true;
-        append_audit_event(
-            &app,
-            "case_reissue_requested",
-            &record.source_sha256,
-            &serde_json::json!({ "previous_case_id": record.case_id }),
-        )?;
-    } else {
-        intake.resume_from_case_id = Some(record.case_id.clone());
-        repo.update_case_run(
-            &record.case_id,
-            "cancelled",
-            record.patient_folder.as_deref(),
-            &record.created_files_json,
-            &record.missing_json,
-            Some("Повторный запуск создан как новая атомарная попытка."),
-        )
-        .map_err(|error| error.to_string())?;
-    }
-    perform_created_documents_intake(&state, &app, intake)
-        .and_then(|response| serde_json::to_value(response).map_err(|error| error.to_string()))
-}
-
-#[tauri::command]
-fn get_privacy_preferences(app: tauri::AppHandle) -> Result<PrivacyPreferences, String> {
-    load_privacy_preferences(&app)
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdatePrivacyPreferencesRequest {
-    preferences: PrivacyPreferences,
-}
-
-#[tauri::command]
-fn update_privacy_preferences(
-    req: UpdatePrivacyPreferencesRequest,
-    app: tauri::AppHandle,
-) -> Result<PrivacyPreferences, String> {
-    persist_privacy_preferences(&app, &req.preferences)?;
-    append_audit_event(
-        &app,
-        "privacy_preferences_updated",
-        "",
-        &serde_json::to_value(&req.preferences).map_err(|error| error.to_string())?,
-    )?;
-    Ok(req.preferences)
-}
-
-#[tauri::command]
-fn run_workspace_hygiene(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<WorkspaceHygieneReport, String> {
-    let privacy = load_privacy_preferences(&app)?;
-    let policy = privacy.retention_policy();
-    let mut roots = BTreeSet::new();
-    if let Ok(guard) = state.watcher.lock() {
-        if let Some(handle) = guard.as_ref() {
-            roots.insert(handle.folder.clone());
-        }
-    }
-    if let Ok(repo) = repository_for(&default_state_db_path(&app)?) {
-        if let Ok(cases) = repo.list_case_runs(500) {
-            for case in cases {
-                if !case.output_root.trim().is_empty() {
-                    roots.insert(PathBuf::from(case.output_root));
-                }
-                if let Some(parent) = Path::new(&case.source_path).parent() {
-                    roots.insert(parent.to_path_buf());
-                }
-            }
-        }
-    }
-    let mut aggregate = WorkspaceHygieneReport::default();
-    let now = std::time::SystemTime::now();
-    for root in roots {
-        match workspace_hygiene::cleanup_workspace_folder(&root, &policy, now) {
-            Ok(report) => {
-                aggregate
-                    .archived_processed_sources
-                    .extend(report.archived_processed_sources);
-                aggregate.archived_service_files.extend(report.archived_service_files);
-                aggregate.removed_orphan_markers.extend(report.removed_orphan_markers);
-                aggregate
-                    .removed_expired_archived_files
-                    .extend(report.removed_expired_archived_files);
-                aggregate.warnings.extend(report.warnings);
-            }
-            Err(error) => aggregate
-                .warnings
-                .push(format!("{}: {error}", root.display())),
-        }
-    }
-    let details = serde_json::to_value(&aggregate).map_err(|error| error.to_string())?;
-    append_audit_event(&app, "workspace_hygiene_manual", "", &details)?;
-    Ok(aggregate)
-}
+// Case history, corpus, retry, privacy and workspace management live in a focused owner.
+include!("automation_management.rs");
 
 #[derive(Debug, Deserialize)]
 struct ListAutomationExceptionsRequest {
@@ -2949,5 +2839,78 @@ mod publication_completion_receipt_tests {
             local_completion_receipt(&root, &"d".repeat(64))
         );
         std::fs::remove_dir_all(root).expect("cleanup completion receipt test root");
+    }
+}
+
+
+#[cfg(test)]
+mod template_automation_admission_tests {
+    use super::learning_validation_allows_zero_touch;
+
+    fn legacy_evidence(
+        holdout: serde_json::Value,
+        passed: bool,
+        replay_passed: bool,
+        intervention_passed: bool,
+    ) -> String {
+        serde_json::json!({
+            "schema": "dokkomplekt.template-learning-validation.v2",
+            "holdout_pair_index": holdout,
+            "validation": {
+                "passed": passed,
+                "replay_passed": replay_passed,
+                "controlled_intervention_passed": intervention_passed
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn explicit_automatic_learning_level_allows_zero_touch() {
+        let evidence = serde_json::json!({
+            "schema": "dokkomplekt.template-learning-validation.v2",
+            "validation_level": "validated_automatic"
+        })
+        .to_string();
+        assert!(learning_validation_allows_zero_touch(&evidence));
+    }
+
+    #[test]
+    fn explicit_manual_learning_level_never_infers_automatic_admission() {
+        let evidence = serde_json::json!({
+            "schema": "dokkomplekt.template-learning-validation.v2",
+            "validation_level": "validated_manual",
+            "holdout_pair_index": 3,
+            "validation": {
+                "passed": true,
+                "replay_passed": true,
+                "controlled_intervention_passed": true
+            }
+        })
+        .to_string();
+        assert!(!learning_validation_allows_zero_touch(&evidence));
+    }
+
+    #[test]
+    fn legacy_v2_proof_requires_holdout_replay_and_intervention() {
+        assert!(learning_validation_allows_zero_touch(&legacy_evidence(
+            serde_json::json!(3),
+            true,
+            true,
+            true,
+        )));
+        assert!(!learning_validation_allows_zero_touch(&legacy_evidence(
+            serde_json::Value::Null,
+            true,
+            true,
+            true,
+        )));
+        assert!(!learning_validation_allows_zero_touch(&legacy_evidence(
+            serde_json::json!(3),
+            true,
+            false,
+            true,
+        )));
+        assert!(!learning_validation_allows_zero_touch("{broken-json"));
     }
 }

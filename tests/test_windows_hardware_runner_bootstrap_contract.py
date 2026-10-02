@@ -102,6 +102,12 @@ def test_new_hardware_evidence_preflight_is_side_effect_free_before_handoff_veri
         assert forbidden_secret in text
 
 
+def test_hardware_config_import_restores_literal_percent_escaping() -> None:
+    text = read(EVIDENCE_PREFLIGHT)
+    assert "DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER" in text
+    assert "$Matches.value.Replace('%%', '%')" in text
+
+
 def test_public_workflow_never_targets_self_hosted_runner() -> None:
     text = read(PUBLIC_WORKFLOW)
     assert "runs-on: ubuntu-latest" in text
@@ -125,18 +131,24 @@ def test_dispatcher_requires_a_separate_private_target_and_correlates_runs() -> 
     assert '"reboot_phase": args.reboot_phase' in text
 
 
-def test_private_workflow_requires_only_one_physical_windows_runner() -> None:
+def test_private_workflow_requires_two_independent_windows_live_runners() -> None:
     text = read(PRIVATE_WORKFLOW)
     assert "signed-runtime-build:" in text
     assert "hardware-evidence:" in text
     assert "runs-on: windows-latest" in text
-    assert "runs-on: [self-hosted, Windows, X64, dokkomplekt-hardware]" in text
+    assert "strategy:" in text
+    assert "fail-fast: false" in text
+    assert "platform: windows-10" in text
+    assert "runner_label: dokkomplekt-win10-live" in text
+    assert "platform: windows-11" in text
+    assert "runner_label: dokkomplekt-win11-live" in text
+    assert "- ${{ matrix.runner_label }}" in text
     assert "dokkomplekt-runtime]" not in text
-    assert text.count("runs-on: [self-hosted") == 1
     assert "environment: windows-production-signing" in text
     assert "environment: windows-hardware-validation" in text
     assert "needs: signed-runtime-build" in text
     assert "Dokkomplekt-Windows-Signed-Handoff-" in text
+    assert "Dokkomplekt-Windows-Hardware-E2E-${{ matrix.artifact_suffix }}" in text
     assert "actions/upload-artifact@" in text
     assert "actions/download-artifact@" in text
 
@@ -233,21 +245,23 @@ def test_reboot_prepare_state_is_persistent_and_cleanup_is_bounded() -> None:
     assert "Prepared NSIS uninstall" in cleanup
 
 
-def test_hardware_runner_runbook_describes_single_physical_machine_boundary() -> None:
+def test_hardware_runner_runbook_describes_dual_windows_matrix_boundary() -> None:
     text = read(DOC)
     assert "windows-production-signing" in text
     assert "windows-hardware-validation" in text
     assert "windows-hardware-dispatch" in text
     assert "private" in text.lower()
     assert "GitHub-hosted" in text
-    assert "одна физическая Windows-машина" in text
+    assert "Windows 10 x64" in text
+    assert "Windows 11 x64" in text
+    assert "dokkomplekt-win10-live" in text
+    assert "dokkomplekt-win11-live" in text
     assert "DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" in text
     assert "DOKKOMPLEKT_HARDWARE_DISPATCH_TOKEN" in text
     assert "DOKKOMPLEKT_RUNTIME_BUNDLE_URL" in text
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_BACKEND" in text
     assert "DOKKOMPLEKT_WINDOWS_SIGNING_CERT_THUMBPRINT" in text
     assert "non-exportable" in text
-    assert "dokkomplekt-hardware" in text
     assert "SIGNED_HANDOFF.json" in text
     assert "prepare" in text
     assert "production-hardware" in text

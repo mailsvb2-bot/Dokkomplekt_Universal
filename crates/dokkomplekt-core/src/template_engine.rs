@@ -2094,7 +2094,7 @@ mod tests {
             "contract.date".into(),
             SemanticValue::new(
                 "contract.date",
-                "2027-12-30",
+                "2028-12-30",
                 ValueSource::UserConfirmed,
                 1.0,
             ),
@@ -2105,7 +2105,7 @@ mod tests {
         assert!(result
             .template_errors
             .iter()
-            .any(|error| error.contains("2027")));
+            .any(|error| error.contains("2028")));
     }
 
     #[test]

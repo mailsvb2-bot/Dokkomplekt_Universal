@@ -172,9 +172,23 @@ jobs:
           test "$request_id" != null && test -n "$request_id"
           [[ "$prepare_run_id" =~ ^[1-9][0-9]*$ ]]
           [[ "$verify_run_id" =~ ^[1-9][0-9]*$ ]]
-          mkdir -p private-release/handoff private-release/evidence
-          gh run download "$prepare_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Signed-Handoff-${{ needs.release-plan.outputs.release_sha }}-$request_id"             --dir private-release/handoff
-          gh run download "$verify_run_id"             --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY"             --name "Dokkomplekt-Windows-Hardware-E2E-verify-$request_id-prepare-$prepare_run_id"             --dir private-release/evidence
+          mkdir -p private-release/handoff \
+            private-release/evidence/prepare/win10 private-release/evidence/prepare/win11 \
+            private-release/evidence/verify/win10 private-release/evidence/verify/win11
+          gh run download "$prepare_run_id" \
+            --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" \
+            --name "Dokkomplekt-Windows-Signed-Handoff-${{ needs.release-plan.outputs.release_sha }}-$request_id" \
+            --dir private-release/handoff
+          for platform in win10 win11; do
+            gh run download "$prepare_run_id" \
+              --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" \
+              --name "Dokkomplekt-Windows-Hardware-E2E-$platform-prepare-$request_id-prepare-" \
+              --dir "private-release/evidence/prepare/$platform"
+            gh run download "$verify_run_id" \
+              --repo "$DOKKOMPLEKT_HARDWARE_VALIDATION_REPOSITORY" \
+              --name "Dokkomplekt-Windows-Hardware-E2E-$platform-verify-$request_id-prepare-$prepare_run_id" \
+              --dir "private-release/evidence/verify/$platform"
+          done
           echo "DOKKOMPLEKT_RELEASE_REQUEST_ID=$request_id" >> "$GITHUB_ENV"
       - name: Cryptographically bind publication to the hardware-tested handoff
         shell: bash
@@ -190,12 +204,22 @@ jobs:
           PYKEY
           consumer_host_id="$(printf '%s' "public-release-publisher:$GITHUB_RUN_ID:$GITHUB_JOB" | sha256sum | awk '{print $1}')"
           python scripts/windows_signed_handoff.py verify private-release/handoff             --release-sha "${{ needs.release-plan.outputs.release_sha }}"             --request-id "$DOKKOMPLEKT_RELEASE_REQUEST_ID"             --trusted-public-key "$trusted_key"             --consumer-host-id "$consumer_host_id"             --json-report verification/release/PUBLICATION_HANDOFF_VERIFICATION.json
-          mapfile -t evidence_manifests < <(find private-release/evidence -type f -name SIGNED_HANDOFF.json -print)
-          mapfile -t evidence_signatures < <(find private-release/evidence -type f -name SIGNED_HANDOFF.json.sig -print)
-          test "${#evidence_manifests[@]}" -eq 1
-          test "${#evidence_signatures[@]}" -eq 1
-          cmp private-release/handoff/SIGNED_HANDOFF.json "${evidence_manifests[0]}"
-          cmp private-release/handoff/SIGNED_HANDOFF.json.sig "${evidence_signatures[0]}"
+          mapfile -t evidence_manifests < <(find private-release/evidence/verify -type f -name SIGNED_HANDOFF.json -print | sort)
+          mapfile -t evidence_signatures < <(find private-release/evidence/verify -type f -name SIGNED_HANDOFF.json.sig -print | sort)
+          test "${#evidence_manifests[@]}" -eq 2
+          test "${#evidence_signatures[@]}" -eq 2
+          for manifest in "${evidence_manifests[@]}"; do
+            cmp private-release/handoff/SIGNED_HANDOFF.json "$manifest"
+          done
+          for signature in "${evidence_signatures[@]}"; do
+            cmp private-release/handoff/SIGNED_HANDOFF.json.sig "$signature"
+          done
+          test "$(find private-release/evidence/prepare/win10 -type f -name 'LIVE_USER_E2E-win10.json' | wc -l)" -eq 1
+          test "$(find private-release/evidence/prepare/win11 -type f -name 'LIVE_USER_E2E-win11.json' | wc -l)" -eq 1
+          test "$(find private-release/evidence/prepare/win10 -type f -name 'FPR19_LIVE_UPDATE-win10.json' | wc -l)" -eq 1
+          test "$(find private-release/evidence/prepare/win11 -type f -name 'FPR19_LIVE_UPDATE-win11.json' | wc -l)" -eq 1
+          test "$(find private-release/evidence/verify/win10 -type f -name 'WINDOWS_REBOOT_E2E_RAW-win10.json' | wc -l)" -eq 1
+          test "$(find private-release/evidence/verify/win11 -type f -name 'WINDOWS_REBOOT_E2E_RAW-win11.json' | wc -l)" -eq 1
           test "$(find private-release/handoff/release-installers/thin -type f -name '*.exe' | wc -l)" -eq 1
           test "$(find private-release/handoff/release-installers/offline -type f -name '*.exe' | wc -l)" -eq 1
           test -d private-release/handoff/release-components

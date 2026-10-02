@@ -54,3 +54,48 @@ def test_legacy_template_migration_preserves_non_learning_version_contract() -> 
     call = legacy[call_start:call_end]
     assert "None," in call
     assert "Some(" not in call
+
+
+def test_zero_touch_requires_validated_automatic_template_proof() -> None:
+    learning = read("src-tauri/src/subsystems/template_learning_commands.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+
+    assert '"validation_level": "validated_automatic"' in learning
+    assert "fn learning_validation_allows_zero_touch(" in automation
+    assert 'level == "validated_automatic"' in automation
+    assert '"automatic_validation_missing"' in automation
+    assert '"template_automation_admission"' in automation
+    assert '"intake_blocked_template_admission"' in automation
+    assert '"required_level": "validated_automatic"' in automation
+    assert '"template_admission_contract": "validated-automatic-v1"' in automation
+
+    selection = automation.index("let selected_document_ids = bundle_decision")
+    admission = automation.index("zero_touch_template_admission_blockers(", selection)
+    configured = automation.index("let mut configured = Vec::new();", admission)
+    assert selection < admission < configured
+
+
+def test_new_template_publication_has_capability_manifest_gate() -> None:
+    docx = read("crates/dokkomplekt-docx/src/lib.rs")
+    commands = read("src-tauri/src/subsystems/document_commands.rs")
+    admission_owner = read("src-tauri/src/subsystems/template_capability_admission.rs")
+
+    assert "pub struct DocxCapabilityManifest" in docx
+    assert "pub fn inspect_docx_capabilities_file(" in docx
+    assert '"custom_xml_requires_explicit_sanitization_policy"' in docx
+    assert '"data_binding_not_supported_for_published_reference"' in docx
+    assert '"revision_markup_requires_explicit_sanitization_policy"' in docx
+    assert '"comments_require_explicit_sanitization_policy"' in docx
+    assert 'include!("template_capability_admission.rs");' in commands
+    assert "inspect_docx_capabilities_file(snapshot.path())" in admission_owner
+    assert '"template_capability_admission_passed"' in admission_owner
+    assert "custom_xml_only" in admission_owner
+    assert "learning_validation_id.is_none()" in admission_owner
+    assert "snapshot.sanitize_hidden_custom_xml_for_publication(app)?" in admission_owner
+
+    admission = commands.index("admit_template_capabilities_for_publication(")
+    pack_creation = commands.index(
+        'create_pack_from_confirmations("incoming", "Новые шаблоны", &rows).pack',
+        admission,
+    )
+    assert admission < pack_creation

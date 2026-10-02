@@ -3,6 +3,7 @@ param(
     [string] $PrinterName = '',
     [string] $RebootEvidencePath = '',
     [string] $RunnerRoot = '',
+    [ValidateSet('10', '11')] [string] $ExpectedWindowsVersion = '11',
     [string] $OutputPath = 'verification/release/HARDWARE_RUNNER_HOST.json'
 )
 
@@ -68,7 +69,8 @@ function Import-LocalHardwareConfiguration {
         'DOKKOMPLEKT_TEST_TRAY',
         'DOKKOMPLEKT_REBOOT_EVIDENCE_PATH',
         'DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT',
-        'DOKKOMPLEKT_WORD_PATH'
+        'DOKKOMPLEKT_WORD_PATH',
+        'DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER'
     )
     foreach ($line in Get-Content -LiteralPath $configPath) {
         if ($line -notmatch '^\s*set\s+"(?<name>DOKKOMPLEKT_[A-Z0-9_]+)=(?<value>.*)"\s*$') { continue }
@@ -76,7 +78,7 @@ function Import-LocalHardwareConfiguration {
         if ($allowedNames -notcontains $name) { continue }
         $existing = [Environment]::GetEnvironmentVariable($name, 'Process')
         if ([string]::IsNullOrWhiteSpace($existing)) {
-            Publish-GitHubEnvironmentValue -Name $name -Value $Matches.value
+            Publish-GitHubEnvironmentValue -Name $name -Value $Matches.value.Replace('%%', '%')
         }
     }
     return $configPath
@@ -91,6 +93,18 @@ if ([string]::IsNullOrWhiteSpace($PrinterName)) {
 if ([string]::IsNullOrWhiteSpace($RebootEvidencePath)) {
     $RebootEvidencePath = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_REBOOT_EVIDENCE_PATH', 'Process')
 }
+
+$os = Get-CimInstance Win32_OperatingSystem
+$buildNumber = [int]$os.BuildNumber
+$workstation = [int]$os.ProductType -eq 1
+$expectedOs = if ($ExpectedWindowsVersion -eq '10') {
+    $workstation -and $buildNumber -ge 10240 -and $buildNumber -lt 22000
+} else {
+    $workstation -and $buildNumber -ge 22000
+}
+$x64Os = [Environment]::Is64BitOperatingSystem -and ([string]$os.OSArchitecture -match '64')
+Add-Check -Name "windows-$ExpectedWindowsVersion" -Ok $expectedOs -Detail "caption=$($os.Caption); version=$($os.Version); build=$buildNumber; product_type=$($os.ProductType)"
+Add-Check -Name 'windows-x64' -Ok $x64Os -Detail "architecture=$($os.OSArchitecture)"
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sessionId = (Get-Process -Id $PID).SessionId
@@ -160,14 +174,26 @@ $rebootSourceDocument = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_REBOO
 $rebootSourceOk = (-not [string]::IsNullOrWhiteSpace($rebootSourceDocument)) -and (Test-Path -LiteralPath $rebootSourceDocument -PathType Leaf) -and ([IO.Path]::GetExtension($rebootSourceDocument) -ieq '.docx')
 Add-Check -Name 'reboot-source-docx-configured' -Ok $rebootSourceOk -Detail (if ([string]::IsNullOrWhiteSpace($rebootSourceDocument)) { 'missing' } else { $rebootSourceDocument })
 
+$previousInstaller = [Environment]::GetEnvironmentVariable('DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER', 'Process')
+$previousInstallerOk = (-not [string]::IsNullOrWhiteSpace($previousInstaller)) -and (Test-Path -LiteralPath $previousInstaller -PathType Leaf)
+$previousInstallerDetail = if ($previousInstallerOk) { $previousInstaller } else { 'missing previous production-signed NSIS path' }
+if ($previousInstallerOk) {
+    $previousInstallerSignature = Get-AuthenticodeSignature -FilePath $previousInstaller
+    $previousInstallerOk = $previousInstallerSignature.Status -eq 'Valid'
+    $previousInstallerDetail = "$previousInstaller; Authenticode=$($previousInstallerSignature.Status)"
+}
+Add-Check -Name 'previous-signed-installer-configured' -Ok $previousInstallerOk -Detail $previousInstallerDetail
+
 $powerState = (& powercfg /getactivescheme 2>$null) -join ' '
 Add-Check -Name 'power-plan-readable' -Ok (-not [string]::IsNullOrWhiteSpace($powerState)) -Detail $powerState
 
 $parent = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 $report = [ordered]@{
-    schema = 'dokkomplekt.hardware-evidence-host-preflight.v3'
+    schema = 'dokkomplekt.hardware-evidence-host-preflight.v4'
     created_at_utc = [DateTime]::UtcNow.ToString('o')
+    expected_windows_version = $ExpectedWindowsVersion
+    windows_build_number = $buildNumber
     computer = $env:COMPUTERNAME
     user = $identity.Name
     session_id = $sessionId

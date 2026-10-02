@@ -2401,30 +2401,54 @@ $fpr09ExpandControl = Wait-UiElement -Description 'FPR-09 primary automatic fill
   Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
 }
 
-# Do not trust WebView2's ExpandCollapseState by itself. Hosted WebView2 can
-# report <details> as Expanded while its descendants are still absent from the
-# accessibility tree. Success is defined by an observable child control.
-if ($fpr09ExpandControl.Current.IsScrollItemPatternAvailable) {
-  try {
+function Find-Fpr09ExpandedObservableChild {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-E2NamedElement -Root $window -Name 'Открыть Word и показать место'
+}
+
+$fpr09ExpandedChild = Find-Fpr09ExpandedObservableChild
+if ($null -eq $fpr09ExpandedChild) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before automatic filling expansion.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  if ($fpr09ExpandControl.Current.IsOffscreen -and $fpr09ExpandControl.Current.IsScrollItemPatternAvailable) {
     $fpr09ExpandControl.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
     Start-Sleep -Milliseconds 150
-  } catch { }
+  }
+  $fpr09ExpandControl.SetFocus()
+  Start-Sleep -Milliseconds 120
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Start-Sleep -Milliseconds 250
+  $fpr09ExpandedChild = Find-Fpr09ExpandedObservableChild
 }
-$fpr09ExpandedChild = $null
-try {
-  $fpr09ExpandedChild = Find-E2NamedElement -Root (Find-LiveAppWindow) -Name 'Открыть Word и показать место'
-} catch { }
 if ($null -eq $fpr09ExpandedChild) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before Space expansion fallback.' }
+  Activate-LiveAppWindow -Window $currentAppWindow
+  $fpr09ExpandControl = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+  if ($null -eq $fpr09ExpandControl) { throw 'FPR-09 expansion control disappeared before Space fallback.' }
+  $fpr09ExpandControl.SetFocus()
+  Start-Sleep -Milliseconds 120
+  [System.Windows.Forms.SendKeys]::SendWait(' ')
+  Start-Sleep -Milliseconds 250
+  $fpr09ExpandedChild = Find-Fpr09ExpandedObservableChild
+}
+if ($null -eq $fpr09ExpandedChild) {
+  $currentAppWindow = Find-LiveAppWindow
+  if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before physical expansion fallback.' }
+  $fpr09ExpandControl = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
+  if ($null -eq $fpr09ExpandControl) { throw 'FPR-09 expansion control disappeared before physical fallback.' }
   Invoke-UiElementPhysically -Element $fpr09ExpandControl -Description 'FPR-09 physically expand automatic filling setup'
   $fpr09ExpandedChild = Wait-UiElement -Description 'FPR-09 observable expanded setup child' -TimeoutSeconds 10 -Probe {
-    $currentAppWindow = Find-LiveAppWindow
-    if ($null -eq $currentAppWindow) { return $null }
-    Find-E2NamedElement -Root $currentAppWindow -Name 'Открыть Word и показать место'
+    Find-Fpr09ExpandedObservableChild
   }
-  Write-Host 'FPR-09 setup expansion proved by observable child control after physical summary activation.'
-} else {
-  Write-Host 'FPR-09 setup expansion already observable through child control.'
 }
+if ($null -eq $fpr09ExpandedChild) {
+  throw 'FPR-09 automatic filling setup did not expose its observable child after keyboard and physical activation.'
+}
+Write-Host 'FPR-09 setup expansion proved by observable child control after real user activation.'
+
 $fpr09SourceControl = $null
 for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceControl; $scrollAttempt++) {
   $currentAppWindow = Find-LiveAppWindow
@@ -2437,43 +2461,23 @@ for ($scrollAttempt = 0; $scrollAttempt -lt 12 -and $null -eq $fpr09SourceContro
 
   # WebView2 can report the native <details> as Expanded while keeping lower
   # descendants out of the UIA tree until the actual modal viewport is scrolled.
-  # Scroll the actual template-setup dialog first; scrolling the host window is
-  # not equivalent and can leave the modal viewport untouched on hosted runners.
-  $setupDialog = Find-E2NamedElement -Root $currentAppWindow -Name 'Добавление шаблонов'
-  $scrolledModal = $false
-  if ($null -ne $setupDialog -and $setupDialog.Current.IsScrollPatternAvailable) {
-    try {
-      $scrollPattern = $setupDialog.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
-      if ($scrollPattern.Current.VerticallyScrollable) {
-        $scrollPattern.Scroll(
-          [System.Windows.Automation.ScrollAmount]::NoAmount,
-          [System.Windows.Automation.ScrollAmount]::LargeIncrement
-        )
-        $scrolledModal = $true
-      }
-    } catch { }
-  }
-
-  if (-not $scrolledModal) {
-    # Fallback only when WebView2 does not expose ScrollPattern for the dialog.
-    Activate-LiveAppWindow -Window $currentAppWindow
-    $dialogRect = if ($null -ne $setupDialog) { $setupDialog.Current.BoundingRectangle } else { $currentAppWindow.Current.BoundingRectangle }
-    $wheelX = [int][Math]::Round($dialogRect.Left + ($dialogRect.Width / 2))
-    $wheelY = [int][Math]::Round($dialogRect.Top + ($dialogRect.Height * 0.70))
-    [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
-    [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, -480, [UIntPtr]::Zero)
-  }
+  # PgDn is focus-dependent and can target the host window instead of the modal,
+  # so move the pointer inside the live app and scroll the rendered viewport
+  # physically. Re-resolve the control on every iteration because WebView2 may
+  # recreate accessibility nodes as content enters the viewport.
+  Activate-LiveAppWindow -Window $currentAppWindow
+  $windowRect = $currentAppWindow.Current.BoundingRectangle
+  $wheelX = [int][Math]::Round($windowRect.Left + ($windowRect.Width / 2))
+  $wheelY = [int][Math]::Round($windowRect.Top + ($windowRect.Height * 0.70))
+  [void][DokkomplektNativeMouse]::SetCursorPos($wheelX, $wheelY)
+  [DokkomplektNativeMouse]::mouse_event(0x0800, 0, 0, -480, [UIntPtr]::Zero)
   Start-Sleep -Milliseconds 250
 }
 if ($null -eq $fpr09SourceControl) {
   $currentAppWindow = Find-LiveAppWindow
   if ($null -ne $currentAppWindow) {
-    $liveExpand = Find-E2NamedElement -Root $currentAppWindow -Name 'Необязательно: настроить автоматическое заполнение'
-    if ($null -ne $liveExpand -and $liveExpand.Current.IsExpandCollapsePatternAvailable) {
-      $livePattern = $liveExpand.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-      if ($livePattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
-        throw 'FPR-09 setup collapsed again after explicit ExpandCollapsePattern expansion.'
-      }
+    if ($null -eq (Find-Fpr09ExpandedObservableChild)) {
+      Write-Host 'FPR-09 diagnostic: observable expanded child is absent at source-control timeout.'
     }
     Write-E2LearningUiDiagnostic -Root $currentAppWindow
   }
@@ -3467,6 +3471,9 @@ $fpr12AfterInstallerReplacement = Wait-AppStateCipherFingerprint `
 if ([string]::IsNullOrWhiteSpace($fpr12AfterInstallerReplacement)) {
   throw 'FPR-12 installer replacement lost the durable output preference row.'
 }
+if ($fpr12AfterInstallerReplacement -ne $fpr12BeforeInstallerReplacement) {
+  throw "FPR-12 installer replacement mutated durable output preferences: before=$fpr12BeforeInstallerReplacement after=$fpr12AfterInstallerReplacement"
+}
 $fpr12ReplacementProcess = Start-Process -FilePath $app.FullName -PassThru
 try {
   $fpr12ReplacementWindow = Wait-UiElement -Description 'FPR-12 window after installer replacement' -TimeoutSeconds 30 -Probe {
@@ -3492,27 +3499,63 @@ try {
     throw 'FPR-12 installer replacement lost the persisted workspace/button state.'
   }
 
-  Invoke-UiActionWithObservedTransition `
-    -Description 'FPR-12 Настройки after installer replacement' `
-    -TransitionDescription 'FPR-12 settings panel after installer replacement' `
-    -ActionProbe {
-      $condition = [System.Windows.Automation.PropertyCondition]::new(
+  try {
+    Invoke-UiActionWithObservedTransition `
+      -Description 'FPR-12 Настройки after installer replacement' `
+      -TransitionDescription 'FPR-12 settings panel after installer replacement' `
+      -ActionProbe {
+        $condition = [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+          [int]$fpr12ReplacementProcess.Id
+        )
+        $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if ($null -eq $replacementWindow) { return $null }
+        Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
+      } `
+      -TransitionProbe {
+        $condition = [System.Windows.Automation.PropertyCondition]::new(
+          [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+          [int]$fpr12ReplacementProcess.Id
+        )
+        $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if ($null -eq $replacementWindow) { return $null }
+        Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
+      } | Out-Null
+  } catch {
+    Write-Host "FPR-12 settings UIA/physical activation exhausted; trying one focused keyboard Enter fallback: $($_.Exception.Message)"
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      [int]$fpr12ReplacementProcess.Id
+    )
+    $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($null -eq $replacementWindow) {
+      throw 'FPR-12 replacement window disappeared before focused keyboard fallback.'
+    }
+    Activate-LiveAppWindow -Window $replacementWindow
+    $fpr12SettingsButton = Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
+    if ($null -eq $fpr12SettingsButton) {
+      throw 'FPR-12 settings button is unavailable before focused keyboard fallback.'
+    }
+    if ($fpr12SettingsButton.Current.IsOffscreen -and $fpr12SettingsButton.Current.IsScrollItemPatternAvailable) {
+      try {
+        $fpr12SettingsButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 150
+      } catch { }
+    }
+    $fpr12SettingsButton.SetFocus()
+    Start-Sleep -Milliseconds 150
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Wait-UiElement -Description 'FPR-12 settings panel after focused keyboard fallback' -TimeoutSeconds 30 -Probe {
+      $liveCondition = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
         [int]$fpr12ReplacementProcess.Id
       )
-      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-      if ($null -eq $replacementWindow) { return $null }
-      Find-ReadyButtonByNames -Root $replacementWindow -Names @('Настройки')
-    } `
-    -TransitionProbe {
-      $condition = [System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-        [int]$fpr12ReplacementProcess.Id
-      )
-      $replacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-      if ($null -eq $replacementWindow) { return $null }
-      Find-ButtonByNames -Root $replacementWindow -Names @('Проверить и сохранить папку')
+      $liveReplacementWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $liveCondition)
+      if ($null -eq $liveReplacementWindow) { return $null }
+      Find-ButtonByNames -Root $liveReplacementWindow -Names @('Проверить и сохранить папку')
     } | Out-Null
+    Write-Host 'FPR-12 SETTINGS KEYBOARD FALLBACK PASS: real focused Enter exposed the settings panel after installer replacement.'
+  }
 
   $fpr12AfterReplacementStorage = Wait-AppStateCipherFingerprint `
     -DatabasePath $stateDatabase `

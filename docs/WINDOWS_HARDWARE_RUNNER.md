@@ -1,8 +1,11 @@
 # Windows production signing + hardware validation
 
-Для пользователя нужна **одна физическая Windows-машина**, а не две.
+Dokkomplekt production acceptance uses a **two-row independent live Windows matrix**. Build/signing still runs once on an ephemeral **GitHub-hosted Windows** runner inside the protected `windows-production-signing` environment. The same exact signed handoff is then consumed independently by:
 
-Dokkomplekt production acceptance requires **one physical Windows machine**, not two. Build/signing runs on an ephemeral **GitHub-hosted Windows** runner inside the protected `windows-production-signing` environment. Only Word/printer/reboot/watcher acceptance uses a self-hosted physical Windows host.
+- **Windows 10 x64** interactive runner: `dokkomplekt-win10-live`;
+- **Windows 11 x64** interactive runner: `dokkomplekt-win11-live`.
+
+The two live runners must be separate Windows instances (physical machines or isolated VMs) with separate interactive user sessions, runner identities, local state and evidence. One platform failing must not cancel the other (`fail-fast: false`), and release evidence is complete only when both rows pass.
 
 The public source repository `mailsvb2-bot/Dokkomplekt_Universal` must not be registered as a self-hosted runner target. The sole physical runner belongs only to the private repository `mailsvb2-bot/Dokkomplekt_Hardware_Validation`; the public `windows-hardware-dispatch` workflow dispatches and waits from GitHub-hosted Linux.
 
@@ -72,13 +75,14 @@ Publish the ZIP, signing JSON, runtime signature and offline-approval signature 
 
 Runner labels:
 
-`self-hosted`, `Windows`, `X64`, `dokkomplekt-hardware`
+- `self-hosted`, `Windows`, `X64`, `dokkomplekt-win10-live`;
+- `self-hosted`, `Windows`, `X64`, `dokkomplekt-win11-live`.
 
 Protected environment:
 
 `windows-hardware-validation`
 
-This is the **only physical Windows machine required**. It is a representative interactive user host with licensed desktop Microsoft Word, WebView2, Visual Studio C++ tools used by the current Rust/Word hardware test, a dedicated real printer queue, PrintService Operational logging and persistent reboot storage.
+Each matrix row is a representative interactive user host with licensed desktop Microsoft Word, WebView2, Visual Studio C++ tools used by the current Rust/Word hardware test, a dedicated real printer queue, PrintService Operational logging and persistent reboot storage. Windows 10 and Windows 11 evidence are independent and are uploaded under platform-specific artifact names.
 
 The hardware environment must contain no signing/private-key secrets and must not expose a sidecar manifest. `scripts/verify_windows_hardware_evidence_host.ps1` fails closed if signing material or `DOKKOMPLEKT_SIDECAR_MANIFEST_PATH` is exposed.
 
@@ -94,10 +98,20 @@ Hardware-side variables are limited to public verification/hardware data:
 Audited registration entrypoint:
 
 ```powershell
+# Run on the dedicated Windows 10 x64 instance
 .\scripts\register_windows_hardware_evidence_runner.ps1 `
   -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
+  -WindowsVersion 10 `
+  -InstallPrerequisites
+
+# Run separately on the dedicated Windows 11 x64 instance
+.\scripts\register_windows_hardware_evidence_runner.ps1 `
+  -PrinterName 'YOUR_REAL_PRINTER_QUEUE' `
+  -WindowsVersion 11 `
   -InstallPrerequisites
 ```
+
+The bootstrap verifies the actual OS build before registration and assigns only the matching platform label. Windows 10 is build < 22000; Windows 11 is build >= 22000.
 
 The hardware runner remains an interactive `AtLogOn` scheduled task. Windows service/Session 0 execution is forbidden for Word COM, printer and visible-GUI evidence.
 
@@ -107,7 +121,7 @@ The hosted signing job creates:
 
 `Dokkomplekt-Windows-Signed-Handoff-<release_sha>-<request_id>`
 
-`SIGNED_HANDOFF.json` binds the application, installer, approved runtime and build evidence by path, size and SHA-256 and is signed with the runtime signing key. The physical hardware runner independently verifies that handoff, application/installer Authenticode and the runtime signature before any Word/printer/reboot execution. Hardware never receives signing private keys.
+`SIGNED_HANDOFF.json` binds the application, installer, approved runtime and build evidence by path, size and SHA-256 and is signed with the runtime signing key. Each Windows 10/11 hardware runner independently verifies that same handoff, application/installer Authenticode and runtime signature before any Word/printer/reboot execution. Hardware never receives signing private keys.
 
 Because the producer is an ephemeral GitHub-hosted Windows runner and the consumer is the self-hosted physical machine, the trust domains and host identities remain separate without requiring a second user-owned PC.
 
@@ -119,10 +133,13 @@ The public workflow `.github/workflows/windows-hardware-e2e.yml` runs only on Gi
 
 The audited scaffold is `ops/private-hardware-validation/windows-hardware-e2e.yml`; the private repository `.github/workflows/windows-hardware-e2e.yml` must match it.
 
-It contains two jobs in strict order:
+It contains one signed build job followed by a two-row live matrix:
 
 1. `signed-runtime-build` on ephemeral GitHub-hosted Windows / `windows-production-signing`;
-2. `hardware-evidence` on the one physical `dokkomplekt-hardware` runner / `windows-hardware-validation`.
+2. `hardware-evidence (windows-10)` on `dokkomplekt-win10-live`;
+3. `hardware-evidence (windows-11)` on `dokkomplekt-win11-live`.
+
+Both hardware rows consume the same exact signed handoff and run independently with `fail-fast: false`.
 
 ## Real reboot — two phases
 
@@ -130,7 +147,7 @@ It contains two jobs in strict order:
 
 Run public **Windows Hardware E2E** with the approved `release_sha` and `reboot_phase=prepare`. Hosted Windows creates the signed handoff; the physical runner verifies it and prepares persistent watcher/reboot state under `C:\ProgramData\DokkomplektE2E`.
 
-Perform a real Windows restart and log back into the dedicated hardware runner account.
+Perform a real Windows restart on **both** live runners and log back into each dedicated runner account.
 
 ### `verify`
 

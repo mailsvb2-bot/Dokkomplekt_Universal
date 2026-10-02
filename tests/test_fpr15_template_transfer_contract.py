@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 RUST = ROOT / "src-tauri" / "src" / "subsystems" / "template_transfer.rs"
@@ -52,11 +53,19 @@ def test_fpr15_transfer_is_visible_in_primary_template_management_ui() -> None:
     assert "firstRunImportTemplates" in rail
 
 
-def test_fpr15_register_does_not_claim_runtime_closure_before_clean_profile_proof() -> None:
-    register = REGISTER.read_text(encoding="utf-8")
-    assert '"id": "FPR-15"' in register
-    assert '"status": "needs-runtime-proof"' in register
-    assert "clean-profile" in register.lower() or "чист" in register.lower()
+def test_fpr15_register_closure_is_bound_to_its_own_clean_profile_installed_proof() -> None:
+    payload = json.loads(REGISTER.read_text(encoding="utf-8"))
+    entry = next(item for item in payload["features"] if item["id"] == "FPR-15")
+
+    assert entry["status"] == "verified"
+    assert entry["runtime_gap"] == ""
+    assert "clean profile" in entry["actual_state"].lower()
+    assert "physical DOCX" in entry["actual_state"]
+    assert any(
+        "FPR-15 INSTALLED PASS: export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt"
+        in evidence
+        for evidence in entry["runtime_evidence"]
+    )
 
 
 def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_output() -> None:
@@ -77,5 +86,8 @@ def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_
     ):
         assert marker in source
     assert source.index("FPR-15 CLEAN PROFILE PASS:") < source.index("FPR-15 IMPORT PASS:")
+    assert "$fpr15Candidate = @(" in source
+    assert "$fpr15Package = @(Get-ChildItem" not in source
+    assert "if ($fpr15Candidate.Count -gt 0) { $fpr15Package = $fpr15Candidate[0]; break }" in source
     assert "FPR-15 clean-profile template management" not in source
     assert source.index("FPR-15 IMPORT PASS:") < source.index("FPR-15 INSTALLED PASS:")

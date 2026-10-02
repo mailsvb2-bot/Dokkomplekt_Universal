@@ -17,15 +17,20 @@ class ReferenceDataFreshnessTests(unittest.TestCase):
             check=False,
         )
 
-    def test_provisional_next_year_is_allowed_before_october(self) -> None:
-        result = self.run_for("2026-07-18")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("2027=provisional", result.stdout)
-
-    def test_provisional_next_year_blocks_release_from_october(self) -> None:
+    def test_complete_2027_satisfies_october_gate(self) -> None:
         result = self.run_for("2026-10-01")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2027=complete", result.stdout)
+
+    def test_missing_next_year_is_allowed_before_october(self) -> None:
+        result = self.run_for("2027-07-18")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("2028=missing", result.stdout)
+
+    def test_missing_next_year_blocks_release_from_october(self) -> None:
+        result = self.run_for("2027-10-01")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("2027", result.stderr)
+        self.assertIn("2028", result.stderr)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,10 @@ def test_matrix_covers_product_boundaries_not_just_unit_tests() -> None:
     assert features["word-print"]["level"] == "hardware-e2e"
     assert features["reboot-watcher"]["level"] == "hardware-e2e"
     assert features["authenticode"]["scope"] == "production-hardware"
+    update_evidence = set(features["update-rollback"]["evidence"])
+    assert "tests/test_fpr19_update_recovery_contract.py" in update_evidence
+    assert "tests/windows/windows_live_update_e2e.ps1" in update_evidence
+    assert "tests/test_published_template_provenance_contract.py" not in update_evidence
 
 
 def test_one_button_workflow_dispatches_existing_authoritative_gates() -> None:

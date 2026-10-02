@@ -221,6 +221,36 @@ exec "${DOKKOMPLEKT_REAL_RM:?}" "$@"
     assert "Linux bundle validation OK" in result.stdout
 
 
+def test_linux_installer_contract_core_parses_with_bash() -> None:
+    core = ROOT / "tests" / "installer" / "linux_installer_contract_core.sh"
+    result = subprocess.run(
+        ["bash", "-n", str(core)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout
+
+def test_rpm_lane_requires_real_install_render_and_uninstall() -> None:
+    core = (ROOT / "tests" / "installer" / "linux_installer_contract_core.sh").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "run_rpm_install_smoke",
+        'rpm --dbpath "$rpm_db" --initdb',
+        'rpm --dbpath "$rpm_db" --install --nodeps',
+        'run_rendered_gui_smoke "$binary_path" "RPM installed application" "binary"',
+        'rpm --dbpath "$rpm_db" --erase --nodeps',
+        "rpm install/render/uninstall smoke: OK",
+        'rpm_cleanup_package="$package_name"',
+        'rpm_cleanup_db="$rpm_db"',
+        "rpm package metadata query failed",
+        "installed RPM file query failed",
+    ):
+        assert marker in core
+
 def test_contract_watchdog_bounds_a_hung_external_tool(tmp_path: Path) -> None:
     bundle_root = tmp_path / "bundle"
     bundle_root.mkdir()

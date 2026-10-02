@@ -10,12 +10,12 @@ def read(relative: str) -> str:
 
 class WorkspaceProfileContextContract(unittest.TestCase):
     def test_template_setup_reuses_current_document_pack_as_context(self) -> None:
-        source = read("src-tauri/src/subsystems/document_commands.rs")
+        shell = read("src-tauri/src/subsystems/document_commands.rs")
+        source = read("src-tauri/src/subsystems/template_analysis_commands.rs")
+
+        self.assertIn('include!("template_analysis_commands.rs");', shell)
         start = source.index("fn prepare_template_setup(")
-        end = source.index(
-            'include!("template_learning_commands.rs");', start
-        )
-        command = source[start:end]
+        command = source[start:]
 
         self.assertIn("state: State<'_, AppState>", command)
         self.assertIn(
@@ -26,11 +26,14 @@ class WorkspaceProfileContextContract(unittest.TestCase):
 
     def test_workspace_context_is_core_owned_not_a_second_tauri_classifier(self) -> None:
         core = read("crates/dokkomplekt-core/src/workspace_profile.rs")
-        command = read("src-tauri/src/subsystems/document_commands.rs")
+        command_surface = (
+            read("src-tauri/src/subsystems/document_commands.rs")
+            + read("src-tauri/src/subsystems/template_analysis_commands.rs")
+        )
 
         self.assertIn("reinforce_workspace_inference_with_pack", core)
         self.assertIn("has_clear_conflict_with_existing_domain", core)
-        self.assertNotIn("reinforce_workspace_inference_with_pack", command)
+        self.assertNotIn("reinforce_workspace_inference_with_pack", command_surface)
 
 
 if __name__ == "__main__":

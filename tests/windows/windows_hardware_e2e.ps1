@@ -140,6 +140,86 @@ if ([int64]$fpr17Record.pdf_size_bytes -ne (Get-Item -LiteralPath $fpr17Pdf).Len
 }
 Write-Host "FPR-17 PDF INSTALLED PASS: installed offline app -> packaged LibreOffice runtime -> physical PDF -> SHA-256 verified: $fpr17Pdf"
 
+# FPR-20: prove the installed offline runtime does not depend on the
+# developer toolchain that happens to be present on the hardware runner.
+# The application is launched by absolute path with PATH reduced to Windows
+# system locations only; cargo/rustc/node/npm/python must all be unresolvable.
+$fpr20Evidence = Join-Path $releaseGate 'FPR20_OFFLINE_RUNTIME.json'
+$fpr20Pdf = [IO.Path]::ChangeExtension($fpr20Evidence, '.pdf')
+$fpr20Log = Join-Path $releaseGate 'offline-runtime-probe.log'
+$originalPath = $env:PATH
+$developerEnvironmentNames = @(
+    'CARGO_HOME',
+    'RUSTUP_HOME',
+    'NODE_PATH',
+    'NPM_CONFIG_PREFIX',
+    'PYTHONHOME',
+    'PYTHONPATH',
+    'VIRTUAL_ENV'
+)
+$developerEnvironment = @{}
+foreach ($name in $developerEnvironmentNames) {
+    $developerEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+$systemOnlyPath = @(
+    (Join-Path $env:SystemRoot 'System32'),
+    $env:SystemRoot,
+    (Join-Path $env:SystemRoot 'System32\Wbem'),
+    (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0')
+) -join ';'
+try {
+    $env:PATH = $systemOnlyPath
+    foreach ($name in $developerEnvironmentNames) {
+        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+    }
+    $unexpectedDeveloperTools = @(
+        'cargo','rustc','rustup','node','npm','npx','python','python3','pip','pip3'
+    ) | Where-Object { $null -ne (Get-Command $_ -ErrorAction SilentlyContinue) }
+    if ($unexpectedDeveloperTools.Count -gt 0) {
+        throw "FPR-20 developer tools are still resolvable under stripped PATH: $($unexpectedDeveloperTools -join ', ')"
+    }
+
+    $fpr20Process = Start-Process -FilePath $app -ArgumentList @(
+        "--e2e-export-pdf=$fpr17Source",
+        "--e2e-evidence=$fpr20Evidence"
+    ) -Wait -PassThru
+    if ($fpr20Process.ExitCode -ne 0) {
+        throw "FPR-20 installed runtime probe failed with exit code $($fpr20Process.ExitCode)."
+    }
+    if (-not (Test-Path -LiteralPath $fpr20Evidence -PathType Leaf)) {
+        throw 'FPR-20 installed runtime probe did not write application evidence.'
+    }
+    if (-not (Test-Path -LiteralPath $fpr20Pdf -PathType Leaf)) {
+        throw 'FPR-20 installed runtime probe did not publish a physical PDF.'
+    }
+    $fpr20Record = Get-Content -LiteralPath $fpr20Evidence -Raw | ConvertFrom-Json
+    if ($fpr20Record.schema -ne 'dokkomplekt.fpr17-pdf-export-e2e.v1' -or
+        $fpr20Record.action -ne 'export_pdf' -or
+        $fpr20Record.pdf_signature_valid -ne $true) {
+        throw 'FPR-20 installed runtime application evidence is incomplete or malformed.'
+    }
+    $fpr20PdfHash = (Get-FileHash -LiteralPath $fpr20Pdf -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($fpr20PdfHash -ne [string]$fpr20Record.pdf_sha256) {
+        throw 'FPR-20 physical PDF SHA-256 does not match installed application evidence.'
+    }
+    @(
+        'schema=dokkomplekt.fpr20-offline-runtime.v1',
+        'developer_toolchain_absent=true',
+        "application_sha256=$((Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash.ToLowerInvariant())",
+        "pdf_sha256=$fpr20PdfHash",
+        "path=$systemOnlyPath"
+    ) | Set-Content -LiteralPath $fpr20Log -Encoding utf8
+    if (-not (Test-Path -LiteralPath $fpr20Log -PathType Leaf)) {
+        throw 'FPR-20 offline runtime log was not written.'
+    }
+    Write-Host "FPR-20 OFFLINE RUNTIME PASS: installed app + packaged converter produced physical PDF with cargo/rustc/node/npm/python absent from PATH: $fpr20Log"
+} finally {
+    $env:PATH = $originalPath
+    foreach ($name in $developerEnvironmentNames) {
+        [Environment]::SetEnvironmentVariable($name, $developerEnvironment[$name], 'Process')
+    }
+}
+
 [ordered]@{
     schema = 'dokkomplekt.authenticode-evidence.v1'
     installer = [ordered]@{
@@ -425,6 +505,9 @@ if (-not (Test-Path -LiteralPath $guiConsoleEvidencePath -PathType Leaf)) {
     fpr17_pdf_export_verified = $true
     fpr17_pdf_sha256 = $fpr17PdfHash
     fpr17_pdf_evidence_sha256 = (Get-FileHash $fpr17Evidence -Algorithm SHA256).Hash.ToLowerInvariant()
+    fpr20_offline_runtime_verified = $true
+    fpr20_offline_runtime_log_sha256 = (Get-FileHash $fpr20Log -Algorithm SHA256).Hash.ToLowerInvariant()
+    fpr20_pdf_sha256 = $fpr20PdfHash
     print_event_evidence_sha256 = (Get-FileHash $printEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
     authenticode_evidence_sha256 = (Get-FileHash $signatureEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
     installed_application_signature_valid = $true

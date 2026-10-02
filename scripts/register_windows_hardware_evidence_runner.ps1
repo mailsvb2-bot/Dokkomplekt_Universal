@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $PrinterName,
+    [Parameter(Mandatory = $true)] [ValidateSet('10', '11')] [string] $WindowsVersion,
     [switch] $InstallPrerequisites
 )
 
@@ -18,6 +19,7 @@ try {
       -RepositoryUrl 'https://github.com/mailsvb2-bot/Dokkomplekt_Hardware_Validation' `
       -RegistrationToken $plainToken `
       -PrinterName $PrinterName `
+      -HardwareWindowsVersion $WindowsVersion `
       -InstallPrerequisites:$InstallPrerequisites
     if ($LASTEXITCODE -notin @(0, $null)) { throw "Hardware evidence runner bootstrap failed with exit code $LASTEXITCODE." }
 } finally {

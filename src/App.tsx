@@ -4,7 +4,7 @@ import {
   activateWordScanner, analyzeTemplate, analyzeTemplateFile, applyPopup, applyPopupBatch, applyScanner, applyTemplateLearningMap, applyTemplateMarkup, applyWordScannerSelection, captureWordScanner, closeWordScanner, confirmTemplateSetup,
   getRecordSeriesPlan, getDocumentTemplateText, getIntakeCapabilities, getSidecarStatus, getComponentStatuses, installComponent, getOutputPlan, getWorkflowPlan, getWorkflowPlanBatch, loadState, parseSource, parseSourceFile, parseSourcePath, parseWebSource,
   approveDocumentTemplate, createKedoPackage, exportFilesToPdf, getPrintTriage, importTemplateFile, listLearnedScannerRules, openInFileManager, pickLearningFiles, prepareTemplateSetup, printFiles, removeDocumentButton, renameDocumentButton, renderDocxBatch, renderPreview, resetCase, runCreatedDocumentsIntake, saveLearnedScannerRule, semanticExtract, saveState, setField, startWordScanner, uninstallBackgroundWatcher, updateDocumentPopupFields, updateDocumentTemplate,
-  checkForUpdates, pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
+  pickSourceFile, pickTemplateFiles, validateProductAccess, verifyRustLicenseText,
 } from './lib/api';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UtilityPanel } from './components/UtilityPanel';
@@ -23,6 +23,7 @@ import { useActionRunner } from './hooks/useActionRunner';
 import { useGenerationPreflight, type GenerationSnapshot } from './hooks/useGenerationPreflight';
 import { useOutputDestination } from './hooks/useOutputDestination';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { useUpdateLifecycle } from './hooks/useUpdateLifecycle';
 import { useTemplateTransfer } from './hooks/useTemplateTransfer'; import { useTemplateVersionSelection } from './hooks/useTemplateVersionSelection';
 import { useDocumentSelectionPersistence } from './hooks/useDocumentSelectionPersistence';
 import { useWatcherPreferenceSync } from './hooks/useWatcherPreferenceSync';
@@ -51,6 +52,12 @@ function AppContent() {
   const [status, setStatus] = useState('Загружаем сохранённый рабочий набор…');
   const { busy, run } = useActionRunner(setStatus);
   const { workspaceStateReady, workspaceStateLoading, workspaceStateError, retryWorkspaceStateLoad } = useWorkspaceBootstrap({ setDocuments, setSelectedDocIds, setStatus });
+  const { checkAndApplyUpdate: checkUpdates } = useUpdateLifecycle({
+    workspaceStateReady,
+    run,
+    setStatus,
+    confirm: dialogs.confirm,
+  });
   const chooseActiveTemplateVersion = useTemplateVersionSelection({ activeDocumentId: activeDoc, documents, dialogs, run, setDocuments, setStatus });
   const { exportTemplates, importTemplates } = useTemplateTransfer({ run, setDocuments, setStatus });
   useDocumentSelectionPersistence({
@@ -1211,16 +1218,6 @@ function AppContent() {
     const res = await run('verify_rust_license_text', () => verifyRustLicenseText(licenseText));
     setStatus(res ? 'Лицензия подтверждена.' : 'Не удалось подтвердить лицензию.');
   }
-  async function checkUpdates() {
-    const result = await run('check_for_updates', () => checkForUpdates());
-    if (!result) return;
-    if (result.available) {
-      setStatus(`Доступна версия ${result.latest_version}. Проверенный пакет сохранён: ${result.verified_package_path ?? 'путь не указан'}.`);
-    } else {
-      setStatus(`${result.message}: ${result.current_version}.`);
-    }
-  }
-
   async function runZeroTouch() {
     if (!intakeSource.trim()) {
       setStatus('Укажите путь к исходному файлу поддерживаемого формата.');

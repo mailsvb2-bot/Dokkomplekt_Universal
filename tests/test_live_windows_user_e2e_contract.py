@@ -1,0 +1,229 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+REGISTRY = ROOT / "verification" / "e2e" / "LIVE_USER_SCENARIOS.json"
+HARNESS = ROOT / "tests" / "windows" / "windows_live_user_e2e.ps1"
+PRIVATE_WORKFLOW = ROOT / "ops" / "private-hardware-validation" / "windows-hardware-e2e.yml"
+HOST_PREFLIGHT = ROOT / "scripts" / "verify_windows_hardware_evidence_host.ps1"
+LIVE_UPDATE = ROOT / "tests" / "windows" / "windows_live_update_e2e.ps1"
+HARDWARE_EXECUTOR = ROOT / "tests" / "windows" / "windows_hardware_e2e.ps1"
+QUALITY = ROOT / ".github" / "workflows" / "quality-gate.yml"
+
+
+def test_live_registry_is_exhaustive_for_every_fpr() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    assert payload["schema"] == "dokkomplekt.live-user-scenarios.v1"
+    scenarios = payload["scenarios"]
+    ids = [item["id"] for item in scenarios]
+    assert len(ids) == len(set(ids))
+    for number in range(1, 24):
+        assert f"FPR-{number:02d}" in ids
+    for item in scenarios:
+        assert item["required"] is True
+        assert item["lane"] in {
+            "installed-baseline",
+            "installed-e1",
+            "hardware-live",
+            "reboot-live",
+            "update-live",
+        }
+        assert item["executor"]
+        assert item["evidence_marker"]
+
+
+def test_every_installed_registry_marker_exists_in_its_real_executor() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    executor_cache: dict[str, str] = {}
+    for item in payload["scenarios"]:
+        if item["lane"] not in {"installed-baseline", "installed-e1"}:
+            continue
+        executor = item["executor"]
+        if executor not in executor_cache:
+            executor_cache[executor] = (
+                ROOT / "tests" / "installer" / executor
+            ).read_text(encoding="utf-8-sig")
+        assert item["evidence_marker"] in executor_cache[executor], (
+            f"{item['id']} marker is not emitted by {executor}: {item['evidence_marker']}"
+        )
+
+
+def test_every_update_live_registry_marker_exists_in_its_real_executor() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    executor_cache: dict[str, str] = {}
+    for item in payload["scenarios"]:
+        if item["lane"] != "update-live":
+            continue
+        executor = item["executor"]
+        if executor not in executor_cache:
+            executor_cache[executor] = (
+                ROOT / "tests" / "windows" / executor
+            ).read_text(encoding="utf-8-sig")
+        assert item["evidence_marker"] in executor_cache[executor], (
+            f"{item['id']} update-live marker is not emitted by {executor}: "
+            f"{item['evidence_marker']}"
+        )
+
+
+
+def test_every_hardware_and_reboot_registry_marker_exists_in_its_real_executor() -> None:
+    payload = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    executor_cache: dict[str, str] = {}
+    for item in payload["scenarios"]:
+        if item["lane"] not in {"hardware-live", "reboot-live"}:
+            continue
+        executor = item["executor"]
+        if executor not in executor_cache:
+            executor_cache[executor] = (
+                ROOT / "tests" / "windows" / executor
+            ).read_text(encoding="utf-8-sig")
+        assert item["evidence_marker"] in executor_cache[executor], (
+            f"{item['id']} {item['lane']} marker is not emitted by {executor}: "
+            f"{item['evidence_marker']}"
+        )
+
+
+def test_fpr20_hardware_probe_removes_developer_toolchain_from_runtime_path() -> None:
+    source = HARDWARE_EXECUTOR.read_text(encoding="utf-8-sig")
+    for marker in (
+        "offline-runtime-probe.log",
+        "FPR-20 OFFLINE RUNTIME PASS:",
+        "developer_toolchain_absent=true",
+        "'cargo','rustc','rustup','node','npm','npx','python','python3','pip','pip3'",
+        "$env:PATH = $systemOnlyPath",
+        "--e2e-export-pdf=$fpr17Source",
+        "fpr20_offline_runtime_verified = $true",
+    ):
+        assert marker in source
+
+
+def test_live_harness_requires_real_windows10_or_11_x64_interactive_signed_install() -> None:
+    source = HARNESS.read_text(encoding="utf-8-sig")
+    for marker in (
+        "[ValidateSet('10', '11')]",
+        "ExpectedWindowsVersion",
+        "buildNumber -ge 10240",
+        "buildNumber -lt 22000",
+        "buildNumber -ge 22000",
+        "ProductType",
+        "[Environment]::Is64BitOperatingSystem",
+        "real interactive user session",
+        "Get-Service -Name 'actions.runner.*'",
+        "Get-AuthenticodeSignature",
+        "Live E2E refuses unsigned/invalid installer",
+        "windows_installer_contract.ps1",
+        "windows_e1_accounting_contract.ps1",
+        "src-tauri/tauri.offline.conf.json",
+        "DOKKOMPLEKT_ADVERSARIAL = '1'",
+        "LIVE WINDOWS USER E2E INSTALLED LANES PASSED",
+    ):
+        assert marker in source
+
+
+def test_private_workflow_has_two_independent_windows_live_jobs() -> None:
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    signed_build = workflow[
+        workflow.index("  signed-runtime-build:") : workflow.index("  hardware-evidence:")
+    ]
+    assert "matrix." not in signed_build
+    hardware = workflow[workflow.index("  hardware-evidence:") :]
+    assert "strategy:" in hardware
+    assert "fail-fast: false" in hardware
+    assert "platform: windows-10" in hardware
+    assert "expected_windows_version: '10'" in hardware
+    assert "runner_label: dokkomplekt-win10-live" in hardware
+    assert "platform: windows-11" in hardware
+    assert "expected_windows_version: '11'" in hardware
+    assert "runner_label: dokkomplekt-win11-live" in hardware
+    assert "- ${{ matrix.runner_label }}" in hardware
+    assert "ExpectedWindowsVersion '${{ matrix.expected_windows_version }}'" in hardware
+    assert "Dokkomplekt-Windows-Hardware-E2E-${{ matrix.artifact_suffix }}" in hardware
+
+
+def test_windows_matrix_keeps_device_configuration_local_to_each_runner() -> None:
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    hardware = workflow[workflow.index("  hardware-evidence:") :]
+    for shared_value in (
+        "vars.DOKKOMPLEKT_TEST_PRINTER",
+        "vars.DOKKOMPLEKT_TEST_DUPLEX",
+        "vars.DOKKOMPLEKT_TEST_TRAY",
+        "vars.DOKKOMPLEKT_REBOOT_EVIDENCE_PATH",
+        "vars.DOKKOMPLEKT_REBOOT_SOURCE_DOCUMENT",
+    ):
+        assert shared_value not in hardware
+    preflight = HOST_PREFLIGHT.read_text(encoding="utf-8")
+    assert "hardware-config.cmd" in preflight
+    assert "Publish-GitHubEnvironmentValue" in preflight
+
+
+def test_private_workflow_runs_live_suite_after_signed_handoff_verification() -> None:
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    hardware = workflow[workflow.index("  hardware-evidence:") :]
+    assert "windows_signed_handoff.py verify" in hardware
+    assert "Execute full installed live user scenario suite" in hardware
+    assert "windows_live_user_e2e.ps1" in hardware
+    assert "LIVE_USER_E2E-${{ matrix.artifact_suffix }}.json" in hardware
+    assert hardware.index("windows_signed_handoff.py verify") < hardware.index(
+        "Execute full installed live user scenario suite"
+    )
+    assert hardware.index("Execute full installed live user scenario suite") < hardware.index(
+        "Prepare real reboot E2E state"
+    )
+
+
+def test_hardware_host_is_pinned_to_requested_windows10_or_11_x64() -> None:
+    source = HOST_PREFLIGHT.read_text(encoding="utf-8")
+    assert "[ValidateSet('10', '11')]" in source
+    assert "ExpectedWindowsVersion" in source
+    assert "Get-CimInstance Win32_OperatingSystem" in source
+    assert "buildNumber -ge 10240" in source
+    assert "buildNumber -lt 22000" in source
+    assert "buildNumber -ge 22000" in source
+    assert "ProductType" in source
+    assert 'Add-Check -Name "windows-$ExpectedWindowsVersion"' in source
+    assert "Add-Check -Name 'windows-x64'" in source
+
+
+def test_update_live_lane_is_real_previous_signed_gui_update() -> None:
+    source = LIVE_UPDATE.read_text(encoding="utf-8-sig")
+    for marker in (
+        "DOKKOMPLEKT_PREVIOUS_SIGNED_INSTALLER",
+        "DokkomplektHardwareRunner\\hardware-config.cmd",
+        "[ValidateSet('10', '11')]",
+        "ExpectedWindowsVersion",
+        "buildNumber -ge 10240",
+        "buildNumber -lt 22000",
+        "buildNumber -ge 22000",
+        "ProductType",
+        "OSArchitecture",
+        "Get-AuthenticodeSignature",
+        "Проверить обновления",
+        "Установить и перезапустить",
+        "update-recovery.json",
+        "recovery.status -ne 'verified'",
+        "FPR-19 LIVE RECOVERABLE FAILURE PASS:",
+        "FPR-19 LIVE ROLLBACK PASS:",
+        "FPR19-CONTROLLED-CORRUPT-DATABASE",
+        "HoldInstalledExecutable",
+        "FPR-19 LIVE UPDATE PASS:",
+    ):
+        assert marker in source
+    assert "requires Windows 11" not in source
+    preflight = HOST_PREFLIGHT.read_text(encoding="utf-8")
+    workflow = PRIVATE_WORKFLOW.read_text(encoding="utf-8")
+    assert "previous-signed-installer-configured" in preflight
+    assert "windows_live_update_e2e.ps1" in workflow
+    assert workflow.index("Execute full installed live user scenario suite") < workflow.index(
+        "Execute previous-version signed update/recovery live scenario"
+    )
+
+
+def test_mocked_browser_lane_is_not_the_live_evidence_lane() -> None:
+    quality = QUALITY.read_text(encoding="utf-8")
+    registry = REGISTRY.read_text(encoding="utf-8")
+    assert '"UX-UPDATE-RECOVERABLE"' in registry
+    assert '"UX-UPDATE-ROLLBACK"' in registry
+    assert "Browser UI e2e (mocked Tauri IPC)" in quality
+    assert "mocked IPC is not accepted" in registry

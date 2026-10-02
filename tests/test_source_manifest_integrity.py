@@ -21,5 +21,11 @@ def test_mutable_release_evidence_is_not_part_of_source_manifest() -> None:
         path.relative_to(ROOT).as_posix()
         for path in MODULE.source_archive.source_files()
     }
-    assert not any(path.startswith("verification/") for path in relative)
+    authored_verification = {
+        "verification/autopilot/feature-matrix.json",
+        "verification/e2e/LIVE_USER_SCENARIOS.json",
+        "verification/security/rustsec-advisory-db.json",
+    }
+    included_verification = {path for path in relative if path.startswith("verification/")}
+    assert included_verification == authored_verification
     assert not any(path.startswith("build-evidence/") for path in relative)

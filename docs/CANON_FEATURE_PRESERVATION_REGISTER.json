@@ -399,7 +399,7 @@
       "id": "FPR-12",
       "group": "Настройки",
       "status": "needs-runtime-proof",
-      "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence now proves durable output-preference presence and a physical post-restart DOCX published into the restored output root with the restored naming rule; same-version NSIS replacement preserves durable preferences and workspace; true previous-version to current-version migration evidence remains pending",
+      "actual_state": "save/load state commands and transactional persistence are present; installed Windows evidence proves restart routing/naming and exact same-version NSIS state preservation; the signed update-live executor now requires the exact output_preferences_v2 row to survive a real previous-version -> current-version installer apply before the new app starts, but Win10/Win11 cross-version evidence has not yet executed",
       "entry": [
         "src-tauri/src/subsystems/document_commands.rs#save_state/load_state"
       ],
@@ -417,14 +417,19 @@
       "evidence_paths": [
         "src-tauri/src/subsystems/document_commands.rs",
         "src-tauri/src/state_transaction.rs",
-        "crates/dokkomplekt-storage/src/lib.rs"
+        "crates/dokkomplekt-storage/src/lib.rs",
+        "tests/windows/windows_live_update_e2e.ps1",
+        "scripts/read_app_state_fingerprint.py",
+        "tests/test_app_state_fingerprint_helper.py",
+        "tests/test_fpr12_settings_persistence_contract.py",
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [
         "tests/installer/windows_installer_contract.ps1#FPR-12 clean-restart physical output destination/naming proof",
         "tests/installer/windows_installer_contract.ps1#FPR-12 non-destructive NSIS replacement durable-state/workspace proof",
         "tests/test_fpr12_settings_persistence_contract.py#FPR-12 regression lock"
       ],
-      "runtime_gap": "A real previous-version -> current-version installed upgrade with preserved settings is still required for final register closure."
+      "runtime_gap": "Run the signed previous-version -> current-version update-live lane on both Windows 10 and Windows 11 and retain FPR-12 LIVE UPGRADE STORAGE PASS evidence for the exact release SHA before final register closure."
     },
     {
       "id": "FPR-13",
@@ -499,7 +504,7 @@
       "id": "FPR-15",
       "group": "Перенос шаблонов",
       "status": "verified",
-      "actual_state": "privacy-safe .dktpack export/import is implemented in Rust and exposed in template management UI; clean-profile installed proof is pending",
+      "actual_state": "privacy-safe .dktpack export/import is implemented in Rust and exposed in template management UI; exact-candidate installed proof completed export -> privacy read-back -> clean profile -> import -> new case -> physical DOCX -> committed receipt",
       "entry": [
         "src/hooks/useTemplateTransfer.ts",
         "src/components/DocumentRail.tsx#Экспорт шаблонов / Импорт шаблонов"
@@ -584,7 +589,10 @@
       "evidence_paths": [
         "src/App.tsx",
         "src-tauri/src/subsystems/document_commands.rs",
-        "crates/dokkomplekt-core/src/print_triage.rs"
+        "crates/dokkomplekt-core/src/print_triage.rs",
+        "tests/windows/windows_hardware_e2e.ps1",
+        "tests/test_fpr17_print_pdf_contract.py",
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [
         "tests/windows/windows_hardware_e2e.ps1#FPR-17 dedicated-printer Event 307 and installed packaged-LibreOffice PDF proof",
@@ -632,7 +640,7 @@
       "id": "FPR-19",
       "group": "Обновления",
       "status": "needs-runtime-proof",
-      "actual_state": "signed update lifecycle now verifies and downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, snapshots local durable state, stops the watcher, persists a recovery marker and validates version/state on next startup; real previous-version installed upgrade/recovery proof is still pending",
+      "actual_state": "signed update lifecycle verifies/downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, keeps the watcher alive until successful installer spawn, creates a SQLite-owned consistent snapshot via VACUUM INTO plus an обязательный local-key backup, persists recovery state, verifies successful post-start upgrades, preserves a newer valid live DB/key without rollback when the signed installer fails, and restores the pre-update DB/key before workspace load when live state fails integrity/key validation; the live Windows executor now exercises all three branches (recoverable installer failure, damaged-live rollback, successful previous-version -> current-version upgrade), but exact Windows 10/11 evidence has not yet executed",
       "entry": [
         "src-tauri/src/main.rs#check_for_updates",
         "src-tauri/src/main.rs#apply_verified_update",
@@ -653,16 +661,19 @@
         "src-tauri/src/subsystems/update_runtime.rs",
         "src/lib/api.ts",
         "tests/test_fpr19_update_recovery_contract.py",
-        ".github/workflows/build-installers.yml"
+        ".github/workflows/build-installers.yml",
+        "src/hooks/useUpdateLifecycle.ts",
+        "tests/windows/windows_live_update_e2e.ps1",
+        "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "A real previous-version -> current-version installed upgrade must prove preserved settings/state, successful post-start verification, and recoverable installer failure/rollback before final register closure."
+      "runtime_gap": "Run the complete signed previous-version -> current-version update-live executor on both Windows 10 and Windows 11 for the exact release SHA and retain FPR-19 LIVE RECOVERABLE FAILURE PASS, FPR-19 LIVE ROLLBACK PASS, FPR-12 LIVE UPGRADE STORAGE PASS, and FPR-19 LIVE UPDATE PASS evidence before final register closure."
     },
     {
       "id": "FPR-20",
       "group": "Runtime и упаковка",
       "status": "needs-runtime-proof",
-      "actual_state": "Windows/Linux packaging workflows are present; clean-install proof remains an E1/E7 evidence task",
+      "actual_state": "Windows/Linux packaging workflows are present. The protected Windows hardware executor launches the installed signed application by absolute path with PATH reduced to Windows system directories, removes developer-toolchain environment, proves cargo/rustc/node/npm/python are unavailable, and requires a physical PDF through the packaged production converter plus offline-runtime-probe.log evidence. Linux AppImage receives packaged rendered pixel-golden smoke, deb is physically installed/rendered/uninstalled, and the RPM lane now requires a real rpm install/render/uninstall smoke instead of package-file listing only; exact Windows 10/11 and Linux workflow execution for the final candidate remain evidence gates.",
       "entry": [
         "installed application"
       ],
@@ -679,10 +690,16 @@
       "after": "installed_baseline",
       "evidence_paths": [
         ".github/workflows/build-installers.yml",
-        ".github/workflows/quality-gate.yml"
+        ".github/workflows/quality-gate.yml",
+        "tests/windows/windows_hardware_e2e.ps1",
+        "tests/installer/linux_installer_contract.sh",
+        "tests/installer/linux_installer_contract_core.sh",
+        "tests/test_linux_installer_smoke_contract.py",
+        "tests/test_live_windows_user_e2e_contract.py",
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "Clean installed runtime evidence is required for final register closure."
+      "runtime_gap": "Run the protected signed FPR-20 probe on both Windows 10 and Windows 11 for the exact release SHA, and retain the final-candidate Linux AppImage/deb/rpm package runtime evidence from the linux-bundles workflow before final register closure."
     },
     {
       "id": "FPR-21",
@@ -772,8 +789,11 @@
       "after": "installed_baseline",
       "evidence_paths": [
         ".github/workflows/quality-gate.yml",
+        ".github/workflows/source-provenance.yml",
+        ".github/workflows/windows-hardware-e2e.yml",
+        "ops/private-hardware-validation/windows-hardware-e2e.yml",
         "scripts/prepackage_rust_gate.sh",
-        ".github/workflows/source-provenance.yml"
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [],
       "runtime_gap": "Exact final-candidate CI and installed evidence is required for final register closure."

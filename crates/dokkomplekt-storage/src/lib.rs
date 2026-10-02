@@ -203,6 +203,10 @@ pub enum StorageError {
     EncryptionRequired,
     #[error("invalid encrypted local data: {0}")]
     Crypto(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("invalid storage path: {0}")]
+    InvalidPath(String),
 }
 
 pub type StorageResult<T> = Result<T, StorageError>;
@@ -651,6 +655,65 @@ impl LocalRepository {
                 "SQLite quick_check failed: {result}"
             )))
         }
+    }
+
+    /// Create a transactionally consistent standalone SQLite snapshot.
+    ///
+    /// SQLite owns the snapshot boundary via VACUUM INTO so committed writes
+    /// from another process are never reconstructed by copying a live DB/WAL/SHM
+    /// file set. The destination must be new; any failed/invalid snapshot is
+    /// removed before returning an error.
+    pub fn backup_snapshot(&self, target: &Path) -> StorageResult<()> {
+        if target.exists() {
+            return Err(StorageError::InvalidPath(format!(
+                "backup target already exists: {}",
+                target.display()
+            )));
+        }
+        let parent = target.parent().ok_or_else(|| {
+            StorageError::InvalidPath(format!("backup target has no parent: {}", target.display()))
+        })?;
+        std::fs::create_dir_all(parent)?;
+        let target_text = target.to_str().ok_or_else(|| {
+            StorageError::InvalidPath(format!(
+                "backup target is not valid UTF-8: {}",
+                target.display()
+            ))
+        })?;
+
+        if let Err(error) = self
+            .conn
+            .execute("VACUUM main INTO ?1", params![target_text])
+        {
+            let _ = std::fs::remove_file(target);
+            return Err(StorageError::Sqlite(error));
+        }
+
+        let verification = (|| -> StorageResult<()> {
+            let metadata = std::fs::symlink_metadata(target)?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(StorageError::InvalidPath(format!(
+                    "backup snapshot is not a regular file: {}",
+                    target.display()
+                )));
+            }
+            let snapshot = Connection::open(target)?;
+            let result: String =
+                snapshot.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
+            if result.trim().eq_ignore_ascii_case("ok") {
+                Ok(())
+            } else {
+                Err(StorageError::Crypto(format!(
+                    "SQLite snapshot quick_check failed: {result}"
+                )))
+            }
+        })();
+
+        if let Err(error) = verification {
+            let _ = std::fs::remove_file(target);
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn delete_state_value(&self, key: &str) -> StorageResult<()> {
@@ -2475,6 +2538,37 @@ mod tests {
         let repo = LocalRepository::open(&path).expect("repo");
         repo.save_case("current", &case).expect("save");
         assert_eq!(repo.load_case("current").expect("load"), Some(case));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_backup_snapshot_is_self_contained_and_preserves_committed_state() {
+        let path = temp_db("backup-source");
+        let snapshot = temp_db("backup-snapshot");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&snapshot);
+        let key = [31u8; 32];
+        let repo = LocalRepository::open_with_key(&path, key).unwrap();
+        repo.save_state_value("snapshot.probe", &serde_json::json!({"value":"before"}))
+            .unwrap();
+
+        repo.backup_snapshot(&snapshot).unwrap();
+
+        repo.save_state_value("snapshot.probe", &serde_json::json!({"value":"after"}))
+            .unwrap();
+        let snapshot_repo = LocalRepository::open_with_key(&snapshot, key).unwrap();
+        assert_eq!(
+            snapshot_repo
+                .load_state_value::<serde_json::Value>("snapshot.probe")
+                .unwrap(),
+            Some(serde_json::json!({"value":"before"}))
+        );
+        snapshot_repo.quick_integrity_check().unwrap();
+
+        assert!(repo.backup_snapshot(&snapshot).is_err());
+        drop(snapshot_repo);
+        drop(repo);
+        let _ = std::fs::remove_file(snapshot);
         let _ = std::fs::remove_file(path);
     }
 

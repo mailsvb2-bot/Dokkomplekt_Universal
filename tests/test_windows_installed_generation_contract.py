@@ -106,9 +106,7 @@ def test_windows_installer_smoke_drives_real_generation_to_physical_docx() -> No
     assert "NameProperty,\n        'Источник принят'" not in restart_section
     assert "FPR-08 restart source committed" not in restart_section
     assert "FPR-09 observable expanded setup child" in source
-    assert "Открыть Word и показать место" in source
-    assert "FPR-09 physically expand automatic filling setup" in source
-    assert "[System.Windows.Automation.ScrollPattern]::Pattern" in source
+    assert "FPR-09 setup expansion proved by observable child control after real user activation." in source
 
 
 def test_quality_windows_installer_exercises_blank_diary_filler_discharge() -> None:

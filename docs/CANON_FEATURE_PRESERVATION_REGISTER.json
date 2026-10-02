@@ -637,7 +637,7 @@
       "id": "FPR-19",
       "group": "Обновления",
       "status": "needs-runtime-proof",
-      "actual_state": "signed update lifecycle verifies/downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, keeps the watcher alive until successful installer spawn, creates a SQLite-owned consistent snapshot via VACUUM INTO plus an обязательный local-key backup, persists recovery state, verifies successful post-start upgrades, preserves a newer valid live DB/key without rollback when the installer fails, and restores the pre-update DB/key before workspace load only when the live state itself fails integrity/key validation; physical previous-version success + forced installer-failure/corruption recovery proof is still pending",
+      "actual_state": "signed update lifecycle verifies/downloads the artifact, rejects update during active case-runs, re-verifies bytes before installer launch, keeps the watcher alive until successful installer spawn, creates a SQLite-owned consistent snapshot via VACUUM INTO plus an обязательный local-key backup, persists recovery state, verifies successful post-start upgrades, preserves a newer valid live DB/key without rollback when the signed installer fails, and restores the pre-update DB/key before workspace load when live state fails integrity/key validation; the live Windows executor now exercises all three branches (recoverable installer failure, damaged-live rollback, successful previous-version -> current-version upgrade), but exact Windows 10/11 evidence has not yet executed",
       "entry": [
         "src-tauri/src/main.rs#check_for_updates",
         "src-tauri/src/main.rs#apply_verified_update",
@@ -664,7 +664,7 @@
         "crates/dokkomplekt-storage/src/lib.rs"
       ],
       "runtime_evidence": [],
-      "runtime_gap": "A real previous-version -> current-version installed run must prove preserved settings/state and successful post-start verification; a forced real recoverable installer failure must prove that valid newer live state is preserved without rollback, and a controlled damaged-live-state run must prove automatic pre-workspace rollback from the consistent SQLite snapshot on both Windows 10 and Windows 11 before final register closure."
+      "runtime_gap": "Run the complete signed update-live executor on both Windows 10 and Windows 11 for the exact release SHA and retain FPR-19 LIVE RECOVERABLE FAILURE PASS, FPR-19 LIVE ROLLBACK PASS, FPR-12 LIVE UPGRADE STORAGE PASS, and FPR-19 LIVE UPDATE PASS evidence before final register closure."
     },
     {
       "id": "FPR-20",

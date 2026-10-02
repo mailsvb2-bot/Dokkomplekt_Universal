@@ -164,6 +164,22 @@
       "required": true
     },
     {
+      "id": "UX-UPDATE-RECOVERABLE",
+      "title": "Failed signed installer preserves valid live state without rollback",
+      "lane": "update-live",
+      "executor": "windows_live_update_e2e.ps1",
+      "evidence_marker": "FPR-19 LIVE RECOVERABLE FAILURE PASS:",
+      "required": true
+    },
+    {
+      "id": "UX-UPDATE-ROLLBACK",
+      "title": "Damaged live DB/key rolls back from consistent pre-update snapshot",
+      "lane": "update-live",
+      "executor": "windows_live_update_e2e.ps1",
+      "evidence_marker": "FPR-19 LIVE ROLLBACK PASS:",
+      "required": true
+    },
+    {
       "id": "FPR-20",
       "title": "Offline runtime without developer toolchain",
       "lane": "hardware-live",

@@ -589,7 +589,10 @@
       "evidence_paths": [
         "src/App.tsx",
         "src-tauri/src/subsystems/document_commands.rs",
-        "crates/dokkomplekt-core/src/print_triage.rs"
+        "crates/dokkomplekt-core/src/print_triage.rs",
+        "tests/windows/windows_hardware_e2e.ps1",
+        "tests/test_fpr17_print_pdf_contract.py",
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [
         "tests/windows/windows_hardware_e2e.ps1#FPR-17 dedicated-printer Event 307 and installed packaged-LibreOffice PDF proof",
@@ -689,6 +692,9 @@
         ".github/workflows/build-installers.yml",
         ".github/workflows/quality-gate.yml",
         "tests/windows/windows_hardware_e2e.ps1",
+        "tests/installer/linux_installer_contract.sh",
+        "tests/installer/linux_installer_contract_core.sh",
+        "tests/test_linux_installer_smoke_contract.py",
         "tests/test_live_windows_user_e2e_contract.py",
         "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
@@ -783,8 +789,11 @@
       "after": "installed_baseline",
       "evidence_paths": [
         ".github/workflows/quality-gate.yml",
+        ".github/workflows/source-provenance.yml",
+        ".github/workflows/windows-hardware-e2e.yml",
+        "ops/private-hardware-validation/windows-hardware-e2e.yml",
         "scripts/prepackage_rust_gate.sh",
-        ".github/workflows/source-provenance.yml"
+        "verification/e2e/LIVE_USER_SCENARIOS.json"
       ],
       "runtime_evidence": [],
       "runtime_gap": "Exact final-candidate CI and installed evidence is required for final register closure."

@@ -1,4 +1,6 @@
-use super::{build_app, config::ServerConfig, state::AppState};
+use super::{
+    build_app, config::ServerConfig, license_issue::owner_bootstrap_digest, state::AppState,
+};
 use axum::{
     body::{to_bytes, Body},
     http::{
@@ -20,7 +22,7 @@ fn config(database_url: Option<String>) -> ServerConfig {
         product_id: "dokkomplekt_universal".to_string(),
         product_title: "Dokkomplekt Universal".to_string(),
         default_license_days: 30,
-        owner_bootstrap_code_hash: None,
+        owner_bootstrap_code_hash: Some(owner_bootstrap_digest("owner-code")),
         owner_license_days: 36_500,
         payment_provider: "manual".to_string(),
         storage_mode: if database_url.is_some() {
@@ -203,12 +205,14 @@ async fn emulate(
     assert_eq!(status, StatusCode::OK);
     assert_ne!(second_activation["activation_id"], first_activation_id);
 
-    let issue_body = json!({ "owner_name": "User", "organization_name": "Org", "machine_hash": "machine-b", "issue_token": "test-issue-secret" });
-    let (status, license) = call(
+    let issue_body =
+        json!({ "owner_name": "User", "organization_name": "Org", "machine_hash": "machine-b" });
+    let (status, license) = call_authorized(
         app.clone(),
         Method::POST,
         format!("/api/orders/{order_id}/license"),
         Some(issue_body.clone()),
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -218,6 +222,10 @@ async fn emulate(
         .to_string();
     assert!(license_id.starts_with("DKK-"));
     assert_eq!(license["license"]["payload"]["order_id"], order_id);
+    assert_eq!(
+        license["license"]["payload"]["metadata"]["product_id"],
+        "dokkomplekt_universal"
+    );
     assert_eq!(
         license["license"]["payload"]["allowed_machines"],
         json!(["machine-a", "machine-b"])
@@ -234,15 +242,47 @@ async fn emulate(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["status"], "license_issued");
 
-    let (status, repeated) = call(
+    let (status, repeated) = call_authorized(
         app.clone(),
         Method::POST,
         format!("/api/orders/{order_id}/license"),
         Some(issue_body),
+        &access_token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(repeated["license"]["payload"]["license_id"], license_id);
+
+    let (status, owner_license) = call(
+        app.clone(),
+        Method::POST,
+        "/api/owner/license".to_string(),
+        Some(json!({ "bootstrap_code": "owner-code", "machine_hash": "owner-machine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owner_license["license"]["payload"]["plan"], "vip");
+    assert_eq!(
+        owner_license["license"]["payload"]["allowed_machines"],
+        json!(["owner-machine"])
+    );
+    assert_eq!(
+        owner_license["license"]["payload"]["metadata"]["role"],
+        "owner_superadmin"
+    );
+    assert_eq!(
+        owner_license["license"]["payload"]["metadata"]["access"],
+        "unlimited"
+    );
+
+    let (status, _body) = call(
+        app,
+        Method::POST,
+        "/api/owner/license".to_string(),
+        Some(json!({ "bootstrap_code": "wrong-owner-code", "machine_hash": "owner-machine" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

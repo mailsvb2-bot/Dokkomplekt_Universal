@@ -65,7 +65,7 @@ pub(crate) fn enforce_ephemeral_workspace_group_quota(
             .duration_since(session.modified)
             .ok()
             .is_some_and(|age| age >= retention);
-        if !session.live && expired {
+        if !session.live && expired && !session_has_live_process_lease(&session.path)? {
             remove_sensitive_session(&session.path)?;
             removed += 1;
         } else {
@@ -85,6 +85,9 @@ pub(crate) fn enforce_ephemeral_workspace_group_quota(
     // never candidates regardless of which backing workspace owns them.
     retained.sort_by_key(|session| session.modified);
     for session in retained.iter().filter(|session| !session.live) {
+        if session_has_live_process_lease(&session.path)? {
+            continue;
+        }
         remove_sensitive_session(&session.path)?;
         total = total.saturating_sub(session.bytes);
         removed += 1;

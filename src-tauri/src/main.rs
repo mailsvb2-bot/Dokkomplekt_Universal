@@ -2162,7 +2162,9 @@ fn main() {
                 if let Err(error) = cleanup_intake_workspace(&handle) {
                     eprintln!("Очистка временных рабочих данных при запуске пропущена: {error}");
                 }
-                let _ = std::fs::remove_dir_all(data_dir.join("word-scanner-work"));
+                // word-scanner-work is cleaned by cleanup_intake_workspace()
+                // through ownership-aware retention/quota rules. Never remove the
+                // whole directory by name: unknown files are not app-owned cache.
                 start_periodic_intake_cleanup(handle.clone());
                 if let Ok(db_path) = default_state_db_path(&handle) {
                     if let Ok(mut repo) = repository_for(&db_path) {

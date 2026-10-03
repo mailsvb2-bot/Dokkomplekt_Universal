@@ -153,3 +153,12 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "metadata_is_link_like(&metadata)" in workspace_session
     assert "two-pass validation must avoid partial cleanup" in universal
     assert "cleanup_preserves_unknown_workspace_entries_without_ownership_marker" in universal
+    assert "create_sensitive_session_with_lease" in universal
+    assert "active_lease: Option<std::fs::File>" in universal
+    assert "fs2::FileExt::unlock(&lease)" in universal
+    assert "session_has_live_process_lease" in workspace_session
+    assert "try_lock_exclusive" in workspace_session
+    assert "fs2::lock_contended_error()" in workspace_session
+    assert "lock_error_is_contended" in workspace_session
+    assert "fs2_contended_error_is_recognized_for_a_real_held_lease" in workspace_session
+    assert "cleanup_never_evicts_session_while_os_lease_is_held" in workspace_session

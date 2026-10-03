@@ -1,12 +1,58 @@
-#[derive(Debug)]
-struct LegacyTemplateInferenceWorkspace {
-    root: PathBuf,
+type LegacyTemplateInferenceWorkspace = universal_intake::OwnedWorkspaceSession;
+
+pub(crate) const TEMPLATE_COMPILER_CACHE_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+const TEMPLATE_COMPILER_CACHE_MIN_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+const TEMPLATE_COMPILER_CACHE_EXPANSION_FACTOR: u64 = 8;
+
+fn template_compiler_cache_roots(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    Ok([
+        "template-contract-migration",
+        "template-render-inference",
+        "template-inference-work",
+    ]
+    .into_iter()
+    .map(|class| data_dir.join(class))
+    .collect())
 }
 
-impl Drop for LegacyTemplateInferenceWorkspace {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
+fn create_template_compiler_workspace(
+    app: &tauri::AppHandle,
+    class: &str,
+) -> Result<LegacyTemplateInferenceWorkspace, String> {
+    let roots = template_compiler_cache_roots(app)?;
+    let workspace = roots
+        .iter()
+        .find(|root| root.file_name().and_then(|value| value.to_str()) == Some(class))
+        .cloned()
+        .ok_or_else(|| format!("Неизвестный класс compiler cache: {class}"))?;
+    universal_intake::enforce_ephemeral_workspace_group_quota(
+        &roots,
+        Duration::from_secs(TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS),
+        TEMPLATE_COMPILER_CACHE_QUOTA_BYTES,
+        0,
+    )?;
+    universal_intake::create_owned_workspace_session(&workspace)
+}
+
+fn ensure_template_compiler_cache_capacity(
+    app: &tauri::AppHandle,
+    input_path: &Path,
+) -> Result<(), String> {
+    let input_bytes = std::fs::metadata(input_path)
+        .map_err(|error| format!("Не удалось определить размер compiler input: {error}"))?
+        .len();
+    let reserve = input_bytes
+        .saturating_mul(TEMPLATE_COMPILER_CACHE_EXPANSION_FACTOR)
+        .max(TEMPLATE_COMPILER_CACHE_MIN_RESERVE_BYTES);
+    universal_intake::enforce_ephemeral_workspace_group_quota(
+        &template_compiler_cache_roots(app)?,
+        Duration::from_secs(TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS),
+        TEMPLATE_COMPILER_CACHE_QUOTA_BYTES,
+        reserve,
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -603,13 +649,8 @@ fn migrate_loaded_medical_template_contracts(
     case: &SemanticCase,
     license: &Option<LicenseDocument>,
 ) -> Result<usize, String> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-contract-migration")
-        .join(Uuid::new_v4().to_string());
-    let workspace = LegacyTemplateInferenceWorkspace { root: root.clone() };
+    let workspace = create_template_compiler_workspace(app, "template-contract-migration")?;
+    let root = workspace.root().to_path_buf();
     let mut drafts = Vec::new();
     let mut migrated = 0usize;
 
@@ -618,6 +659,7 @@ fn migrate_loaded_medical_template_contracts(
             continue;
         }
         let input_path = resolve_user_path(app, &document.template_path)?;
+        ensure_template_compiler_cache_capacity(app, &input_path)?;
         let extension = input_path
             .extension()
             .and_then(|value| value.to_str())
@@ -711,17 +753,14 @@ fn prepare_medical_template_for_render(
             _workspace: None,
         });
     }
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-render-inference")
-        .join(Uuid::new_v4().to_string());
+    let workspace = create_template_compiler_workspace(app, "template-render-inference")?;
+    let root = workspace.root().to_path_buf();
     let extension = template_path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("docx");
     let output_path = root.join(format!("render-template.{extension}"));
+    ensure_template_compiler_cache_capacity(app, template_path)?;
     let compiled = compile_template_contract_copy(
         template_path,
         &output_path,
@@ -753,7 +792,7 @@ fn prepare_medical_template_for_render(
         path: compiled.path,
         template_text: compiled.template_text,
         effective_document,
-        _workspace: Some(LegacyTemplateInferenceWorkspace { root }),
+        _workspace: Some(workspace),
     })
 }
 
@@ -813,19 +852,17 @@ fn infer_static_template_rows(
             continue;
         }
         if workspace.is_none() {
-            let root = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| error.to_string())?
-                .join("template-inference-work")
-                .join(Uuid::new_v4().to_string());
-            workspace = Some(LegacyTemplateInferenceWorkspace { root });
+            workspace = Some(create_template_compiler_workspace(
+                app,
+                "template-inference-work",
+            )?);
         }
-        let root = &workspace
+        let root = workspace
             .as_ref()
             .ok_or_else(|| "template compiler workspace was not initialized".to_string())?
-            .root;
+            .root();
         let input_path = resolve_user_path(app, &row.template_path)?;
+        ensure_template_compiler_cache_capacity(app, &input_path)?;
         let extension = input_path
             .extension()
             .and_then(|value| value.to_str())

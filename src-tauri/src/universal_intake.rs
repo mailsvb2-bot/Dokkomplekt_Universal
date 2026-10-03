@@ -36,10 +36,13 @@ pub use web::fetch_web_source;
 #[cfg(test)]
 use web::is_public_ip;
 pub(crate) use workspace_session::{
-    cleanup_workspace, create_retained_workspace_session, refresh_retained_workspace_session,
+    cleanup_workspace, create_owned_workspace_session, create_retained_workspace_session,
+    enforce_ephemeral_workspace_group_quota, enforce_ephemeral_workspace_quota,
+    owned_workspace_bytes, owned_workspace_group_bytes, refresh_retained_workspace_session,
+    OwnedWorkspaceSession,
 };
 use workspace_session::{
-    create_sensitive_session, remove_sensitive_session, restrict_directory_permissions,
+    create_sensitive_session_with_lease, remove_sensitive_session, restrict_directory_permissions,
     restrict_file_permissions, ACTIVE_SESSION_MARKER, SESSION_OWNERSHIP_MARKER,
 };
 
@@ -114,6 +117,7 @@ pub struct NormalizedSource {
 pub struct UploadedSourceSession {
     source: Option<NormalizedSource>,
     root: PathBuf,
+    active_lease: Option<std::fs::File>,
 }
 
 impl UploadedSourceSession {
@@ -151,6 +155,10 @@ impl UploadedSourceSession {
 
 impl Drop for UploadedSourceSession {
     fn drop(&mut self) {
+        if let Some(lease) = self.active_lease.take() {
+            let _ = fs2::FileExt::unlock(&lease);
+            drop(lease);
+        }
         let _ = remove_sensitive_session(&self.root);
     }
 }
@@ -412,8 +420,12 @@ pub fn materialize_sensitive_file(
     if bytes.len() > MAX_UPLOAD_BYTES {
         return Err("Источник превышает безопасный предел 100 МБ.".to_string());
     }
-    let root = create_sensitive_session(workspace)?;
-    let session = UploadedSourceSession { source: None, root };
+    let (root, active_lease) = create_sensitive_session_with_lease(workspace)?;
+    let session = UploadedSourceSession {
+        source: None,
+        root,
+        active_lease: Some(active_lease),
+    };
     let safe_name = safe_file_name(file_name);
     let path = session.root.join(safe_name);
     std::fs::write(&path, bytes)

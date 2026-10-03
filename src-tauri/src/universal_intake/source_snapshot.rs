@@ -1,6 +1,6 @@
 use super::{
-    create_sensitive_session, restrict_file_permissions, safe_file_name, validate_source_file_size,
-    UploadedSourceSession, MAX_SOURCE_FILE_BYTES,
+    create_sensitive_session_with_lease, restrict_file_permissions, safe_file_name,
+    validate_source_file_size, UploadedSourceSession, MAX_SOURCE_FILE_BYTES,
 };
 use sha2::{Digest as _, Sha256};
 use std::fs::File;
@@ -156,8 +156,12 @@ pub fn capture_stable_source(
             }
         };
 
-        let root = create_sensitive_session(workspace)?;
-        let session = UploadedSourceSession { source: None, root };
+        let (root, active_lease) = create_sensitive_session_with_lease(workspace)?;
+        let session = UploadedSourceSession {
+            source: None,
+            root,
+            active_lease: Some(active_lease),
+        };
         let snapshot_path = session.root.join(safe_file_name(&source_name));
         let copied = copy_source_limited(source, &snapshot_path);
         let after = source_file_signature(source);

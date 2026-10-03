@@ -198,13 +198,9 @@ fn validate_product_id(raw: &str) -> anyhow::Result<String> {
     let value = raw.trim().to_ascii_lowercase();
     if value.is_empty()
         || value.len() > 64
-        || !value
-            .bytes()
-            .all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'_' | b'-')
-            })
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
     {
         anyhow::bail!(
             "DOKKOMPLEKT_LICENSE_PRODUCT_ID must contain only lowercase ASCII letters, digits, '_' or '-'"

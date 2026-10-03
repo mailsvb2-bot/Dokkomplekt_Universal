@@ -12,6 +12,7 @@ mod state_transaction;
 mod template_snapshot;
 mod threshold_calibration;
 mod universal_intake;
+mod watcher_log;
 mod workspace_hygiene;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;

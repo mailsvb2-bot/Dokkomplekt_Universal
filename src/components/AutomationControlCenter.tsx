@@ -42,6 +42,16 @@ export async function loadOptionalTechnicalStorage(
   }
 }
 
+export function formatRetentionDuration(seconds: number): string {
+  if (seconds === 0) return 'после освобождения';
+  const totalHours = Math.max(1, Math.round(seconds / 3600));
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  if (days > 0 && hours > 0) return `${days} д. ${hours} ч.`;
+  if (days > 0) return `${days} дн.`;
+  return `${hours} ч.`;
+}
+
 const DEFAULT_PRINTERS: PrinterInventory = {
   platform: '',
   printers: [],
@@ -441,7 +451,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
           <span>Под политикой хранения <b>{formatBytes(technicalStorage.retention_managed_bytes)}</b></span>
         </div>
         <div className="compactList storageBreakdown">
-          {technicalStorage.categories.map(item => <small key={item.key}>{item.label}: <b>{formatBytes(item.bytes)}</b>{item.quota_bytes !== null ? ` · лимит ${formatBytes(item.quota_bytes)}` : ''}{item.retention_seconds !== null ? ` · срок ${item.retention_seconds === 0 ? 'после освобождения' : `${Math.max(1, Math.round(item.retention_seconds / 86400))} дн.`}` : ''}{item.retention_managed ? ' · управляется политикой хранения' : ' · не удаляется этой очисткой'}</small>)}
+          {technicalStorage.categories.map(item => <small key={item.key}>{item.label}: <b>{formatBytes(item.bytes)}</b>{item.quota_bytes !== null ? ` · лимит ${formatBytes(item.quota_bytes)}` : ''}{item.retention_seconds !== null ? ` · срок ${formatRetentionDuration(item.retention_seconds)}` : ''}{item.retention_managed ? ' · управляется политикой хранения' : ' · не удаляется этой очисткой'}</small>)}
         </div>
       </>}
       <div className="inlineButtons"><button className="utilBtn" disabled={busy} onClick={savePrivacy}>Сохранить политику</button><button className="softBtn" disabled={busy} onClick={cleanWorkspaceNow}>Очистить сейчас</button></div>

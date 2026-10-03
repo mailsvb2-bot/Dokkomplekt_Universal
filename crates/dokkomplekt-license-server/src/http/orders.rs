@@ -191,7 +191,7 @@ async fn create_provider_payment(
     let request = CreatePaymentRequest {
         order_id: order.id,
         amount_rub: order.amount_rub,
-        description: format!("Dokkomplekt Universal — {}", order.plan),
+        description: format!("{} — {}", state.config.product_title, order.plan),
         return_url: Some(format!(
             "{}/payment/return/{}",
             state.config.public_base_url.trim_end_matches('/'),

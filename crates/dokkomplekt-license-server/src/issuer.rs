@@ -4,6 +4,7 @@ use dokkomplekt_license_core::models::{
     Feature, LicenseDocument, LicensePayload, PlanId, SignedLicense, WatermarkMode,
 };
 use ed25519_dalek::{Signer, SigningKey};
+use std::collections::BTreeMap;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -15,6 +16,8 @@ pub struct IssueLicenseInput {
     pub organization_name: Option<String>,
     pub allowed_machines: Vec<String>,
     pub valid_days: i64,
+    pub product_id: String,
+    pub owner_unlimited: bool,
 }
 
 pub fn issue_license(
@@ -29,9 +32,16 @@ pub fn issue_license(
     let signing_key = SigningKey::from_bytes(&key_array);
     let now = OffsetDateTime::now_utc();
     let limits = limits_for_plan(&input.plan);
+    let product_id = normalize_product_id(&input.product_id)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("product_id".to_string(), product_id);
+    if input.owner_unlimited {
+        metadata.insert("role".to_string(), "owner_superadmin".to_string());
+        metadata.insert("access".to_string(), "unlimited".to_string());
+    }
     let payload = LicensePayload {
         license_id: format!("DKK-{}", Uuid::new_v4()),
-        order_id: Some(input.order_id.to_string()),
+        order_id: (!input.order_id.is_nil()).then(|| input.order_id.to_string()),
         plan: input.plan,
         owner_name: input.owner_name,
         organization_name: input.organization_name,
@@ -47,7 +57,7 @@ pub fn issue_license(
         watermark_mode: limits.watermark_mode,
         issued_by: issuer_id.to_string(),
         issued_at: now,
-        metadata: Default::default(),
+        metadata,
     };
     let message = canonical_json(&payload)?;
     let signature = signing_key.sign(&message);
@@ -59,6 +69,19 @@ pub fn issue_license(
             signature: STANDARD.encode(signature.to_bytes()),
         },
     })
+}
+
+fn normalize_product_id(value: &str) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty()
+        || normalized.len() > 64
+        || !normalized
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-'))
+    {
+        anyhow::bail!("product_id must be 1..64 lowercase ASCII letters, digits, '_' or '-'");
+    }
+    Ok(normalized)
 }
 
 struct PlanLimits {

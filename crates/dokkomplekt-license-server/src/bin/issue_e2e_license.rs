@@ -28,6 +28,8 @@ fn main() -> Result<()> {
             organization_name: None,
             allowed_machines: vec![],
             valid_days: 30,
+            product_id: "dokkomplekt_universal".to_string(),
+            owner_unlimited: false,
         },
         "fpr18-e2e-issuer",
         issuer_key_b64.trim(),

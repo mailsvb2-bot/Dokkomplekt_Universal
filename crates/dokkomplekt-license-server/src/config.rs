@@ -7,7 +7,11 @@ pub struct ServerConfig {
     pub public_base_url: String,
     pub issuer_id: String,
     pub issuer_key_b64: Option<String>,
+    pub product_id: String,
+    pub product_title: String,
     pub default_license_days: i64,
+    pub owner_bootstrap_code_hash: Option<String>,
+    pub owner_license_days: i64,
     pub payment_provider: String,
     pub storage_mode: String,
     pub database_url: Option<String>,
@@ -41,10 +45,27 @@ impl ServerConfig {
         let issuer_id = std::env::var("DOKKOMPLEKT_LICENSE_ISSUER")
             .unwrap_or_else(|_| "dokkomplekt-license-server".to_string());
         let issuer_key_b64 = non_empty_env("DOKKOMPLEKT_LICENSE_ISSUER_KEY_B64");
+        let product_id = validate_product_id(
+            &std::env::var("DOKKOMPLEKT_LICENSE_PRODUCT_ID")
+                .unwrap_or_else(|_| "dokkomplekt_universal".to_string()),
+        )?;
+        let product_title = validate_product_title(
+            &std::env::var("DOKKOMPLEKT_LICENSE_PRODUCT_TITLE")
+                .unwrap_or_else(|_| "Dokkomplekt Universal".to_string()),
+        )?;
         let default_license_days = std::env::var("DOKKOMPLEKT_DEFAULT_LICENSE_DAYS")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(365);
+            .unwrap_or(365)
+            .clamp(1, 3_660);
+        let owner_bootstrap_code_hash = non_empty_env("DOKKOMPLEKT_OWNER_BOOTSTRAP_CODE_SHA256")
+            .map(|value| validate_owner_bootstrap_hash(&value))
+            .transpose()?;
+        let owner_license_days = std::env::var("DOKKOMPLEKT_OWNER_LICENSE_DAYS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(36_500)
+            .clamp(365, 36_500);
         let payment_provider_raw =
             std::env::var("DOKKOMPLEKT_PAYMENT_PROVIDER").unwrap_or_else(|_| "manual".to_string());
         let payment_provider =
@@ -147,7 +168,11 @@ impl ServerConfig {
             public_base_url,
             issuer_id,
             issuer_key_b64,
+            product_id,
+            product_title,
             default_license_days,
+            owner_bootstrap_code_hash,
+            owner_license_days,
             payment_provider,
             storage_mode,
             database_url,
@@ -167,6 +192,35 @@ impl ServerConfig {
             trusted_proxies,
         })
     }
+}
+
+fn validate_product_id(raw: &str) -> anyhow::Result<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-'))
+    {
+        anyhow::bail!("DOKKOMPLEKT_LICENSE_PRODUCT_ID must contain only lowercase ASCII letters, digits, '_' or '-'");
+    }
+    Ok(value)
+}
+
+fn validate_product_title(raw: &str) -> anyhow::Result<String> {
+    let value = raw.trim();
+    if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+        anyhow::bail!("DOKKOMPLEKT_LICENSE_PRODUCT_TITLE must be 1..128 visible characters");
+    }
+    Ok(value.to_string())
+}
+
+fn validate_owner_bootstrap_hash(raw: &str) -> anyhow::Result<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
+        anyhow::bail!("DOKKOMPLEKT_OWNER_BOOTSTRAP_CODE_SHA256 must be a lowercase SHA-256 hex digest");
+    }
+    Ok(value)
 }
 
 fn boolean_env(name: &str, default: bool) -> anyhow::Result<bool> {

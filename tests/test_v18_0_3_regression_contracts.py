@@ -120,6 +120,8 @@ class CriticalSecurityRegressionContractTest(unittest.TestCase):
         self.assertIn("UnsafeActiveContent", docx)
         self.assertIn("validate_safe_template_file(template_path)?", docx)
         self.assertIn("worker_panic; retry_blocked=true", watcher)
+        self.assertIn("watcher_log::append_watcher_log", watcher)
+        self.assertNotIn(".append(true)", watcher)
         self.assertIn("atomic_write_file", watcher)
 
 

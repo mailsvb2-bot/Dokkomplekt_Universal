@@ -1,4 +1,4 @@
-use std::io::{Read as _, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,6 +8,8 @@ use uuid::Uuid;
 const RUNTIME_LOG_DIR: &str = "runtime-logs";
 const WATCHER_LOG_NAME: &str = "watcher.log";
 const OWNERSHIP_HEADER: &[u8] = b"# dokkomplekt-runtime-log-v1\n";
+const LEGACY_MIGRATION_NOTE: &[u8] = b"# migrated legacy app-data watcher.log\n";
+const LEGACY_ARCHIVE_NAME: &str = "watcher.legacy.log";
 pub(crate) const WATCHER_LOG_ACTIVE_QUOTA_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const WATCHER_LOG_TOTAL_QUOTA_BYTES: u64 = 16 * 1024 * 1024;
 pub(crate) const WATCHER_LOG_RETENTION_SECONDS: u64 = 14 * 24 * 60 * 60;
@@ -34,12 +36,17 @@ impl RuntimeLogPolicy {
 }
 
 pub(crate) fn watcher_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    Ok(app
+    let data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|error| format!("Каталог журналов фонового агента недоступен: {error}"))?
-        .join(RUNTIME_LOG_DIR)
-        .join(WATCHER_LOG_NAME))
+        .map_err(|error| format!("Каталог журналов фонового агента недоступен: {error}"))?;
+    let path = data_dir.join(RUNTIME_LOG_DIR).join(WATCHER_LOG_NAME);
+    let _guard = WATCHER_LOG_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "runtime log lock failed".to_string())?;
+    retire_legacy_watcher_log(&data_dir, &path, SystemTime::now())?;
+    Ok(path)
 }
 
 pub(crate) fn append_watcher_log(path: &Path, message: &str) -> Result<(), String> {
@@ -133,15 +140,7 @@ fn append_with_policy(
     }
 
     if !path.exists() {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|error| format!("Не удалось создать runtime log: {error}"))?;
-        file.write_all(OWNERSHIP_HEADER)
-            .map_err(|error| format!("Не удалось записать ownership runtime log: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("Не удалось синхронизировать runtime log: {error}"))?;
+        initialize_active_log_atomically(path)?;
     }
 
     let mut file = std::fs::OpenOptions::new()
@@ -154,6 +153,187 @@ fn append_with_policy(
         .map_err(|error| format!("Не удалось завершить запись runtime log: {error}"))?;
     cleanup_archives_with_policy(path, policy, now)?;
     Ok(())
+}
+
+fn initialize_active_log_atomically(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Не удалось определить каталог runtime log.".to_string())?;
+    let temp = parent.join(format!(".watcher-init-{}.tmp", Uuid::new_v4().simple()));
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| format!("Не удалось подготовить runtime log: {error}"))?;
+        file.write_all(OWNERSHIP_HEADER)
+            .map_err(|error| format!("Не удалось записать ownership runtime log: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Не удалось синхронизировать runtime log: {error}"))?;
+        drop(file);
+
+        match std::fs::hard_link(&temp, path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                validate_active_log(path).map(|_| ())
+            }
+            Err(error) => Err(format!(
+                "Не удалось атомарно опубликовать runtime log: {error}"
+            )),
+        }
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+fn retire_legacy_watcher_log(
+    data_dir: &Path,
+    active_path: &Path,
+    now: SystemTime,
+) -> Result<(), String> {
+    let legacy = data_dir.join(WATCHER_LOG_NAME);
+    let metadata = match std::fs::symlink_metadata(&legacy) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Не удалось проверить legacy watcher log: {error}")),
+    };
+    if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+        // An unexpected object at the historical path is not treated as app-owned.
+        return Ok(());
+    }
+    if !legacy_watcher_log_is_owned(&legacy)? {
+        return Ok(());
+    }
+
+    let root = active_path
+        .parent()
+        .ok_or_else(|| "Не удалось определить каталог runtime log.".to_string())?;
+    ensure_safe_log_root(root)?;
+    let archive = root.join(LEGACY_ARCHIVE_NAME);
+    match std::fs::symlink_metadata(&archive) {
+        Ok(existing) => {
+            if crate::publication_metadata_is_link_or_reparse(&existing)
+                || !existing.is_file()
+                || !file_has_ownership_header(&archive)?
+            {
+                return Err(
+                    "Legacy runtime log не перенесён: целевой архив не имеет ownership proof."
+                        .into(),
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_legacy_archive_atomically(&legacy, &archive, metadata.len())?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "Не удалось проверить legacy runtime archive: {error}"
+            ))
+        }
+    }
+
+    std::fs::remove_file(&legacy)
+        .map_err(|error| format!("Legacy watcher log перенесён, но исходник не удалён: {error}"))?;
+    cleanup_archives_with_policy(active_path, RuntimeLogPolicy::watcher(), now)?;
+    Ok(())
+}
+
+fn legacy_watcher_log_is_owned(path: &Path) -> Result<bool, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("Не удалось проверить legacy watcher log: {error}"))?;
+    if metadata.len() == 0 {
+        return Ok(true);
+    }
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("Не удалось открыть legacy watcher log: {error}"))?;
+    const PREFIX: &[u8] = b"[watcher] ";
+    let mut buffer = [0_u8; 8192];
+    let mut at_line_start = true;
+    let mut prefix_index = 0_usize;
+    let mut saw_owned_line = false;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Не удалось прочитать legacy watcher log: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        for byte in &buffer[..read] {
+            if at_line_start {
+                if *byte == b'\n' || prefix_index >= PREFIX.len() || *byte != PREFIX[prefix_index] {
+                    return Ok(false);
+                }
+                prefix_index += 1;
+                if prefix_index == PREFIX.len() {
+                    at_line_start = false;
+                    saw_owned_line = true;
+                }
+            } else if *byte == b'\n' {
+                at_line_start = true;
+                prefix_index = 0;
+            }
+        }
+    }
+    if at_line_start && prefix_index != 0 {
+        return Ok(false);
+    }
+    Ok(saw_owned_line)
+}
+
+fn write_legacy_archive_atomically(
+    legacy: &Path,
+    archive: &Path,
+    legacy_len: u64,
+) -> Result<(), String> {
+    let root = archive
+        .parent()
+        .ok_or_else(|| "Не удалось определить каталог runtime log.".to_string())?;
+    let temp = root.join(format!(
+        ".watcher-legacy-migrate-{}.tmp",
+        Uuid::new_v4().simple()
+    ));
+    let result = (|| -> Result<(), String> {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| format!("Не удалось подготовить legacy runtime archive: {error}"))?;
+        output
+            .write_all(OWNERSHIP_HEADER)
+            .and_then(|_| output.write_all(LEGACY_MIGRATION_NOTE))
+            .map_err(|error| format!("Не удалось записать legacy runtime archive: {error}"))?;
+
+        let reserved = (OWNERSHIP_HEADER.len() + LEGACY_MIGRATION_NOTE.len()) as u64;
+        let payload_limit = WATCHER_LOG_ACTIVE_QUOTA_BYTES.saturating_sub(reserved);
+        let mut source = std::fs::File::open(legacy)
+            .map_err(|error| format!("Не удалось открыть legacy watcher log: {error}"))?;
+        if legacy_len > payload_limit {
+            source
+                .seek(SeekFrom::Start(legacy_len - payload_limit))
+                .map_err(|error| format!("Не удалось ограничить legacy watcher log: {error}"))?;
+            let mut reader = BufReader::new(source);
+            let mut partial_line = Vec::new();
+            reader
+                .read_until(b'\n', &mut partial_line)
+                .map_err(|error| format!("Не удалось выровнять legacy watcher log: {error}"))?;
+            std::io::copy(&mut reader, &mut output)
+                .map_err(|error| format!("Не удалось перенести legacy watcher log: {error}"))?;
+        } else {
+            std::io::copy(&mut source, &mut output)
+                .map_err(|error| format!("Не удалось перенести legacy watcher log: {error}"))?;
+        }
+        output.sync_all().map_err(|error| {
+            format!("Не удалось синхронизировать legacy runtime archive: {error}")
+        })?;
+        drop(output);
+        std::fs::hard_link(&temp, archive).map_err(|error| {
+            format!("Не удалось атомарно опубликовать legacy runtime archive: {error}")
+        })?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result
 }
 
 fn validate_policy(policy: RuntimeLogPolicy) -> Result<(), String> {
@@ -334,6 +514,72 @@ mod tests {
             retention: Duration::from_secs(60 * 60),
             max_archives: 2,
         }
+    }
+
+    #[test]
+    fn atomic_initialization_cleans_temp_when_publish_fails() {
+        let root =
+            std::env::temp_dir().join(format!("dkk-runtime-log-init-fail-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(WATCHER_LOG_NAME);
+        std::fs::create_dir(&path).unwrap();
+
+        let error = initialize_active_log_atomically(&path).unwrap_err();
+        assert!(error.contains("небезопасный тип") || error.contains("опубликовать"));
+        let stale_temp = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .any(|name| name.starts_with(".watcher-init-"));
+        assert!(!stale_temp);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_app_data_log_is_migrated_into_owned_bounded_archive() {
+        let data_dir =
+            std::env::temp_dir().join(format!("dkk-runtime-log-legacy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let legacy = data_dir.join(WATCHER_LOG_NAME);
+        std::fs::write(
+            &legacy,
+            b"[watcher] source_processing_failed; visible_note=true\n[watcher] worker_panic; retry_blocked=true\n",
+        )
+        .unwrap();
+        let active = data_dir.join(RUNTIME_LOG_DIR).join(WATCHER_LOG_NAME);
+
+        retire_legacy_watcher_log(&data_dir, &active, SystemTime::now()).unwrap();
+
+        assert!(!legacy.exists());
+        let archive = data_dir.join(RUNTIME_LOG_DIR).join(LEGACY_ARCHIVE_NAME);
+        assert!(file_has_ownership_header(&archive).unwrap());
+        assert!(std::fs::metadata(&archive).unwrap().len() <= WATCHER_LOG_ACTIVE_QUOTA_BYTES);
+        assert_eq!(
+            owned_log_bytes(&active).unwrap(),
+            std::fs::metadata(&archive).unwrap().len()
+        );
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn unrecognized_legacy_file_is_preserved_and_not_claimed_as_owned() {
+        let data_dir =
+            std::env::temp_dir().join(format!("dkk-runtime-log-legacy-unknown-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let legacy = data_dir.join(WATCHER_LOG_NAME);
+        std::fs::write(&legacy, b"user-created file at historical path\n").unwrap();
+        let active = data_dir.join(RUNTIME_LOG_DIR).join(WATCHER_LOG_NAME);
+
+        retire_legacy_watcher_log(&data_dir, &active, SystemTime::now()).unwrap();
+
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            b"user-created file at historical path\n"
+        );
+        assert!(!data_dir.join(RUNTIME_LOG_DIR).exists());
+
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[test]

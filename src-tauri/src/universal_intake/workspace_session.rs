@@ -19,13 +19,31 @@ struct OwnedSessionUsage {
 }
 
 pub(crate) fn owned_workspace_bytes(workspace: &Path) -> Result<u64, String> {
-    Ok(scan_owned_sessions(workspace)?
+    owned_workspace_group_bytes(&[workspace.to_path_buf()])
+}
+
+pub(crate) fn owned_workspace_group_bytes(workspaces: &[PathBuf]) -> Result<u64, String> {
+    Ok(scan_owned_session_group(workspaces)?
         .into_iter()
         .fold(0_u64, |total, session| total.saturating_add(session.bytes)))
 }
 
 pub(crate) fn enforce_ephemeral_workspace_quota(
     workspace: &Path,
+    retention: Duration,
+    max_bytes: u64,
+    required_bytes: u64,
+) -> Result<usize, String> {
+    enforce_ephemeral_workspace_group_quota(
+        &[workspace.to_path_buf()],
+        retention,
+        max_bytes,
+        required_bytes,
+    )
+}
+
+pub(crate) fn enforce_ephemeral_workspace_group_quota(
+    workspaces: &[PathBuf],
     retention: Duration,
     max_bytes: u64,
     required_bytes: u64,
@@ -37,7 +55,7 @@ pub(crate) fn enforce_ephemeral_workspace_quota(
     }
 
     let now = SystemTime::now();
-    let mut sessions = scan_owned_sessions(workspace)?;
+    let mut sessions = scan_owned_session_group(workspaces)?;
     let mut removed = 0_usize;
 
     // Retention cleanup only touches finished/unlocked sessions.
@@ -63,7 +81,8 @@ pub(crate) fn enforce_ephemeral_workspace_quota(
     }
 
     // Under quota pressure, evict only completed (unlocked) owned sessions,
-    // oldest first. Live sessions are never candidates regardless of age.
+    // oldest first across the whole logical cache class. Live sessions are
+    // never candidates regardless of which backing workspace owns them.
     retained.sort_by_key(|session| session.modified);
     for session in retained.iter().filter(|session| !session.live) {
         remove_sensitive_session(&session.path)?;
@@ -75,9 +94,20 @@ pub(crate) fn enforce_ephemeral_workspace_quota(
     }
 
     Err(format!(
-        "Временный cache занят активными сессиями: требуется {} байт при квоте {} байт и текущем защищённом объёме {} байт.",
+        "Временный cache занят активными сессиями: требуется {} байт при общей квоте {} байт и текущем защищённом объёме {} байт.",
         required_bytes, max_bytes, total
     ))
+}
+
+fn scan_owned_session_group(workspaces: &[PathBuf]) -> Result<Vec<OwnedSessionUsage>, String> {
+    let mut unique = std::collections::BTreeSet::new();
+    let mut sessions = Vec::new();
+    for workspace in workspaces {
+        if unique.insert(workspace.clone()) {
+            sessions.extend(scan_owned_sessions(workspace)?);
+        }
+    }
+    Ok(sessions)
 }
 
 fn scan_owned_sessions(workspace: &Path) -> Result<Vec<OwnedSessionUsage>, String> {
@@ -468,6 +498,39 @@ pub(super) fn remove_sensitive_session(root: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_quota_is_shared_across_backing_workspaces() {
+        let root = std::env::temp_dir().join(format!("dkk-cache-group-quota-{}", Uuid::new_v4()));
+        let first_workspace = root.join("first");
+        let second_workspace = root.join("second");
+
+        let released = create_sensitive_session(&first_workspace).unwrap();
+        std::fs::write(released.join("released.bin"), vec![b'r'; 128]).unwrap();
+
+        let (live, lease) = create_sensitive_session_with_lease(&second_workspace).unwrap();
+        std::fs::write(live.join("live.bin"), vec![b'l'; 128]).unwrap();
+        let live_bytes = owned_session_size(&live).unwrap();
+
+        let roots = vec![first_workspace.clone(), second_workspace.clone()];
+        let removed = enforce_ephemeral_workspace_group_quota(
+            &roots,
+            Duration::from_secs(24 * 60 * 60),
+            live_bytes + 1,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!released.exists());
+        assert!(live.is_dir());
+        assert_eq!(owned_workspace_group_bytes(&roots).unwrap(), live_bytes);
+
+        lease.unlock().unwrap();
+        drop(lease);
+        remove_sensitive_session(&live).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn quota_pressure_evicts_released_owned_cache_but_never_live_session() {

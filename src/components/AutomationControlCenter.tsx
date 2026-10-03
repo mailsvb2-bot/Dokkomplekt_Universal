@@ -32,6 +32,16 @@ const DEFAULT_MODEL: LocalSemanticModelConfig = {
   consistency_passes: 2,
 };
 
+export async function loadOptionalTechnicalStorage(
+  fetcher: () => Promise<TechnicalStorageStatus> = getTechnicalStorageStatus,
+): Promise<TechnicalStorageStatus | null> {
+  try {
+    return await fetcher();
+  } catch {
+    return null;
+  }
+}
+
 const DEFAULT_PRINTERS: PrinterInventory = {
   platform: '',
   printers: [],
@@ -44,6 +54,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
   const dialogs = useAppDialog();
   const [privacy, setPrivacy] = useState<PrivacyPreferences>(DEFAULT_PRIVACY);
   const [technicalStorage, setTechnicalStorage] = useState<TechnicalStorageStatus | null>(null);
+  const [technicalStorageUnavailable, setTechnicalStorageUnavailable] = useState(false);
   const [exceptions, setExceptions] = useState<AutomationExceptionRecord[]>([]);
   const [caseRuns, setCaseRuns] = useState<CaseRunRecord[]>([]);
   const [metrics, setMetrics] = useState<AutomationMetrics | null>(null);
@@ -90,7 +101,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       getSidecarStatus(),
       getPrinterInventory(),
       getQualityTelemetry(),
-      getTechnicalStorageStatus(),
+      loadOptionalTechnicalStorage(),
     ]));
     if (!result) return;
     setPrivacy(result[0]); setExceptions(result[1]); setMetrics(result[2]); setDaily(result[3]); setQueueStatus(result[4]); setCorpusStatus(result[5]); setCalibratedThresholds(result[6]); setCaseRuns(result[7]); setAudit(result[8]);
@@ -101,6 +112,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
     setPrinters(result[13]);
     setQualityTelemetry(result[14]);
     setTechnicalStorage(result[15]);
+    setTechnicalStorageUnavailable(result[15] === null);
   }
 
   async function savePrivacy() {
@@ -422,6 +434,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
       <label>Архивировать служебные заметки через, дней<input type="number" min={1} max={3650} value={privacy.service_note_retention_days} onChange={e => setPrivacy({ ...privacy, service_note_retention_days: Number(e.target.value) })}/></label>
       <label>Удалять устаревшие служебные отметки через, дней<input type="number" min={1} max={3650} value={privacy.processed_marker_retention_days} onChange={e => setPrivacy({ ...privacy, processed_marker_retention_days: Number(e.target.value) })}/></label>
       <label>Удалять архивные источники через, дней<input type="number" min={0} max={3650} value={privacy.archived_source_retention_days} onChange={e => setPrivacy({ ...privacy, archived_source_retention_days: Number(e.target.value) })}/><small>0 — хранить бессрочно.</small></label>
+      {technicalStorageUnavailable && <small role="status">Размер технических данных сейчас недоступен. Остальные настройки и рабочие функции продолжают работать.</small>}
       {technicalStorage && <>
         <div className="metricGrid" aria-label="Размер технических данных">
           <span>Учтённые технические данные <b>{formatBytes(technicalStorage.total_bytes)}</b></span>

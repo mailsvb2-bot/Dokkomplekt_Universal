@@ -312,7 +312,13 @@ pub(crate) fn collect_technical_storage_status(
     let mut categories = Vec::with_capacity(managed.len() + 1);
     let mut retention_managed_bytes = 0_u64;
     for (key, label, quota_bytes, retention_seconds) in managed {
-        let bytes = owned_path_size(&data_dir.join(key))?;
+        let bytes = if key == "runtime-logs" {
+            crate::watcher_log::owned_watcher_log_bytes(
+                &data_dir.join("runtime-logs").join("watcher.log"),
+            )?
+        } else {
+            owned_path_size(&data_dir.join(key))?
+        };
         retention_managed_bytes = retention_managed_bytes.saturating_add(bytes);
         categories.push(TechnicalStorageCategory {
             key: key.into(),

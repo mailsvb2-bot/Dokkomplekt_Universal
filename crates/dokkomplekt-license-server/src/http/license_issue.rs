@@ -155,7 +155,11 @@ async fn issue_owner_license(
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
     let machine_hash = request.machine_hash.trim();
-    let owner_name = request.owner_name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let owner_name = request
+        .owner_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if machine_hash.is_empty()
         || machine_hash.len() > 256
         || machine_hash.chars().any(char::is_control)

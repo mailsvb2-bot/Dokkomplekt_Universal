@@ -200,9 +200,15 @@ fn validate_product_id(raw: &str) -> anyhow::Result<String> {
         || value.len() > 64
         || !value
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-'))
+            .all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'-')
+            })
     {
-        anyhow::bail!("DOKKOMPLEKT_LICENSE_PRODUCT_ID must contain only lowercase ASCII letters, digits, '_' or '-'");
+        anyhow::bail!(
+            "DOKKOMPLEKT_LICENSE_PRODUCT_ID must contain only lowercase ASCII letters, digits, '_' or '-'"
+        );
     }
     Ok(value)
 }
@@ -217,8 +223,14 @@ fn validate_product_title(raw: &str) -> anyhow::Result<String> {
 
 fn validate_owner_bootstrap_hash(raw: &str) -> anyhow::Result<String> {
     let value = raw.trim().to_ascii_lowercase();
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
-        anyhow::bail!("DOKKOMPLEKT_OWNER_BOOTSTRAP_CODE_SHA256 must be a lowercase SHA-256 hex digest");
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        anyhow::bail!(
+            "DOKKOMPLEKT_OWNER_BOOTSTRAP_CODE_SHA256 must be a lowercase SHA-256 hex digest"
+        );
     }
     Ok(value)
 }

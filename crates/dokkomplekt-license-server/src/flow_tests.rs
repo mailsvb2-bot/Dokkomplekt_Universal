@@ -17,7 +17,11 @@ fn config(database_url: Option<String>) -> ServerConfig {
         public_base_url: "http://127.0.0.1:8787".to_string(),
         issuer_id: "test-issuer".to_string(),
         issuer_key_b64: Some(STANDARD.encode([0u8; 32])),
+        product_id: "dokkomplekt_universal".to_string(),
+        product_title: "Dokkomplekt Universal".to_string(),
         default_license_days: 30,
+        owner_bootstrap_code_hash: None,
+        owner_license_days: 36_500,
         payment_provider: "manual".to_string(),
         storage_mode: if database_url.is_some() {
             "postgres"

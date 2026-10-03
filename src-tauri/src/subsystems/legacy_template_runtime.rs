@@ -5,17 +5,30 @@ pub(crate) const TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS: u64 = 24 * 60 * 60;
 const TEMPLATE_COMPILER_CACHE_MIN_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
 const TEMPLATE_COMPILER_CACHE_EXPANSION_FACTOR: u64 = 8;
 
+fn template_compiler_cache_roots(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    Ok([
+        "template-contract-migration",
+        "template-render-inference",
+        "template-inference-work",
+    ]
+    .into_iter()
+    .map(|class| data_dir.join(class))
+    .collect())
+}
+
 fn create_template_compiler_workspace(
     app: &tauri::AppHandle,
     class: &str,
 ) -> Result<LegacyTemplateInferenceWorkspace, String> {
-    let workspace = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join(class);
-    universal_intake::enforce_ephemeral_workspace_quota(
-        &workspace,
+    let roots = template_compiler_cache_roots(app)?;
+    let workspace = roots
+        .iter()
+        .find(|root| root.file_name().and_then(|value| value.to_str()) == Some(class))
+        .cloned()
+        .ok_or_else(|| format!("Неизвестный класс compiler cache: {class}"))?;
+    universal_intake::enforce_ephemeral_workspace_group_quota(
+        &roots,
         Duration::from_secs(TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS),
         TEMPLATE_COMPILER_CACHE_QUOTA_BYTES,
         0,
@@ -24,7 +37,7 @@ fn create_template_compiler_workspace(
 }
 
 fn ensure_template_compiler_cache_capacity(
-    workspace: &LegacyTemplateInferenceWorkspace,
+    app: &tauri::AppHandle,
     input_path: &Path,
 ) -> Result<(), String> {
     let input_bytes = std::fs::metadata(input_path)
@@ -33,12 +46,8 @@ fn ensure_template_compiler_cache_capacity(
     let reserve = input_bytes
         .saturating_mul(TEMPLATE_COMPILER_CACHE_EXPANSION_FACTOR)
         .max(TEMPLATE_COMPILER_CACHE_MIN_RESERVE_BYTES);
-    let cache_root = workspace
-        .root()
-        .parent()
-        .ok_or_else(|| "Не удалось определить корень compiler cache.".to_string())?;
-    universal_intake::enforce_ephemeral_workspace_quota(
-        cache_root,
+    universal_intake::enforce_ephemeral_workspace_group_quota(
+        &template_compiler_cache_roots(app)?,
         Duration::from_secs(TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS),
         TEMPLATE_COMPILER_CACHE_QUOTA_BYTES,
         reserve,
@@ -650,7 +659,7 @@ fn migrate_loaded_medical_template_contracts(
             continue;
         }
         let input_path = resolve_user_path(app, &document.template_path)?;
-        ensure_template_compiler_cache_capacity(&workspace, &input_path)?;
+        ensure_template_compiler_cache_capacity(app, &input_path)?;
         let extension = input_path
             .extension()
             .and_then(|value| value.to_str())
@@ -751,7 +760,7 @@ fn prepare_medical_template_for_render(
         .and_then(|value| value.to_str())
         .unwrap_or("docx");
     let output_path = root.join(format!("render-template.{extension}"));
-    ensure_template_compiler_cache_capacity(&workspace, template_path)?;
+    ensure_template_compiler_cache_capacity(app, template_path)?;
     let compiled = compile_template_contract_copy(
         template_path,
         &output_path,
@@ -853,12 +862,7 @@ fn infer_static_template_rows(
             .ok_or_else(|| "template compiler workspace was not initialized".to_string())?
             .root();
         let input_path = resolve_user_path(app, &row.template_path)?;
-        ensure_template_compiler_cache_capacity(
-            workspace
-                .as_ref()
-                .ok_or_else(|| "template compiler workspace was not initialized".to_string())?,
-            &input_path,
-        )?;
+        ensure_template_compiler_cache_capacity(app, &input_path)?;
         let extension = input_path
             .extension()
             .and_then(|value| value.to_str())

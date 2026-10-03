@@ -281,10 +281,18 @@ fn session_has_live_process_lease(path: &Path) -> Result<bool, String> {
             let _ = lease.unlock();
             Ok(false)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) if lock_error_is_contended(&error) => Ok(true),
         Err(error) => Err(format!(
             "Не удалось безопасно проверить lease временной сессии: {error}"
         )),
+    }
+}
+
+fn lock_error_is_contended(error: &std::io::Error) -> bool {
+    let expected = fs2::lock_contended_error();
+    match (error.raw_os_error(), expected.raw_os_error()) {
+        (Some(actual), Some(contended)) => actual == contended,
+        _ => error.kind() == expected.kind(),
     }
 }
 
@@ -531,6 +539,27 @@ mod tests {
         );
         assert_eq!(std::fs::metadata(&unknown).unwrap().len(), 4096);
 
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn fs2_contended_error_is_recognized_for_a_real_held_lease() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-session-contended-{}", Uuid::new_v4()));
+        let (root, lease) = create_sensitive_session_with_lease(&workspace).unwrap();
+        let marker = root.join(ACTIVE_SESSION_MARKER);
+        let second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(marker)
+            .unwrap();
+        let error = second.try_lock_exclusive().unwrap_err();
+
+        assert!(lock_error_is_contended(&error));
+
+        lease.unlock().unwrap();
+        drop(lease);
+        remove_sensitive_session(&root).unwrap();
         let _ = std::fs::remove_dir_all(workspace);
     }
 

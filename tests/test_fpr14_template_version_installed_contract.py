@@ -22,13 +22,16 @@ def test_fpr14_installed_flow_selects_superseded_version_and_reads_physical_docx
         "enabled FPR-14 document button after fixture restart",
         "Find-ReadyButtonByNames -Root $window -Names @($fpr14Label)",
         "trap {",
-        "Write-Error -ErrorRecord $failure",
+        '[Console]::Error.WriteLine("E1 installed contract failed: {0}", [string]$failure.Exception.Message)',
         "Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue",
         "DOKKOMPLEKT_E2E_TEMPLATE_VERSION_REQUEST",
         "rollback output did not contain the archived v1 marker",
         "rollback output incorrectly rendered the superseded-current v2 marker",
     ):
         assert marker in script, marker
+    trap_block = script[script.index("trap {"):script.index("function Test-UiaTransientTimeout")]
+    assert "Write-Error -ErrorRecord $failure" not in trap_block
+    assert "exit 1" in trap_block
 
 
 def test_fpr14_fixture_is_guarded_and_uses_installed_application_state() -> None:

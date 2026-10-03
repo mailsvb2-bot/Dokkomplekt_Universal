@@ -205,7 +205,14 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "produced no observable transition and remains actionable; retrying once with physical input" in source
     assert "still has no transition after physical retry; using one focused keyboard Space fallback." in source
     assert "$keyboardAction.SetFocus()" in source
+    assert "$keyboardFocused = $false" in source
+    assert "cannot receive keyboard focus after the bounded physical retry; using one final fresh physical recovery." in source
+    assert '"$Description focus-recovery physical retry"' in source
     assert "[System.Windows.Forms.SendKeys]::SendWait(' ')" in source
+    trap_block = source[source.index("trap {"):source.index("function Test-UiaTransientTimeout")]
+    assert "Write-Error" not in trap_block
+    assert '[Console]::Error.WriteLine("E1 installed contract failed: {0}", [string]$failure.Exception.Message)' in trap_block
+    assert "exit 1" in trap_block
     assert '$null = Invoke-UiActionWithObservedTransition `\n    -Description "reset case before $($scenario.Label)"' in source
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-01 main-document batch'" in source
     assert "$null = Invoke-UiActionWithObservedTransition `\n  -Description 'reset case before FPR-02 diary proof'" in source

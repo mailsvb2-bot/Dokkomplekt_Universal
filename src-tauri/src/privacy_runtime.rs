@@ -56,6 +56,110 @@ pub(crate) struct TechnicalStorageStatus {
     pub(crate) categories: Vec<TechnicalStorageCategory>,
 }
 
+const MIB: u64 = 1024 * 1024;
+const MANUAL_BATCH_MIN_OUTPUT_BYTES_PER_DOCUMENT: u64 = 8 * MIB;
+const MANUAL_BATCH_OUTPUT_EXPANSION_FACTOR: u64 = 3;
+const MANUAL_BATCH_MIN_RECOVERY_RESERVE_BYTES: u64 = 64 * MIB;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ManualBatchStorageEstimate {
+    pub(crate) staged_outputs_bytes: u64,
+    pub(crate) transient_render_bytes: u64,
+    pub(crate) retained_source_bytes: u64,
+    pub(crate) recovery_reserve_bytes: u64,
+    pub(crate) required_free_bytes: u64,
+}
+
+fn checked_capacity_add(left: u64, right: u64) -> Result<u64, String> {
+    left.checked_add(right)
+        .ok_or_else(|| "Оценка требуемого места для комплекта переполнена.".to_string())
+}
+
+fn estimate_manual_batch_storage(
+    documents: &[(u64, u64)],
+    retained_source_bytes: u64,
+) -> Result<ManualBatchStorageEstimate, String> {
+    if documents.is_empty() {
+        return Err("Нельзя оценить место для пустого комплекта документов.".into());
+    }
+
+    let mut staged_outputs_bytes = 0_u64;
+    let mut transient_render_bytes = 0_u64;
+    for (template_bytes, image_field_count) in documents {
+        let expanded = template_bytes
+            .checked_mul(MANUAL_BATCH_OUTPUT_EXPANSION_FACTOR)
+            .ok_or_else(|| {
+                "Размер шаблона слишком велик для безопасной оценки места.".to_string()
+            })?;
+        let image_budget = image_field_count
+            .checked_mul(dokkomplekt_docx::MAX_IMAGE_ASSET_BYTES)
+            .ok_or_else(|| {
+                "Количество изображений слишком велико для безопасной оценки места.".to_string()
+            })?;
+        let estimated_output = checked_capacity_add(
+            expanded.max(MANUAL_BATCH_MIN_OUTPUT_BYTES_PER_DOCUMENT),
+            image_budget,
+        )?;
+        staged_outputs_bytes = checked_capacity_add(staged_outputs_bytes, estimated_output)?;
+        transient_render_bytes = transient_render_bytes.max(estimated_output);
+    }
+
+    // Rendering uses a sibling temporary DOCX before the final staged file is committed,
+    // so peak usage includes one additional largest-output allowance. Recovery also needs
+    // headroom while the previous published directory may still exist.
+    let recovery_reserve_bytes =
+        MANUAL_BATCH_MIN_RECOVERY_RESERVE_BYTES.max(staged_outputs_bytes / 4);
+    let required_free_bytes = checked_capacity_add(
+        checked_capacity_add(
+            checked_capacity_add(staged_outputs_bytes, transient_render_bytes)?,
+            retained_source_bytes,
+        )?,
+        recovery_reserve_bytes,
+    )?;
+
+    Ok(ManualBatchStorageEstimate {
+        staged_outputs_bytes,
+        transient_render_bytes,
+        retained_source_bytes,
+        recovery_reserve_bytes,
+        required_free_bytes,
+    })
+}
+
+fn capacity_mib_ceil(bytes: u64) -> u64 {
+    bytes.saturating_add(MIB - 1) / MIB
+}
+
+fn require_available_capacity(
+    estimate: ManualBatchStorageEstimate,
+    available_bytes: u64,
+) -> Result<ManualBatchStorageEstimate, String> {
+    if available_bytes < estimate.required_free_bytes {
+        return Err(format!(
+            "Недостаточно свободного места для безопасного создания комплекта: требуется не менее {} МБ (включая {} МБ резерва для commit/recovery), доступно {} МБ. Генерация остановлена до создания временного комплекта.",
+            capacity_mib_ceil(estimate.required_free_bytes),
+            capacity_mib_ceil(estimate.recovery_reserve_bytes),
+            capacity_mib_ceil(available_bytes),
+        ));
+    }
+    Ok(estimate)
+}
+
+pub(crate) fn ensure_manual_batch_storage_capacity(
+    stage_parent: &Path,
+    documents: &[(u64, u64)],
+    retained_source_bytes: u64,
+) -> Result<(), String> {
+    let estimate = estimate_manual_batch_storage(documents, retained_source_bytes)?;
+    let available_bytes = fs2::available_space(stage_parent).map_err(|error| {
+        format!(
+            "Не удалось проверить свободное место в {}: {error}. Комплект не создаётся без проверки диска.",
+            stage_parent.display()
+        )
+    })?;
+    require_available_capacity(estimate, available_bytes).map(|_| ())
+}
+
 impl Default for PrivacyPreferences {
     fn default() -> Self {
         let retention = WorkspaceRetentionPolicy::default();
@@ -250,6 +354,27 @@ mod tests {
         assert!(root.join("one.bin").exists());
         assert!(root.join("nested").join("two.bin").exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manual_batch_storage_estimate_includes_render_peak_source_and_recovery() {
+        let estimate =
+            estimate_manual_batch_storage(&[(2 * MIB, 0), (20 * MIB, 1)], 5 * MIB).unwrap();
+        assert_eq!(estimate.staged_outputs_bytes, 100 * MIB);
+        assert_eq!(estimate.transient_render_bytes, 92 * MIB);
+        assert_eq!(estimate.retained_source_bytes, 5 * MIB);
+        assert_eq!(estimate.recovery_reserve_bytes, 64 * MIB);
+        assert_eq!(estimate.required_free_bytes, 261 * MIB);
+    }
+
+    #[test]
+    fn manual_batch_storage_gate_fails_closed_below_required_capacity() {
+        let estimate = estimate_manual_batch_storage(&[(MIB, 0)], 0).unwrap();
+        let error =
+            require_available_capacity(estimate, estimate.required_free_bytes - 1).unwrap_err();
+        assert!(error.contains("Недостаточно свободного места"));
+        assert!(error.contains("commit/recovery"));
+        assert!(require_available_capacity(estimate, estimate.required_free_bytes).is_ok());
     }
 
     #[test]

@@ -906,6 +906,8 @@ export interface TechnicalStorageCategory {
   label: string;
   bytes: number;
   retention_managed: boolean;
+  quota_bytes: number | null;
+  retention_seconds: number | null;
 }
 
 export interface TechnicalStorageStatus {

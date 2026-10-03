@@ -75,17 +75,11 @@ fn normalize_product_id(value: &str) -> anyhow::Result<String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.is_empty()
         || normalized.len() > 64
-        || !normalized
-            .bytes()
-            .all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'_' | b'-')
-            })
+        || !normalized.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
     {
-        anyhow::bail!(
-            "product_id must be 1..64 lowercase ASCII letters, digits, '_' or '-'"
-        );
+        anyhow::bail!("product_id must be 1..64 lowercase ASCII letters, digits, '_' or '-'");
     }
     Ok(normalized)
 }

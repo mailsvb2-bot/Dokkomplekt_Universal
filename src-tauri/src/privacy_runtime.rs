@@ -47,6 +47,8 @@ pub(crate) struct TechnicalStorageCategory {
     pub(crate) label: String,
     pub(crate) bytes: u64,
     pub(crate) retention_managed: bool,
+    pub(crate) quota_bytes: Option<u64>,
+    pub(crate) retention_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,14 +281,37 @@ pub(crate) fn collect_technical_storage_status(
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app)?;
+    let temp_retention_seconds = u64::from(privacy.temp_retention_hours) * 60 * 60;
     let managed = [
-        ("intake-work", "Временные исходники"),
-        ("template-learning-inputs", "Входы обучения шаблонов"),
-        ("template-learning-work", "Рабочие данные обучения"),
+        (
+            "intake-work",
+            "Временные исходники",
+            None,
+            Some(temp_retention_seconds),
+        ),
+        (
+            "template-learning-inputs",
+            "Входы обучения шаблонов",
+            None,
+            Some(temp_retention_seconds),
+        ),
+        (
+            "template-learning-work",
+            "Рабочие данные обучения",
+            None,
+            Some(temp_retention_seconds),
+        ),
+        (
+            "runtime-logs",
+            "Журналы фонового агента",
+            Some(crate::watcher_log::WATCHER_LOG_TOTAL_QUOTA_BYTES),
+            Some(crate::watcher_log::WATCHER_LOG_RETENTION_SECONDS),
+        ),
     ];
     let mut categories = Vec::with_capacity(managed.len() + 1);
     let mut retention_managed_bytes = 0_u64;
-    for (key, label) in managed {
+    for (key, label, quota_bytes, retention_seconds) in managed {
         let bytes = owned_path_size(&data_dir.join(key))?;
         retention_managed_bytes = retention_managed_bytes.saturating_add(bytes);
         categories.push(TechnicalStorageCategory {
@@ -294,6 +319,8 @@ pub(crate) fn collect_technical_storage_status(
             label: label.into(),
             bytes,
             retention_managed: true,
+            quota_bytes,
+            retention_seconds,
         });
     }
     let total_bytes = owned_path_size(&data_dir)?;
@@ -302,6 +329,8 @@ pub(crate) fn collect_technical_storage_status(
         label: "Остальные локальные данные приложения".into(),
         bytes: total_bytes.saturating_sub(retention_managed_bytes),
         retention_managed: false,
+        quota_bytes: None,
+        retention_seconds: None,
     });
     Ok(TechnicalStorageStatus {
         total_bytes,
@@ -330,6 +359,9 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
             max_age,
         )?);
     }
+    removed = removed.saturating_add(crate::watcher_log::cleanup_watcher_logs(
+        &data_dir.join("runtime-logs").join("watcher.log"),
+    )?);
     Ok(removed)
 }
 

@@ -115,9 +115,12 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "technicalStorageUnavailable" in ui
     assert "Остальные настройки и рабочие функции продолжают работать." in ui
     universal = read("src-tauri/src/universal_intake.rs")
-    assert 'SESSION_OWNERSHIP_MARKER: &str = ".dokkomplekt-owned-session"' in universal
-    assert "session_has_verified_ownership" in universal
-    assert "validate_existing_workspace_root" in universal
-    assert "metadata_is_link_like(&metadata)" in universal
+    workspace_session = read("src-tauri/src/universal_intake/workspace_session.rs")
+    assert "mod workspace_session;" in universal
+    assert "SESSION_OWNERSHIP_MARKER" in universal
+    assert 'SESSION_OWNERSHIP_MARKER: &str = ".dokkomplekt-owned-session"' in workspace_session
+    assert "session_has_verified_ownership" in workspace_session
+    assert "validate_existing_workspace_root" in workspace_session
+    assert "metadata_is_link_like(&metadata)" in workspace_session
     assert "two-pass validation must avoid partial cleanup" in universal
     assert "cleanup_preserves_unknown_workspace_entries_without_ownership_marker" in universal

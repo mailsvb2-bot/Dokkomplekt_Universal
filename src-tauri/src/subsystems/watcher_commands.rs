@@ -874,7 +874,6 @@ fn process_watcher_source(
     control_path: Option<PathBuf>,
     log_path: PathBuf,
 ) {
-    use std::io::Write;
     let runtime = match control_path
         .as_deref()
         .ok_or_else(|| "Настройки фонового агента не найдены.".to_string())
@@ -929,13 +928,10 @@ fn process_watcher_source(
     if runtime.open_ui_on_drop
         && launch_or_activate_watcher_ui(control_path.as_deref()).is_err()
     {
-        if let Ok(mut log) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
-            let _ = writeln!(log, "[watcher] ui_activation_failed=true");
-        }
+        let _ = watcher_log::append_watcher_log(
+            &log_path,
+            "[watcher] ui_activation_failed=true",
+        );
     }
     let state = app.state::<AppState>();
     // Background automation is allowed to reuse only an explicit durable user
@@ -1038,16 +1034,10 @@ fn process_watcher_source(
                                 "",
                                 &details,
                             );
-                            if let Ok(mut log) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&log_path)
-                            {
-                                let _ = writeln!(
-                                    log,
-                                    "[watcher] automatic_print_blocked; print_preferences_unavailable=true"
-                                );
-                            }
+                            let _ = watcher_log::append_watcher_log(
+                                &log_path,
+                                "[watcher] automatic_print_blocked; print_preferences_unavailable=true",
+                            );
                             return;
                         }
                     };
@@ -1065,17 +1055,13 @@ fn process_watcher_source(
                             &details,
                         );
                         let _ = append_audit_event(&app, "automatic_print_failed", "", &details);
-                        if let Ok(mut log) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&log_path)
-                        {
-                            let _ = writeln!(
-                                log,
+                        let _ = watcher_log::append_watcher_log(
+                            &log_path,
+                            &format!(
                                 "[watcher] automatic_print_failed; failed_count={}",
                                 print_result.failed_files.len()
-                            );
-                        }
+                            ),
+                        );
                     } else if !print_result.queued_files.is_empty() {
                         let details = serde_json::to_value(&print_result).unwrap_or_default();
                         let _ = append_audit_event(
@@ -1097,16 +1083,10 @@ fn process_watcher_source(
                         "",
                         &details,
                     );
-                    if let Ok(mut log) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&log_path)
-                    {
-                        let _ = writeln!(
-                            log,
-                            "[watcher] automatic_print_blocked; review_required=true"
-                        );
-                    }
+                    let _ = watcher_log::append_watcher_log(
+                        &log_path,
+                        "[watcher] automatic_print_blocked; review_required=true",
+                    );
                 }
             }
         }
@@ -1134,17 +1114,13 @@ fn process_watcher_source(
                 message: "Документ не обработан. Рядом создан диагностический файл «НЕ ПРОЧИТАН»; постоянная ошибка ждёт исправления источника, временная будет повторена автоматически.".into(),
             };
             let _ = app.emit("document-batch-ready", response);
-            if let Ok(mut log) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
-                let _ = writeln!(
-                    log,
+            let _ = watcher_log::append_watcher_log(
+                &log_path,
+                &format!(
                     "[watcher] source_processing_failed; visible_note={}",
                     note.is_some()
-                );
-            }
+                ),
+            );
         }
     }
 }
@@ -1184,11 +1160,10 @@ fn start_watcher_thread(
     let thread_stop = Arc::clone(&stop);
     let control_path = watcher_config_path(&app).ok();
     let captured_owner = handoff_owner.clone();
-    let log_path = app
-        .path()
-        .app_data_dir()
-        .map(|d| d.join("watcher.log"))
-        .unwrap_or_else(|_| folder.join("watcher.log"));
+    let log_path = watcher_log::watcher_log_path(&app)?;
+    // Apply retention before the first new event; technical logs never fall
+    // back into the user's watched document folder.
+    let _ = watcher_log::cleanup_watcher_logs(&log_path);
     std::thread::spawn(move || {
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let mut native_watcher = notify::recommended_watcher(move |event| {
@@ -1369,13 +1344,10 @@ fn start_watcher_thread(
                             message: "Фоновая обработка аварийно остановлена. Исходник не удалён; рядом создан файл «НЕ ПРОЧИТАН», повторный цикл заблокирован до изменения источника.".into(),
                         };
                         let _ = worker_app.emit("document-batch-ready", response);
-                        if let Ok(mut log) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&worker_log_path)
-                        {
-                            let _ = writeln!(log, "[watcher] worker_panic; retry_blocked=true");
-                        }
+                        let _ = watcher_log::append_watcher_log(
+                            &worker_log_path,
+                            "[watcher] worker_panic; retry_blocked=true",
+                        );
                     }
                     if let Ok(mut active) = worker_in_flight.lock() {
                         active.remove(&worker_path);

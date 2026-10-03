@@ -187,6 +187,15 @@ def test_e1_accounting_installed_lane_is_real_and_fail_closed() -> None:
     assert "border-radius: var(--radius-card); overflow: clip;" in styles
     assert "border-radius: var(--radius-card); overflow: hidden;" not in styles
     assert source.count("Find-ReadyButtonByAutomationId -Root $window -AutomationId 'create-selected-documents'") >= 2
+    assert "function Resolve-LiveReactTextElement" in source
+    assert "Never reuse that" in source and "stale handle for a retry" in source
+    assert "$liveElement = Resolve-LiveReactTextElement -Original $Element" in source
+    assert "[DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)" in source
+    react_helper = source[source.index("function Set-ReactControlledText"):source.index("function Get-UiValue", source.index("function Set-ReactControlledText"))]
+    assert "SendKeys]::SendWait('{BACKSPACE}')" not in react_helper
+    assert "Paste directly over the selected value" in react_helper
+    assert "live React input disappeared after physical focus retry" in source
+    assert "live React input disappeared after commit" in source
     assert "function Set-ReactControlledText" in source
     assert 'Set-ReactControlledText -Element $labelInput -Value $Label' in source
     assert 'Set-ReactControlledText -Element $custom -Value $CustomProfile' in source

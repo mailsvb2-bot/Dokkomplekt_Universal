@@ -2,7 +2,15 @@ use crate::{resolve_user_path, universal_intake, MAX_DOCX_BYTES};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tauri::Manager as _;
+
+pub(crate) const TEMPLATE_SNAPSHOT_QUOTA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const TEMPLATE_SNAPSHOT_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+pub(crate) const TEMPLATE_SANITIZED_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const TEMPLATE_SANITIZED_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+const TEMPLATE_SNAPSHOT_RESERVE_OVERHEAD_BYTES: u64 = 1024 * 1024;
+const TEMPLATE_SANITIZED_RESERVE_OVERHEAD_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 struct PublicationSnapshot {
@@ -75,6 +83,14 @@ impl TemplateSnapshot {
             .app_data_dir()
             .map_err(|error| error.to_string())?
             .join("template-snapshot-work");
+        universal_intake::enforce_ephemeral_workspace_quota(
+            &workspace,
+            Duration::from_secs(TEMPLATE_SNAPSHOT_RETENTION_SECONDS),
+            TEMPLATE_SNAPSHOT_QUOTA_BYTES,
+            metadata
+                .len()
+                .saturating_add(TEMPLATE_SNAPSHOT_RESERVE_OVERHEAD_BYTES),
+        )?;
         Self::capture_path(live_path, &workspace, label)
     }
 
@@ -139,6 +155,12 @@ impl TemplateSnapshot {
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("template.docx");
+        universal_intake::enforce_ephemeral_workspace_quota(
+            &workspace,
+            Duration::from_secs(TEMPLATE_SANITIZED_RETENTION_SECONDS),
+            TEMPLATE_SANITIZED_QUOTA_BYTES,
+            (bytes.len() as u64).saturating_add(TEMPLATE_SANITIZED_RESERVE_OVERHEAD_BYTES),
+        )?;
         let session = universal_intake::materialize_sensitive_file(file_name, &bytes, &workspace)?;
         let path = session.original_path()?;
         let sha256 = hex::encode(Sha256::digest(&bytes));

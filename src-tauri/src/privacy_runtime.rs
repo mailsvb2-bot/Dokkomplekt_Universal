@@ -320,6 +320,18 @@ pub(crate) fn collect_technical_storage_status(
             Some(crate::WORD_SCANNER_CACHE_QUOTA_BYTES),
             Some(crate::WORD_SCANNER_CACHE_RETENTION_SECONDS),
         ),
+        (
+            "template-snapshots",
+            "Временные snapshot шаблонов",
+            Some(crate::template_snapshot::TEMPLATE_SNAPSHOT_QUOTA_BYTES),
+            Some(crate::template_snapshot::TEMPLATE_SNAPSHOT_RETENTION_SECONDS),
+        ),
+        (
+            "template-sanitized-snapshots",
+            "Временные очищенные копии шаблонов",
+            Some(crate::template_snapshot::TEMPLATE_SANITIZED_QUOTA_BYTES),
+            Some(crate::template_snapshot::TEMPLATE_SANITIZED_RETENTION_SECONDS),
+        ),
     ];
     let mut categories = Vec::with_capacity(managed.len() + 1);
     let mut retention_managed_bytes = 0_u64;
@@ -341,6 +353,12 @@ pub(crate) fn collect_technical_storage_status(
             )?
         } else if key == "word-scanner-cache" {
             universal_intake::owned_workspace_bytes(&data_dir.join("word-scanner-work"))?
+        } else if key == "template-snapshots" {
+            universal_intake::owned_workspace_bytes(&data_dir.join("template-snapshot-work"))?
+        } else if key == "template-sanitized-snapshots" {
+            universal_intake::owned_workspace_bytes(
+                &data_dir.join("template-publication-sanitized-work"),
+            )?
         } else {
             owned_path_size(&data_dir.join(key))?
         };
@@ -410,6 +428,18 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
         &data_dir.join("word-scanner-work"),
         Duration::from_secs(crate::WORD_SCANNER_CACHE_RETENTION_SECONDS),
         crate::WORD_SCANNER_CACHE_QUOTA_BYTES,
+        0,
+    )?);
+    removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_quota(
+        &data_dir.join("template-snapshot-work"),
+        Duration::from_secs(crate::template_snapshot::TEMPLATE_SNAPSHOT_RETENTION_SECONDS),
+        crate::template_snapshot::TEMPLATE_SNAPSHOT_QUOTA_BYTES,
+        0,
+    )?);
+    removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_quota(
+        &data_dir.join("template-publication-sanitized-work"),
+        Duration::from_secs(crate::template_snapshot::TEMPLATE_SANITIZED_RETENTION_SECONDS),
+        crate::template_snapshot::TEMPLATE_SANITIZED_QUOTA_BYTES,
         0,
     )?);
     Ok(removed)

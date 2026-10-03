@@ -96,7 +96,7 @@ trap {
       }
     } catch { }
   }
-  Write-Error -ErrorRecord $failure
+  [Console]::Error.WriteLine("E1 installed contract failed: {0}", [string]$failure.Exception.Message)
   exit 1
 }
 
@@ -306,9 +306,19 @@ function Invoke-UiActionWithObservedTransition {
       $keyboardAction.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
       Start-Sleep -Milliseconds 100
     }
-    $keyboardAction.SetFocus()
-    Start-Sleep -Milliseconds 100
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    $keyboardFocused = $false
+    try {
+      $keyboardAction.SetFocus()
+      $keyboardFocused = $true
+    } catch {
+      Write-Host "E1 UI action '$Description' cannot receive keyboard focus after the bounded physical retry; using one final fresh physical recovery."
+    }
+    if ($keyboardFocused) {
+      Start-Sleep -Milliseconds 100
+      [System.Windows.Forms.SendKeys]::SendWait(' ')
+    } else {
+      Invoke-UiActionPhysicallyFromProbe -ActionProbe $ActionProbe -Description "$Description focus-recovery physical retry"
+    }
   }
 
   return Wait-UiElement -Description $TransitionDescription -TimeoutSeconds 30 -Probe $TransitionProbe

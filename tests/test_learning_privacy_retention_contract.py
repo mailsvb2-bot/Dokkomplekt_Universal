@@ -158,4 +158,7 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "fs2::FileExt::unlock(&lease)" in universal
     assert "session_has_live_process_lease" in workspace_session
     assert "try_lock_exclusive" in workspace_session
+    assert "fs2::lock_contended_error()" in workspace_session
+    assert "lock_error_is_contended" in workspace_session
+    assert "fs2_contended_error_is_recognized_for_a_real_held_lease" in workspace_session
     assert "cleanup_never_evicts_session_while_os_lease_is_held" in workspace_session

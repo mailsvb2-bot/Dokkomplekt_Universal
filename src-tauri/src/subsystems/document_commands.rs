@@ -1498,6 +1498,7 @@ fn apply_scanner(
 
 pub(crate) const WORD_SCANNER_CACHE_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) const WORD_SCANNER_CACHE_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+#[cfg(target_os = "windows")]
 const WORD_SCANNER_CACHE_RESERVE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]

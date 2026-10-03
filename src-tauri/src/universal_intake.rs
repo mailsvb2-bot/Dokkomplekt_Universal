@@ -60,7 +60,6 @@ const MAX_ARCHIVE_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_DEPTH: usize = 3;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_LAYOUT_ITEMS: usize = 20_000;
-const ACTIVE_SESSION_GRACE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IntakeCapability {

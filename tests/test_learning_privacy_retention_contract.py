@@ -29,11 +29,12 @@ def test_learning_imports_live_in_active_app_data_sessions() -> None:
 
 def test_zero_hour_active_lease_and_non_learning_isolation_have_rust_regressions() -> None:
     intake = read("src-tauri/src/universal_intake.rs")
+    workspace_session = read("src-tauri/src/universal_intake/workspace_session.rs")
     assert "retained_learning_session_survives_zero_hour_cleanup_while_lease_is_active" in intake
     assert "zero_hour_cleanup_removes_released_learning_session_without_touching_other_root" in intake
     assert "retained_learning_lease_refresh_ignores_paths_outside_workspace" in intake
-    assert "symlink_metadata(&session_root)" in intake
-    assert "metadata.file_type().is_symlink()" in intake
+    assert "symlink_metadata(&session_root)" in workspace_session
+    assert "metadata_is_link_like(&metadata)" in workspace_session
 
 
 def test_startup_cleanup_failure_is_visible_not_silently_discarded() -> None:

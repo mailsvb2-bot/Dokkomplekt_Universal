@@ -441,7 +441,7 @@ export function AutomationControlCenter({ onStatus }: Props) {
           <span>Под политикой хранения <b>{formatBytes(technicalStorage.retention_managed_bytes)}</b></span>
         </div>
         <div className="compactList storageBreakdown">
-          {technicalStorage.categories.map(item => <small key={item.key}>{item.label}: <b>{formatBytes(item.bytes)}</b>{item.retention_managed ? ' · очищается по заданному сроку' : ' · не удаляется этой очисткой'}</small>)}
+          {technicalStorage.categories.map(item => <small key={item.key}>{item.label}: <b>{formatBytes(item.bytes)}</b>{item.quota_bytes !== null ? ` · лимит ${formatBytes(item.quota_bytes)}` : ''}{item.retention_seconds !== null ? ` · срок ${item.retention_seconds === 0 ? 'после освобождения' : `${Math.max(1, Math.round(item.retention_seconds / 86400))} дн.`}` : ''}{item.retention_managed ? ' · управляется политикой хранения' : ' · не удаляется этой очисткой'}</small>)}
         </div>
       </>}
       <div className="inlineButtons"><button className="utilBtn" disabled={busy} onClick={savePrivacy}>Сохранить политику</button><button className="softBtn" disabled={busy} onClick={cleanWorkspaceNow}>Очистить сейчас</button></div>

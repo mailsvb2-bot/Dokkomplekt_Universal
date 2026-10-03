@@ -134,9 +134,14 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "owned_watcher_log_bytes" in watcher_log
     assert "unsafe_archive_blocks_append_before_log_can_grow" in watcher_log
     assert "oversized_active_log_fails_cleanup_without_panicking_or_deleting" in watcher_log
+    assert "initialize_active_log_atomically" in watcher_log
+    assert "atomic_initialization_cleans_temp_when_publish_fails" in watcher_log
+    assert "retire_legacy_watcher_log" in watcher_log
+    assert "legacy_app_data_log_is_migrated_into_owned_bounded_archive" in watcher_log
+    assert "unrecognized_legacy_file_is_preserved_and_not_claimed_as_owned" in watcher_log
     assert "owned_watcher_log_bytes(" in privacy
     assert "item.quota_bytes !== null" in ui
-    assert "item.retention_seconds !== null" in ui
+    assert "formatRetentionDuration(item.retention_seconds)" in ui
     assert "управляется политикой хранения" in ui
     universal = read("src-tauri/src/universal_intake.rs")
     workspace_session = read("src-tauri/src/universal_intake/workspace_session.rs")

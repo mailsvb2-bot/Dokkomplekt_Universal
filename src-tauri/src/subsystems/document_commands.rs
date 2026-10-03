@@ -1496,6 +1496,10 @@ fn apply_scanner(
     serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
+pub(crate) const WORD_SCANNER_CACHE_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const WORD_SCANNER_CACHE_RETENTION_SECONDS: u64 = 24 * 60 * 60;
+const WORD_SCANNER_CACHE_RESERVE_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 struct StartWordScannerRequest {
     path: String,
@@ -1544,12 +1548,18 @@ fn start_word_scanner(
                     .retained_uploaded_source
                     .lock()
                     .map_err(|_| "uploaded source state lock failed")?;
-                retained
-                    .as_ref()
-                    .ok_or_else(|| {
-                        "Загруженный источник уже очищен. Выберите файл заново.".to_string()
-                    })?
-                    .materialize(&workspace)?
+                let retained = retained.as_ref().ok_or_else(|| {
+                    "Загруженный источник уже очищен. Выберите файл заново.".to_string()
+                })?;
+                universal_intake::enforce_ephemeral_workspace_quota(
+                    &workspace,
+                    Duration::from_secs(WORD_SCANNER_CACHE_RETENTION_SECONDS),
+                    WORD_SCANNER_CACHE_QUOTA_BYTES,
+                    retained
+                        .byte_len()
+                        .saturating_add(WORD_SCANNER_CACHE_RESERVE_BYTES),
+                )?;
+                retained.materialize(&workspace)?
             };
             let path = materialized.original_path()?;
             sensitive_source_session = Some(materialized);

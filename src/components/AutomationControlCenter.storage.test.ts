@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { loadOptionalTechnicalStorage } from './AutomationControlCenter';
+import { formatRetentionDuration, loadOptionalTechnicalStorage } from './AutomationControlCenter';
 import type { TechnicalStorageStatus } from '../lib/types';
 
 describe('AutomationControlCenter optional technical storage telemetry', () => {
+  it('preserves configured retention precision instead of rounding hours to days', () => {
+    expect(formatRetentionDuration(3600)).toBe('1 ч.');
+    expect(formatRetentionDuration(25 * 3600)).toBe('1 д. 1 ч.');
+    expect(formatRetentionDuration(14 * 24 * 3600)).toBe('14 дн.');
+  });
+
   it('returns telemetry when measurement succeeds', async () => {
     const value: TechnicalStorageStatus = {
       total_bytes: 12,

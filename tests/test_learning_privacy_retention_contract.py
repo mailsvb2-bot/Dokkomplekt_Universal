@@ -94,9 +94,12 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     ui = read("src/components/AutomationControlCenter.tsx")
 
     assert "pub(crate) struct TechnicalStorageStatus" in privacy
-    assert '("intake-work", "Временные исходники")' in privacy
-    assert '("template-learning-inputs", "Входы обучения шаблонов")' in privacy
-    assert '("template-learning-work", "Рабочие данные обучения")' in privacy
+    assert '"intake-work"' in privacy
+    assert '"Временные исходники"' in privacy
+    assert '"template-learning-inputs"' in privacy
+    assert '"Входы обучения шаблонов"' in privacy
+    assert '"template-learning-work"' in privacy
+    assert '"Рабочие данные обучения"' in privacy
     assert 'key: "other-app-data".into()' in privacy
     assert "retention_managed: false" in privacy
     assert "fn get_technical_storage_status(" in management
@@ -115,6 +118,22 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "loadOptionalTechnicalStorage()" in ui
     assert "technicalStorageUnavailable" in ui
     assert "Остальные настройки и рабочие функции продолжают работать." in ui
+    assert '"runtime-logs"' in privacy
+    assert '"Журналы фонового агента"' in privacy
+    assert "WATCHER_LOG_TOTAL_QUOTA_BYTES" in privacy
+    assert "WATCHER_LOG_RETENTION_SECONDS" in privacy
+    assert "quota_bytes: Option<u64>" in privacy
+    assert "retention_seconds: Option<u64>" in privacy
+    watcher_log = read("src-tauri/src/watcher_log.rs")
+    assert "WATCHER_LOG_ACTIVE_QUOTA_BYTES: u64 = 4 * 1024 * 1024" in watcher_log
+    assert "WATCHER_LOG_TOTAL_QUOTA_BYTES: u64 = 16 * 1024 * 1024" in watcher_log
+    assert "WATCHER_LOG_RETENTION_SECONDS: u64 = 14 * 24 * 60 * 60" in watcher_log
+    assert "A filename pattern is not ownership" in watcher_log
+    assert "runtime_log_rotation_enforces_total_quota_and_archive_count" in watcher_log
+    assert "cleanup_preserves_unknown_lookalike_file" in watcher_log
+    assert "item.quota_bytes !== null" in ui
+    assert "item.retention_seconds !== null" in ui
+    assert "управляется политикой хранения" in ui
     universal = read("src-tauri/src/universal_intake.rs")
     workspace_session = read("src-tauri/src/universal_intake/workspace_session.rs")
     assert "mod workspace_session;" in universal

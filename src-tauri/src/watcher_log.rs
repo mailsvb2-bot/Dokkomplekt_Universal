@@ -63,6 +63,50 @@ pub(crate) fn cleanup_watcher_logs(path: &Path) -> Result<usize, String> {
     cleanup_archives_with_policy(path, RuntimeLogPolicy::watcher(), SystemTime::now())
 }
 
+pub(crate) fn owned_watcher_log_bytes(path: &Path) -> Result<u64, String> {
+    let _guard = WATCHER_LOG_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "runtime log lock failed".to_string())?;
+    owned_log_bytes(path)
+}
+
+fn owned_log_bytes(active_path: &Path) -> Result<u64, String> {
+    let Some(root) = active_path.parent() else {
+        return Err("Не удалось определить каталог runtime log.".into());
+    };
+    let root_metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("Не удалось проверить каталог runtime log: {error}")),
+    };
+    if crate::publication_metadata_is_link_or_reparse(&root_metadata) || !root_metadata.is_dir() {
+        return Err(format!(
+            "Каталог runtime log имеет небезопасный тип: {}",
+            root.display()
+        ));
+    }
+
+    let mut total = validate_active_log(active_path)?;
+    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path == active_path || !is_archive_name(&path) {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "Архив runtime log имеет небезопасный тип: {}",
+                path.display()
+            ));
+        }
+        if file_has_ownership_header(&path)? {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
+}
+
 fn append_with_policy(
     path: &Path,
     message: &str,
@@ -74,6 +118,10 @@ fn append_with_policy(
         .parent()
         .ok_or_else(|| "Не удалось определить каталог runtime log.".to_string())?;
     ensure_safe_log_root(parent)?;
+    // Enforce the existing archive boundary before accepting another write.
+    // If ownership is ambiguous or quota cleanup is blocked, logging stops
+    // instead of growing the disk behind a failed cleanup.
+    cleanup_archives_with_policy(path, policy, now)?;
     let line = format!("{}\n", message.replace(['\r', '\n'], " "));
     if OWNERSHIP_HEADER.len() as u64 + line.len() as u64 > policy.active_quota_bytes {
         return Err("Одна запись runtime log превышает лимит активного журнала.".into());
@@ -250,14 +298,20 @@ fn cleanup_archives_with_policy(
     let mut archive_bytes = archives.iter().fold(0_u64, |total, (_, bytes, _, _)| {
         total.saturating_add(*bytes)
     });
-    while archives.len() > policy.max_archives
-        || active_bytes.saturating_add(archive_bytes) > policy.total_quota_bytes
+    while !archives.is_empty()
+        && (archives.len() > policy.max_archives
+            || active_bytes.saturating_add(archive_bytes) > policy.total_quota_bytes)
     {
         let (path, bytes, _, _) = archives.remove(0);
         std::fs::remove_file(&path)
             .map_err(|error| format!("Не удалось применить квоту runtime log: {error}"))?;
         archive_bytes = archive_bytes.saturating_sub(bytes);
         removed += 1;
+    }
+    if active_bytes.saturating_add(archive_bytes) > policy.total_quota_bytes {
+        return Err(
+            "Активный runtime log превышает общую квоту; новые записи заблокированы.".into(),
+        );
     }
     Ok(removed)
 }
@@ -320,7 +374,58 @@ mod tests {
         append_with_policy(&path, "status=ok", tiny_policy(), SystemTime::now()).unwrap();
         cleanup_archives_with_policy(&path, tiny_policy(), SystemTime::now()).unwrap();
         assert_eq!(std::fs::read(&unknown).unwrap(), b"user-owned");
+        assert_eq!(
+            owned_log_bytes(&path).unwrap(),
+            std::fs::metadata(&path).unwrap().len()
+        );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn oversized_active_log_fails_cleanup_without_panicking_or_deleting() {
+        let root =
+            std::env::temp_dir().join(format!("dkk-runtime-log-oversized-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(WATCHER_LOG_NAME);
+        let mut bytes = OWNERSHIP_HEADER.to_vec();
+        bytes.resize((tiny_policy().total_quota_bytes + 1) as usize, b'x');
+        std::fs::write(&path, &bytes).unwrap();
+
+        let error =
+            cleanup_archives_with_policy(&path, tiny_policy(), SystemTime::now()).unwrap_err();
+        assert!(error.contains("превышает общую квоту"));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), bytes.len() as u64);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_archive_blocks_append_before_log_can_grow() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("dkk-runtime-log-blocked-{}", Uuid::new_v4()));
+        let external =
+            std::env::temp_dir().join(format!("dkk-runtime-log-target-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let path = root.join(WATCHER_LOG_NAME);
+        append_with_policy(&path, "status=seed", tiny_policy(), SystemTime::now()).unwrap();
+        let before = std::fs::metadata(&path).unwrap().len();
+        symlink(&external, root.join("watcher.unsafe.log")).unwrap();
+
+        let error = append_with_policy(
+            &path,
+            "status=must-not-grow",
+            tiny_policy(),
+            SystemTime::now(),
+        )
+        .unwrap_err();
+        assert!(error.contains("небезопасный тип"));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), before);
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
     }
 
     #[test]

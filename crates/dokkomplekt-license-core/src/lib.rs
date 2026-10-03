@@ -12,8 +12,8 @@ pub use activation::{evaluate_machine_activation, max_machines_for_plan, Activat
 pub use clock::{ClockGuard, ClockState};
 pub use core_error::{CoreError, CoreResult};
 pub use crypto::{
-    verify_license_document_at, verify_license_document_now, verify_license_signature,
-    PublicKeyBytes,
+    verify_license_document_at, verify_license_document_now, verify_license_product_id,
+    verify_license_signature, PublicKeyBytes,
 };
 pub use machine::{MachineFacts, MachineFingerprint};
 pub use models::{Feature, LicenseDocument, LicensePayload, PlanId, SignedLicense, WatermarkMode};

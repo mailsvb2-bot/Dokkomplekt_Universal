@@ -58,7 +58,7 @@ use dokkomplekt_docx::{
 };
 use dokkomplekt_license_core::{
     evaluate_access as evaluate_signed_access, max_documents_per_run as signed_run_limit,
-    verify_license_document_now, AccessRequest as SignedAccessRequest,
+    verify_license_document_now, verify_license_product_id, AccessRequest as SignedAccessRequest,
     AccessStatus as SignedAccessStatus, LicenseDocument, MachineFacts, MachineFingerprint,
     PlanId as SignedPlanId, UsageLedger, WatermarkMode,
 };
@@ -119,6 +119,7 @@ const TRUSTED_LICENSE_PUBKEY_B64: &str = match option_env!("DOKKOMPLEKT_LICENSE_
 };
 const LICENSE_TRUST_ANCHOR_IS_CONFIGURED: bool =
     option_env!("DOKKOMPLEKT_LICENSE_PUBKEY_B64").is_some();
+const DESKTOP_LICENSE_PRODUCT_ID: &str = "dokkomplekt_universal";
 
 /// A separate trust anchor is used for software updates. It is deliberately not
 /// shared with licensing and is never accepted as a command argument from the UI.
@@ -1517,6 +1518,8 @@ fn inspect_desktop_access(
     if let Some(document) = license {
         match verify_license_document_now(&document, &trusted_license_key()?) {
             Ok(()) => {
+                verify_license_product_id(&document, DESKTOP_LICENSE_PRODUCT_ID, true)
+                    .map_err(|error| format!("license product verification failed: {error}"))?;
                 let payload = &document.license.payload;
                 let pack = state.pack.lock().map_err(|_| "state lock failed")?;
                 let case = state

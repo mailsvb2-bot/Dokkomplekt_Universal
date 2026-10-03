@@ -7,6 +7,7 @@ pub enum CoreError {
     MissingProof,
     BadProof,
     BadPublicKey,
+    ProductMismatch(String),
     MachineMismatch,
     NotYetValid,
     Expired,

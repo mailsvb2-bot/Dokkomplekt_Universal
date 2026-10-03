@@ -22,6 +22,7 @@ pub enum RateLimitScope {
     OrderRecovery,
     ProviderCallback,
     LicenseIssue,
+    OwnerLicenseIssue,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -386,6 +387,36 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn owner_license_scope_cannot_inherit_short_order_license_window() {
+        let guard = TrafficGuard::new(8);
+        let ip: IpAddr = "192.0.2.55".parse().unwrap();
+        let now = Instant::now();
+        assert!(guard.check_at(
+            ip,
+            RateLimitScope::LicenseIssue,
+            120,
+            Duration::from_secs(60),
+            now
+        ));
+        for _ in 0..10 {
+            assert!(guard.check_at(
+                ip,
+                RateLimitScope::OwnerLicenseIssue,
+                10,
+                Duration::from_secs(60 * 60),
+                now
+            ));
+        }
+        assert!(!guard.check_at(
+            ip,
+            RateLimitScope::OwnerLicenseIssue,
+            10,
+            Duration::from_secs(60 * 60),
+            now
+        ));
+    }
+
     fn scopes_and_addresses_have_independent_budgets() {
         let guard = TrafficGuard::new(8);
         let first: IpAddr = "192.0.2.10".parse().unwrap();

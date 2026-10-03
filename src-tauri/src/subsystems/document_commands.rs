@@ -2730,6 +2730,8 @@ fn load_state_from_locked(
     if let Some(Some(document)) = loaded_license.as_ref() {
         verify_license_document_now(document, &trusted_license_key()?)
             .map_err(|error| format!("Сохранённая лицензия недействительна: {error}"))?;
+        verify_license_product_id(document, DESKTOP_LICENSE_PRODUCT_ID, true)
+            .map_err(|error| format!("Сохранённая лицензия другого продукта: {error}"))?;
     }
     let loaded_pack = if let Some(mut pack) = loaded_pack {
         let rebound = bind_loaded_pack_to_published_template_versions(app, &repo, &mut pack)?;
@@ -2860,6 +2862,8 @@ fn persist_verified_license_text(
     let public_key = dokkomplekt_license_core::PublicKeyBytes::from_base64(key_b64)
         .map_err(|error| error.to_string())?;
     verify_license_document_now(&document, &public_key).map_err(|error| error.to_string())?;
+    verify_license_product_id(&document, DESKTOP_LICENSE_PRODUCT_ID, true)
+        .map_err(|error| format!("license product mismatch: {error}"))?;
     transact_default_state(app, state, |snapshot| {
         snapshot.license_document = Some(document);
         Ok((true, true))

@@ -148,7 +148,7 @@ async fn issue_owner_license(
 ) -> Result<Json<LicenseDocument>, StatusCode> {
     if !state.traffic_guard.check(
         client_ip.0,
-        RateLimitScope::LicenseIssue,
+        RateLimitScope::OwnerLicenseIssue,
         10,
         Duration::from_secs(60 * 60),
     ) {

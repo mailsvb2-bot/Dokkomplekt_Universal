@@ -623,8 +623,8 @@ function Set-ReactControlledText {
 
       Set-Clipboard -Value $Value -ErrorAction Stop
       [System.Windows.Forms.SendKeys]::SendWait('^a')
-      [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
-      Start-Sleep -Milliseconds 50
+      # Paste directly over the selected value. Clearing first can trigger a
+      # React rerender between selection and paste, invalidating the live UIA handle.
       [System.Windows.Forms.SendKeys]::SendWait('^v')
 
       $commitDeadline = [DateTime]::UtcNow.AddSeconds(2)

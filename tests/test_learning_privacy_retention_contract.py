@@ -131,6 +131,10 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "A filename pattern is not ownership" in watcher_log
     assert "runtime_log_rotation_enforces_total_quota_and_archive_count" in watcher_log
     assert "cleanup_preserves_unknown_lookalike_file" in watcher_log
+    assert "owned_watcher_log_bytes" in watcher_log
+    assert "unsafe_archive_blocks_append_before_log_can_grow" in watcher_log
+    assert "oversized_active_log_fails_cleanup_without_panicking_or_deleting" in watcher_log
+    assert "owned_watcher_log_bytes(" in privacy
     assert "item.quota_bytes !== null" in ui
     assert "item.retention_seconds !== null" in ui
     assert "управляется политикой хранения" in ui

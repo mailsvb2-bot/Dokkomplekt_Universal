@@ -308,6 +308,18 @@ pub(crate) fn collect_technical_storage_status(
             Some(crate::watcher_log::WATCHER_LOG_TOTAL_QUOTA_BYTES),
             Some(crate::watcher_log::WATCHER_LOG_RETENTION_SECONDS),
         ),
+        (
+            "template-compiler-cache",
+            "Кэш compiler шаблонов",
+            Some(crate::TEMPLATE_COMPILER_CACHE_QUOTA_BYTES),
+            Some(crate::TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS),
+        ),
+        (
+            "word-scanner-cache",
+            "Кэш Word-сканера",
+            Some(crate::WORD_SCANNER_CACHE_QUOTA_BYTES),
+            Some(crate::WORD_SCANNER_CACHE_RETENTION_SECONDS),
+        ),
     ];
     let mut categories = Vec::with_capacity(managed.len() + 1);
     let mut retention_managed_bytes = 0_u64;
@@ -316,6 +328,19 @@ pub(crate) fn collect_technical_storage_status(
             crate::watcher_log::owned_watcher_log_bytes(
                 &data_dir.join("runtime-logs").join("watcher.log"),
             )?
+        } else if key == "template-compiler-cache" {
+            [
+                "template-contract-migration",
+                "template-render-inference",
+                "template-inference-work",
+            ]
+            .into_iter()
+            .try_fold(0_u64, |total, workspace| {
+                universal_intake::owned_workspace_bytes(&data_dir.join(workspace))
+                    .map(|bytes| total.saturating_add(bytes))
+            })?
+        } else if key == "word-scanner-cache" {
+            universal_intake::owned_workspace_bytes(&data_dir.join("word-scanner-work"))?
         } else {
             owned_path_size(&data_dir.join(key))?
         };
@@ -367,6 +392,24 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
     }
     removed = removed.saturating_add(crate::watcher_log::cleanup_watcher_logs(
         &data_dir.join("runtime-logs").join("watcher.log"),
+    )?);
+    for workspace in [
+        "template-contract-migration",
+        "template-render-inference",
+        "template-inference-work",
+    ] {
+        removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_quota(
+            &data_dir.join(workspace),
+            Duration::from_secs(crate::TEMPLATE_COMPILER_CACHE_RETENTION_SECONDS),
+            crate::TEMPLATE_COMPILER_CACHE_QUOTA_BYTES,
+            0,
+        )?);
+    }
+    removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_quota(
+        &data_dir.join("word-scanner-work"),
+        Duration::from_secs(crate::WORD_SCANNER_CACHE_RETENTION_SECONDS),
+        crate::WORD_SCANNER_CACHE_QUOTA_BYTES,
+        0,
     )?);
     Ok(removed)
 }

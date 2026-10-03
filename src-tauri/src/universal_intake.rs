@@ -37,7 +37,8 @@ pub use web::fetch_web_source;
 use web::is_public_ip;
 pub(crate) use workspace_session::{
     cleanup_workspace, create_owned_workspace_session, create_retained_workspace_session,
-    enforce_ephemeral_workspace_quota, owned_workspace_bytes, refresh_retained_workspace_session,
+    enforce_ephemeral_workspace_group_quota, enforce_ephemeral_workspace_quota,
+    owned_workspace_bytes, owned_workspace_group_bytes, refresh_retained_workspace_session,
     OwnedWorkspaceSession,
 };
 use workspace_session::{

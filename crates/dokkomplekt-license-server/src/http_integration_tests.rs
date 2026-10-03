@@ -32,6 +32,7 @@ fn base_config(database_url: Option<String>) -> ServerConfig {
         issuer_key_b64: None,
         product_id: "dokkomplekt_universal".to_string(),
         product_title: "Dokkomplekt Universal".to_string(),
+        doctor_start_amount_rub: 1_490,
         default_license_days: 30,
         owner_bootstrap_code_hash: None,
         owner_license_days: 36_500,

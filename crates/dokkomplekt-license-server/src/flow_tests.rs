@@ -21,6 +21,7 @@ fn config(database_url: Option<String>) -> ServerConfig {
         issuer_key_b64: Some(STANDARD.encode([0u8; 32])),
         product_id: "dokkomplekt_universal".to_string(),
         product_title: "Dokkomplekt Universal".to_string(),
+        doctor_start_amount_rub: 1_490,
         default_license_days: 30,
         owner_bootstrap_code_hash: Some(owner_bootstrap_digest("owner-code")),
         owner_license_days: 36_500,

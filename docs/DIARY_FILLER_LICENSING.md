@@ -10,11 +10,14 @@ Recommended production environment for the MedicalDiaryAutofill instance:
 - `DOKKOMPLEKT_LICENSE_PRODUCT_ID=diary_filler`
 - `DOKKOMPLEKT_LICENSE_PRODUCT_TITLE=MedicalDiaryAutofill`
 - `DOKKOMPLEKT_DEFAULT_LICENSE_DAYS=31`
+- `DOKKOMPLEKT_DOCTOR_START_AMOUNT_RUB=<your monthly price>`
 - `DOKKOMPLEKT_OWNER_LICENSE_DAYS=36500`
 - `DOKKOMPLEKT_OWNER_BOOTSTRAP_CODE_SHA256=<domain-separated digest>`
 - `DOKKOMPLEKT_PAYMENT_PROVIDER=yookassa` or `sbp`
-- normal production PostgreSQL, issuer-key, YooKassa and callback/recovery
-  secrets from the existing server deployment contract.
+- a **dedicated PostgreSQL database** for `diary_filler` (do not share the
+  orders database with another product instance);
+- normal issuer-key, YooKassa and callback/recovery secrets from the existing
+  server deployment contract.
 
 Generate the owner-code digest interactively:
 

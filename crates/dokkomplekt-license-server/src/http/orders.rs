@@ -65,7 +65,11 @@ async fn create_order(
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
     let plan = normalize_order_plan(&request.plan).ok_or(StatusCode::BAD_REQUEST)?;
-    let amount_rub = tariff_amount_rub(plan).ok_or(StatusCode::BAD_REQUEST)?;
+    let amount_rub = if plan == "doctor_start" {
+        state.config.doctor_start_amount_rub
+    } else {
+        tariff_amount_rub(plan).ok_or(StatusCode::BAD_REQUEST)?
+    };
     if matches!(request.amount_rub, Some(client_amount) if client_amount != amount_rub) {
         return Err(StatusCode::BAD_REQUEST);
     }

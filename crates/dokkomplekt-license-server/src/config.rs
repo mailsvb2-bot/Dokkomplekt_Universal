@@ -9,6 +9,7 @@ pub struct ServerConfig {
     pub issuer_key_b64: Option<String>,
     pub product_id: String,
     pub product_title: String,
+    pub doctor_start_amount_rub: u64,
     pub default_license_days: i64,
     pub owner_bootstrap_code_hash: Option<String>,
     pub owner_license_days: i64,
@@ -53,6 +54,11 @@ impl ServerConfig {
             &std::env::var("DOKKOMPLEKT_LICENSE_PRODUCT_TITLE")
                 .unwrap_or_else(|_| "Dokkomplekt Universal".to_string()),
         )?;
+        let doctor_start_amount_rub = std::env::var("DOKKOMPLEKT_DOCTOR_START_AMOUNT_RUB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1_490)
+            .clamp(1, 10_000_000);
         let default_license_days = std::env::var("DOKKOMPLEKT_DEFAULT_LICENSE_DAYS")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -170,6 +176,7 @@ impl ServerConfig {
             issuer_key_b64,
             product_id,
             product_title,
+            doctor_start_amount_rub,
             default_license_days,
             owner_bootstrap_code_hash,
             owner_license_days,

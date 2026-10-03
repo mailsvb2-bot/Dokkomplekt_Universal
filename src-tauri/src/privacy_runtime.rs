@@ -247,8 +247,11 @@ fn owned_path_size(path: &Path) -> Result<u64, String> {
             ))
         }
     };
-    if metadata.file_type().is_symlink() {
-        return Ok(0);
+    if crate::publication_metadata_is_link_or_reparse(&metadata) {
+        return Err(format!(
+            "Подсчёт технических данных заблокирован: {} является ссылкой/reparse point.",
+            path.display()
+        ));
     }
     if metadata.is_file() {
         return Ok(metadata.len());
@@ -354,6 +357,30 @@ mod tests {
         assert!(root.join("one.bin").exists());
         assert!(root.join("nested").join("two.bin").exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn technical_storage_size_never_follows_symlink_outside_owned_root() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("dokkomplekt-storage-link-{}", uuid::Uuid::new_v4()));
+        let external = std::env::temp_dir().join(format!(
+            "dokkomplekt-storage-external-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(external.join("outside.bin"), b"must-not-be-counted").unwrap();
+        symlink(&external, root.join("linked-external")).unwrap();
+
+        let error = owned_path_size(&root).unwrap_err();
+        assert!(error.contains("ссылкой/reparse point"));
+        assert!(external.join("outside.bin").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(external);
     }
 
     #[test]

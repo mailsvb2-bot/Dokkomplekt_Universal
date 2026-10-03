@@ -109,3 +109,8 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert "Под политикой хранения" in ui
     assert "не удаляется этой очисткой" in ui
     assert "Очистить сейчас" in ui
+    assert "publication_metadata_is_link_or_reparse(&metadata)" in privacy
+    assert "ссылкой/reparse point" in privacy
+    assert "loadOptionalTechnicalStorage()" in ui
+    assert "technicalStorageUnavailable" in ui
+    assert "Остальные настройки и рабочие функции продолжают работать." in ui

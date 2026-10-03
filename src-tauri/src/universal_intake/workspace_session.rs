@@ -2,13 +2,143 @@ use super::metadata_is_link_like;
 use fs2::FileExt as _;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub(super) const ACTIVE_SESSION_MARKER: &str = ".active";
 pub(super) const SESSION_OWNERSHIP_MARKER: &str = ".dokkomplekt-owned-session";
 const SESSION_OWNERSHIP_PROOF: &[u8] = b"dokkomplekt-owned-session-v1";
 const ACTIVE_SESSION_GRACE: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Debug)]
+struct OwnedSessionUsage {
+    path: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
+    live: bool,
+}
+
+pub(crate) fn owned_workspace_bytes(workspace: &Path) -> Result<u64, String> {
+    Ok(scan_owned_sessions(workspace)?
+        .into_iter()
+        .fold(0_u64, |total, session| total.saturating_add(session.bytes)))
+}
+
+pub(crate) fn enforce_ephemeral_workspace_quota(
+    workspace: &Path,
+    retention: Duration,
+    max_bytes: u64,
+    required_bytes: u64,
+) -> Result<usize, String> {
+    if max_bytes == 0 || required_bytes > max_bytes {
+        return Err(format!(
+            "Требуемый резерв временного cache ({required_bytes} байт) превышает квоту {max_bytes} байт."
+        ));
+    }
+
+    let now = SystemTime::now();
+    let mut sessions = scan_owned_sessions(workspace)?;
+    let mut removed = 0_usize;
+
+    // Retention cleanup only touches finished/unlocked sessions.
+    let mut retained = Vec::with_capacity(sessions.len());
+    for session in sessions.drain(..) {
+        let expired = now
+            .duration_since(session.modified)
+            .ok()
+            .is_some_and(|age| age >= retention);
+        if !session.live && expired {
+            remove_sensitive_session(&session.path)?;
+            removed += 1;
+        } else {
+            retained.push(session);
+        }
+    }
+
+    let mut total = retained
+        .iter()
+        .fold(0_u64, |sum, session| sum.saturating_add(session.bytes));
+    if total.saturating_add(required_bytes) <= max_bytes {
+        return Ok(removed);
+    }
+
+    // Under quota pressure, evict only completed (unlocked) owned sessions,
+    // oldest first. Live sessions are never candidates regardless of age.
+    retained.sort_by_key(|session| session.modified);
+    for session in retained.iter().filter(|session| !session.live) {
+        remove_sensitive_session(&session.path)?;
+        total = total.saturating_sub(session.bytes);
+        removed += 1;
+        if total.saturating_add(required_bytes) <= max_bytes {
+            return Ok(removed);
+        }
+    }
+
+    Err(format!(
+        "Временный cache занят активными сессиями: требуется {} байт при квоте {} байт и текущем защищённом объёме {} байт.",
+        required_bytes, max_bytes, total
+    ))
+}
+
+fn scan_owned_sessions(workspace: &Path) -> Result<Vec<OwnedSessionUsage>, String> {
+    if !validate_existing_workspace_root(workspace)? {
+        return Ok(Vec::new());
+    }
+
+    let mut sessions = Vec::new();
+    for entry in std::fs::read_dir(workspace).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata_is_link_like(&metadata) {
+            return Err(format!(
+                "Квота временного cache не применяется: обнаружена ссылка/reparse point {}.",
+                path.display()
+            ));
+        }
+        if !metadata.is_dir() || !session_has_verified_ownership(&path)? {
+            continue;
+        }
+        sessions.push(OwnedSessionUsage {
+            bytes: owned_session_size(&path)?,
+            modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+            live: session_has_live_process_lease(&path)?,
+            path,
+        });
+    }
+    Ok(sessions)
+}
+
+fn owned_session_size(root: &Path) -> Result<u64, String> {
+    let metadata = std::fs::symlink_metadata(root).map_err(|error| error.to_string())?;
+    if metadata_is_link_like(&metadata) || !metadata.is_dir() {
+        return Err(format!(
+            "Owned cache session имеет небезопасный тип: {}",
+            root.display()
+        ));
+    }
+
+    let mut total = 0_u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in std::fs::read_dir(&directory).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if metadata_is_link_like(&metadata) {
+                return Err(format!(
+                    "Owned cache session содержит ссылку/reparse point: {}",
+                    path.display()
+                ));
+            }
+            if metadata.is_dir() {
+                stack.push(path);
+            } else if metadata.is_file() {
+                total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+    Ok(total)
+}
 
 pub(crate) fn cleanup_workspace(workspace: &Path, max_age: Duration) -> Result<usize, String> {
     if !validate_existing_workspace_root(workspace)? {
@@ -158,6 +288,38 @@ fn session_has_live_process_lease(path: &Path) -> Result<bool, String> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct OwnedWorkspaceSession {
+    root: PathBuf,
+    active_lease: Option<File>,
+}
+
+impl OwnedWorkspaceSession {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Drop for OwnedWorkspaceSession {
+    fn drop(&mut self) {
+        if let Some(lease) = self.active_lease.take() {
+            let _ = lease.unlock();
+            drop(lease);
+        }
+        let _ = remove_sensitive_session(&self.root);
+    }
+}
+
+pub(crate) fn create_owned_workspace_session(
+    workspace: &Path,
+) -> Result<OwnedWorkspaceSession, String> {
+    let (root, active_lease) = create_sensitive_session_with_lease(workspace)?;
+    Ok(OwnedWorkspaceSession {
+        root,
+        active_lease: Some(active_lease),
+    })
+}
+
 pub(crate) fn create_retained_workspace_session(workspace: &Path) -> Result<PathBuf, String> {
     create_sensitive_session(workspace)
 }
@@ -274,9 +436,103 @@ pub(super) fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn remove_sensitive_session(root: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata_is_link_like(&metadata) || !metadata.is_dir() {
+        return Err(format!(
+            "Временная сессия имеет небезопасный тип и не удалена: {}",
+            root.display()
+        ));
+    }
+    if !session_has_verified_ownership(root)? {
+        return Err(format!(
+            "Временная сессия без подтверждённого ownership marker не удалена: {}",
+            root.display()
+        ));
+    }
+    std::fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_pressure_evicts_released_owned_cache_but_never_live_session() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-cache-quota-live-{}", Uuid::new_v4()));
+
+        let released = create_sensitive_session(&workspace).unwrap();
+        std::fs::write(released.join("released.bin"), vec![b'r'; 128]).unwrap();
+
+        let (live, lease) = create_sensitive_session_with_lease(&workspace).unwrap();
+        std::fs::write(live.join("live.bin"), vec![b'l'; 128]).unwrap();
+        let live_bytes = owned_session_size(&live).unwrap();
+
+        let removed = enforce_ephemeral_workspace_quota(
+            &workspace,
+            Duration::from_secs(24 * 60 * 60),
+            live_bytes + 1,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!released.exists());
+        assert!(live.is_dir());
+
+        lease.unlock().unwrap();
+        drop(lease);
+        remove_sensitive_session(&live).unwrap();
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn quota_fails_closed_when_live_session_consumes_reserved_capacity() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-cache-quota-block-{}", Uuid::new_v4()));
+        let (live, lease) = create_sensitive_session_with_lease(&workspace).unwrap();
+        std::fs::write(live.join("live.bin"), vec![b'l'; 64]).unwrap();
+        let live_bytes = owned_session_size(&live).unwrap();
+
+        let error = enforce_ephemeral_workspace_quota(
+            &workspace,
+            Duration::from_secs(24 * 60 * 60),
+            live_bytes,
+            1,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("активными сессиями"));
+        assert!(live.is_dir());
+
+        lease.unlock().unwrap();
+        drop(lease);
+        remove_sensitive_session(&live).unwrap();
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn unknown_workspace_entries_are_not_counted_or_deleted_by_cache_quota() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-cache-quota-unknown-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let unknown = workspace.join("user-owned.bin");
+        std::fs::write(&unknown, vec![b'u'; 4096]).unwrap();
+
+        assert_eq!(owned_workspace_bytes(&workspace).unwrap(), 0);
+        assert_eq!(
+            enforce_ephemeral_workspace_quota(&workspace, Duration::ZERO, 1024, 512,).unwrap(),
+            0
+        );
+        assert_eq!(std::fs::metadata(&unknown).unwrap().len(), 4096);
+
+        let _ = std::fs::remove_dir_all(workspace);
+    }
 
     #[test]
     fn live_process_lease_is_visible_until_explicit_release() {
@@ -313,25 +569,4 @@ mod tests {
         assert!(!root.exists());
         let _ = std::fs::remove_dir_all(workspace);
     }
-}
-
-pub(super) fn remove_sensitive_session(root: &Path) -> Result<(), String> {
-    let metadata = match std::fs::symlink_metadata(root) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.to_string()),
-    };
-    if metadata_is_link_like(&metadata) || !metadata.is_dir() {
-        return Err(format!(
-            "Временная сессия имеет небезопасный тип и не удалена: {}",
-            root.display()
-        ));
-    }
-    if !session_has_verified_ownership(root)? {
-        return Err(format!(
-            "Временная сессия без подтверждённого ownership marker не удалена: {}",
-            root.display()
-        ));
-    }
-    std::fs::remove_dir_all(root).map_err(|error| error.to_string())
 }

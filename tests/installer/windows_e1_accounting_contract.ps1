@@ -516,6 +516,59 @@ function Set-UiValue {
   Start-Sleep -Milliseconds 200
 }
 
+function Resolve-LiveReactTextElement {
+  param([Parameter(Mandatory = $true)]$Original)
+
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+
+  $automationId = ''
+  $name = ''
+  $controlType = $null
+  try {
+    $automationId = [string]$Original.Current.AutomationId
+    $name = [string]$Original.Current.Name
+    $controlType = $Original.Current.ControlType
+  } catch {
+    return $null
+  }
+
+  $conditions = New-Object System.Collections.Generic.List[System.Windows.Automation.Condition]
+  if (-not [string]::IsNullOrWhiteSpace($automationId)) {
+    $conditions.Add(
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+        $automationId
+      )
+    )
+  } elseif (-not [string]::IsNullOrWhiteSpace($name)) {
+    $conditions.Add(
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        $name
+      )
+    )
+  } else {
+    return $Original
+  }
+
+  if ($null -ne $controlType) {
+    $conditions.Add(
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        $controlType
+      )
+    )
+  }
+
+  $condition = if ($conditions.Count -eq 1) {
+    $conditions[0]
+  } else {
+    [System.Windows.Automation.AndCondition]::new($conditions.ToArray())
+  }
+  return $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
 function Set-ReactControlledText {
   param(
     [Parameter(Mandatory = $true)]$Element,
@@ -523,41 +576,72 @@ function Set-ReactControlledText {
     [Parameter(Mandatory = $true)][string]$Description
   )
 
-  # WebView2 exposes HTML inputs through UIA, but SetFocus can succeed without
-  # transferring real DOM keyboard focus. Commit through user-equivalent input
-  # and require observable value persistence before accepting the interaction.
+  # WebView2 can replace an HTML input during a React render while the old UIA
+  # AutomationElement remains readable and keeps stale geometry. Never reuse that
+  # stale handle for a retry: reacquire the live DOM-backed element before every
+  # physical/focus action and again before read-back.
   $expected = Normalize-UiValue -Value $Value
   $lastActual = ''
   for ($attempt = 0; $attempt -lt 3; $attempt++) {
     try {
-      if ($Element.Current.IsOffscreen -and $Element.Current.IsScrollItemPatternAvailable) {
-        $Element.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+      $liveElement = Resolve-LiveReactTextElement -Original $Element
+      if ($null -eq $liveElement) {
+        throw "live React input disappeared before attempt $($attempt + 1)"
+      }
+
+      if ($liveElement.Current.IsOffscreen -and $liveElement.Current.IsScrollItemPatternAvailable) {
+        $liveElement.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern).ScrollIntoView()
+        Start-Sleep -Milliseconds 100
+        $liveElement = Resolve-LiveReactTextElement -Original $Element
+        if ($null -eq $liveElement) { throw "live React input disappeared after scroll recovery" }
+      }
+
+      $process.Refresh()
+      $windowHandle = [IntPtr]$process.MainWindowHandle
+      if ($windowHandle -ne [IntPtr]::Zero) {
+        [void][DokkomplektE1NativeMouse]::ShowWindow($windowHandle, 5)
+        [void][DokkomplektE1NativeMouse]::SetForegroundWindow($windowHandle)
         Start-Sleep -Milliseconds 100
       }
 
       if ($attempt -gt 0) {
-        Invoke-UiElementPhysically -Element $Element -Description "$Description focus retry $attempt"
+        Invoke-UiElementPhysically -Element $liveElement -Description "$Description focus retry $attempt"
         Start-Sleep -Milliseconds 120
-      } else {
-        $Element.SetFocus()
-        Start-Sleep -Milliseconds 100
+        $liveElement = Resolve-LiveReactTextElement -Original $Element
+        if ($null -eq $liveElement) { throw "live React input disappeared after physical focus retry" }
       }
+
+      try {
+        $liveElement.SetFocus()
+      } catch {
+        Invoke-UiElementPhysically -Element $liveElement -Description "$Description focus recovery $attempt"
+        $liveElement = Resolve-LiveReactTextElement -Original $Element
+        if ($null -eq $liveElement) { throw "live React input disappeared after focus recovery" }
+        $liveElement.SetFocus()
+      }
+      Start-Sleep -Milliseconds 100
 
       Set-Clipboard -Value $Value -ErrorAction Stop
       [System.Windows.Forms.SendKeys]::SendWait('^a')
+      [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+      Start-Sleep -Milliseconds 50
       [System.Windows.Forms.SendKeys]::SendWait('^v')
 
       $commitDeadline = [DateTime]::UtcNow.AddSeconds(2)
       do {
         Start-Sleep -Milliseconds 100
-        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+        $liveElement = Resolve-LiveReactTextElement -Original $Element
+        if ($null -eq $liveElement) { continue }
+        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $liveElement)
         if ($lastActual -eq $expected) { break }
       } while ([DateTime]::UtcNow -lt $commitDeadline)
 
       if ($lastActual -eq $expected) {
         [System.Windows.Forms.SendKeys]::SendWait('{TAB}')
         Start-Sleep -Milliseconds 200
-        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $Element)
+        $liveElement = Resolve-LiveReactTextElement -Original $Element
+        if ($null -eq $liveElement) { throw "live React input disappeared after commit" }
+        $lastActual = Normalize-UiValue -Value (Get-UiValue -Element $liveElement)
         if ($lastActual -eq $expected) { return }
       }
     } catch {

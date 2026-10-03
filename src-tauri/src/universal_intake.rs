@@ -2961,7 +2961,8 @@ Symbolic Link = ../../secret
         use std::os::unix::fs::symlink;
 
         let link = std::env::temp_dir().join(format!("dkk-workspace-link-{}", Uuid::new_v4()));
-        let external = std::env::temp_dir().join(format!("dkk-workspace-external-{}", Uuid::new_v4()));
+        let external =
+            std::env::temp_dir().join(format!("dkk-workspace-external-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&external).unwrap();
         let external_file = external.join("user-owned.txt");
         std::fs::write(&external_file, b"must survive").unwrap();
@@ -2990,7 +2991,10 @@ Symbolic Link = ../../secret
 
         let error = cleanup_workspace(&workspace, Duration::ZERO).unwrap_err();
         assert!(error.contains("ссылка/reparse point"));
-        assert!(owned.is_dir(), "two-pass validation must avoid partial cleanup");
+        assert!(
+            owned.is_dir(),
+            "two-pass validation must avoid partial cleanup"
+        );
         assert!(external_file.is_file());
 
         let _ = std::fs::remove_dir_all(workspace);

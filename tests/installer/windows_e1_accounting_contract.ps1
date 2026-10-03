@@ -2970,23 +2970,23 @@ if ($null -eq $fpr15Export) {
     Find-E1NamedElement -Name 'Экспорт шаблонов'
   }
 }
-Invoke-UiElementPhysically -Element $fpr15Export -Description 'FPR-15 export templates'
-
-$fpr15Package = $null
-$fpr15ExportDeadline = [DateTime]::UtcNow.AddSeconds(30)
-do {
-  # Keep the stable result variable null until a real package exists. Assigning
-  # @() directly to $fpr15Package makes a timeout look non-null in PowerShell
-  # and would later surface as ZipFile.OpenRead(path='') instead of the real
-  # export timeout.
-  $fpr15Candidate = @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue |
+$fpr15NewPackageProbe = {
+  $candidate = @(Get-ChildItem -LiteralPath $desktopPath -File -Filter '*.dktpack' -ErrorAction SilentlyContinue |
     Where-Object { -not $fpr15ExistingPackages.ContainsKey($_.FullName) } |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1)
-  if ($fpr15Candidate.Count -gt 0) { $fpr15Package = $fpr15Candidate[0]; break }
-  Start-Sleep -Milliseconds 200
-} while ([DateTime]::UtcNow -lt $fpr15ExportDeadline)
-if ($null -eq $fpr15Package) { throw 'FPR-15 installed export did not publish a .dktpack file.' }
+  if ($candidate.Count -gt 0) { return $candidate[0] }
+  return $null
+}
+$fpr15Package = Invoke-UiActionWithObservedTransition -ActionProbe {
+  $window = Find-LiveAppWindow
+  if ($null -eq $window) { return $null }
+  Find-ReadyButtonByTrimmedName -Root $window -Name 'Экспорт шаблонов'
+} -TransitionProbe $fpr15NewPackageProbe -Description 'FPR-15 export templates' -TransitionDescription 'FPR-15 exported .dktpack on Desktop' -TransitionSeconds 12
+if ($null -eq $fpr15Package -or -not (Test-Path -LiteralPath $fpr15Package.FullName -PathType Leaf)) {
+  throw 'FPR-15 installed export did not publish a .dktpack file.'
+}
+Write-Host "FPR-15 export transition observed: $($fpr15Package.FullName)"
 
 $fpr15Zip = [System.IO.Compression.ZipFile]::OpenRead($fpr15Package.FullName)
 try {

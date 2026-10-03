@@ -86,8 +86,13 @@ def test_fpr15_installed_lane_requires_clean_profile_export_import_and_new_case_
     ):
         assert marker in source
     assert source.index("FPR-15 CLEAN PROFILE PASS:") < source.index("FPR-15 IMPORT PASS:")
-    assert "$fpr15Candidate = @(" in source
+    assert "$fpr15NewPackageProbe = {" in source
+    assert "Invoke-UiActionWithObservedTransition" in source
+    assert "-TransitionProbe $fpr15NewPackageProbe" in source
+    assert "-TransitionDescription 'FPR-15 exported .dktpack on Desktop'" in source
+    assert "-TransitionSeconds 12" in source
+    assert "FPR-15 export transition observed:" in source
     assert "$fpr15Package = @(Get-ChildItem" not in source
-    assert "if ($fpr15Candidate.Count -gt 0) { $fpr15Package = $fpr15Candidate[0]; break }" in source
+    assert "$fpr15ExportDeadline" not in source
     assert "FPR-15 clean-profile template management" not in source
     assert source.index("FPR-15 IMPORT PASS:") < source.index("FPR-15 INSTALLED PASS:")

@@ -39,8 +39,8 @@ pub(crate) use workspace_session::{
     cleanup_workspace, create_retained_workspace_session, refresh_retained_workspace_session,
 };
 use workspace_session::{
-    create_sensitive_session, remove_sensitive_session, restrict_file_permissions,
-    ACTIVE_SESSION_MARKER, SESSION_OWNERSHIP_MARKER,
+    create_sensitive_session, remove_sensitive_session, restrict_directory_permissions,
+    restrict_file_permissions, ACTIVE_SESSION_MARKER, SESSION_OWNERSHIP_MARKER,
 };
 
 const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;

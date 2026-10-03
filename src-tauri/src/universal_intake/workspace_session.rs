@@ -189,14 +189,14 @@ pub(super) fn create_sensitive_session(workspace: &Path) -> Result<PathBuf, Stri
 }
 
 #[cfg(unix)]
-fn restrict_directory_permissions(path: &Path) -> Result<(), String> {
+pub(super) fn restrict_directory_permissions(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("Не удалось ограничить доступ к временной папке: {error}"))
 }
 
 #[cfg(not(unix))]
-fn restrict_directory_permissions(_path: &Path) -> Result<(), String> {
+pub(super) fn restrict_directory_permissions(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 

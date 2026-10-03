@@ -1,4 +1,6 @@
 use super::metadata_is_link_like;
+use fs2::FileExt as _;
+use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -102,6 +104,10 @@ fn session_has_verified_ownership(path: &Path) -> Result<bool, String> {
 }
 
 fn active_session_is_recent(path: &Path, now: SystemTime) -> Result<bool, String> {
+    if session_has_live_process_lease(path)? {
+        return Ok(true);
+    }
+
     let marker = path.join(ACTIVE_SESSION_MARKER);
     let metadata = match std::fs::symlink_metadata(&marker) {
         Ok(metadata) => metadata,
@@ -119,6 +125,37 @@ fn active_session_is_recent(path: &Path, now: SystemTime) -> Result<bool, String
         .ok()
         .and_then(|modified| now.duration_since(modified).ok())
         .is_some_and(|age| age < ACTIVE_SESSION_GRACE))
+}
+
+fn session_has_live_process_lease(path: &Path) -> Result<bool, String> {
+    let marker = path.join(ACTIVE_SESSION_MARKER);
+    let metadata = match std::fs::symlink_metadata(&marker) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata_is_link_like(&metadata) || !metadata.is_file() {
+        return Err(format!(
+            "Маркер активности временной сессии имеет небезопасный тип: {}",
+            marker.display()
+        ));
+    }
+
+    let lease = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&marker)
+        .map_err(|error| format!("Не удалось проверить lease временной сессии: {error}"))?;
+    match lease.try_lock_exclusive() {
+        Ok(()) => {
+            let _ = lease.unlock();
+            Ok(false)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(format!(
+            "Не удалось безопасно проверить lease временной сессии: {error}"
+        )),
+    }
 }
 
 pub(crate) fn create_retained_workspace_session(workspace: &Path) -> Result<PathBuf, String> {
@@ -153,6 +190,31 @@ pub(crate) fn refresh_retained_workspace_session(
         .map_err(|error| format!("Не удалось продлить учебную сессию: {error}"))?;
     restrict_file_permissions(&marker)?;
     Ok(true)
+}
+
+pub(super) fn create_sensitive_session_with_lease(
+    workspace: &Path,
+) -> Result<(PathBuf, File), String> {
+    let root = create_sensitive_session(workspace)?;
+    let marker = root.join(ACTIVE_SESSION_MARKER);
+    let lease = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&marker)
+        .map_err(|error| format!("Не удалось открыть lease временной сессии: {error}"))
+        .and_then(|file| {
+            file.lock_exclusive().map_err(|error| {
+                format!("Не удалось зафиксировать lease временной сессии: {error}")
+            })?;
+            Ok(file)
+        }) {
+        Ok(lease) => lease,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&root);
+            return Err(error);
+        }
+    };
+    Ok((root, lease))
 }
 
 pub(super) fn create_sensitive_session(workspace: &Path) -> Result<PathBuf, String> {
@@ -210,6 +272,47 @@ pub(super) fn restrict_file_permissions(path: &Path) -> Result<(), String> {
 #[cfg(not(unix))]
 pub(super) fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_process_lease_is_visible_until_explicit_release() {
+        let workspace = std::env::temp_dir().join(format!("dkk-session-lease-{}", Uuid::new_v4()));
+        let (root, lease) = create_sensitive_session_with_lease(&workspace).unwrap();
+
+        assert!(session_has_live_process_lease(&root).unwrap());
+
+        lease.unlock().unwrap();
+        drop(lease);
+        assert!(!session_has_live_process_lease(&root).unwrap());
+
+        remove_sensitive_session(&root).unwrap();
+        assert!(!root.exists());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn cleanup_never_evicts_session_while_os_lease_is_held() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-session-cleanup-lease-{}", Uuid::new_v4()));
+        let (root, lease) = create_sensitive_session_with_lease(&workspace).unwrap();
+
+        assert_eq!(cleanup_workspace(&workspace, Duration::ZERO).unwrap(), 0);
+        assert!(root.is_dir());
+
+        lease.unlock().unwrap();
+        drop(lease);
+        // The marker freshness still protects a just-released retained-style session.
+        assert_eq!(cleanup_workspace(&workspace, Duration::ZERO).unwrap(), 0);
+
+        std::fs::remove_file(root.join(ACTIVE_SESSION_MARKER)).unwrap();
+        assert_eq!(cleanup_workspace(&workspace, Duration::ZERO).unwrap(), 1);
+        assert!(!root.exists());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
 }
 
 pub(super) fn remove_sensitive_session(root: &Path) -> Result<(), String> {

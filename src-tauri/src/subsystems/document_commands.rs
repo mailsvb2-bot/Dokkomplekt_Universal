@@ -807,6 +807,8 @@ fn render_docx(
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     require_strict_document_publication(req.strict)?;
+    let trace_started = std::time::Instant::now();
+    let mut trace_stages = Vec::with_capacity(5);
     let doc = {
         let pack = state.pack.lock().map_err(|_| "state lock failed")?;
         pack.documents
@@ -821,6 +823,7 @@ fn render_docx(
         .map_err(|_| "state lock failed")?
         .clone();
     let state_db_path = active_state_db_path(&app, &state)?;
+    let reference_clone_started = std::time::Instant::now();
     let template_snapshot = template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;
     let prepared_template = prepare_medical_template_for_render(
         &app,
@@ -829,6 +832,12 @@ fn render_docx(
         template_snapshot.path(),
         template_snapshot.sha256(),
     )?;
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::ReferenceClone,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            reference_clone_started,
+        ),
+    });
     let template_text = prepared_template.template_text.clone();
     let effective_document = &prepared_template.effective_document;
     // Both paths are anchored: an installed app must not depend on the process CWD.
@@ -874,6 +883,7 @@ fn render_docx(
             return Err(error);
         }
     };
+    let replay_started = std::time::Instant::now();
     let render_result = render_docx_with_assets(
         &app,
         &prepared_template.path,
@@ -890,12 +900,31 @@ fn render_docx(
             return Err(error.to_string());
         }
     };
-    if let Err(error) = ensure_rendered_document_complete(
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::Replay,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(replay_started),
+    });
+
+    let physical_readback_started = std::time::Instant::now();
+    if let Err(error) = ensure_rendered_document_readable(effective_document, &reservation.path) {
+        let _ = std::fs::remove_file(&reservation.path);
+        rollback_counter_reservations(&app, &hydrated.counter_reservations);
+        rollback_generation_access(&app, &state, &permit);
+        return Err(error);
+    }
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::PhysicalReadback,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            physical_readback_started,
+        ),
+    });
+
+    let verify_started = std::time::Instant::now();
+    if let Err(error) = ensure_rendered_document_semantically_complete(
         effective_document,
         &template_text,
         &render_case,
         &proof.visible_text,
-        &reservation.path,
     ) {
         let _ = std::fs::remove_file(&reservation.path);
         rollback_counter_reservations(&app, &hydrated.counter_reservations);
@@ -908,6 +937,12 @@ fn render_docx(
         rollback_generation_access(&app, &state, &permit);
         return Err(error);
     }
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::Verify,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(verify_started),
+    });
+
+    let publish_started = std::time::Instant::now();
     if let Err(error) = generation_publication::prepare_publication(
         &app,
         &permit,
@@ -966,7 +1001,22 @@ fn render_docx(
     publication_warnings.extend(generation_publication::finalize_published_generation(
         &app, &permit, false,
     ));
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::Publish,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(publish_started),
+    });
     result.warnings.extend(publication_warnings);
+
+    let end_to_end_ms = crate::performance_trace_runtime::elapsed_milliseconds(trace_started);
+    if crate::performance_trace_runtime::persist_manual_single_document_trace(
+        &app,
+        trace_stages,
+        end_to_end_ms,
+    )
+    .is_err()
+    {
+        increment_metric(&app, "performance_trace_write_failures", 1);
+    }
     // Report the real absolute location back to the user (the core RenderResult
     // deliberately knows nothing about the filesystem).
     let mut value = serde_json::to_value(result).map_err(|e| e.to_string())?;

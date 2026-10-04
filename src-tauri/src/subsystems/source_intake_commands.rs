@@ -529,12 +529,14 @@ fn parse_source_file_bytes(
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("intake-work");
+    let intake_guard = crate::privacy_runtime::lock_intake_workspace()?;
     crate::privacy_runtime::ensure_intake_work_capacity(
         &app,
         crate::privacy_runtime::NORMALIZATION_WORK_RESERVE_BYTES,
     )?;
     let mut upload_session =
         universal_intake::normalize_uploaded_bytes(&file_name, &bytes, &workspace)?;
+    drop(intake_guard);
     let normalized = upload_session.take_source()?;
     let provenance = SourceProvenance::from_bytes(&file_name, &bytes);
     let retained_source = universal_intake::RetainedUploadedSource::new(&file_name, &bytes)?;
@@ -713,11 +715,13 @@ fn parse_web_source(
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("intake-work");
+    let intake_guard = crate::privacy_runtime::lock_intake_workspace()?;
     crate::privacy_runtime::ensure_intake_work_capacity(
         &app,
         crate::privacy_runtime::NORMALIZATION_WORK_RESERVE_BYTES,
     )?;
     let fetched = universal_intake::fetch_web_source(req.url.trim(), &workspace)?;
+    drop(intake_guard);
     let provenance = SourceProvenance::from_sha256(&fetched.final_url, &fetched.source_sha256)?;
     let (mut parsed, mut report) = parse_source_text(&fetched.source_text, req.default_year);
     report.warnings.extend(fetched.warnings);

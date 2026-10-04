@@ -40,14 +40,25 @@ def test_e6_zero_touch_shadow_corpus_is_bounded_without_deleting_confirmed_corpu
         storage.index("pub fn list_corpus_entries")
     ]
     assert "WHERE retention_class=?1" in policy_block
+    assert "ORDER BY created_at ASC, rowid ASC" in policy_block
+    assert "let candidates = {" in policy_block
+    assert "victim_rowids" in policy_block
+    assert "remaining_entries" in policy_block
+    assert "remaining_bytes" in policy_block
+    assert "zero_touch_shadow_corpus_status_for(transaction)?" not in policy_block
+    assert "julianday(created_at)" not in policy_block
     assert "CORPUS_CLASS_ZERO_TOUCH_SHADOW" in policy_block
     assert "without deleting protected corpus data" in policy_block
     assert "CORPUS_CLASS_SPECIALIST_CONFIRMED" not in policy_block
 
     backfill = storage[
-        storage.index("fn backfill_corpus_retention_metadata"):
+        storage.index("fn migrate_corpus_retention_metadata_once"):
         storage.index("fn encoded_workspace_profile")
     ]
+    assert "storage_migrations" in backfill
+    assert "CORPUS_RETENTION_MIGRATION_KEY" in backfill
+    assert "already_completed" in backfill
+    assert "TransactionBehavior::Immediate" in backfill
     assert "CORPUS_CLASS_LEGACY_UNVERIFIED" in backfill
     assert ".decode_sensitive(&stored)" in backfill
 
@@ -56,6 +67,7 @@ def test_e6_zero_touch_shadow_corpus_is_bounded_without_deleting_confirmed_corpu
         "zero_touch_shadow_retention_removes_expired_shadow_only",
         "zero_touch_shadow_byte_quota_evicts_shadow_instead_of_protected_corpus",
         "legacy_corpus_rows_are_backfilled_into_safe_retention_classes",
+        "corpus_retention_backfill_is_marked_and_not_rescanned_on_reopen",
         "encrypted_legacy_corpus_rows_are_backfilled_without_losing_acceptance_source",
         "corrupt_legacy_corpus_row_is_preserved_as_unverified_instead_of_blocking_open",
     ]:

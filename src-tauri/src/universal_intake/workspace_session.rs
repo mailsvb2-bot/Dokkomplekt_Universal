@@ -633,10 +633,11 @@ mod tests {
         assert!(retained.is_dir());
 
         std::fs::remove_file(retained.join(ACTIVE_SESSION_MARKER)).unwrap();
+        let unleased_bytes = owned_session_size(&retained).unwrap();
         let still_protected = enforce_retained_workspace_quota(
             &workspace,
             Duration::from_secs(24 * 60 * 60),
-            retained_bytes,
+            unleased_bytes,
             1,
         )
         .unwrap_err();
@@ -644,7 +645,7 @@ mod tests {
         assert!(retained.is_dir());
 
         assert_eq!(
-            enforce_retained_workspace_quota(&workspace, Duration::ZERO, retained_bytes, 1)
+            enforce_retained_workspace_quota(&workspace, Duration::ZERO, unleased_bytes, 1)
                 .unwrap(),
             1
         );

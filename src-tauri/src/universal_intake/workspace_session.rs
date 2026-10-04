@@ -422,7 +422,10 @@ pub(crate) fn create_completed_retained_workspace_file(
 ) -> Result<PathBuf, String> {
     let file_component = Path::new(file_name);
     if file_component.components().count() != 1
-        || !matches!(file_component.components().next(), Some(Component::Normal(_)))
+        || !matches!(
+            file_component.components().next(),
+            Some(Component::Normal(_))
+        )
     {
         return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
     }
@@ -463,8 +466,9 @@ pub(crate) fn create_completed_retained_workspace_file(
 
     let active = root.join(ACTIVE_SESSION_MARKER);
     let finalize_result = (|| -> Result<(), String> {
-        let metadata = std::fs::symlink_metadata(&active)
-            .map_err(|error| format!("Не удалось проверить active marker retained-сессии: {error}"))?;
+        let metadata = std::fs::symlink_metadata(&active).map_err(|error| {
+            format!("Не удалось проверить active marker retained-сессии: {error}")
+        })?;
         if metadata_is_link_like(&metadata) || !metadata.is_file() {
             return Err("Active marker retained-сессии имеет небезопасный тип.".into());
         }
@@ -485,7 +489,10 @@ pub(crate) fn list_owned_workspace_files(
 ) -> Result<Vec<PathBuf>, String> {
     let file_component = Path::new(file_name);
     if file_component.components().count() != 1
-        || !matches!(file_component.components().next(), Some(Component::Normal(_)))
+        || !matches!(
+            file_component.components().next(),
+            Some(Component::Normal(_))
+        )
     {
         return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
     }

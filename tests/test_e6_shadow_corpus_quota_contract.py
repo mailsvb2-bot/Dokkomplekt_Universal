@@ -28,11 +28,12 @@ def test_e6_zero_touch_shadow_corpus_is_bounded_without_deleting_confirmed_corpu
         storage.index("fn append_corpus_entry_with_shadow_policy"):
         storage.index("pub fn zero_touch_shadow_corpus_status")
     ]
-    assert append_block.index("enforce_zero_touch_shadow_policy_in_transaction") < append_block.index(
+    assert append_block.index(
         'transaction.execute(\n            "INSERT INTO corpus_entries'
-    )
+    ) < append_block.index("enforce_zero_touch_shadow_policy_in_transaction")
     assert "TransactionBehavior::Immediate" in append_block
     assert "let now = chrono::Utc::now();" in append_block
+    assert "zero-touch shadow corpus entry exceeds quota" in append_block
     assert "transaction.commit()?" in append_block
 
     policy_block = storage[
@@ -73,6 +74,7 @@ def test_e6_zero_touch_shadow_corpus_is_bounded_without_deleting_confirmed_corpu
     for regression in [
         "zero_touch_shadow_quota_evicts_oldest_without_touching_specialist_corpus",
         "zero_touch_shadow_retention_removes_expired_shadow_only",
+        "expired_incoming_shadow_is_discarded_without_evicting_newer_entry",
         "zero_touch_shadow_byte_quota_evicts_shadow_instead_of_protected_corpus",
         "legacy_corpus_rows_are_backfilled_into_safe_retention_classes",
         "corpus_retention_migration_applies_production_shadow_policy_before_marking_complete",

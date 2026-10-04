@@ -642,17 +642,18 @@ impl LocalRepository {
         chrono::DateTime::parse_from_rfc3339(&entry.created_at)
             .map_err(|error| StorageError::Crypto(format!("invalid corpus created_at: {error}")))?;
         let now = chrono::Utc::now();
+        if retention_class == CORPUS_CLASS_ZERO_TOUCH_SHADOW && payload_bytes > policy.max_bytes {
+            return Err(StorageError::Crypto(format!(
+                "zero-touch shadow corpus entry exceeds quota: {payload_bytes} > {}",
+                policy.max_bytes
+            )));
+        }
 
         let transaction =
             Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
-        let incoming_shadow_bytes =
-            (retention_class == CORPUS_CLASS_ZERO_TOUCH_SHADOW).then_some(payload_bytes);
-        Self::enforce_zero_touch_shadow_policy_in_transaction(
-            &transaction,
-            policy,
-            now,
-            incoming_shadow_bytes,
-        )?;
+        // Insert first within the same transaction. Enforcement then sees the incoming row,
+        // so a historical/replayed entry that is already expired can evict itself instead
+        // of displacing newer shadow evidence.
         transaction.execute(
             "INSERT INTO corpus_entries(
                 entry_id,case_id,source_sha256,domain_json,json,created_at,
@@ -668,6 +669,12 @@ impl LocalRepository {
                 retention_class,
                 payload_bytes_sql,
             ],
+        )?;
+        Self::enforce_zero_touch_shadow_policy_in_transaction(
+            &transaction,
+            policy,
+            now,
+            None,
         )?;
         transaction.commit()?;
         Ok(())
@@ -3908,6 +3915,47 @@ mod tests {
         assert!(ids.iter().any(|id| id == "specialist-old"));
         assert!(!ids.iter().any(|id| id == "shadow-expired"));
         assert!(ids.iter().any(|id| id == "shadow-current"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn expired_incoming_shadow_is_discarded_without_evicting_newer_entry() {
+        let path = temp_db("shadow-expired-incoming");
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let policy = ShadowCorpusPolicy {
+            max_bytes: 10 * 1024 * 1024,
+            max_entries: 1,
+            retention_days: 90,
+        };
+
+        let current_created_at = chrono::Utc::now().to_rfc3339();
+        let expired_created_at = (chrono::Utc::now() - chrono::Duration::days(120)).to_rfc3339();
+        let current = corpus_entry_for_policy(
+            "shadow-current-survives",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &current_created_at,
+        );
+        let expired = corpus_entry_for_policy(
+            "shadow-expired-incoming",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &expired_created_at,
+        );
+
+        repo.append_corpus_entry_with_shadow_policy(&current, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&expired, policy)
+            .unwrap();
+
+        let ids = repo
+            .list_corpus_entries(20)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.entry_id)
+            .collect::<Vec<_>>();
+        assert!(ids.iter().any(|id| id == "shadow-current-survives"));
+        assert!(!ids.iter().any(|id| id == "shadow-expired-incoming"));
+        assert_eq!(repo.zero_touch_shadow_corpus_status().unwrap().entries, 1);
 
         let _ = std::fs::remove_file(path);
     }

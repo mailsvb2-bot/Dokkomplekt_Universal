@@ -642,6 +642,39 @@ fn apply_compiled_contract_to_document_with_compiler_fields(
     validate_medical_template_output_contract(document)
 }
 
+fn should_compile_medical_template_on_startup(
+    document: &DocumentTemplateSpec,
+    has_matching_version: bool,
+) -> bool {
+    if document.category != DomainKind::Medical || is_medical_diary_document(document) {
+        return false;
+    }
+    document.is_static_copy
+        || !missing_medical_template_render_paths(document).is_empty()
+        || !has_matching_version
+}
+
+fn medical_template_requires_startup_migration(
+    repo: &LocalRepository,
+    document: &DocumentTemplateSpec,
+) -> Result<bool, String> {
+    if document.category != DomainKind::Medical || is_medical_diary_document(document) {
+        return Ok(false);
+    }
+    if document.is_static_copy || !missing_medical_template_render_paths(document).is_empty() {
+        return Ok(true);
+    }
+    let versions = repo
+        .list_template_versions(&document.id)
+        .map_err(|error| error.to_string())?;
+    let has_matching_version =
+        matching_replayable_template_version_sha(&versions, document).is_some();
+    Ok(should_compile_medical_template_on_startup(
+        document,
+        has_matching_version,
+    ))
+}
+
 fn migrate_loaded_medical_template_contracts(
     app: &tauri::AppHandle,
     repo: &mut LocalRepository,
@@ -649,15 +682,25 @@ fn migrate_loaded_medical_template_contracts(
     case: &SemanticCase,
     license: &Option<LicenseDocument>,
 ) -> Result<usize, String> {
-    let workspace = create_template_compiler_workspace(app, "template-contract-migration")?;
-    let root = workspace.root().to_path_buf();
+    let mut workspace: Option<LegacyTemplateInferenceWorkspace> = None;
     let mut drafts = Vec::new();
     let mut migrated = 0usize;
 
     for document in &mut pack.documents {
-        if document.category != DomainKind::Medical {
+        if !medical_template_requires_startup_migration(repo, document)? {
             continue;
         }
+        if workspace.is_none() {
+            workspace = Some(create_template_compiler_workspace(
+                app,
+                "template-contract-migration",
+            )?);
+        }
+        let root = workspace
+            .as_ref()
+            .ok_or_else(|| "template migration workspace was not initialized".to_string())?
+            .root()
+            .to_path_buf();
         let input_path = resolve_user_path(app, &document.template_path)?;
         ensure_template_compiler_cache_capacity(app, &input_path)?;
         let extension = input_path
@@ -1163,6 +1206,47 @@ mod legacy_template_runtime_tests {
             )],
             popup_configured: true,
         }
+    }
+
+    #[test]
+    fn startup_compiler_is_lazy_for_complete_versioned_contracts_and_diaries() {
+        let complete = {
+            let mut document = medical_document();
+            document.required_fields.clear();
+            document.placeholders = vec![
+                "subject.name".into(),
+                "medical.case_number".into(),
+                "medical.admission_date".into(),
+                "medical.discharge_date".into(),
+                "medical.diagnosis".into(),
+                "medical.treatment".into(),
+                "medical.expert_anamnesis".into(),
+            ];
+            document
+        };
+        assert!(
+            missing_medical_template_render_paths(&complete).is_empty(),
+            "fixture must be complete"
+        );
+        assert!(!should_compile_medical_template_on_startup(&complete, true));
+        assert!(should_compile_medical_template_on_startup(&complete, false));
+
+        let mut static_document = complete.clone();
+        static_document.is_static_copy = true;
+        assert!(should_compile_medical_template_on_startup(
+            &static_document,
+            true
+        ));
+
+        let mut incomplete = complete.clone();
+        incomplete
+            .placeholders
+            .retain(|field| field != "medical.treatment");
+        assert!(should_compile_medical_template_on_startup(&incomplete, true));
+
+        let mut diary = static_document;
+        diary.role_id = "diaries".into();
+        assert!(!should_compile_medical_template_on_startup(&diary, false));
     }
 
     fn complete_discharge_document() -> DocumentTemplateSpec {

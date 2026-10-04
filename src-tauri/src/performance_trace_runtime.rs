@@ -1,7 +1,10 @@
-use dokkomplekt_core::PerformanceTrace;
+use dokkomplekt_core::{
+    PerformanceCacheState, PerformanceClass, PerformanceOutcome, PerformanceRunPhase,
+    PerformanceStageMeasurement, PerformanceTrace, PerformanceTraceContext, PerformanceWorkload,
+};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::Manager as _;
 
 const PERFORMANCE_TRACE_WORKSPACE: &str = "performance-traces";
@@ -17,6 +20,38 @@ fn performance_trace_workspace(app: &tauri::AppHandle) -> Result<PathBuf, String
         .app_data_dir()
         .map(|path| path.join(PERFORMANCE_TRACE_WORKSPACE))
         .map_err(|error| format!("Каталог performance trace недоступен: {error}"))
+}
+
+pub(crate) fn elapsed_milliseconds(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+pub(crate) fn persist_manual_single_document_trace(
+    app: &tauri::AppHandle,
+    stages: Vec<PerformanceStageMeasurement>,
+    end_to_end_ms: u64,
+) -> Result<PathBuf, String> {
+    let trace = PerformanceTrace::new(
+        PerformanceTraceContext {
+            run_id: uuid::Uuid::new_v4().simple().to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            class: PerformanceClass::Unclassified,
+            cache_state: PerformanceCacheState::Unclassified,
+            run_phase: PerformanceRunPhase::Unclassified,
+            workload: PerformanceWorkload::SingleDocument,
+            batch_size: 1,
+            // These features are not invoked inside the manual render command.
+            // Upstream source-analysis choices are outside this command's click→ready interval.
+            ocr_used: false,
+            runtime_layout_used: false,
+            pdf_used: false,
+        },
+        stages,
+        end_to_end_ms,
+        0,
+        PerformanceOutcome::Completed,
+    )?;
+    persist_performance_trace(app, &trace)
 }
 
 pub(crate) fn persist_performance_trace(

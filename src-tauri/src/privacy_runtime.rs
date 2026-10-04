@@ -550,9 +550,8 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
     removed = removed.saturating_add(crate::watcher_log::cleanup_watcher_logs(
         &data_dir.join("runtime-logs").join("watcher.log"),
     )?);
-    removed = removed.saturating_add(
-        crate::performance_trace_runtime::cleanup_performance_traces(app)?,
-    );
+    removed =
+        removed.saturating_add(crate::performance_trace_runtime::cleanup_performance_traces(app)?);
     removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_group_quota(
         &[
             "template-contract-migration",

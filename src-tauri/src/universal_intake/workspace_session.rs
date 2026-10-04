@@ -133,28 +133,20 @@ pub(crate) fn enforce_retained_workspace_quota(
         }
     }
 
-    let mut total = retained
+    let total = retained
         .iter()
         .fold(0_u64, |sum, session| sum.saturating_add(session.bytes));
     if total.saturating_add(required_bytes) <= max_bytes {
         return Ok(removed);
     }
 
-    retained.sort_by_key(|session| session.modified);
-    for session in retained {
-        if session.live || active_session_is_recent(&session.path, now)? {
-            continue;
-        }
-        remove_sensitive_session(&session.path)?;
-        total = total.saturating_sub(session.bytes);
-        removed += 1;
-        if total.saturating_add(required_bytes) <= max_bytes {
-            return Ok(removed);
-        }
-    }
-
+    // Retained learning inputs are user-selected working state, not a disposable
+    // cache. Quota pressure must never evict an unexpired retained session merely
+    // because its short activity heartbeat is stale. If expired inactive sessions
+    // were insufficient to make room, fail admission and preserve the remaining
+    // recoverable user state.
     Err(format!(
-        "Retained workspace занят активными или ещё используемыми сессиями: требуется {required_bytes} байт при квоте {max_bytes} байт и защищённом объёме {total} байт."
+        "Retained workspace занят активными или ещё не просроченными сессиями: требуется {required_bytes} байт при квоте {max_bytes} байт и защищённом объёме {total} байт."
     ))
 }
 
@@ -641,14 +633,19 @@ mod tests {
         assert!(retained.is_dir());
 
         std::fs::remove_file(retained.join(ACTIVE_SESSION_MARKER)).unwrap();
+        let still_protected = enforce_retained_workspace_quota(
+            &workspace,
+            Duration::from_secs(24 * 60 * 60),
+            retained_bytes,
+            1,
+        )
+        .unwrap_err();
+        assert!(still_protected.contains("ещё не просроченными"));
+        assert!(retained.is_dir());
+
         assert_eq!(
-            enforce_retained_workspace_quota(
-                &workspace,
-                Duration::from_secs(24 * 60 * 60),
-                retained_bytes,
-                1,
-            )
-            .unwrap(),
+            enforce_retained_workspace_quota(&workspace, Duration::ZERO, retained_bytes, 1)
+                .unwrap(),
             1
         );
         assert!(!retained.exists());

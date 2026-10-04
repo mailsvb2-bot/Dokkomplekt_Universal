@@ -17,13 +17,20 @@ def test_e6_update_backup_quota_is_owned_bounded_and_recovery_safe() -> None:
     assert "UPDATE_BACKUP_MAX_ENTRIES: u64 = 8" in runtime
     assert "UPDATE_BACKUP_RETENTION_SECONDS: u64 = 180 * 24 * 60 * 60" in runtime
 
+    assert "fn validate_update_backup_root" in runtime
+    assert "fn ensure_update_backup_root" in runtime
     assert "fn collect_owned_update_backups" in runtime
+    assert "fn validate_owned_update_backup_for_removal" in runtime
     assert "fn enforce_update_backup_policy_at" in runtime
+    assert "publication_metadata_is_link_or_reparse" in runtime
     assert "fallback_protected_index" in runtime
     assert "protected_update_backup_path" in runtime
     assert "load_update_recovery_state(app)?" in runtime
     assert "write_update_backup_ownership_marker(" in runtime
     assert "create_new(true)" in runtime
+    assert "std::fs::create_dir(&backup_dir)" in runtime
+    assert "validate_update_backup_root(root)?" in runtime
+    assert runtime.count("validate_owned_update_backup_for_removal(backup)?") >= 2
 
     apply_start = runtime.index("fn apply_verified_update(")
     apply = runtime[apply_start:]
@@ -38,6 +45,8 @@ def test_e6_update_backup_quota_is_owned_bounded_and_recovery_safe() -> None:
         "update_backup_policy_preserves_active_recovery_and_unowned_legacy",
         "update_backup_policy_keeps_newest_as_sole_recovery_when_marker_is_absent",
         "malformed_update_backup_marker_blocks_destructive_cleanup",
+        "update_backup_root_rejects_symlink_before_cleanup_or_creation",
+        "changed_update_backup_marker_is_rejected_before_removal",
     ):
         assert regression in runtime
 

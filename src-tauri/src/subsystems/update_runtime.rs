@@ -575,6 +575,36 @@ fn lock_update_backup_policy() -> Result<std::sync::MutexGuard<'static, ()>, Str
         .map_err(|_| "Не удалось заблокировать политику backup обновлений".to_string())
 }
 
+fn validate_update_backup_root(root: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(root)
+        .map_err(|error| format!("Не удалось проверить каталог update-backups: {error}"))?;
+    if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+        return Err(format!(
+            "Каталог update-backups имеет небезопасный тип: {}",
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_update_backup_root(data_dir: &Path) -> Result<PathBuf, String> {
+    let root = data_dir.join("update-backups");
+    match std::fs::symlink_metadata(&root) {
+        Ok(_) => validate_update_backup_root(&root)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(&root)
+                .map_err(|error| format!("Не удалось создать update-backups: {error}"))?;
+            validate_update_backup_root(&root)?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "Не удалось проверить каталог update-backups: {error}"
+            ))
+        }
+    }
+    Ok(root)
+}
+
 fn update_backup_path_size(path: &Path) -> Result<u64, String> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| format!("Не удалось проверить backup {}: {error}", path.display()))?;
@@ -684,6 +714,57 @@ fn collect_owned_update_backups(root: &Path) -> Result<Vec<OwnedUpdateBackup>, S
     Ok(backups)
 }
 
+fn validate_owned_update_backup_for_removal(backup: &OwnedUpdateBackup) -> Result<(), String> {
+    let directory_metadata = std::fs::symlink_metadata(&backup.path).map_err(|error| {
+        format!(
+            "Управляемый backup исчез перед очисткой {}: {error}",
+            backup.path.display()
+        )
+    })?;
+    if crate::publication_metadata_is_link_or_reparse(&directory_metadata)
+        || !directory_metadata.is_dir()
+    {
+        return Err(format!(
+            "Очистка backup остановлена: каталог изменил безопасный тип {}",
+            backup.path.display()
+        ));
+    }
+
+    let marker_path = backup.path.join(UPDATE_BACKUP_OWNERSHIP_FILE);
+    let marker_metadata = std::fs::symlink_metadata(&marker_path).map_err(|error| {
+        format!(
+            "Ownership marker исчез перед очисткой {}: {error}",
+            marker_path.display()
+        )
+    })?;
+    if crate::publication_metadata_is_link_or_reparse(&marker_metadata)
+        || !marker_metadata.is_file()
+    {
+        return Err(format!(
+            "Очистка backup остановлена: ownership marker изменил безопасный тип {}",
+            marker_path.display()
+        ));
+    }
+    let marker: UpdateBackupOwnership = serde_json::from_slice(
+        &std::fs::read(&marker_path).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| {
+        format!(
+            "Ownership marker изменился перед очисткой {}: {error}",
+            marker_path.display()
+        )
+    })?;
+    if marker.schema != UPDATE_BACKUP_OWNERSHIP_SCHEMA
+        || marker.created_at_unix != backup.created_at_unix
+    {
+        return Err(format!(
+            "Очистка backup остановлена: ownership marker больше не соответствует кандидату {}",
+            backup.path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn enforce_update_backup_policy_at(
     root: &Path,
     protected_backup: Option<&Path>,
@@ -693,6 +774,7 @@ fn enforce_update_backup_policy_at(
     if policy.max_bytes == 0 || policy.max_entries == 0 || policy.retention_seconds == 0 {
         return Err("Некорректная политика хранения backup обновлений".to_string());
     }
+    validate_update_backup_root(root)?;
     let backups = collect_owned_update_backups(root)?;
     if backups.is_empty() {
         return Ok(0);
@@ -758,24 +840,23 @@ fn enforce_update_backup_policy_at(
         }
     }
 
+    // Preflight every victim before deleting anything so a changed marker/root blocks the
+    // destructive phase rather than producing a partially cleaned recovery set.
+    for (index, backup) in backups.iter().enumerate() {
+        if victim[index] {
+            validate_owned_update_backup_for_removal(backup)?;
+        }
+    }
+
     let mut removed = 0_usize;
     for (index, backup) in backups.iter().enumerate() {
         if !victim[index] {
             continue;
         }
-        let marker = backup.path.join(UPDATE_BACKUP_OWNERSHIP_FILE);
-        let metadata = std::fs::symlink_metadata(&marker).map_err(|error| {
-            format!(
-                "Ownership marker исчез перед очисткой {}: {error}",
-                marker.display()
-            )
-        })?;
-        if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
-            return Err(format!(
-                "Очистка backup остановлена: ownership marker изменился {}",
-                marker.display()
-            ));
-        }
+        // Re-check immediately before remove_dir_all to narrow the TOCTOU window and, in
+        // particular, refuse a directory that was replaced by a symlink/junction/reparse point.
+        validate_update_backup_root(root)?;
+        validate_owned_update_backup_for_removal(backup)?;
         std::fs::remove_dir_all(&backup.path).map_err(|error| {
             format!(
                 "Не удалось удалить управляемый backup {}: {error}",
@@ -812,8 +893,14 @@ fn enforce_update_backup_storage_policy_unlocked(
 ) -> Result<usize, String> {
     let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let root = data_dir.join("update-backups");
-    if !root.exists() {
-        return Ok(0);
+    match std::fs::symlink_metadata(&root) {
+        Ok(_) => validate_update_backup_root(&root)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(format!(
+                "Не удалось проверить каталог update-backups: {error}"
+            ))
+        }
     }
     let protected = protected_update_backup_path(app, &root)?;
     enforce_update_backup_policy_at(
@@ -916,10 +1003,9 @@ fn copy_update_backup_file(source: &Path, target_dir: &Path) -> Result<Option<Pa
 fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<PathBuf, String> {
     let db_path = default_state_db_path(app)?;
     let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    let backup_dir = data_dir
-        .join("update-backups")
-        .join(format!("{}-{}", target_version, Uuid::new_v4()));
-    std::fs::create_dir_all(&backup_dir).map_err(|error| error.to_string())?;
+    let backup_root = ensure_update_backup_root(&data_dir)?;
+    let backup_dir = backup_root.join(format!("{}-{}", target_version, Uuid::new_v4()));
+    std::fs::create_dir(&backup_dir).map_err(|error| error.to_string())?;
 
     let result = (|| -> Result<(), String> {
         let repo = repository_for(&db_path)?;
@@ -1563,6 +1649,51 @@ mod fpr19_update_lifecycle_tests {
         assert!(error.contains("Повреждён ownership marker"));
         assert!(valid.exists());
         assert!(corrupt.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_backup_root_rejects_symlink_before_cleanup_or_creation() {
+        use std::os::unix::fs::symlink;
+
+        let sandbox = std::env::temp_dir().join(format!(
+            "dokkomplekt-update-backup-root-link-{}",
+            Uuid::new_v4()
+        ));
+        let external = sandbox.join("external");
+        let root_link = sandbox.join("update-backups");
+        std::fs::create_dir_all(&external).unwrap();
+        symlink(&external, &root_link).unwrap();
+
+        let error = validate_update_backup_root(&root_link).unwrap_err();
+        assert!(error.contains("небезопасный тип"));
+
+        let _ = std::fs::remove_file(root_link);
+        let _ = std::fs::remove_dir_all(sandbox);
+    }
+
+    #[test]
+    fn changed_update_backup_marker_is_rejected_before_removal() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-update-backup-marker-race-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let backup = owned_backup_fixture(&root, "owned", 100, 64);
+        let candidate = collect_owned_update_backups(&root).unwrap().remove(0);
+        let marker_path = backup.join(UPDATE_BACKUP_OWNERSHIP_FILE);
+        let changed = UpdateBackupOwnership {
+            schema: UPDATE_BACKUP_OWNERSHIP_SCHEMA.to_string(),
+            target_version: "99.0.0".to_string(),
+            created_at_unix: 101,
+        };
+        std::fs::write(&marker_path, serde_json::to_vec_pretty(&changed).unwrap()).unwrap();
+
+        let error = validate_owned_update_backup_for_removal(&candidate).unwrap_err();
+        assert!(error.contains("больше не соответствует кандидату"));
+        assert!(backup.exists());
 
         let _ = std::fs::remove_dir_all(root);
     }

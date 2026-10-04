@@ -71,6 +71,21 @@ where
     Ok((candidate, versions))
 }
 
+fn active_state_db_path(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<PathBuf, String> {
+    if let Some(path) = state
+        .db_path
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .clone()
+    {
+        return Ok(path);
+    }
+    default_state_db_path(app)
+}
+
 fn verify_published_template_version_file(
     path: &Path,
     record: &TemplateVersionRecord,
@@ -805,9 +820,11 @@ fn render_docx(
         .lock()
         .map_err(|_| "state lock failed")?
         .clone();
+    let state_db_path = active_state_db_path(&app, &state)?;
     let template_snapshot = template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;
     let prepared_template = prepare_medical_template_for_render(
         &app,
+        &state_db_path,
         &doc,
         template_snapshot.path(),
         template_snapshot.sha256(),
@@ -1137,6 +1154,7 @@ fn render_docx_batch(
         return Err(error.to_string());
     }
 
+    let state_db_path = active_state_db_path(&app, &state)?;
     let mut counter_reservations = Vec::new();
     let mut ancillary_warnings = Vec::new();
     let mut staged_source_copy: Option<PathBuf> = None;
@@ -1150,6 +1168,7 @@ fn render_docx_batch(
             })?;
             let prepared_template = prepare_medical_template_for_render(
                 &app,
+                &state_db_path,
                 document,
                 template_snapshot.path(),
                 template_snapshot.sha256(),

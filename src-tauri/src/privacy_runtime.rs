@@ -291,6 +291,25 @@ pub(crate) fn ensure_learning_input_capacity(
     .map(|_| ())
 }
 
+pub(crate) fn capture_learning_source_snapshot(
+    app: &tauri::AppHandle,
+    source: &Path,
+) -> Result<universal_intake::StableSourceSnapshot, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app)?;
+    let workspace = data_dir.join("template-learning-work");
+    universal_intake::enforce_ephemeral_workspace_quota(
+        &workspace,
+        temporary_workspace_retention(&privacy),
+        TEMPLATE_LEARNING_WORK_QUOTA_BYTES,
+        universal_intake::MAX_SOURCE_FILE_BYTES,
+    )?;
+    universal_intake::capture_stable_source(source, &workspace)
+}
+
 pub(crate) fn create_learning_work_session(
     app: &tauri::AppHandle,
 ) -> Result<universal_intake::OwnedWorkspaceSession, String> {

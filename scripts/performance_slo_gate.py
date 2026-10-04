@@ -141,6 +141,48 @@ RESOURCE_POLICY_KEYS = (
 )
 
 
+# Machine-readable interpretation of the immutable Canon condition labels above.
+# These rules apply to the *bound* series used to claim each SLO, not merely to
+# aggregate corpus coverage supplied by unrelated filler series.
+SLO_SERIES_REQUIREMENTS: dict[str, dict[str, Any]] = {
+    "source_analysis": {
+        "class": "typical_docx",
+        "condition_flags": {"ocr": False},
+    },
+    "preflight_calculation": {
+        "condition_flags": {"human_wait_excluded": True},
+    },
+    "render_readback_verify": {
+        "class": "typical_docx",
+        "run_kind": "single_document",
+        "condition_flags": {"runtime_layout": False},
+    },
+    "button_to_ready": {
+        "class": "typical_docx",
+        "run_kind": "single_document",
+        "condition_flags": {"questions_present": False},
+    },
+    "large_docx_to_ready": {
+        "class": "large_docx",
+        "run_kind": "single_document",
+        "require_complexity": True,
+    },
+    "cold_start_to_interactive_ui": {
+        "cache_state": "cold_cache",
+        "run_kind": "first_run",
+        "condition_flags": {"installed_configuration": True},
+    },
+    "visible_action_response": {
+        "condition_flags": {"long_work_backend": True},
+    },
+    "prompt_form_ready": {
+        "condition_flags": {"prompt_plan_precalculated": True},
+    },
+}
+
+LARGE_DOCX_COMPRESSED_BYTES_MAX = 25 * 1024 * 1024
+
+
 def load_object(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -348,11 +390,31 @@ def evaluate(
         )
         if metric and metric not in CANONICAL_METRICS:
             errors.append(f"series[{index}].metric is not a Canon SLO metric: {metric}")
-        require_nonempty_string(series.get("class"), f"series[{index}].class", errors)
-        require_nonempty_string(
+        class_name = require_nonempty_string(
+            series.get("class"), f"series[{index}].class", errors
+        )
+        if class_name and class_name not in (
+            set(CANONICAL_CORPUS_CLASSES) | set(CANONICAL_SPECIAL_CLASSES)
+        ):
+            errors.append(f"series[{index}].class is not a Canon class: {class_name}")
+        cache_state = require_nonempty_string(
             series.get("cache_state"), f"series[{index}].cache_state", errors
         )
-        require_nonempty_string(series.get("run_kind"), f"series[{index}].run_kind", errors)
+        if cache_state and cache_state not in CANONICAL_CACHE_STATES:
+            errors.append(
+                f"series[{index}].cache_state is not canonical: {cache_state}"
+            )
+        run_kind = require_nonempty_string(
+            series.get("run_kind"), f"series[{index}].run_kind", errors
+        )
+        if run_kind and run_kind not in CANONICAL_RUN_KINDS:
+            errors.append(f"series[{index}].run_kind is not canonical: {run_kind}")
+        conditions = series.get("conditions")
+        if conditions is not None and not isinstance(conditions, dict):
+            errors.append(f"series[{index}].conditions must be an object when present")
+        complexity = series.get("complexity")
+        if complexity is not None and not isinstance(complexity, dict):
+            errors.append(f"series[{index}].complexity must be an object when present")
         warmup_runs = series.get("warmup_runs")
         if not isinstance(warmup_runs, int) or isinstance(warmup_runs, bool) or warmup_runs < 0:
             errors.append(f"series[{index}].warmup_runs must be a non-negative integer")
@@ -402,6 +464,70 @@ def evaluate(
         if series.get("metric") != metric:
             errors.append(f"{metric}: bound series reports metric {series.get('metric')!r}")
             continue
+
+        requirements = SLO_SERIES_REQUIREMENTS[metric]
+        required_class = requirements.get("class")
+        if required_class is not None and series.get("class") != required_class:
+            errors.append(
+                f"{metric}: bound series class {series.get('class')!r} "
+                f"does not satisfy {target['conditions']!r}; expected {required_class!r}"
+            )
+        required_cache_state = requirements.get("cache_state")
+        if required_cache_state is not None and series.get("cache_state") != required_cache_state:
+            errors.append(
+                f"{metric}: bound series cache_state {series.get('cache_state')!r} "
+                f"does not satisfy {target['conditions']!r}; expected {required_cache_state!r}"
+            )
+        required_run_kind = requirements.get("run_kind")
+        if required_run_kind is not None and series.get("run_kind") != required_run_kind:
+            errors.append(
+                f"{metric}: bound series run_kind {series.get('run_kind')!r} "
+                f"does not satisfy {target['conditions']!r}; expected {required_run_kind!r}"
+            )
+        condition_flags = requirements.get("condition_flags", {})
+        series_conditions = series.get("conditions")
+        if not isinstance(series_conditions, dict):
+            series_conditions = {}
+        for flag, expected in condition_flags.items():
+            if series_conditions.get(flag) is not expected:
+                errors.append(
+                    f"{metric}: conditions.{flag} must be {expected!r} "
+                    f"for {target['conditions']!r}"
+                )
+
+        if requirements.get("require_complexity") is True:
+            complexity = series.get("complexity")
+            if not isinstance(complexity, dict):
+                errors.append(
+                    f"{metric}: structural complexity metadata is required "
+                    f"for {target['conditions']!r}"
+                )
+            else:
+                compressed_bytes = complexity.get("compressed_bytes")
+                if (
+                    not isinstance(compressed_bytes, (int, float))
+                    or isinstance(compressed_bytes, bool)
+                    or not math.isfinite(float(compressed_bytes))
+                    or float(compressed_bytes) <= 0
+                    or float(compressed_bytes) > LARGE_DOCX_COMPRESSED_BYTES_MAX
+                ):
+                    errors.append(
+                        f"{metric}: complexity.compressed_bytes must be in "
+                        f"(0, {LARGE_DOCX_COMPRESSED_BYTES_MAX}]"
+                    )
+                for dimension in CANONICAL_COMPLEXITY_DIMENSIONS:
+                    value = complexity.get(dimension)
+                    if (
+                        not isinstance(value, (int, float))
+                        or isinstance(value, bool)
+                        or not math.isfinite(float(value))
+                        or float(value) < 0
+                    ):
+                        errors.append(
+                            f"{metric}: complexity.{dimension} must be a finite "
+                            "non-negative number"
+                        )
+
         samples = numeric_samples(
             series.get("samples_ms"), f"series[{series_id}].samples_ms", errors
         )

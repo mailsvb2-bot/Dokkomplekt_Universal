@@ -460,6 +460,38 @@ pub(crate) fn create_completed_retained_workspace_file(
     result
 }
 
+pub(crate) fn list_owned_workspace_files(
+    workspace: &Path,
+    file_name: &str,
+    limit: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let file_component = Path::new(file_name);
+    if file_component.components().count() != 1
+        || !matches!(file_component.components().next(), Some(Component::Normal(_)))
+    {
+        return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
+    }
+    let mut sessions = scan_owned_sessions(workspace)?;
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.modified));
+    let mut files = Vec::new();
+    for session in sessions.into_iter().take(limit.clamp(1, 1_000)) {
+        let path = session.path.join(file_component);
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if metadata_is_link_like(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "Owned retained-файл имеет небезопасный тип: {}",
+                path.display()
+            ));
+        }
+        files.push(path);
+    }
+    Ok(files)
+}
+
 pub(crate) fn refresh_retained_workspace_session(
     workspace: &Path,
     path: &Path,

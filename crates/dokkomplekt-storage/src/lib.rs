@@ -542,6 +542,12 @@ impl LocalRepository {
                 params![retention_class, payload_bytes, rowid],
             )?;
         }
+        Self::enforce_zero_touch_shadow_policy_in_transaction(
+            &transaction,
+            ShadowCorpusPolicy::production(),
+            chrono::Utc::now(),
+            None,
+        )?;
         transaction.execute(
             "INSERT INTO storage_migrations(migration_key) VALUES (?1)",
             params![CORPUS_RETENTION_MIGRATION_KEY],
@@ -4017,6 +4023,74 @@ mod tests {
                 && class == CORPUS_CLASS_SPECIALIST_CONFIRMED
                 && *bytes > 0
         }));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corpus_retention_migration_applies_production_shadow_policy_before_marking_complete() {
+        let path = temp_db("shadow-migration-policy");
+        let expired_shadow = corpus_entry_for_policy(
+            "legacy-expired-shadow",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2025-01-01T00:00:00Z",
+        );
+        let protected_specialist = corpus_entry_for_policy(
+            "legacy-protected-specialist",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            "2025-01-01T00:00:00Z",
+        );
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE corpus_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    domain_json TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+            for entry in [&expired_shadow, &protected_specialist] {
+                conn.execute(
+                    "INSERT INTO corpus_entries(
+                        entry_id,case_id,source_sha256,domain_json,json,created_at
+                     ) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        entry.entry_id.as_str(),
+                        entry.case_id.as_str(),
+                        entry.source_sha256.as_str(),
+                        serde_json::to_string(&entry.domain).unwrap(),
+                        serde_json::to_string(entry).unwrap(),
+                        entry.created_at.as_str(),
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let repo = LocalRepository::open(&path).unwrap();
+        let ids = repo
+            .list_corpus_entries(20)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.entry_id)
+            .collect::<Vec<_>>();
+        assert!(!ids.iter().any(|id| id == "legacy-expired-shadow"));
+        assert!(ids.iter().any(|id| id == "legacy-protected-specialist"));
+        assert_eq!(
+            repo.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM storage_migrations WHERE migration_key=?1",
+                    params![CORPUS_RETENTION_MIGRATION_KEY],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
 
         let _ = std::fs::remove_file(path);
     }

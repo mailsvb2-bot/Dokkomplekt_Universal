@@ -426,12 +426,12 @@ pub(crate) fn create_completed_retained_workspace_file(
     {
         return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
     }
-    let root = create_sensitive_session(workspace)?;
-    let result = (|| -> Result<PathBuf, String> {
+    let (root, active_lease) = create_sensitive_session_with_lease(workspace)?;
+    let destination = root.join(file_component);
+    let write_result = (|| -> Result<(), String> {
         if !session_has_verified_ownership(&root)? {
             return Err("Retained-сессия не содержит ownership proof.".into());
         }
-        let destination = root.join(file_component);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -442,22 +442,40 @@ pub(crate) fn create_completed_retained_workspace_file(
             .map_err(|error| format!("Не удалось записать retained-файл: {error}"))?;
         file.sync_all()
             .map_err(|error| format!("Не удалось синхронизировать retained-файл: {error}"))?;
-        drop(file);
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = active_lease.unlock();
+        drop(active_lease);
+        let _ = remove_sensitive_session(&root);
+        return Err(error);
+    }
 
-        let active = root.join(ACTIVE_SESSION_MARKER);
+    if let Err(error) = active_lease
+        .unlock()
+        .map_err(|error| format!("Не удалось завершить lease retained-сессии: {error}"))
+    {
+        drop(active_lease);
+        let _ = remove_sensitive_session(&root);
+        return Err(error);
+    }
+    drop(active_lease);
+
+    let active = root.join(ACTIVE_SESSION_MARKER);
+    let finalize_result = (|| -> Result<(), String> {
         let metadata = std::fs::symlink_metadata(&active)
             .map_err(|error| format!("Не удалось проверить active marker retained-сессии: {error}"))?;
         if metadata_is_link_like(&metadata) || !metadata.is_file() {
             return Err("Active marker retained-сессии имеет небезопасный тип.".into());
         }
         std::fs::remove_file(&active)
-            .map_err(|error| format!("Не удалось завершить retained-сессию: {error}"))?;
-        Ok(destination)
+            .map_err(|error| format!("Не удалось завершить retained-сессию: {error}"))
     })();
-    if result.is_err() {
+    if let Err(error) = finalize_result {
         let _ = remove_sensitive_session(&root);
+        return Err(error);
     }
-    result
+    Ok(destination)
 }
 
 pub(crate) fn list_owned_workspace_files(
@@ -474,7 +492,11 @@ pub(crate) fn list_owned_workspace_files(
     let mut sessions = scan_owned_sessions(workspace)?;
     sessions.sort_by_key(|session| std::cmp::Reverse(session.modified));
     let mut files = Vec::new();
-    for session in sessions.into_iter().take(limit.clamp(1, 1_000)) {
+    for session in sessions
+        .into_iter()
+        .filter(|session| !session.live)
+        .take(limit.clamp(1, 1_000))
+    {
         let path = session.path.join(file_component);
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -753,6 +775,30 @@ mod tests {
         lease.unlock().unwrap();
         drop(lease);
         remove_sensitive_session(&live).unwrap();
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn retained_file_listing_never_exposes_live_cross_process_session() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-retained-live-list-{}", Uuid::new_v4()));
+        let (root, lease) = create_sensitive_session_with_lease(&workspace).unwrap();
+        let trace = root.join("trace.json");
+        std::fs::write(&trace, b"complete-but-not-committed").unwrap();
+
+        assert!(list_owned_workspace_files(&workspace, "trace.json", 10)
+            .unwrap()
+            .is_empty());
+
+        lease.unlock().unwrap();
+        drop(lease);
+        std::fs::remove_file(root.join(ACTIVE_SESSION_MARKER)).unwrap();
+        assert_eq!(
+            list_owned_workspace_files(&workspace, "trace.json", 10).unwrap(),
+            vec![trace]
+        );
+
+        remove_sensitive_session(&root).unwrap();
         let _ = std::fs::remove_dir_all(workspace);
     }
 

@@ -7,6 +7,14 @@ use tauri::Manager as _;
 
 const PRIVACY_PREFERENCES_STATE_KEY: &str = "privacy_preferences_v1";
 static LEARNING_WORKSPACE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static INTAKE_WORKSPACE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub(crate) fn lock_intake_workspace() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    INTAKE_WORKSPACE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "intake workspace lock failed".to_string())
+}
 
 pub(crate) fn lock_learning_workspace() -> Result<std::sync::MutexGuard<'static, ()>, String> {
     LEARNING_WORKSPACE_LOCK
@@ -59,6 +67,11 @@ pub(crate) struct TechnicalStorageStatus {
 }
 
 const MIB: u64 = 1024 * 1024;
+const GIB: u64 = 1024 * MIB;
+pub(crate) const INTAKE_WORK_QUOTA_BYTES: u64 = 4 * GIB;
+pub(crate) const TEMPLATE_LEARNING_INPUTS_QUOTA_BYTES: u64 = 4 * GIB;
+pub(crate) const TEMPLATE_LEARNING_WORK_QUOTA_BYTES: u64 = 2 * GIB;
+pub(crate) const NORMALIZATION_WORK_RESERVE_BYTES: u64 = GIB;
 const MANUAL_BATCH_MIN_OUTPUT_BYTES_PER_DOCUMENT: u64 = 8 * MIB;
 const MANUAL_BATCH_OUTPUT_EXPANSION_FACTOR: u64 = 3;
 const MANUAL_BATCH_MIN_RECOVERY_RESERVE_BYTES: u64 = 64 * MIB;
@@ -238,6 +251,83 @@ pub(crate) fn persist_privacy_preferences(
         .map_err(|error| error.to_string())
 }
 
+fn temporary_workspace_retention(preferences: &PrivacyPreferences) -> Duration {
+    Duration::from_secs(u64::from(preferences.temp_retention_hours) * 60 * 60)
+}
+
+pub(crate) fn ensure_intake_work_capacity(
+    app: &tauri::AppHandle,
+    required_bytes: u64,
+) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app)?;
+    universal_intake::enforce_ephemeral_workspace_quota(
+        &data_dir.join("intake-work"),
+        temporary_workspace_retention(&privacy),
+        INTAKE_WORK_QUOTA_BYTES,
+        required_bytes,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn ensure_learning_input_capacity(
+    app: &tauri::AppHandle,
+    required_bytes: u64,
+) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app)?;
+    universal_intake::enforce_retained_workspace_quota(
+        &data_dir.join("template-learning-inputs"),
+        temporary_workspace_retention(&privacy),
+        TEMPLATE_LEARNING_INPUTS_QUOTA_BYTES,
+        required_bytes,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn capture_learning_source_snapshot(
+    app: &tauri::AppHandle,
+    source: &Path,
+) -> Result<universal_intake::StableSourceSnapshot, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app)?;
+    let workspace = data_dir.join("template-learning-work");
+    universal_intake::enforce_ephemeral_workspace_quota(
+        &workspace,
+        temporary_workspace_retention(&privacy),
+        TEMPLATE_LEARNING_WORK_QUOTA_BYTES,
+        universal_intake::MAX_SOURCE_FILE_BYTES,
+    )?;
+    universal_intake::capture_stable_source(source, &workspace)
+}
+
+pub(crate) fn create_learning_work_session(
+    app: &tauri::AppHandle,
+) -> Result<universal_intake::OwnedWorkspaceSession, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let privacy = load_privacy_preferences(app)?;
+    let workspace = data_dir.join("template-learning-work");
+    universal_intake::enforce_ephemeral_workspace_quota(
+        &workspace,
+        temporary_workspace_retention(&privacy),
+        TEMPLATE_LEARNING_WORK_QUOTA_BYTES,
+        NORMALIZATION_WORK_RESERVE_BYTES,
+    )?;
+    universal_intake::create_owned_workspace_session(&workspace)
+}
+
 fn owned_path_size(path: &Path) -> Result<u64, String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -287,19 +377,19 @@ pub(crate) fn collect_technical_storage_status(
         (
             "intake-work",
             "Временные исходники",
-            None,
+            Some(INTAKE_WORK_QUOTA_BYTES),
             Some(temp_retention_seconds),
         ),
         (
             "template-learning-inputs",
             "Входы обучения шаблонов",
-            None,
+            Some(TEMPLATE_LEARNING_INPUTS_QUOTA_BYTES),
             Some(temp_retention_seconds),
         ),
         (
             "template-learning-work",
             "Рабочие данные обучения",
-            None,
+            Some(TEMPLATE_LEARNING_WORK_QUOTA_BYTES),
             Some(temp_retention_seconds),
         ),
         (
@@ -353,7 +443,12 @@ pub(crate) fn collect_technical_storage_status(
     let mut categories = Vec::with_capacity(managed.len() + 1);
     let mut retention_managed_bytes = 0_u64;
     for (key, label, quota_bytes, retention_seconds) in managed {
-        let bytes = if key == "runtime-logs" {
+        let bytes = if matches!(
+            key,
+            "intake-work" | "template-learning-inputs" | "template-learning-work"
+        ) {
+            universal_intake::owned_workspace_bytes(&data_dir.join(key))?
+        } else if key == "runtime-logs" {
             crate::watcher_log::owned_watcher_log_bytes(
                 &data_dir.join("runtime-logs").join("watcher.log"),
             )?
@@ -421,18 +516,29 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
     // Destructive cleanup must fail closed. If the user's privacy policy cannot
     // be loaded, deleting anything under a guessed/default policy is forbidden.
     let privacy = load_privacy_preferences(app)?;
-    let max_age = Duration::from_secs(u64::from(privacy.temp_retention_hours) * 60 * 60);
-    let mut removed = universal_intake::cleanup_workspace(&data_dir.join("intake-work"), max_age)?;
-    // Learning imports and their normalized artifacts may contain the same
-    // sensitive source data as ordinary intake. Serialize cleanup against active
-    // learning commands, and never traverse outside these app-data-owned roots.
+    let max_age = temporary_workspace_retention(&privacy);
+    let mut removed = universal_intake::enforce_ephemeral_workspace_quota(
+        &data_dir.join("intake-work"),
+        max_age,
+        INTAKE_WORK_QUOTA_BYTES,
+        0,
+    )?;
+    // Learning inputs are retained across several UI steps, so a recent retained
+    // session is protected even without an OS lease. Normalization work is fully
+    // ephemeral and uses an owned live session for the duration of each read.
     let _learning_guard = lock_learning_workspace()?;
-    for workspace in ["template-learning-inputs", "template-learning-work"] {
-        removed = removed.saturating_add(universal_intake::cleanup_workspace(
-            &data_dir.join(workspace),
-            max_age,
-        )?);
-    }
+    removed = removed.saturating_add(universal_intake::enforce_retained_workspace_quota(
+        &data_dir.join("template-learning-inputs"),
+        max_age,
+        TEMPLATE_LEARNING_INPUTS_QUOTA_BYTES,
+        0,
+    )?);
+    removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_quota(
+        &data_dir.join("template-learning-work"),
+        max_age,
+        TEMPLATE_LEARNING_WORK_QUOTA_BYTES,
+        0,
+    )?);
     removed = removed.saturating_add(crate::watcher_log::cleanup_watcher_logs(
         &data_dir.join("runtime-logs").join("watcher.log"),
     )?);

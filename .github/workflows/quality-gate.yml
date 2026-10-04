@@ -126,6 +126,8 @@ jobs:
           if-no-files-found: error
       - run: python scripts/verify_starter_content_packs.py
       - run: python scripts/static_quality_gate.py --source-only
+      - name: Validate Canon E6 performance target contract
+        run: python scripts/performance_slo_gate.py validate-targets
       - run: python scripts/check_reference_data_freshness.py
 
   postgres-integration:

@@ -427,20 +427,20 @@ def parser() -> argparse.ArgumentParser:
 
     validate_targets_cmd = sub.add_parser("validate-targets")
     validate_targets_cmd.add_argument(
-        "--targets", default="verification/performance/slo-targets.json"
+        "--targets", default="performance/slo-targets.json"
     )
     validate_targets_cmd.set_defaults(func=command_validate_targets)
 
     validate_reference_cmd = sub.add_parser("validate-reference")
     validate_reference_cmd.add_argument(
-        "--targets", default="verification/performance/slo-targets.json"
+        "--targets", default="performance/slo-targets.json"
     )
     validate_reference_cmd.add_argument("--reference", required=True)
     validate_reference_cmd.set_defaults(func=command_validate_reference)
 
     evaluate_cmd = sub.add_parser("evaluate")
     evaluate_cmd.add_argument(
-        "--targets", default="verification/performance/slo-targets.json"
+        "--targets", default="performance/slo-targets.json"
     )
     evaluate_cmd.add_argument("--reference", required=True)
     evaluate_cmd.add_argument("--evidence", required=True)

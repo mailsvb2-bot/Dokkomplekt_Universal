@@ -19,16 +19,105 @@ TARGET_SCHEMA = "dokkomplekt.performance-slo.v1"
 REFERENCE_SCHEMA = "dokkomplekt.performance-reference.v1"
 EVIDENCE_SCHEMA = "dokkomplekt.performance-evidence.v1"
 
-CANONICAL_METRICS: dict[str, dict[str, int]] = {
-    "source_analysis": {"p50_ms_max": 250, "p95_ms_max": 700},
-    "preflight_calculation": {"p50_ms_max": 100, "p95_ms_max": 300},
-    "render_readback_verify": {"p50_ms_max": 500, "p95_ms_max": 1200},
-    "button_to_ready": {"p50_ms_max": 1000, "p95_ms_max": 2000},
-    "large_docx_to_ready": {"p95_ms_max": 5000},
-    "cold_start_to_interactive_ui": {"p50_ms_max": 1500, "p95_ms_max": 3000},
-    "visible_action_response": {"p95_ms_max": 100},
-    "prompt_form_ready": {"p95_ms_max": 150},
+CANONICAL_METRICS: dict[str, dict[str, int | str]] = {
+    "source_analysis": {
+        "p50_ms_max": 250,
+        "p95_ms_max": 700,
+        "conditions": "typical_source_docx_without_ocr",
+    },
+    "preflight_calculation": {
+        "p50_ms_max": 100,
+        "p95_ms_max": 300,
+        "conditions": "human_response_time_excluded",
+    },
+    "render_readback_verify": {
+        "p50_ms_max": 500,
+        "p95_ms_max": 1200,
+        "conditions": "typical_single_docx_without_runtime_layout",
+    },
+    "button_to_ready": {
+        "p50_ms_max": 1000,
+        "p95_ms_max": 2000,
+        "conditions": "single_ordinary_result_no_questions_cache_state_recorded",
+    },
+    "large_docx_to_ready": {
+        "p95_ms_max": 5000,
+        "conditions": "approximately_up_to_25mb_with_recorded_structural_complexity",
+    },
+    "cold_start_to_interactive_ui": {
+        "p50_ms_max": 1500,
+        "p95_ms_max": 3000,
+        "conditions": "clean_start_of_declared_installed_configuration",
+    },
+    "visible_action_response": {
+        "p95_ms_max": 100,
+        "conditions": "ui_budget_long_work_runs_in_backend",
+    },
+    "prompt_form_ready": {
+        "p95_ms_max": 150,
+        "conditions": "prompt_plan_already_calculated",
+    },
 }
+
+CANONICAL_COMPLEXITY_DIMENSIONS = (
+    "uncompressed_bytes",
+    "xml_nodes",
+    "stories",
+    "tables",
+    "images",
+    "operation_count",
+    "text_lengths",
+    "collection_cardinality",
+)
+CANONICAL_ENVIRONMENT_FIELDS = (
+    "cpu",
+    "ram_bytes",
+    "storage_filesystem",
+    "os_build",
+    "power_mode",
+    "scanner_antivirus_environment",
+    "app_version",
+    "fonts_layout_engine",
+)
+CANONICAL_CACHE_STATES = ("cold_cache", "warm_cache")
+CANONICAL_RUN_KINDS = (
+    "first_run",
+    "repeat_run",
+    "single_document",
+    "batch_10",
+    "batch_50",
+)
+CANONICAL_MEASUREMENT_SPLITS = CANONICAL_CACHE_STATES + CANONICAL_RUN_KINDS
+CANONICAL_CORPUS_CLASSES = (
+    "small_docx",
+    "typical_docx",
+    "large_docx",
+    "table_heavy",
+    "header_footer_heavy",
+    "long_text",
+    "repeated_blocks",
+    "batch_10",
+    "batch_50",
+    "accounting_table",
+    "hr_kit",
+    "many_roles",
+)
+CANONICAL_SPECIAL_CLASSES = (
+    "ocr",
+    "runtime_layout",
+    "pdf",
+    "slow_storage",
+    "network_storage",
+)
+CANONICAL_MEASUREMENT_RULES = (
+    "record_sample_count_and_warmup_rules",
+    "never_derive_end_to_end_p95_by_summing_stage_p95_values",
+    "report_full_drop_to_ready_and_click_to_ready_separately_when_preanalysis_exists",
+    "exclude_human_wait_time_from_machine_time",
+    "do_not_mix_ocr_runtime_layout_pdf_or_slow_network_storage_into_typical_docx_class",
+    "verification_must_remain_enabled_during_measurement",
+    "target_miss_must_not_be_reported_as_pass",
+)
 
 REQUIRED_PROTOCOL_FLAGS = (
     "human_wait_excluded",
@@ -93,10 +182,8 @@ def validate_targets(data: dict[str, Any]) -> list[str]:
         if not isinstance(actual, dict):
             errors.append(f"{metric}: metric definition missing")
             continue
-        for key, value in expected.items():
-            if actual.get(key) != value:
-                errors.append(f"{metric}.{key} must be {value}")
-        require_nonempty_string(actual.get("conditions"), f"{metric}.conditions", errors)
+        if actual != expected:
+            errors.append(f"{metric}: target contract drifted from Canon")
 
     typical = data.get("typical_docx")
     if not isinstance(typical, dict):
@@ -104,23 +191,21 @@ def validate_targets(data: dict[str, Any]) -> list[str]:
     else:
         if typical.get("compressed_bytes_guideline_max") != 5 * 1024 * 1024:
             errors.append("typical_docx compressed guideline must be 5 MiB")
-        dimensions = typical.get("complexity_dimensions")
-        if not isinstance(dimensions, list) or len(dimensions) < 8:
-            errors.append("typical_docx must record structural complexity dimensions")
+        if tuple(typical.get("complexity_dimensions") or ()) != CANONICAL_COMPLEXITY_DIMENSIONS:
+            errors.append("typical_docx complexity dimensions drifted from Canon")
 
-    for key in (
-        "required_environment_fields",
-        "required_measurement_splits",
-        "required_resource_measurements",
-        "required_corpus_classes",
-        "separate_performance_classes",
-        "measurement_rules",
-    ):
-        value = data.get(key)
-        if not isinstance(value, list) or not value or not all(
-            isinstance(item, str) and item.strip() for item in value
-        ):
-            errors.append(f"{key} must be a non-empty string array")
+    exact_arrays = {
+        "required_environment_fields": CANONICAL_ENVIRONMENT_FIELDS,
+        "required_measurement_splits": CANONICAL_MEASUREMENT_SPLITS,
+        "required_resource_measurements": RESOURCE_POLICY_KEYS,
+        "required_corpus_classes": CANONICAL_CORPUS_CLASSES,
+        "separate_performance_classes": CANONICAL_SPECIAL_CLASSES,
+        "measurement_rules": CANONICAL_MEASUREMENT_RULES,
+    }
+    for key, expected in exact_arrays.items():
+        actual = data.get(key)
+        if not isinstance(actual, list) or tuple(actual) != expected:
+            errors.append(f"{key} drifted from the Canon performance contract")
     return errors
 
 
@@ -245,37 +330,6 @@ def evaluate(
         if protocol.get(flag) is not True:
             errors.append(f"protocol.{flag} must be true")
 
-    coverage = evidence.get("coverage")
-    if not isinstance(coverage, dict):
-        errors.append("evidence coverage must be an object")
-        coverage = {}
-    for evidence_key, target_key in (
-        ("measurement_splits", "required_measurement_splits"),
-        ("corpus_classes", "required_corpus_classes"),
-        ("separate_performance_classes", "separate_performance_classes"),
-        ("typical_docx_complexity_dimensions", "complexity_dimensions"),
-    ):
-        actual_raw = coverage.get(evidence_key)
-        if evidence_key == "typical_docx_complexity_dimensions":
-            expected_raw = (targets.get("typical_docx") or {}).get(target_key, [])
-        else:
-            expected_raw = targets.get(target_key, [])
-        actual = {
-            item.strip()
-            for item in actual_raw
-            if isinstance(item, str) and item.strip()
-        } if isinstance(actual_raw, list) else set()
-        expected = {
-            item.strip()
-            for item in expected_raw
-            if isinstance(item, str) and item.strip()
-        } if isinstance(expected_raw, list) else set()
-        missing = sorted(expected - actual)
-        if missing:
-            errors.append(
-                f"coverage.{evidence_key} is incomplete; missing={missing}"
-            )
-
     series_raw = evidence.get("series")
     if not isinstance(series_raw, list):
         errors.append("evidence series must be an array")
@@ -289,9 +343,15 @@ def evaluate(
         if series_id in series_by_id:
             errors.append(f"duplicate series id: {series_id}")
             continue
-        require_nonempty_string(series.get("metric"), f"series[{index}].metric", errors)
+        metric = require_nonempty_string(
+            series.get("metric"), f"series[{index}].metric", errors
+        )
+        if metric and metric not in CANONICAL_METRICS:
+            errors.append(f"series[{index}].metric is not a Canon SLO metric: {metric}")
         require_nonempty_string(series.get("class"), f"series[{index}].class", errors)
-        require_nonempty_string(series.get("cache_state"), f"series[{index}].cache_state", errors)
+        require_nonempty_string(
+            series.get("cache_state"), f"series[{index}].cache_state", errors
+        )
         require_nonempty_string(series.get("run_kind"), f"series[{index}].run_kind", errors)
         warmup_runs = series.get("warmup_runs")
         if not isinstance(warmup_runs, int) or isinstance(warmup_runs, bool) or warmup_runs < 0:
@@ -301,6 +361,37 @@ def evaluate(
     metric_results: dict[str, Any] = {}
     min_samples = policy.get("min_samples_per_series")
     min_samples = min_samples if isinstance(min_samples, int) and min_samples >= 3 else 3
+
+    measured_classes: set[str] = set()
+    measured_cache_states: set[str] = set()
+    measured_run_kinds: set[str] = set()
+    for series_id, series in series_by_id.items():
+        samples = numeric_samples(
+            series.get("samples_ms"), f"series[{series_id}].samples_ms", errors
+        )
+        if len(samples) < min_samples:
+            errors.append(
+                f"series[{series_id}]: {len(samples)} samples are below bound minimum {min_samples}"
+            )
+            continue
+        measured_classes.add(str(series.get("class", "")).strip())
+        measured_cache_states.add(str(series.get("cache_state", "")).strip())
+        measured_run_kinds.add(str(series.get("run_kind", "")).strip())
+
+    missing_classes = sorted(
+        (set(CANONICAL_CORPUS_CLASSES) | set(CANONICAL_SPECIAL_CLASSES))
+        - measured_classes
+    )
+    if missing_classes:
+        errors.append(f"measured corpus/class coverage is incomplete; missing={missing_classes}")
+    missing_cache_states = sorted(set(CANONICAL_CACHE_STATES) - measured_cache_states)
+    if missing_cache_states:
+        errors.append(
+            f"measured cache-state coverage is incomplete; missing={missing_cache_states}"
+        )
+    missing_run_kinds = sorted(set(CANONICAL_RUN_KINDS) - measured_run_kinds)
+    if missing_run_kinds:
+        errors.append(f"measured run-kind coverage is incomplete; missing={missing_run_kinds}")
     bindings = policy.get("metric_bindings") if isinstance(policy.get("metric_bindings"), dict) else {}
     for metric, target in CANONICAL_METRICS.items():
         series_id = bindings.get(metric)
@@ -311,11 +402,10 @@ def evaluate(
         if series.get("metric") != metric:
             errors.append(f"{metric}: bound series reports metric {series.get('metric')!r}")
             continue
-        samples = numeric_samples(series.get("samples_ms"), f"series[{series_id}].samples_ms", errors)
+        samples = numeric_samples(
+            series.get("samples_ms"), f"series[{series_id}].samples_ms", errors
+        )
         if len(samples) < min_samples:
-            errors.append(
-                f"{metric}: {len(samples)} samples are below bound minimum {min_samples}"
-            )
             continue
         result: dict[str, float | int | str | bool] = {
             "series_id": series_id,

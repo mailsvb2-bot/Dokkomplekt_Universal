@@ -739,6 +739,10 @@ struct PreparedMedicalRenderTemplate {
     _workspace: Option<LegacyTemplateInferenceWorkspace>,
 }
 
+fn replayable_template_version_status(status: &str) -> bool {
+    matches!(status, "published" | "superseded")
+}
+
 fn published_template_sha256_for_document(
     state_db_path: &Path,
     document: &DocumentTemplateSpec,
@@ -749,7 +753,7 @@ fn published_template_sha256_for_document(
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|version| {
-            matches!(version.status.as_str(), "published" | "superseded")
+            replayable_template_version_status(&version.status)
                 && version.template_path == document.template_path
         })
         .map(|version| version.template_sha256))
@@ -1171,9 +1175,9 @@ mod legacy_template_runtime_tests {
 
     #[test]
     fn frozen_version_statuses_remain_replayable_after_concurrent_publish() {
-        assert!(matches!("published", "published" | "superseded"));
-        assert!(matches!("superseded", "published" | "superseded"));
-        assert!(!matches!("draft", "published" | "superseded"));
+        assert!(replayable_template_version_status("published"));
+        assert!(replayable_template_version_status("superseded"));
+        assert!(!replayable_template_version_status("draft"));
     }
 
     #[test]

@@ -333,6 +333,12 @@ pub(crate) fn collect_technical_storage_status(
             Some(crate::template_snapshot::TEMPLATE_SANITIZED_RETENTION_SECONDS),
         ),
         (
+            "update-backups",
+            "Backups обновлений (активный/последний recovery защищён)",
+            Some(crate::UPDATE_BACKUP_QUOTA_BYTES),
+            Some(crate::UPDATE_BACKUP_RETENTION_SECONDS),
+        ),
+        (
             "zero-touch-shadow-corpus",
             "Shadow-корпус автоматизации (до 50 000 записей)",
             Some(dokkomplekt_storage::ZERO_TOUCH_SHADOW_CORPUS_QUOTA_BYTES),
@@ -370,6 +376,8 @@ pub(crate) fn collect_technical_storage_status(
             universal_intake::owned_workspace_bytes(
                 &data_dir.join("template-publication-sanitized-work"),
             )?
+        } else if key == "update-backups" {
+            crate::owned_update_backup_bytes(app)?
         } else if key == "zero-touch-shadow-corpus" {
             let db_path = default_state_db_path(app)?;
             repository_for(&db_path)?
@@ -459,6 +467,7 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
         crate::template_snapshot::TEMPLATE_SANITIZED_QUOTA_BYTES,
         0,
     )?);
+    removed = removed.saturating_add(crate::enforce_update_backup_storage_policy(app)?);
     let db_path = default_state_db_path(app)?;
     removed = removed.saturating_add(
         repository_for(&db_path)?

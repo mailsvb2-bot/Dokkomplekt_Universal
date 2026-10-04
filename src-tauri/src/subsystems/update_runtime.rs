@@ -530,6 +530,315 @@ struct UpdateApplyResponse {
 }
 
 const UPDATE_RECOVERY_SCHEMA: &str = "dokkomplekt.update-recovery.v1";
+const UPDATE_BACKUP_OWNERSHIP_SCHEMA: &str = "dokkomplekt.update-backup.v1";
+const UPDATE_BACKUP_OWNERSHIP_FILE: &str = ".dokkomplekt-update-backup.json";
+pub(crate) const UPDATE_BACKUP_QUOTA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const UPDATE_BACKUP_MAX_ENTRIES: u64 = 8;
+pub(crate) const UPDATE_BACKUP_RETENTION_SECONDS: u64 = 180 * 24 * 60 * 60;
+static UPDATE_BACKUP_POLICY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpdateBackupOwnership {
+    schema: String,
+    target_version: String,
+    created_at_unix: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UpdateBackupPolicy {
+    max_bytes: u64,
+    max_entries: u64,
+    retention_seconds: u64,
+}
+
+impl UpdateBackupPolicy {
+    fn production() -> Self {
+        Self {
+            max_bytes: UPDATE_BACKUP_QUOTA_BYTES,
+            max_entries: UPDATE_BACKUP_MAX_ENTRIES,
+            retention_seconds: UPDATE_BACKUP_RETENTION_SECONDS,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OwnedUpdateBackup {
+    path: PathBuf,
+    created_at_unix: i64,
+    bytes: u64,
+}
+
+fn lock_update_backup_policy() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    UPDATE_BACKUP_POLICY_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Не удалось заблокировать политику backup обновлений".to_string())
+}
+
+fn update_backup_path_size(path: &Path) -> Result<u64, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("Не удалось проверить backup {}: {error}", path.display()))?;
+    if crate::publication_metadata_is_link_or_reparse(&metadata) {
+        return Err(format!(
+            "Backup содержит ссылку/reparse point и не может считаться управляемым: {}",
+            path.display()
+        ));
+    }
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+    let mut total = 0_u64;
+    for entry in std::fs::read_dir(path)
+        .map_err(|error| format!("Не удалось прочитать backup {}: {error}", path.display()))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        total = total.saturating_add(update_backup_path_size(&entry.path())?);
+    }
+    Ok(total)
+}
+
+fn write_update_backup_ownership_marker(
+    backup_dir: &Path,
+    target_version: &str,
+    created_at_unix: i64,
+) -> Result<(), String> {
+    let marker = UpdateBackupOwnership {
+        schema: UPDATE_BACKUP_OWNERSHIP_SCHEMA.to_string(),
+        target_version: target_version.to_string(),
+        created_at_unix,
+    };
+    let path = backup_dir.join(UPDATE_BACKUP_OWNERSHIP_FILE);
+    let bytes = serde_json::to_vec_pretty(&marker).map_err(|error| error.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| format!("Не удалось создать ownership marker backup: {error}"))?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
+}
+
+fn collect_owned_update_backups(root: &Path) -> Result<Vec<OwnedUpdateBackup>, String> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Не удалось прочитать update-backups: {error}")),
+    };
+    let mut backups = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("Не удалось проверить {}: {error}", path.display()))?;
+        if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+            continue;
+        }
+        let marker_path = path.join(UPDATE_BACKUP_OWNERSHIP_FILE);
+        let marker_metadata = match std::fs::symlink_metadata(&marker_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Не удалось проверить ownership marker {}: {error}",
+                    marker_path.display()
+                ))
+            }
+        };
+        if crate::publication_metadata_is_link_or_reparse(&marker_metadata)
+            || !marker_metadata.is_file()
+        {
+            return Err(format!(
+                "Ownership marker backup имеет небезопасный тип: {}",
+                marker_path.display()
+            ));
+        }
+        let marker: UpdateBackupOwnership = serde_json::from_slice(
+            &std::fs::read(&marker_path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| {
+            format!(
+                "Повреждён ownership marker backup {}: {error}",
+                marker_path.display()
+            )
+        })?;
+        if marker.schema != UPDATE_BACKUP_OWNERSHIP_SCHEMA {
+            return Err(format!(
+                "Неизвестная схема ownership marker backup: {}",
+                marker_path.display()
+            ));
+        }
+        backups.push(OwnedUpdateBackup {
+            bytes: update_backup_path_size(&path)?,
+            path,
+            created_at_unix: marker.created_at_unix,
+        });
+    }
+    backups.sort_by(|left, right| {
+        left.created_at_unix
+            .cmp(&right.created_at_unix)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(backups)
+}
+
+fn enforce_update_backup_policy_at(
+    root: &Path,
+    protected_backup: Option<&Path>,
+    now_unix: i64,
+    policy: UpdateBackupPolicy,
+) -> Result<usize, String> {
+    if policy.max_bytes == 0 || policy.max_entries == 0 || policy.retention_seconds == 0 {
+        return Err("Некорректная политика хранения backup обновлений".to_string());
+    }
+    let backups = collect_owned_update_backups(root)?;
+    if backups.is_empty() {
+        return Ok(0);
+    }
+    let protected = match protected_backup {
+        Some(path) => Some(
+            path.canonicalize()
+                .map_err(|error| format!("Защищённый backup недоступен: {error}"))?,
+        ),
+        None => None,
+    };
+    let fallback_protected_index = protected.is_none().then_some(backups.len() - 1);
+    let cutoff = now_unix.saturating_sub(
+        i64::try_from(policy.retention_seconds)
+            .map_err(|_| "Retention backup превышает допустимый диапазон".to_string())?,
+    );
+    let mut victim = vec![false; backups.len()];
+    let mut remaining_entries = backups.len() as u64;
+    let mut remaining_bytes = backups
+        .iter()
+        .fold(0_u64, |total, backup| total.saturating_add(backup.bytes));
+
+    for (index, backup) in backups.iter().enumerate() {
+        let explicitly_protected = match &protected {
+            Some(protected) => backup
+                .path
+                .canonicalize()
+                .map(|path| path == *protected)
+                .unwrap_or(false),
+            None => false,
+        };
+        let is_protected =
+            explicitly_protected || fallback_protected_index == Some(index);
+        if !is_protected && backup.created_at_unix < cutoff {
+            victim[index] = true;
+            remaining_entries = remaining_entries.saturating_sub(1);
+            remaining_bytes = remaining_bytes.saturating_sub(backup.bytes);
+        }
+    }
+
+    if remaining_entries > policy.max_entries || remaining_bytes > policy.max_bytes {
+        for (index, backup) in backups.iter().enumerate() {
+            if victim[index] {
+                continue;
+            }
+            let explicitly_protected = match &protected {
+                Some(protected) => backup
+                    .path
+                    .canonicalize()
+                    .map(|path| path == *protected)
+                    .unwrap_or(false),
+                None => false,
+            };
+            if explicitly_protected || fallback_protected_index == Some(index) {
+                continue;
+            }
+            victim[index] = true;
+            remaining_entries = remaining_entries.saturating_sub(1);
+            remaining_bytes = remaining_bytes.saturating_sub(backup.bytes);
+            if remaining_entries <= policy.max_entries && remaining_bytes <= policy.max_bytes {
+                break;
+            }
+        }
+    }
+
+    let mut removed = 0_usize;
+    for (index, backup) in backups.iter().enumerate() {
+        if !victim[index] {
+            continue;
+        }
+        let marker = backup.path.join(UPDATE_BACKUP_OWNERSHIP_FILE);
+        let metadata = std::fs::symlink_metadata(&marker).map_err(|error| {
+            format!(
+                "Ownership marker исчез перед очисткой {}: {error}",
+                marker.display()
+            )
+        })?;
+        if crate::publication_metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "Очистка backup остановлена: ownership marker изменился {}",
+                marker.display()
+            ));
+        }
+        std::fs::remove_dir_all(&backup.path).map_err(|error| {
+            format!(
+                "Не удалось удалить управляемый backup {}: {error}",
+                backup.path.display()
+            )
+        })?;
+        removed = removed.saturating_add(1);
+    }
+    Ok(removed)
+}
+
+fn protected_update_backup_path(
+    app: &tauri::AppHandle,
+    root: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let Some(state) = load_update_recovery_state(app)? else {
+        return Ok(None);
+    };
+    let backup = PathBuf::from(state.backup_dir);
+    let canonical = backup
+        .canonicalize()
+        .map_err(|error| format!("Recovery backup недоступен: {error}"))?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("Каталог update-backups недоступен: {error}"))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err("Recovery marker указывает на backup вне доверенного update-backups".to_string());
+    }
+    Ok(Some(canonical))
+}
+
+fn enforce_update_backup_storage_policy_unlocked(
+    app: &tauri::AppHandle,
+) -> Result<usize, String> {
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let root = data_dir.join("update-backups");
+    if !root.exists() {
+        return Ok(0);
+    }
+    let protected = protected_update_backup_path(app, &root)?;
+    enforce_update_backup_policy_at(
+        &root,
+        protected.as_deref(),
+        OffsetDateTime::now_utc().unix_timestamp(),
+        UpdateBackupPolicy::production(),
+    )
+}
+
+pub(crate) fn enforce_update_backup_storage_policy(
+    app: &tauri::AppHandle,
+) -> Result<usize, String> {
+    let _guard = lock_update_backup_policy()?;
+    enforce_update_backup_storage_policy_unlocked(app)
+}
+
+pub(crate) fn owned_update_backup_bytes(app: &tauri::AppHandle) -> Result<u64, String> {
+    let _guard = lock_update_backup_policy()?;
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let backups = collect_owned_update_backups(&data_dir.join("update-backups"))?;
+    Ok(backups
+        .iter()
+        .fold(0_u64, |total, backup| total.saturating_add(backup.bytes)))
+}
 
 fn update_recovery_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app
@@ -634,6 +943,11 @@ fn backup_update_state(app: &tauri::AppHandle, target_version: &str) -> Result<P
         if copy_update_backup_file(&key_path, &backup_dir)?.is_none() {
             return Err("Не удалось создать обязательный backup локального ключа".to_string());
         }
+        write_update_backup_ownership_marker(
+            &backup_dir,
+            target_version,
+            OffsetDateTime::now_utc().unix_timestamp(),
+        )?;
         Ok(())
     })();
 
@@ -1015,6 +1329,8 @@ fn apply_verified_update(
         return Err("Пакет находится вне доверенного каталога verified-updates".to_string());
     }
 
+    let _backup_policy_guard = lock_update_backup_policy()?;
+    enforce_update_backup_storage_policy_unlocked(&app)?;
     let backup_dir = backup_update_state(&app, &target_version)?;
     let mut recovery = UpdateRecoveryState {
         schema: UPDATE_RECOVERY_SCHEMA.to_string(),
@@ -1030,6 +1346,14 @@ fn apply_verified_update(
         last_error: None,
     };
     let recovery_path = write_update_recovery_state(&app, &recovery)?;
+    if let Err(error) = enforce_update_backup_storage_policy_unlocked(&app) {
+        return Err(record_recoverable_update_failure(
+            &app,
+            &mut recovery,
+            format!("Backup обновления создан, но безопасная quota/retention очистка не завершена: {error}"),
+        ));
+    }
+    drop(_backup_policy_guard);
     #[cfg(not(target_os = "windows"))]
     let _ = &recovery_path;
 
@@ -1128,6 +1452,120 @@ fn apply_verified_update(
 #[cfg(test)]
 mod fpr19_update_lifecycle_tests {
     use super::*;
+
+    fn owned_backup_fixture(
+        root: &Path,
+        name: &str,
+        created_at_unix: i64,
+        payload_bytes: usize,
+    ) -> PathBuf {
+        let path = root.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("state.bin"), vec![7_u8; payload_bytes]).unwrap();
+        write_update_backup_ownership_marker(&path, "99.0.0", created_at_unix).unwrap();
+        path
+    }
+
+    #[test]
+    fn update_backup_policy_preserves_active_recovery_and_unowned_legacy() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-update-backup-policy-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let now = 2_000_000_000_i64;
+        let old = owned_backup_fixture(
+            &root,
+            "old-owned",
+            now - (200 * 24 * 60 * 60),
+            128,
+        );
+        let active = owned_backup_fixture(&root, "active-owned", now - 60, 128);
+        let legacy = root.join("legacy-unowned");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("user-or-legacy.bin"), b"preserve").unwrap();
+
+        let removed = enforce_update_backup_policy_at(
+            &root,
+            Some(&active),
+            now,
+            UpdateBackupPolicy {
+                max_bytes: 1024 * 1024,
+                max_entries: 8,
+                retention_seconds: 90 * 24 * 60 * 60,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!old.exists());
+        assert!(active.exists());
+        assert!(legacy.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn update_backup_policy_keeps_newest_as_sole_recovery_when_marker_is_absent() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-update-backup-fallback-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let now = 2_000_000_000_i64;
+        let old = owned_backup_fixture(&root, "old", now - 20, 256);
+        let newest = owned_backup_fixture(&root, "newest", now - 10, 256);
+
+        let removed = enforce_update_backup_policy_at(
+            &root,
+            None,
+            now,
+            UpdateBackupPolicy {
+                max_bytes: 1,
+                max_entries: 1,
+                retention_seconds: 1,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!old.exists());
+        assert!(newest.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_update_backup_marker_blocks_destructive_cleanup() {
+        let root = std::env::temp_dir().join(format!(
+            "dokkomplekt-update-backup-corrupt-marker-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let now = 2_000_000_000_i64;
+        let valid = owned_backup_fixture(&root, "valid-old", now - 1000, 64);
+        let corrupt = root.join("corrupt");
+        std::fs::create_dir_all(&corrupt).unwrap();
+        std::fs::write(corrupt.join(UPDATE_BACKUP_OWNERSHIP_FILE), b"{broken").unwrap();
+
+        let error = enforce_update_backup_policy_at(
+            &root,
+            None,
+            now,
+            UpdateBackupPolicy {
+                max_bytes: 1,
+                max_entries: 1,
+                retention_seconds: 1,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Повреждён ownership marker"));
+        assert!(valid.exists());
+        assert!(corrupt.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn rollback_restores_required_state_and_removes_files_absent_from_backup() {

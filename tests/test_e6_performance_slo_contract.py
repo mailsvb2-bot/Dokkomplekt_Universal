@@ -99,6 +99,12 @@ class PerformanceSloContractTests(unittest.TestCase):
                 "sample_count_and_warmup_recorded": True,
                 "verification_enabled": True,
             },
+            "coverage": {
+                "measurement_splits": targets["required_measurement_splits"],
+                "corpus_classes": targets["required_corpus_classes"],
+                "separate_performance_classes": targets["separate_performance_classes"],
+                "typical_docx_complexity_dimensions": targets["typical_docx"]["complexity_dimensions"],
+            },
             "series": series,
             "resources": {
                 "cpu_percent_peak": 50,
@@ -186,6 +192,40 @@ class PerformanceSloContractTests(unittest.TestCase):
                 any("source_analysis: p95" in error for error in slow_verdict["errors"]),
                 slow_verdict["errors"],
             )
+
+    def test_incomplete_corpus_and_measurement_split_coverage_cannot_pass(self) -> None:
+        targets = gate.load_object(TARGETS)
+        reference = self._reference(targets)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reference_path = tmp_path / "reference.json"
+            self._write_json(reference_path, reference)
+            evidence = self._evidence(TARGETS, reference_path, reference)
+            evidence["coverage"]["measurement_splits"] = ["warm_cache"]  # type: ignore[index]
+            evidence["coverage"]["corpus_classes"] = ["typical_docx"]  # type: ignore[index]
+            evidence_path = tmp_path / "evidence.json"
+            self._write_json(evidence_path, evidence)
+
+            verdict = gate.evaluate(TARGETS, reference_path, evidence_path)
+            self.assertEqual(verdict["result"], "FAIL")
+            self.assertTrue(
+                any("coverage.measurement_splits is incomplete" in error for error in verdict["errors"]),
+                verdict["errors"],
+            )
+            self.assertTrue(
+                any("coverage.corpus_classes is incomplete" in error for error in verdict["errors"]),
+                verdict["errors"],
+            )
+
+    def test_malformed_binding_fails_without_crashing_evaluator(self) -> None:
+        targets = gate.load_object(TARGETS)
+        reference = self._reference(targets)
+        reference["metric_bindings"]["source_analysis"] = ["not", "a", "string"]  # type: ignore[index]
+        errors = gate.validate_reference(reference, targets)
+        self.assertTrue(
+            any("metric_bindings.source_analysis" in error for error in errors),
+            errors,
+        )
 
     def test_evidence_is_bound_to_exact_targets_and_reference_policy(self) -> None:
         targets = gate.load_object(TARGETS)

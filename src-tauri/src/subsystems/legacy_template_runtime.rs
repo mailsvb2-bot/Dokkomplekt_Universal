@@ -740,30 +740,18 @@ struct PreparedMedicalRenderTemplate {
 }
 
 fn published_template_sha256_for_document(
-    app: &tauri::AppHandle,
     state_db_path: &Path,
     document: &DocumentTemplateSpec,
 ) -> Result<Option<String>, String> {
-    let default_db_path = default_state_db_path(app)?;
-    let mut candidate_databases = vec![state_db_path.to_path_buf()];
-    if default_db_path != state_db_path && default_db_path.exists() {
-        candidate_databases.push(default_db_path);
-    }
-
-    for db_path in candidate_databases {
-        let repo = repository_for(&db_path)?;
-        let published = repo
-            .list_template_versions(&document.id)
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .find(|version| {
-                version.status == "published" && version.template_path == document.template_path
-            });
-        if let Some(version) = published {
-            return Ok(Some(version.template_sha256));
-        }
-    }
-    Ok(None)
+    let repo = repository_for(state_db_path)?;
+    Ok(repo
+        .list_template_versions(&document.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|version| {
+            version.status == "published" && version.template_path == document.template_path
+        })
+        .map(|version| version.template_sha256))
 }
 
 fn published_medical_contract_can_replay(
@@ -823,7 +811,7 @@ fn prepare_medical_template_for_render(
     // and can be replayed directly. Legacy/static/incomplete/unversioned templates
     // retain the compiler fallback below.
     let published_sha256 =
-        published_template_sha256_for_document(app, state_db_path, document)?;
+        published_template_sha256_for_document(state_db_path, document)?;
     if published_medical_contract_can_replay(
         document,
         published_sha256.as_deref(),

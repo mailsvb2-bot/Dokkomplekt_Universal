@@ -155,11 +155,16 @@ def validate_reference(
         bindings = {}
     if set(bindings) != set(CANONICAL_METRICS):
         errors.append("metric_bindings must bind every Canon SLO metric exactly once")
+    normalized_binding_ids: list[str] = []
     for metric, series_id in bindings.items():
         if metric not in CANONICAL_METRICS:
             continue
-        require_nonempty_string(series_id, f"metric_bindings.{metric}", errors)
-    if len(set(bindings.values())) != len(bindings):
+        normalized = require_nonempty_string(
+            series_id, f"metric_bindings.{metric}", errors
+        )
+        if normalized:
+            normalized_binding_ids.append(normalized)
+    if len(set(normalized_binding_ids)) != len(normalized_binding_ids):
         errors.append("each metric must bind to a distinct measured series")
 
     budgets = policy.get("resource_budgets")
@@ -172,8 +177,13 @@ def validate_reference(
         )
     for key in RESOURCE_POLICY_KEYS:
         value = budgets.get(key)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
-            errors.append(f"resource_budgets.{key} must be a positive number")
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+        ):
+            errors.append(f"resource_budgets.{key} must be a finite positive number")
     return errors
 
 
@@ -234,6 +244,37 @@ def evaluate(
     for flag in REQUIRED_PROTOCOL_FLAGS:
         if protocol.get(flag) is not True:
             errors.append(f"protocol.{flag} must be true")
+
+    coverage = evidence.get("coverage")
+    if not isinstance(coverage, dict):
+        errors.append("evidence coverage must be an object")
+        coverage = {}
+    for evidence_key, target_key in (
+        ("measurement_splits", "required_measurement_splits"),
+        ("corpus_classes", "required_corpus_classes"),
+        ("separate_performance_classes", "separate_performance_classes"),
+        ("typical_docx_complexity_dimensions", "complexity_dimensions"),
+    ):
+        actual_raw = coverage.get(evidence_key)
+        if evidence_key == "typical_docx_complexity_dimensions":
+            expected_raw = (targets.get("typical_docx") or {}).get(target_key, [])
+        else:
+            expected_raw = targets.get(target_key, [])
+        actual = {
+            item.strip()
+            for item in actual_raw
+            if isinstance(item, str) and item.strip()
+        } if isinstance(actual_raw, list) else set()
+        expected = {
+            item.strip()
+            for item in expected_raw
+            if isinstance(item, str) and item.strip()
+        } if isinstance(expected_raw, list) else set()
+        missing = sorted(expected - actual)
+        if missing:
+            errors.append(
+                f"coverage.{evidence_key} is incomplete; missing={missing}"
+            )
 
     series_raw = evidence.get("series")
     if not isinstance(series_raw, list):
@@ -309,10 +350,20 @@ def evaluate(
     for key in RESOURCE_POLICY_KEYS:
         measured = resources.get(key)
         budget = budgets.get(key)
-        if not isinstance(measured, (int, float)) or isinstance(measured, bool) or measured < 0:
-            errors.append(f"resources.{key} must be a non-negative number")
+        if (
+            not isinstance(measured, (int, float))
+            or isinstance(measured, bool)
+            or not math.isfinite(float(measured))
+            or float(measured) < 0
+        ):
+            errors.append(f"resources.{key} must be a finite non-negative number")
             continue
-        if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
+        if (
+            not isinstance(budget, (int, float))
+            or isinstance(budget, bool)
+            or not math.isfinite(float(budget))
+            or float(budget) <= 0
+        ):
             continue
         passed = float(measured) <= float(budget)
         resource_results[key] = {

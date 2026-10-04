@@ -12,6 +12,8 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     runtime = read("src-tauri/src/performance_trace_runtime.rs")
     privacy = read("src-tauri/src/privacy_runtime.rs")
     workspace = read("src-tauri/src/universal_intake/workspace_session.rs")
+    documents = read("src-tauri/src/subsystems/document_commands.rs")
+    publication = read("src-tauri/src/subsystems/publication_collision.rs")
 
     for stage in (
         "source_open",
@@ -92,3 +94,26 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "PERFORMANCE_TRACE_RETENTION_SECONDS" in privacy
     assert "owned_performance_trace_bytes" in privacy
     assert "cleanup_performance_traces" in privacy
+
+    assert "ensure_rendered_document_readable" in publication
+    assert "ensure_rendered_document_semantically_complete" in publication
+    manual_single = documents[
+        documents.index("fn render_docx("):
+        documents.index("enum ExistingOutputPolicy")
+    ]
+    for stage in (
+        "PerformanceStage::ReferenceClone",
+        "PerformanceStage::Replay",
+        "PerformanceStage::PhysicalReadback",
+        "PerformanceStage::Verify",
+        "PerformanceStage::Publish",
+    ):
+        assert stage in manual_single
+    assert "persist_manual_single_document_trace" in manual_single
+    assert "performance_trace_write_failures" in manual_single
+    assert manual_single.index("PerformanceStage::PhysicalReadback") < manual_single.index(
+        "PerformanceStage::Verify"
+    )
+    assert manual_single.index("PerformanceStage::Verify") < manual_single.index(
+        "PerformanceStage::Publish"
+    )

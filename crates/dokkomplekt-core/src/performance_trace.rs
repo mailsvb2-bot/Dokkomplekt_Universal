@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_identity_must_match_run_kind() {
+    fn batch_identity_must_match_workload() {
         let mut invalid = context();
         invalid.workload = PerformanceWorkload::Batch10;
         invalid.batch_size = 9;
@@ -555,7 +555,7 @@ mod tests {
                     duration_ms: 30,
                 },
             ],
-             1000,
+            50,
             0,
             PerformanceOutcome::Completed,
         )

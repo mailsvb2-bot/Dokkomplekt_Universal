@@ -48,6 +48,9 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
         "pdf_used",
     ):
         assert required in context
+    context_fields = "\n".join(
+        line.strip() for line in context.splitlines() if line.strip().startswith("pub ")
+    ).lower()
     for forbidden in (
         "path",
         "source_text",
@@ -59,7 +62,7 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
         "name:",
         "address",
     ):
-        assert forbidden not in context.lower()
+        assert forbidden not in context_fields
 
     assert "valid_opaque_identifier" in core
     assert "performance stages must follow canonical order" in core

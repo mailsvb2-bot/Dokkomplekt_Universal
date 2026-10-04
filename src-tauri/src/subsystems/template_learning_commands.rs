@@ -48,7 +48,9 @@ async fn pick_learning_files(
         return Err("Для обучения выберите ровно один пустой DOCX/DOCM-шаблон.".into());
     }
 
-    let required_bytes = selected_paths.iter().try_fold(0_u64, |total, selected_path| {
+    let _learning_guard = lock_learning_workspace()?;
+    let mut captured = Vec::with_capacity(selected_paths.len());
+    for selected_path in selected_paths {
         let canonical = selected_path.canonicalize().map_err(|error| {
             format!(
                 "Не удалось открыть выбранный файл обучения «{}»: {error}",
@@ -67,70 +69,55 @@ async fn pick_learning_files(
                 canonical.display()
             ));
         }
-        total
-            .checked_add(metadata.len())
-            .ok_or_else(|| "Суммарный размер файлов обучения слишком велик.".to_string())
-    })?;
-
-    let _learning_guard = lock_learning_workspace()?;
-    crate::privacy_runtime::ensure_learning_input_capacity(&app, required_bytes)?;
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-learning-inputs");
-    let session_root = universal_intake::create_retained_workspace_session(&root)?;
-    let mut files = Vec::with_capacity(selected_paths.len());
-    for selected_path in selected_paths {
-        let canonical = selected_path.canonicalize().map_err(|error| {
-            format!("Не удалось открыть выбранный файл обучения «{}»: {error}", selected_path.display())
-        })?;
-        let metadata = std::fs::metadata(&canonical).map_err(|error| {
-            format!("Не удалось прочитать выбранный файл обучения «{}»: {error}", canonical.display())
-        })?;
-        if !metadata.is_file() {
-            return Err(format!("Выбранный путь не является файлом: {}", canonical.display()));
-        }
         let file_name = canonical
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or_else(|| "Имя выбранного файла обучения не поддерживается системой.".to_string())?
             .to_string();
-
         let extension_name = canonical
             .extension()
             .and_then(|value| value.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
+        let source_label = canonical.display().to_string();
+        let snapshot = crate::privacy_runtime::capture_learning_source_snapshot(&app, &canonical)?;
+        captured.push((source_label, file_name, extension_name, snapshot));
+    }
+
+    let required_bytes = captured.iter().try_fold(0_u64, |total, (_, _, _, snapshot)| {
+        total
+            .checked_add(snapshot.size_bytes())
+            .ok_or_else(|| "Суммарный размер файлов обучения слишком велик.".to_string())
+    })?;
+
+    let mut prepared = Vec::with_capacity(captured.len());
+    for (source_label, file_name, extension_name, snapshot) in captured {
         let (extracted_text, import_error) = if kind == "blank" || kind == "correct_output" {
-            if metadata.len() > MAX_PICKED_TEMPLATE_BYTES {
+            if snapshot.size_bytes() > MAX_PICKED_TEMPLATE_BYTES {
                 return Err("DOCX/DOCM для обучения слишком большой: максимум 50 МБ.".into());
             }
             if extension_name != "docx" && extension_name != "docm" {
-                return Err(format!("Для {kind} поддерживаются только DOCX и DOCM: {}", canonical.display()));
+                return Err(format!(
+                    "Для {kind} поддерживаются только DOCX и DOCM: {source_label}"
+                ));
             }
-            validate_safe_template_file(&canonical).map_err(|error| {
-                format!("Файл обучения «{}» содержит активное содержимое или внешние связи и заблокирован: {error}", canonical.display())
+            validate_safe_template_file(snapshot.path()).map_err(|error| {
+                format!(
+                    "Файл обучения «{source_label}» содержит активное содержимое или внешние связи и заблокирован: {error}"
+                )
             })?;
             (None, None)
         } else if kind == "medical_diary" {
-            if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
-                return Err(format!(
-                    "Файл текстов дневников слишком большой: максимум {} МБ.",
-                    universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
-                ));
-            }
             if !matches!(
                 extension_name.as_str(),
                 "docx" | "docm" | "doc" | "txt" | "rtf" | "odt" | "pdf"
             ) {
                 return Err(format!(
-                    "Для текстов дневников поддерживаются DOCX, DOCM, DOC, TXT, RTF, ODT и PDF: {}",
-                    canonical.display()
+                    "Для текстов дневников поддерживаются DOCX, DOCM, DOC, TXT, RTF, ODT и PDF: {source_label}"
                 ));
             }
             let work_session = crate::privacy_runtime::create_learning_work_session(&app)?;
-            match universal_intake::normalize_path(&canonical, work_session.root(), 0) {
+            match universal_intake::normalize_path(snapshot.path(), work_session.root(), 0) {
                 Ok(normalized) => {
                     let text = normalized.text.trim().to_string();
                     if text.is_empty() {
@@ -148,29 +135,45 @@ async fn pick_learning_files(
                 ),
             }
         } else {
-            if metadata.len() > universal_intake::MAX_SOURCE_FILE_BYTES {
-                return Err(format!(
-                    "Source-файл слишком большой: максимум {} МБ.",
-                    universal_intake::MAX_SOURCE_FILE_BYTES / (1024 * 1024)
-                ));
-            }
             (None, None)
         };
+        prepared.push((
+            file_name,
+            extension_name,
+            snapshot,
+            extracted_text,
+            import_error,
+        ));
+    }
 
+    crate::privacy_runtime::ensure_learning_input_capacity(&app, required_bytes)?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("template-learning-inputs");
+    let session_root = universal_intake::create_retained_workspace_session(&root)?;
+    let mut files = Vec::with_capacity(prepared.len());
+    for (file_name, extension_name, snapshot, extracted_text, import_error) in prepared {
         let extension = if extension_name.is_empty() {
             String::new()
         } else {
             format!(".{extension_name}")
         };
-        let (_, _, content_sha256) = file_content_signature(&canonical)?;
         let target = session_root.join(format!("{}{}", Uuid::new_v4(), extension));
-        std::fs::copy(&canonical, &target).map_err(|error| {
+        let copied = std::fs::copy(snapshot.path(), &target).map_err(|error| {
             format!("Не удалось сохранить защищённую копию файла обучения «{file_name}»: {error}")
         })?;
+        if copied != snapshot.size_bytes() {
+            return Err(format!(
+                "Защищённая копия файла обучения «{file_name}» неполна: ожидалось {} байт, записано {copied}.",
+                snapshot.size_bytes()
+            ));
+        }
         files.push(PickedLearningFile {
             file_name,
             staged_path: target.display().to_string(),
-            content_sha256,
+            content_sha256: snapshot.sha256().to_string(),
             extracted_text,
             import_error,
         });

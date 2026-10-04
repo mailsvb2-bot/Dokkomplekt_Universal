@@ -740,10 +740,10 @@ struct PreparedMedicalRenderTemplate {
 }
 
 fn published_template_sha256_for_document(
-    app: &tauri::AppHandle,
+    state_db_path: &Path,
     document_id: &str,
 ) -> Result<Option<String>, String> {
-    let repo = repository_for(&default_state_db_path(app)?)?;
+    let repo = repository_for(state_db_path)?;
     repo.list_template_versions(document_id)
         .map_err(|error| error.to_string())
         .map(|versions| {
@@ -779,6 +779,7 @@ fn published_medical_contract_can_replay(
 
 fn prepare_medical_template_for_render(
     app: &tauri::AppHandle,
+    state_db_path: &Path,
     document: &DocumentTemplateSpec,
     template_path: &Path,
     snapshot_sha256: &str,
@@ -809,7 +810,8 @@ fn prepare_medical_template_for_render(
     // E6 hot path: a complete, published semantic contract is immutable by SHA
     // and can be replayed directly. Legacy/static/incomplete/unversioned templates
     // retain the compiler fallback below.
-    let published_sha256 = published_template_sha256_for_document(app, &document.id)?;
+    let published_sha256 =
+        published_template_sha256_for_document(state_db_path, &document.id)?;
     if published_medical_contract_can_replay(
         document,
         published_sha256.as_deref(),

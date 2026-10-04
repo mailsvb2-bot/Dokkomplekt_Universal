@@ -399,6 +399,12 @@ pub(crate) fn collect_technical_storage_status(
             Some(crate::watcher_log::WATCHER_LOG_RETENTION_SECONDS),
         ),
         (
+            "performance-traces",
+            "Performance traces (без содержимого документов)",
+            Some(crate::performance_trace_runtime::PERFORMANCE_TRACE_QUOTA_BYTES),
+            Some(crate::performance_trace_runtime::PERFORMANCE_TRACE_RETENTION_SECONDS),
+        ),
+        (
             "template-compiler-cache",
             "Кэш compiler шаблонов",
             Some(crate::TEMPLATE_COMPILER_CACHE_QUOTA_BYTES),
@@ -452,6 +458,8 @@ pub(crate) fn collect_technical_storage_status(
             crate::watcher_log::owned_watcher_log_bytes(
                 &data_dir.join("runtime-logs").join("watcher.log"),
             )?
+        } else if key == "performance-traces" {
+            crate::performance_trace_runtime::owned_performance_trace_bytes(app)?
         } else if key == "template-compiler-cache" {
             universal_intake::owned_workspace_group_bytes(
                 &[
@@ -542,6 +550,9 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
     removed = removed.saturating_add(crate::watcher_log::cleanup_watcher_logs(
         &data_dir.join("runtime-logs").join("watcher.log"),
     )?);
+    removed = removed.saturating_add(
+        crate::performance_trace_runtime::cleanup_performance_traces(app)?,
+    );
     removed = removed.saturating_add(universal_intake::enforce_ephemeral_workspace_group_quota(
         &[
             "template-contract-migration",

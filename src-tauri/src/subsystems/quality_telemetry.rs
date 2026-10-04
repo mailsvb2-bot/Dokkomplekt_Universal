@@ -165,6 +165,52 @@ fn get_daily_automation_dashboard(app: tauri::AppHandle) -> Result<DailyAutomati
     Ok(report)
 }
 
+#[derive(Debug, Deserialize)]
+struct PerformanceTraceQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SlowRunReportQuery {
+    threshold_ms: u64,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[tauri::command]
+fn get_performance_traces(
+    req: PerformanceTraceQuery,
+    app: tauri::AppHandle,
+) -> Result<Vec<dokkomplekt_core::PerformanceTrace>, String> {
+    crate::performance_trace_runtime::recent_performance_traces(
+        &app,
+        req.limit.unwrap_or(100).clamp(1, 1_000),
+    )
+}
+
+#[tauri::command]
+fn get_slow_run_reports(
+    req: SlowRunReportQuery,
+    app: tauri::AppHandle,
+) -> Result<Vec<dokkomplekt_core::SlowRunReport>, String> {
+    if req.threshold_ms == 0 {
+        return Err("Порог slow-run должен быть больше нуля.".into());
+    }
+    let traces = crate::performance_trace_runtime::recent_performance_traces(
+        &app,
+        req.limit.unwrap_or(100).clamp(1, 1_000),
+    )?;
+    traces
+        .into_iter()
+        .filter_map(|trace| match trace.slow_run_report_if_over(req.threshold_ms) {
+            Ok(Some(report)) => Some(Ok(report)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn get_quality_telemetry(app: tauri::AppHandle) -> Result<QualityTelemetryReport, String> {
     let repo = repository_for(&default_state_db_path(&app)?)?;

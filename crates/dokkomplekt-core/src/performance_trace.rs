@@ -467,7 +467,7 @@ mod tests {
                 stage: PerformanceStage::Verify,
                 duration_ms: 1,
             }],
-             1000,
+            1000,
             0,
             PerformanceOutcome::Completed,
         );
@@ -590,7 +590,7 @@ mod tests {
                     stage: PerformanceStage::Publish,
                     duration_ms: 1,
                 }],
-                 1000,
+                1000,
                 0,
                 outcome,
             )

@@ -74,6 +74,7 @@ impl PerformanceStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerformanceClass {
+    Unclassified,
     SmallDocx,
     TypicalDocx,
     LargeDocx,
@@ -96,6 +97,7 @@ pub enum PerformanceClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerformanceCacheState {
+    Unclassified,
     ColdCache,
     WarmCache,
 }
@@ -103,6 +105,7 @@ pub enum PerformanceCacheState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PerformanceRunPhase {
+    Unclassified,
     FirstRun,
     RepeatRun,
 }
@@ -113,6 +116,7 @@ pub enum PerformanceWorkload {
     SingleDocument,
     Batch10,
     Batch50,
+    OtherBatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +205,9 @@ impl PerformanceTraceContext {
             }
             PerformanceWorkload::Batch50 if self.batch_size != 50 => {
                 return Err("batch_50 performance workload must have batch_size=50".into())
+            }
+            PerformanceWorkload::OtherBatch if matches!(self.batch_size, 1 | 10 | 50) => {
+                return Err("other_batch workload is only for non-canonical batch sizes".into())
             }
             _ => {}
         }

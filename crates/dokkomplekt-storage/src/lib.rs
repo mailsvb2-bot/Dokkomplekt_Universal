@@ -10,11 +10,11 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use dokkomplekt_core::{
-    workspace_profile_from_pack, CorpusEntry, DocumentPack, SemanticCase,
+    workspace_profile_from_pack, CorpusAcceptanceSource, CorpusEntry, DocumentPack, SemanticCase,
     WORKSPACE_PROFILE_STATE_KEY,
 };
 use hmac::{Hmac, Mac};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -193,6 +193,52 @@ const ENCRYPTED_PREFIX: &str = "enc:v1:";
 const NONCE_LEN: usize = 16;
 const TAG_LEN: usize = 32;
 
+pub const ZERO_TOUCH_SHADOW_CORPUS_QUOTA_BYTES: u64 = 100 * 1024 * 1024;
+pub const ZERO_TOUCH_SHADOW_CORPUS_MAX_ENTRIES: u64 = 50_000;
+pub const ZERO_TOUCH_SHADOW_CORPUS_RETENTION_DAYS: i64 = 90;
+
+const CORPUS_CLASS_ZERO_TOUCH_SHADOW: &str = "zero_touch_shadow";
+const CORPUS_CLASS_SPECIALIST_CONFIRMED: &str = "specialist_confirmed";
+const CORPUS_CLASS_LEGACY_UNVERIFIED: &str = "legacy_unverified";
+const CORPUS_RETENTION_MIGRATION_KEY: &str = "corpus_retention_metadata_v1";
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowCorpusPolicy {
+    max_bytes: u64,
+    max_entries: u64,
+    retention_days: i64,
+}
+
+impl ShadowCorpusPolicy {
+    const fn production() -> Self {
+        Self {
+            max_bytes: ZERO_TOUCH_SHADOW_CORPUS_QUOTA_BYTES,
+            max_entries: ZERO_TOUCH_SHADOW_CORPUS_MAX_ENTRIES,
+            retention_days: ZERO_TOUCH_SHADOW_CORPUS_RETENTION_DAYS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShadowCorpusStorageStatus {
+    pub entries: u64,
+    pub payload_bytes: u64,
+}
+
+fn corpus_retention_class(entry: &CorpusEntry) -> &'static str {
+    if entry.field_acceptance_source == CorpusAcceptanceSource::SpecialistConfirmed
+        || entry.kit_acceptance_source == CorpusAcceptanceSource::SpecialistConfirmed
+    {
+        CORPUS_CLASS_SPECIALIST_CONFIRMED
+    } else if entry.field_acceptance_source == CorpusAcceptanceSource::ZeroTouchShadow
+        || entry.kit_acceptance_source == CorpusAcceptanceSource::ZeroTouchShadow
+    {
+        CORPUS_CLASS_ZERO_TOUCH_SHADOW
+    } else {
+        CORPUS_CLASS_LEGACY_UNVERIFIED
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error(transparent)]
@@ -261,7 +307,9 @@ impl LocalRepository {
               source_sha256 TEXT NOT NULL,
               domain_json TEXT NOT NULL,
               json TEXT NOT NULL,
-              created_at TEXT NOT NULL
+              created_at TEXT NOT NULL,
+              retention_class TEXT NOT NULL DEFAULT '',
+              payload_bytes INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_corpus_entries_domain
               ON corpus_entries(domain_json, created_at DESC);
@@ -271,6 +319,10 @@ impl LocalRepository {
               state_key TEXT PRIMARY KEY,
               json TEXT NOT NULL,
               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS storage_migrations (
+              migration_key TEXT PRIMARY KEY,
+              completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS clause_blocks (
               block_id TEXT PRIMARY KEY,
@@ -413,6 +465,21 @@ impl LocalRepository {
             "TEXT NOT NULL DEFAULT 'legacy_conservative'",
         )?;
         self.ensure_column("template_versions", "learning_validation_id", "TEXT")?;
+        self.ensure_column(
+            "corpus_entries",
+            "retention_class",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        self.ensure_column(
+            "corpus_entries",
+            "payload_bytes",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_corpus_entries_retention_created
+             ON corpus_entries(retention_class, created_at ASC);",
+        )?;
+        self.migrate_corpus_retention_metadata_once()?;
         Ok(())
     }
 
@@ -426,6 +493,84 @@ impl LocalRepository {
                 "ALTER TABLE {table} ADD COLUMN {column} {definition}"
             ))?;
         }
+        Ok(())
+    }
+
+    fn migrate_corpus_retention_metadata_once(&self) -> StorageResult<()> {
+        let transaction =
+            Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
+        let already_completed = transaction
+            .query_row(
+                "SELECT 1 FROM storage_migrations WHERE migration_key=?1",
+                params![CORPUS_RETENTION_MIGRATION_KEY],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        // A completed marker is sufficient only while every row carries migration metadata.
+        // An older app version can still insert rows using the legacy column list after a
+        // rollback; those rows receive the schema defaults and must be backfilled when the
+        // user upgrades again. The retention_class lookup is index-backed and avoids the
+        // old full-table rescan on normal repository opens.
+        let has_unclassified_rows = transaction
+            .query_row(
+                "SELECT 1 FROM corpus_entries
+                 WHERE retention_class = ''
+                 LIMIT 1",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if already_completed && !has_unclassified_rows {
+            transaction.commit()?;
+            return Ok(());
+        }
+
+        let rows = {
+            let mut statement = transaction.prepare(
+                "SELECT rowid, json FROM corpus_entries
+                 WHERE retention_class = '' OR payload_bytes <= 0
+                 ORDER BY rowid ASC",
+            )?;
+            let collected = {
+                let mapped = statement.query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?;
+                mapped.collect::<Result<Vec<_>, _>>()
+            };
+            drop(statement);
+            collected?
+        };
+
+        for (rowid, stored) in rows {
+            let retention_class = self
+                .decode_sensitive(&stored)
+                .ok()
+                .and_then(|json| serde_json::from_str::<CorpusEntry>(&json).ok())
+                .map(|entry| corpus_retention_class(&entry))
+                .unwrap_or(CORPUS_CLASS_LEGACY_UNVERIFIED);
+            let payload_bytes = i64::try_from(stored.len().max(1)).map_err(|_| {
+                StorageError::Crypto("corpus payload size exceeds SQLite integer range".into())
+            })?;
+            transaction.execute(
+                "UPDATE corpus_entries
+                 SET retention_class=?1, payload_bytes=?2
+                 WHERE rowid=?3",
+                params![retention_class, payload_bytes, rowid],
+            )?;
+        }
+        Self::enforce_zero_touch_shadow_policy_in_transaction(
+            &transaction,
+            ShadowCorpusPolicy::production(),
+            chrono::Utc::now(),
+            None,
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO storage_migrations(migration_key) VALUES (?1)",
+            params![CORPUS_RETENTION_MIGRATION_KEY],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -477,20 +622,206 @@ impl LocalRepository {
     }
 
     pub fn append_corpus_entry(&self, entry: &CorpusEntry) -> StorageResult<()> {
+        self.append_corpus_entry_with_shadow_policy(entry, ShadowCorpusPolicy::production())
+    }
+
+    fn append_corpus_entry_with_shadow_policy(
+        &self,
+        entry: &CorpusEntry,
+        policy: ShadowCorpusPolicy,
+    ) -> StorageResult<()> {
         let json = serde_json::to_string(entry)?;
         let domain_json = serde_json::to_string(&entry.domain)?;
-        self.conn.execute(
-            "INSERT INTO corpus_entries(entry_id,case_id,source_sha256,domain_json,json,created_at) VALUES (?1,?2,?3,?4,?5,?6)",
+        let stored = self.encode_sensitive(&json)?;
+        let retention_class = corpus_retention_class(entry);
+        let payload_bytes = u64::try_from(stored.len())
+            .map_err(|_| StorageError::Crypto("corpus payload size conversion failed".into()))?;
+        let payload_bytes_sql = i64::try_from(payload_bytes).map_err(|_| {
+            StorageError::Crypto("corpus payload size exceeds SQLite integer range".into())
+        })?;
+        chrono::DateTime::parse_from_rfc3339(&entry.created_at)
+            .map_err(|error| StorageError::Crypto(format!("invalid corpus created_at: {error}")))?;
+        let now = chrono::Utc::now();
+        if retention_class == CORPUS_CLASS_ZERO_TOUCH_SHADOW && payload_bytes > policy.max_bytes {
+            return Err(StorageError::Crypto(format!(
+                "zero-touch shadow corpus entry exceeds quota: {payload_bytes} > {}",
+                policy.max_bytes
+            )));
+        }
+
+        let transaction =
+            Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
+        // Insert first within the same transaction. Enforcement then sees the incoming row,
+        // so a historical/replayed entry that is already expired can evict itself instead
+        // of displacing newer shadow evidence.
+        transaction.execute(
+            "INSERT INTO corpus_entries(
+                entry_id,case_id,source_sha256,domain_json,json,created_at,
+                retention_class,payload_bytes
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 entry.entry_id.as_str(),
                 entry.case_id.as_str(),
                 entry.source_sha256.as_str(),
                 domain_json,
-                self.encode_sensitive(&json)?,
+                stored,
                 entry.created_at.as_str(),
+                retention_class,
+                payload_bytes_sql,
             ],
         )?;
+        Self::enforce_zero_touch_shadow_policy_in_transaction(&transaction, policy, now, None)?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn zero_touch_shadow_corpus_status(&self) -> StorageResult<ShadowCorpusStorageStatus> {
+        Self::zero_touch_shadow_corpus_status_for(&self.conn)
+    }
+
+    pub fn enforce_zero_touch_shadow_corpus_policy(&self) -> StorageResult<usize> {
+        let transaction =
+            Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
+        let removed = Self::enforce_zero_touch_shadow_policy_in_transaction(
+            &transaction,
+            ShadowCorpusPolicy::production(),
+            chrono::Utc::now(),
+            None,
+        )?;
+        transaction.commit()?;
+        Ok(removed)
+    }
+
+    fn zero_touch_shadow_corpus_status_for(
+        conn: &Connection,
+    ) -> StorageResult<ShadowCorpusStorageStatus> {
+        let (entries, payload_bytes) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(payload_bytes), 0)
+             FROM corpus_entries
+             WHERE retention_class=?1",
+            params![CORPUS_CLASS_ZERO_TOUCH_SHADOW],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        Ok(ShadowCorpusStorageStatus {
+            entries: u64::try_from(entries.max(0)).unwrap_or_default(),
+            payload_bytes: u64::try_from(payload_bytes.max(0)).unwrap_or_default(),
+        })
+    }
+
+    fn enforce_zero_touch_shadow_policy_in_transaction(
+        transaction: &Transaction<'_>,
+        policy: ShadowCorpusPolicy,
+        now: chrono::DateTime<chrono::Utc>,
+        incoming_shadow_bytes: Option<u64>,
+    ) -> StorageResult<usize> {
+        if policy.max_bytes == 0 || policy.max_entries == 0 || policy.retention_days < 0 {
+            return Err(StorageError::Crypto(
+                "invalid zero-touch shadow corpus policy".into(),
+            ));
+        }
+        if let Some(incoming) = incoming_shadow_bytes {
+            if incoming > policy.max_bytes {
+                return Err(StorageError::Crypto(format!(
+                    "zero-touch shadow corpus entry exceeds quota: {incoming} > {}",
+                    policy.max_bytes
+                )));
+            }
+        }
+
+        let cutoff = now
+            .checked_sub_signed(chrono::Duration::days(policy.retention_days))
+            .ok_or_else(|| {
+                StorageError::Crypto("shadow corpus retention cutoff overflow".into())
+            })?;
+
+        #[derive(Debug)]
+        struct ShadowCandidate {
+            rowid: i64,
+            payload_bytes: u64,
+            expired: bool,
+        }
+
+        // One index-friendly ordered scan computes both retention and quota victims.
+        // Avoid repeated COUNT/SUM/sort cycles while an IMMEDIATE transaction blocks writers.
+        let candidates = {
+            let mut statement = transaction.prepare(
+                "SELECT rowid, payload_bytes, created_at
+                 FROM corpus_entries
+                 WHERE retention_class=?1
+                 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let collected = {
+                let mapped =
+                    statement.query_map(params![CORPUS_CLASS_ZERO_TOUCH_SHADOW], |row| {
+                        let payload_bytes = row.get::<_, i64>(1)?.max(0) as u64;
+                        let created_at = row.get::<_, String>(2)?;
+                        let expired = chrono::DateTime::parse_from_rfc3339(&created_at)
+                            .map(|value| value.with_timezone(&chrono::Utc) < cutoff)
+                            .unwrap_or(false);
+                        Ok(ShadowCandidate {
+                            rowid: row.get(0)?,
+                            payload_bytes,
+                            expired,
+                        })
+                    })?;
+                mapped.collect::<Result<Vec<_>, _>>()
+            };
+            drop(statement);
+            collected?
+        };
+
+        let mut remaining_entries = candidates.len() as u64;
+        let mut remaining_bytes = candidates.iter().fold(0_u64, |total, candidate| {
+            total.saturating_add(candidate.payload_bytes)
+        });
+        let incoming_entries = u64::from(incoming_shadow_bytes.is_some());
+        let incoming_bytes = incoming_shadow_bytes.unwrap_or_default();
+        let mut victim_rowids = Vec::new();
+
+        for candidate in &candidates {
+            if candidate.expired {
+                victim_rowids.push(candidate.rowid);
+                remaining_entries = remaining_entries.saturating_sub(1);
+                remaining_bytes = remaining_bytes.saturating_sub(candidate.payload_bytes);
+            }
+        }
+
+        if remaining_entries.saturating_add(incoming_entries) > policy.max_entries
+            || remaining_bytes.saturating_add(incoming_bytes) > policy.max_bytes
+        {
+            for candidate in candidates.iter().filter(|candidate| !candidate.expired) {
+                victim_rowids.push(candidate.rowid);
+                remaining_entries = remaining_entries.saturating_sub(1);
+                remaining_bytes = remaining_bytes.saturating_sub(candidate.payload_bytes);
+                if remaining_entries.saturating_add(incoming_entries) <= policy.max_entries
+                    && remaining_bytes.saturating_add(incoming_bytes) <= policy.max_bytes
+                {
+                    break;
+                }
+            }
+        }
+
+        if remaining_entries.saturating_add(incoming_entries) > policy.max_entries
+            || remaining_bytes.saturating_add(incoming_bytes) > policy.max_bytes
+        {
+            return Err(StorageError::Crypto(
+                "zero-touch shadow corpus quota cannot be satisfied without deleting protected corpus data".into(),
+            ));
+        }
+
+        let mut removed = 0_usize;
+        if !victim_rowids.is_empty() {
+            let mut delete = transaction.prepare(
+                "DELETE FROM corpus_entries
+                 WHERE rowid=?1 AND retention_class=?2",
+            )?;
+            for rowid in victim_rowids {
+                removed = removed.saturating_add(
+                    delete.execute(params![rowid, CORPUS_CLASS_ZERO_TOUCH_SHADOW])?,
+                );
+            }
+        }
+        Ok(removed)
     }
 
     pub fn list_corpus_entries(&self, limit: usize) -> StorageResult<Vec<CorpusEntry>> {
@@ -2452,6 +2783,39 @@ mod tests {
         ))
     }
 
+    fn corpus_entry_for_policy(
+        entry_id: &str,
+        acceptance: CorpusAcceptanceSource,
+        created_at: &str,
+    ) -> CorpusEntry {
+        use dokkomplekt_core::{build_corpus_entry, CorpusEntryRequest, DomainKind};
+
+        let model_case = SemanticCase::default();
+        let deterministic_case = SemanticCase::default();
+        let final_case = SemanticCase::default();
+        let source_sha256 = "d".repeat(64);
+        build_corpus_entry(CorpusEntryRequest {
+            entry_id: entry_id.into(),
+            case_id: format!("case-{entry_id}"),
+            source_sha256: &source_sha256,
+            fingerprint_key: &[31u8; 32],
+            input_text: "privacy-preserving corpus input",
+            domain: DomainKind::Hr,
+            pack_id: Some("hr-pack".into()),
+            cluster_id: Some("shadow-policy".into()),
+            model_case: &model_case,
+            deterministic_case: &deterministic_case,
+            final_case: &final_case,
+            field_acceptance_source: acceptance,
+            proposed_kit_documents: vec!["contract".into()],
+            kit_proposal_source: Some("test".into()),
+            kit_documents: vec!["contract".into()],
+            kit_acceptance_source: acceptance,
+            created_at: created_at.into(),
+        })
+        .unwrap()
+    }
+
     fn workspace_document(
         id: &str,
         role_id: &str,
@@ -3446,6 +3810,650 @@ mod tests {
             .unwrap();
         assert!(raw.starts_with(ENCRYPTED_PREFIX));
         assert!(!raw.contains("Иванов"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zero_touch_shadow_quota_evicts_oldest_without_touching_specialist_corpus() {
+        let path = temp_db("shadow-quota");
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let policy = ShadowCorpusPolicy {
+            max_bytes: 10 * 1024 * 1024,
+            max_entries: 2,
+            retention_days: 3650,
+        };
+
+        let specialist = corpus_entry_for_policy(
+            "specialist-protected",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            "2026-01-01T00:00:00Z",
+        );
+        let shadow_old = corpus_entry_for_policy(
+            "shadow-old",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2026-01-02T00:00:00Z",
+        );
+        let shadow_mid = corpus_entry_for_policy(
+            "shadow-mid",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2026-01-03T00:00:00Z",
+        );
+        let shadow_new = corpus_entry_for_policy(
+            "shadow-new",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2026-01-04T00:00:00Z",
+        );
+
+        repo.append_corpus_entry_with_shadow_policy(&specialist, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&shadow_old, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&shadow_mid, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&shadow_new, policy)
+            .unwrap();
+
+        let entries = repo.list_corpus_entries(20).unwrap();
+        let ids = entries
+            .iter()
+            .map(|entry| entry.entry_id.as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"specialist-protected"));
+        assert!(!ids.contains(&"shadow-old"));
+        assert!(ids.contains(&"shadow-mid"));
+        assert!(ids.contains(&"shadow-new"));
+        assert_eq!(repo.zero_touch_shadow_corpus_status().unwrap().entries, 2);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zero_touch_shadow_retention_removes_expired_shadow_only() {
+        let path = temp_db("shadow-retention");
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let policy = ShadowCorpusPolicy {
+            max_bytes: 10 * 1024 * 1024,
+            max_entries: 100,
+            retention_days: 90,
+        };
+
+        let specialist_old = corpus_entry_for_policy(
+            "specialist-old",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            "2025-01-01T00:00:00Z",
+        );
+        let shadow_old = corpus_entry_for_policy(
+            "shadow-expired",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2025-01-01T00:00:00Z",
+        );
+        let current_created_at = chrono::Utc::now().to_rfc3339();
+        let shadow_current = corpus_entry_for_policy(
+            "shadow-current",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &current_created_at,
+        );
+
+        repo.append_corpus_entry_with_shadow_policy(&specialist_old, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&shadow_old, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&shadow_current, policy)
+            .unwrap();
+
+        let ids = repo
+            .list_corpus_entries(20)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.entry_id)
+            .collect::<Vec<_>>();
+        assert!(ids.iter().any(|id| id == "specialist-old"));
+        assert!(!ids.iter().any(|id| id == "shadow-expired"));
+        assert!(ids.iter().any(|id| id == "shadow-current"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn expired_incoming_shadow_is_discarded_without_evicting_newer_entry() {
+        let path = temp_db("shadow-expired-incoming");
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let policy = ShadowCorpusPolicy {
+            max_bytes: 10 * 1024 * 1024,
+            max_entries: 1,
+            retention_days: 90,
+        };
+
+        let current_created_at = chrono::Utc::now().to_rfc3339();
+        let expired_created_at = (chrono::Utc::now() - chrono::Duration::days(120)).to_rfc3339();
+        let current = corpus_entry_for_policy(
+            "shadow-current-survives",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &current_created_at,
+        );
+        let expired = corpus_entry_for_policy(
+            "shadow-expired-incoming",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &expired_created_at,
+        );
+
+        repo.append_corpus_entry_with_shadow_policy(&current, policy)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&expired, policy)
+            .unwrap();
+
+        let ids = repo
+            .list_corpus_entries(20)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.entry_id)
+            .collect::<Vec<_>>();
+        assert!(ids.iter().any(|id| id == "shadow-current-survives"));
+        assert!(!ids.iter().any(|id| id == "shadow-expired-incoming"));
+        assert_eq!(repo.zero_touch_shadow_corpus_status().unwrap().entries, 1);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn zero_touch_shadow_byte_quota_evicts_shadow_instead_of_protected_corpus() {
+        let path = temp_db("shadow-byte-quota");
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let generous = ShadowCorpusPolicy {
+            max_bytes: 10 * 1024 * 1024,
+            max_entries: 100,
+            retention_days: 3650,
+        };
+        let specialist = corpus_entry_for_policy(
+            "specialist-byte-protected",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            "2026-02-01T00:00:00Z",
+        );
+        let first = corpus_entry_for_policy(
+            "shadow-byte-first",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2026-02-02T00:00:00Z",
+        );
+        repo.append_corpus_entry_with_shadow_policy(&specialist, generous)
+            .unwrap();
+        repo.append_corpus_entry_with_shadow_policy(&first, generous)
+            .unwrap();
+        let first_bytes = repo
+            .zero_touch_shadow_corpus_status()
+            .unwrap()
+            .payload_bytes;
+        assert!(first_bytes > 0);
+
+        let second = corpus_entry_for_policy(
+            "shadow-byte-second",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2026-02-03T00:00:00Z",
+        );
+        let second_bytes = repo
+            .encode_sensitive(&serde_json::to_string(&second).unwrap())
+            .unwrap()
+            .len() as u64;
+        let bounded = ShadowCorpusPolicy {
+            // Either shadow entry fits alone; the pair does not.
+            max_bytes: first_bytes.max(second_bytes),
+            max_entries: 100,
+            retention_days: 3650,
+        };
+        repo.append_corpus_entry_with_shadow_policy(&second, bounded)
+            .unwrap();
+
+        let ids = repo
+            .list_corpus_entries(20)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.entry_id)
+            .collect::<Vec<_>>();
+        assert!(ids.iter().any(|id| id == "specialist-byte-protected"));
+        assert!(!ids.iter().any(|id| id == "shadow-byte-first"));
+        assert!(ids.iter().any(|id| id == "shadow-byte-second"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_corpus_rows_are_backfilled_into_safe_retention_classes() {
+        let path = temp_db("shadow-backfill");
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
+        let shadow = corpus_entry_for_policy(
+            "legacy-shadow-row",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &fresh_created_at,
+        );
+        let specialist = corpus_entry_for_policy(
+            "legacy-specialist-row",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            &fresh_created_at,
+        );
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE corpus_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    domain_json TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+            for entry in [&shadow, &specialist] {
+                conn.execute(
+                    "INSERT INTO corpus_entries(
+                        entry_id,case_id,source_sha256,domain_json,json,created_at
+                     ) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        entry.entry_id.as_str(),
+                        entry.case_id.as_str(),
+                        entry.source_sha256.as_str(),
+                        serde_json::to_string(&entry.domain).unwrap(),
+                        serde_json::to_string(entry).unwrap(),
+                        entry.created_at.as_str(),
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let repo = LocalRepository::open(&path).unwrap();
+        let classes = repo
+            .conn
+            .prepare(
+                "SELECT entry_id, retention_class, payload_bytes
+                 FROM corpus_entries
+                 ORDER BY entry_id ASC",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(classes.len(), 2);
+        assert!(classes.iter().any(|(id, class, bytes)| {
+            id == "legacy-shadow-row" && class == CORPUS_CLASS_ZERO_TOUCH_SHADOW && *bytes > 0
+        }));
+        assert!(classes.iter().any(|(id, class, bytes)| {
+            id == "legacy-specialist-row"
+                && class == CORPUS_CLASS_SPECIALIST_CONFIRMED
+                && *bytes > 0
+        }));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corpus_retention_migration_applies_production_shadow_policy_before_marking_complete() {
+        let path = temp_db("shadow-migration-policy");
+        let expired_shadow = corpus_entry_for_policy(
+            "legacy-expired-shadow",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            "2025-01-01T00:00:00Z",
+        );
+        let protected_specialist = corpus_entry_for_policy(
+            "legacy-protected-specialist",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            "2025-01-01T00:00:00Z",
+        );
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE corpus_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    domain_json TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+            for entry in [&expired_shadow, &protected_specialist] {
+                conn.execute(
+                    "INSERT INTO corpus_entries(
+                        entry_id,case_id,source_sha256,domain_json,json,created_at
+                     ) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        entry.entry_id.as_str(),
+                        entry.case_id.as_str(),
+                        entry.source_sha256.as_str(),
+                        serde_json::to_string(&entry.domain).unwrap(),
+                        serde_json::to_string(entry).unwrap(),
+                        entry.created_at.as_str(),
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let repo = LocalRepository::open(&path).unwrap();
+        let ids = repo
+            .list_corpus_entries(20)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.entry_id)
+            .collect::<Vec<_>>();
+        assert!(!ids.iter().any(|id| id == "legacy-expired-shadow"));
+        assert!(ids.iter().any(|id| id == "legacy-protected-specialist"));
+        assert_eq!(
+            repo.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM storage_migrations WHERE migration_key=?1",
+                    params![CORPUS_RETENTION_MIGRATION_KEY],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corpus_retention_backfill_is_marked_and_not_rescanned_on_reopen() {
+        let path = temp_db("shadow-backfill-marker");
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
+        let shadow = corpus_entry_for_policy(
+            "legacy-shadow-marker",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &fresh_created_at,
+        );
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE corpus_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    domain_json TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO corpus_entries(
+                    entry_id,case_id,source_sha256,domain_json,json,created_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    shadow.entry_id.as_str(),
+                    shadow.case_id.as_str(),
+                    shadow.source_sha256.as_str(),
+                    serde_json::to_string(&shadow.domain).unwrap(),
+                    serde_json::to_string(&shadow).unwrap(),
+                    shadow.created_at.as_str(),
+                ],
+            )
+            .unwrap();
+        }
+
+        {
+            let repo = LocalRepository::open(&path).unwrap();
+            assert_eq!(
+                repo.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM storage_migrations WHERE migration_key=?1",
+                        params![CORPUS_RETENTION_MIGRATION_KEY],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+            repo.conn
+                .execute(
+                    "UPDATE corpus_entries
+                     SET retention_class='marker-proves-no-rescan', payload_bytes=0
+                     WHERE entry_id=?1",
+                    params![shadow.entry_id.as_str()],
+                )
+                .unwrap();
+        }
+
+        let repo = LocalRepository::open(&path).unwrap();
+        let (class, bytes): (String, i64) = repo
+            .conn
+            .query_row(
+                "SELECT retention_class, payload_bytes
+                 FROM corpus_entries
+                 WHERE entry_id=?1",
+                params![shadow.entry_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(class, "marker-proves-no-rescan");
+        assert_eq!(bytes, 0);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn encrypted_legacy_corpus_rows_are_backfilled_without_losing_acceptance_source() {
+        let path = temp_db("shadow-backfill-encrypted");
+        let encoder_path = temp_db("shadow-backfill-encoder");
+        let key = [31u8; 32];
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
+        let shadow = corpus_entry_for_policy(
+            "legacy-encrypted-shadow",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &fresh_created_at,
+        );
+        let specialist = corpus_entry_for_policy(
+            "legacy-encrypted-specialist",
+            CorpusAcceptanceSource::SpecialistConfirmed,
+            &fresh_created_at,
+        );
+
+        let encoder = LocalRepository::open_with_key(&encoder_path, key).unwrap();
+        let shadow_stored = encoder
+            .encode_sensitive(&serde_json::to_string(&shadow).unwrap())
+            .unwrap();
+        let specialist_stored = encoder
+            .encode_sensitive(&serde_json::to_string(&specialist).unwrap())
+            .unwrap();
+        drop(encoder);
+        let _ = std::fs::remove_file(&encoder_path);
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE corpus_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    domain_json TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+            for (entry, stored) in [(&shadow, shadow_stored), (&specialist, specialist_stored)] {
+                conn.execute(
+                    "INSERT INTO corpus_entries(
+                        entry_id,case_id,source_sha256,domain_json,json,created_at
+                     ) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        entry.entry_id.as_str(),
+                        entry.case_id.as_str(),
+                        entry.source_sha256.as_str(),
+                        serde_json::to_string(&entry.domain).unwrap(),
+                        stored,
+                        entry.created_at.as_str(),
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let repo = LocalRepository::open_with_key(&path, key).unwrap();
+        let classes = repo
+            .conn
+            .prepare(
+                "SELECT entry_id, retention_class
+                 FROM corpus_entries
+                 ORDER BY entry_id ASC",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(classes.iter().any(|(id, class)| {
+            id == "legacy-encrypted-shadow" && class == CORPUS_CLASS_ZERO_TOUCH_SHADOW
+        }));
+        assert!(classes.iter().any(|(id, class)| {
+            id == "legacy-encrypted-specialist" && class == CORPUS_CLASS_SPECIALIST_CONFIRMED
+        }));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corpus_retention_migration_rechecks_rows_added_by_older_app_after_marker() {
+        let path = temp_db("shadow-backfill-post-rollback");
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
+        let shadow = corpus_entry_for_policy(
+            "legacy-shadow-after-rollback",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &fresh_created_at,
+        );
+
+        {
+            let repo = LocalRepository::open(&path).unwrap();
+            assert_eq!(
+                repo.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM storage_migrations WHERE migration_key=?1",
+                        params![CORPUS_RETENTION_MIGRATION_KEY],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+        }
+
+        // Simulate an older binary after rollback: it knows only the legacy insert column
+        // list, so SQLite fills the newly added retention metadata with schema defaults.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO corpus_entries(
+                    entry_id,case_id,source_sha256,domain_json,json,created_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    shadow.entry_id.as_str(),
+                    shadow.case_id.as_str(),
+                    shadow.source_sha256.as_str(),
+                    serde_json::to_string(&shadow.domain).unwrap(),
+                    serde_json::to_string(&shadow).unwrap(),
+                    shadow.created_at.as_str(),
+                ],
+            )
+            .unwrap();
+            let (class, bytes): (String, i64) = conn
+                .query_row(
+                    "SELECT retention_class, payload_bytes
+                     FROM corpus_entries
+                     WHERE entry_id=?1",
+                    params![shadow.entry_id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert!(class.is_empty());
+            assert_eq!(bytes, 0);
+        }
+
+        let repo = LocalRepository::open(&path).unwrap();
+        let (class, bytes): (String, i64) = repo
+            .conn
+            .query_row(
+                "SELECT retention_class, payload_bytes
+                 FROM corpus_entries
+                 WHERE entry_id=?1",
+                params![shadow.entry_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(class, CORPUS_CLASS_ZERO_TOUCH_SHADOW);
+        assert!(bytes > 0);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corrupt_legacy_corpus_row_is_preserved_as_unverified_instead_of_blocking_open() {
+        let path = temp_db("shadow-backfill-corrupt");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE corpus_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    domain_json TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO corpus_entries(
+                    entry_id,case_id,source_sha256,domain_json,json,created_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    "legacy-corrupt",
+                    "case-corrupt",
+                    "e".repeat(64),
+                    "\"hr\"",
+                    "not-valid-encrypted-or-json-payload",
+                    "2026-03-05T00:00:00Z",
+                ],
+            )
+            .unwrap();
+        }
+
+        let repo = LocalRepository::open_with_key(&path, [31u8; 32]).unwrap();
+        let (class, bytes): (String, i64) = repo
+            .conn
+            .query_row(
+                "SELECT retention_class, payload_bytes
+                 FROM corpus_entries
+                 WHERE entry_id='legacy-corrupt'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(class, CORPUS_CLASS_LEGACY_UNVERIFIED);
+        assert!(bytes > 0);
+
+        repo.enforce_zero_touch_shadow_corpus_policy().unwrap();
+        assert_eq!(
+            repo.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM corpus_entries WHERE entry_id='legacy-corrupt'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+
         let _ = std::fs::remove_file(path);
     }
 

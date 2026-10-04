@@ -332,6 +332,17 @@ pub(crate) fn collect_technical_storage_status(
             Some(crate::template_snapshot::TEMPLATE_SANITIZED_QUOTA_BYTES),
             Some(crate::template_snapshot::TEMPLATE_SANITIZED_RETENTION_SECONDS),
         ),
+        (
+            "zero-touch-shadow-corpus",
+            "Shadow-корпус автоматизации (до 50 000 записей)",
+            Some(dokkomplekt_storage::ZERO_TOUCH_SHADOW_CORPUS_QUOTA_BYTES),
+            Some(
+                (dokkomplekt_storage::ZERO_TOUCH_SHADOW_CORPUS_RETENTION_DAYS as u64)
+                    * 24
+                    * 60
+                    * 60,
+            ),
+        ),
     ];
     let mut categories = Vec::with_capacity(managed.len() + 1);
     let mut retention_managed_bytes = 0_u64;
@@ -359,6 +370,12 @@ pub(crate) fn collect_technical_storage_status(
             universal_intake::owned_workspace_bytes(
                 &data_dir.join("template-publication-sanitized-work"),
             )?
+        } else if key == "zero-touch-shadow-corpus" {
+            let db_path = default_state_db_path(app)?;
+            repository_for(&db_path)?
+                .zero_touch_shadow_corpus_status()
+                .map_err(|error| error.to_string())?
+                .payload_bytes
         } else {
             owned_path_size(&data_dir.join(key))?
         };
@@ -442,6 +459,12 @@ pub(crate) fn cleanup_intake_workspace(app: &tauri::AppHandle) -> Result<usize, 
         crate::template_snapshot::TEMPLATE_SANITIZED_QUOTA_BYTES,
         0,
     )?);
+    let db_path = default_state_db_path(app)?;
+    removed = removed.saturating_add(
+        repository_for(&db_path)?
+            .enforce_zero_touch_shadow_corpus_policy()
+            .map_err(|error| error.to_string())?,
+    );
     Ok(removed)
 }
 

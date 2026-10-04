@@ -257,6 +257,24 @@ impl PerformanceTrace {
         })
     }
 
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != Self::SCHEMA {
+            return Err(format!(
+                "unsupported performance trace schema: {}",
+                self.schema
+            ));
+        }
+        let rebuilt = Self::new(
+            self.context.clone(),
+            self.stages.clone(),
+            self.outcome,
+        )?;
+        if rebuilt.total_machine_ms != self.total_machine_ms {
+            return Err("performance trace total_machine_ms does not match stage durations".into());
+        }
+        Ok(())
+    }
+
     pub fn slow_run_report(&self) -> SlowRunReport {
         let bottleneck = self
             .stages
@@ -411,6 +429,31 @@ mod tests {
         invalid.run_kind = PerformanceRunKind::Batch10;
         invalid.batch_size = 9;
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn tampered_serialized_totals_or_schema_fail_validation() {
+        let mut trace = PerformanceTrace::new(
+            context(),
+            vec![
+                PerformanceStageMeasurement {
+                    stage: PerformanceStage::SourceOpen,
+                    duration_ms: 1,
+                },
+                PerformanceStageMeasurement {
+                    stage: PerformanceStage::Publish,
+                    duration_ms: 2,
+                },
+            ],
+            PerformanceOutcome::Completed,
+        )
+        .unwrap();
+        trace.total_machine_ms = 999;
+        assert!(trace.validate().is_err());
+
+        trace.total_machine_ms = 3;
+        trace.schema = "unknown".into();
+        assert!(trace.validate().is_err());
     }
 
     #[test]

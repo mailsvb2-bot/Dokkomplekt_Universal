@@ -87,7 +87,10 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "PERFORMANCE_TRACE_LOCK" in runtime
 
     assert "create_completed_retained_workspace_file" in workspace
+    assert "create_sensitive_session_with_lease" in workspace
     assert "session_has_verified_ownership" in workspace
+    assert "filter(|session| !session.live)" in workspace
+    assert "retained_file_listing_never_exposes_live_cross_process_session" in workspace
     assert "list_owned_workspace_files" in workspace
     assert "metadata_is_link_like" in workspace
 

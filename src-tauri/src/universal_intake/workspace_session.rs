@@ -1,6 +1,7 @@
 use super::metadata_is_link_like;
 use fs2::FileExt as _;
 use std::fs::File;
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -414,6 +415,83 @@ pub(crate) fn create_retained_workspace_session(workspace: &Path) -> Result<Path
     create_sensitive_session(workspace)
 }
 
+pub(crate) fn create_completed_retained_workspace_file(
+    workspace: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let file_component = Path::new(file_name);
+    if file_component.components().count() != 1
+        || !matches!(file_component.components().next(), Some(Component::Normal(_)))
+    {
+        return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
+    }
+    let root = create_sensitive_session(workspace)?;
+    let result = (|| -> Result<PathBuf, String> {
+        if !session_has_verified_ownership(&root)? {
+            return Err("Retained-сессия не содержит ownership proof.".into());
+        }
+        let destination = root.join(file_component);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+            .map_err(|error| format!("Не удалось создать retained-файл: {error}"))?;
+        restrict_file_permissions(&destination)?;
+        file.write_all(bytes)
+            .map_err(|error| format!("Не удалось записать retained-файл: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Не удалось синхронизировать retained-файл: {error}"))?;
+        drop(file);
+
+        let active = root.join(ACTIVE_SESSION_MARKER);
+        let metadata = std::fs::symlink_metadata(&active)
+            .map_err(|error| format!("Не удалось проверить active marker retained-сессии: {error}"))?;
+        if metadata_is_link_like(&metadata) || !metadata.is_file() {
+            return Err("Active marker retained-сессии имеет небезопасный тип.".into());
+        }
+        std::fs::remove_file(&active)
+            .map_err(|error| format!("Не удалось завершить retained-сессию: {error}"))?;
+        Ok(destination)
+    })();
+    if result.is_err() {
+        let _ = remove_sensitive_session(&root);
+    }
+    result
+}
+
+pub(crate) fn list_owned_workspace_files(
+    workspace: &Path,
+    file_name: &str,
+    limit: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let file_component = Path::new(file_name);
+    if file_component.components().count() != 1
+        || !matches!(file_component.components().next(), Some(Component::Normal(_)))
+    {
+        return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
+    }
+    let mut sessions = scan_owned_sessions(workspace)?;
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.modified));
+    let mut files = Vec::new();
+    for session in sessions.into_iter().take(limit.clamp(1, 1_000)) {
+        let path = session.path.join(file_component);
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if metadata_is_link_like(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "Owned retained-файл имеет небезопасный тип: {}",
+                path.display()
+            ));
+        }
+        files.push(path);
+    }
+    Ok(files)
+}
+
 pub(crate) fn refresh_retained_workspace_session(
     workspace: &Path,
     path: &Path,
@@ -675,6 +753,47 @@ mod tests {
         lease.unlock().unwrap();
         drop(lease);
         remove_sensitive_session(&live).unwrap();
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn completed_retained_file_is_owned_listable_and_quota_evictable() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-retained-completed-{}", Uuid::new_v4()));
+        let path =
+            create_completed_retained_workspace_file(&workspace, "trace.json", b"{\"ok\":true}")
+                .unwrap();
+
+        assert!(path.is_file());
+        assert!(!path.parent().unwrap().join(ACTIVE_SESSION_MARKER).exists());
+        assert_eq!(
+            list_owned_workspace_files(&workspace, "trace.json", 10).unwrap(),
+            vec![path.clone()]
+        );
+        assert!(owned_workspace_bytes(&workspace).unwrap() > 0);
+
+        assert_eq!(
+            enforce_ephemeral_workspace_quota(&workspace, Duration::ZERO, 1024, 0).unwrap(),
+            1
+        );
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn retained_file_listing_ignores_unknown_workspace_content() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-retained-list-unknown-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let unknown_dir = workspace.join("session-lookalike");
+        std::fs::create_dir_all(&unknown_dir).unwrap();
+        let unknown = unknown_dir.join("trace.json");
+        std::fs::write(&unknown, b"user-owned").unwrap();
+
+        assert!(list_owned_workspace_files(&workspace, "trace.json", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(std::fs::read(&unknown).unwrap(), b"user-owned");
         let _ = std::fs::remove_dir_all(workspace);
     }
 

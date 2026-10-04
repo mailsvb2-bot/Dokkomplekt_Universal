@@ -518,11 +518,11 @@ impl LocalRepository {
                  WHERE retention_class = '' OR payload_bytes <= 0
                  ORDER BY rowid ASC",
             )?;
-            statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+            let mapped = statement.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let collected = mapped.collect::<Result<Vec<_>, _>>()?;
+            collected
         };
 
         for (rowid, stored) in rows {
@@ -730,20 +730,20 @@ impl LocalRepository {
                  WHERE retention_class=?1
                  ORDER BY created_at ASC, rowid ASC",
             )?;
-            statement
-                .query_map(params![CORPUS_CLASS_ZERO_TOUCH_SHADOW], |row| {
-                    let payload_bytes = row.get::<_, i64>(1)?.max(0) as u64;
-                    let created_at = row.get::<_, String>(2)?;
-                    let expired = chrono::DateTime::parse_from_rfc3339(&created_at)
-                        .map(|value| value.with_timezone(&chrono::Utc) < cutoff)
-                        .unwrap_or(false);
-                    Ok(ShadowCandidate {
-                        rowid: row.get(0)?,
-                        payload_bytes,
-                        expired,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+            let mapped = statement.query_map(params![CORPUS_CLASS_ZERO_TOUCH_SHADOW], |row| {
+                let payload_bytes = row.get::<_, i64>(1)?.max(0) as u64;
+                let created_at = row.get::<_, String>(2)?;
+                let expired = chrono::DateTime::parse_from_rfc3339(&created_at)
+                    .map(|value| value.with_timezone(&chrono::Utc) < cutoff)
+                    .unwrap_or(false);
+                Ok(ShadowCandidate {
+                    rowid: row.get(0)?,
+                    payload_bytes,
+                    expired,
+                })
+            })?;
+            let collected = mapped.collect::<Result<Vec<_>, _>>()?;
+            collected
         };
 
         let mut remaining_entries = candidates.len() as u64;

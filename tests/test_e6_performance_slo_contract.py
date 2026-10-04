@@ -10,7 +10,7 @@ from scripts import performance_slo_gate as gate
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGETS = ROOT / "verification" / "performance" / "slo-targets.json"
+TARGETS = ROOT / "performance" / "slo-targets.json"
 
 
 class PerformanceSloContractTests(unittest.TestCase):

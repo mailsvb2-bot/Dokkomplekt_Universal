@@ -34,11 +34,14 @@ def test_e6_update_backup_quota_is_owned_bounded_and_recovery_safe() -> None:
 
     apply_start = runtime.index("fn apply_verified_update(")
     apply = runtime[apply_start:]
-    assert apply.index("lock_update_backup_policy()?") < apply.index("backup_update_state(")
-    assert apply.index("backup_update_state(") < apply.index("write_update_recovery_state(")
-    assert apply.index("write_update_recovery_state(") < apply.index(
-        "enforce_update_backup_storage_policy_unlocked"
+    lock_index = apply.index("lock_update_backup_policy()?")
+    pre_cleanup_index = apply.index("enforce_update_backup_storage_policy_unlocked", lock_index)
+    backup_index = apply.index("backup_update_state(", pre_cleanup_index)
+    recovery_index = apply.index("write_update_recovery_state(", backup_index)
+    post_cleanup_index = apply.index(
+        "enforce_update_backup_storage_policy_unlocked", recovery_index
     )
+    assert lock_index < pre_cleanup_index < backup_index < recovery_index < post_cleanup_index
     assert "drop(_backup_policy_guard)" in apply
 
     for regression in (

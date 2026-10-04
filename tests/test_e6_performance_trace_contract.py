@@ -38,7 +38,8 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
         "app_version",
         "class",
         "cache_state",
-        "run_kind",
+        "run_phase",
+        "workload",
         "batch_size",
         "ocr_used",
         "runtime_layout_used",
@@ -62,6 +63,8 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "performance stages must follow canonical order" in core
     assert "duplicate performance stage" in core
     assert "total_machine_ms does not match stage durations" in core
+    assert "PerformanceRunPhase" in core
+    assert "PerformanceWorkload" in core
     assert "slow_run_report_if_over" in core
     assert "bottleneck_stage" in core
 

@@ -670,12 +670,7 @@ impl LocalRepository {
                 payload_bytes_sql,
             ],
         )?;
-        Self::enforce_zero_touch_shadow_policy_in_transaction(
-            &transaction,
-            policy,
-            now,
-            None,
-        )?;
+        Self::enforce_zero_touch_shadow_policy_in_transaction(&transaction, policy, now, None)?;
         transaction.commit()?;
         Ok(())
     }

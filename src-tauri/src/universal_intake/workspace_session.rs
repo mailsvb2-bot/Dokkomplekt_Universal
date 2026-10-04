@@ -757,6 +757,47 @@ mod tests {
     }
 
     #[test]
+    fn completed_retained_file_is_owned_listable_and_quota_evictable() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-retained-completed-{}", Uuid::new_v4()));
+        let path =
+            create_completed_retained_workspace_file(&workspace, "trace.json", b"{\"ok\":true}")
+                .unwrap();
+
+        assert!(path.is_file());
+        assert!(!path.parent().unwrap().join(ACTIVE_SESSION_MARKER).exists());
+        assert_eq!(
+            list_owned_workspace_files(&workspace, "trace.json", 10).unwrap(),
+            vec![path.clone()]
+        );
+        assert!(owned_workspace_bytes(&workspace).unwrap() > 0);
+
+        assert_eq!(
+            enforce_ephemeral_workspace_quota(&workspace, Duration::ZERO, 1024, 0).unwrap(),
+            1
+        );
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn retained_file_listing_ignores_unknown_workspace_content() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-retained-list-unknown-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let unknown_dir = workspace.join("session-lookalike");
+        std::fs::create_dir_all(&unknown_dir).unwrap();
+        let unknown = unknown_dir.join("trace.json");
+        std::fs::write(&unknown, b"user-owned").unwrap();
+
+        assert!(list_owned_workspace_files(&workspace, "trace.json", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(std::fs::read(&unknown).unwrap(), b"user-owned");
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
     fn unknown_workspace_entries_are_not_counted_or_deleted_by_cache_quota() {
         let workspace =
             std::env::temp_dir().join(format!("dkk-cache-quota-unknown-{}", Uuid::new_v4()));

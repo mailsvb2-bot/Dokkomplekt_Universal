@@ -70,6 +70,7 @@ class PerformanceSloContractTests(unittest.TestCase):
         reference_path: Path,
         reference: dict[str, object],
     ) -> dict[str, object]:
+        targets = gate.load_object(targets_path)
         series = []
         for metric in gate.CANONICAL_METRICS:
             series.append(

@@ -41,8 +41,8 @@ pub(crate) use workspace_session::{
     create_completed_retained_workspace_file, create_owned_workspace_session,
     create_retained_workspace_session, enforce_ephemeral_workspace_group_quota,
     enforce_ephemeral_workspace_quota,
-    enforce_retained_workspace_quota, owned_workspace_bytes, owned_workspace_group_bytes,
-    refresh_retained_workspace_session, OwnedWorkspaceSession,
+    enforce_retained_workspace_quota, list_owned_workspace_files, owned_workspace_bytes,
+    owned_workspace_group_bytes, refresh_retained_workspace_session, OwnedWorkspaceSession,
 };
 use workspace_session::{
     create_sensitive_session_with_lease, remove_sensitive_session, restrict_directory_permissions,

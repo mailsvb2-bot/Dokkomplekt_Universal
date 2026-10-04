@@ -739,10 +739,49 @@ struct PreparedMedicalRenderTemplate {
     _workspace: Option<LegacyTemplateInferenceWorkspace>,
 }
 
+fn published_template_sha256_for_document(
+    app: &tauri::AppHandle,
+    document_id: &str,
+) -> Result<Option<String>, String> {
+    let repo = repository_for(&default_state_db_path(app)?)?;
+    repo.list_template_versions(document_id)
+        .map_err(|error| error.to_string())
+        .map(|versions| {
+            versions
+                .into_iter()
+                .find(|version| version.status == "published")
+                .map(|version| version.template_sha256)
+        })
+}
+
+fn published_medical_contract_can_replay(
+    document: &DocumentTemplateSpec,
+    published_sha256: Option<&str>,
+    snapshot_sha256: &str,
+) -> Result<bool, String> {
+    if document.category != DomainKind::Medical
+        || document.is_static_copy
+        || !missing_medical_template_render_paths(document).is_empty()
+    {
+        return Ok(false);
+    }
+    let Some(expected_sha256) = published_sha256 else {
+        return Ok(false);
+    };
+    if expected_sha256 != snapshot_sha256 {
+        return Err(format!(
+            "Опубликованный medical-шаблон «{}» изменился после проверки версии: ожидался SHA-256 {}, получен {}. Генерация остановлена; восстановите опубликованную версию или опубликуйте новую.",
+            document.button_label, expected_sha256, snapshot_sha256
+        ));
+    }
+    Ok(true)
+}
+
 fn prepare_medical_template_for_render(
     app: &tauri::AppHandle,
     document: &DocumentTemplateSpec,
     template_path: &Path,
+    snapshot_sha256: &str,
 ) -> Result<PreparedMedicalRenderTemplate, String> {
     let template_text = extract_docx_text(template_path).map_err(|error| error.to_string())?;
     if document.category != DomainKind::Medical {
@@ -753,6 +792,37 @@ fn prepare_medical_template_for_render(
             _workspace: None,
         });
     }
+
+    // Diary generation already snapshots the canonical program-calendar template.
+    // It is a complete generated contract and must never enter the legacy compiler.
+    if is_medical_diary_document(document) {
+        let effective_document = effective_generation_document_spec(document, &template_text)?;
+        validate_medical_template_output_contract(&effective_document)?;
+        return Ok(PreparedMedicalRenderTemplate {
+            path: template_path.to_path_buf(),
+            template_text,
+            effective_document,
+            _workspace: None,
+        });
+    }
+
+    // E6 hot path: a complete, published semantic contract is immutable by SHA
+    // and can be replayed directly. Legacy/static/incomplete/unversioned templates
+    // retain the compiler fallback below.
+    let published_sha256 = published_template_sha256_for_document(app, &document.id)?;
+    if published_medical_contract_can_replay(
+        document,
+        published_sha256.as_deref(),
+        snapshot_sha256,
+    )? {
+        return Ok(PreparedMedicalRenderTemplate {
+            path: template_path.to_path_buf(),
+            template_text,
+            effective_document: document.clone(),
+            _workspace: None,
+        });
+    }
+
     let workspace = create_template_compiler_workspace(app, "template-render-inference")?;
     let root = workspace.root().to_path_buf();
     let extension = template_path
@@ -1075,6 +1145,72 @@ mod legacy_template_runtime_tests {
             )],
             popup_configured: true,
         }
+    }
+
+    fn complete_discharge_document() -> DocumentTemplateSpec {
+        let mut document = medical_document();
+        document.required_fields.clear();
+        document.placeholders = vec![
+            "subject.name".into(),
+            "medical.case_number".into(),
+            "medical.admission_date".into(),
+            "medical.discharge_date".into(),
+            "medical.diagnosis".into(),
+            "medical.treatment".into(),
+            "medical.expert_anamnesis".into(),
+        ];
+        assert!(
+            missing_medical_template_render_paths(&document).is_empty(),
+            "fixture must represent a complete published contract"
+        );
+        document
+    }
+
+    #[test]
+    fn complete_published_medical_contract_replays_without_compiler() {
+        let document = complete_discharge_document();
+        assert!(published_medical_contract_can_replay(
+            &document,
+            Some("abc123"),
+            "abc123"
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn static_incomplete_or_unversioned_medical_contract_keeps_compiler_fallback() {
+        let mut static_document = complete_discharge_document();
+        static_document.is_static_copy = true;
+        assert!(!published_medical_contract_can_replay(
+            &static_document,
+            Some("abc123"),
+            "abc123"
+        )
+        .unwrap());
+
+        let mut incomplete = complete_discharge_document();
+        incomplete
+            .placeholders
+            .retain(|field| field != "medical.treatment");
+        assert!(!published_medical_contract_can_replay(
+            &incomplete,
+            Some("abc123"),
+            "abc123"
+        )
+        .unwrap());
+
+        let complete = complete_discharge_document();
+        assert!(!published_medical_contract_can_replay(&complete, None, "abc123").unwrap());
+    }
+
+    #[test]
+    fn changed_published_medical_contract_fails_closed_before_compiler() {
+        let document = complete_discharge_document();
+        let error =
+            published_medical_contract_can_replay(&document, Some("expected"), "tampered")
+                .unwrap_err();
+        assert!(error.contains("изменился после проверки версии"), "{error}");
+        assert!(error.contains("ожидался SHA-256 expected"), "{error}");
     }
 
     #[test]

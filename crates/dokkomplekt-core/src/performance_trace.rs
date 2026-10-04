@@ -102,9 +102,14 @@ pub enum PerformanceCacheState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PerformanceRunKind {
+pub enum PerformanceRunPhase {
     FirstRun,
     RepeatRun,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceWorkload {
     SingleDocument,
     Batch10,
     Batch50,
@@ -132,7 +137,8 @@ pub struct PerformanceTraceContext {
     pub app_version: String,
     pub class: PerformanceClass,
     pub cache_state: PerformanceCacheState,
-    pub run_kind: PerformanceRunKind,
+    pub run_phase: PerformanceRunPhase,
+    pub workload: PerformanceWorkload,
     pub batch_size: u32,
     pub ocr_used: bool,
     pub runtime_layout_used: bool,
@@ -158,7 +164,8 @@ pub struct SlowRunReport {
     pub stages: Vec<PerformanceStageMeasurement>,
     pub class: PerformanceClass,
     pub cache_state: PerformanceCacheState,
-    pub run_kind: PerformanceRunKind,
+    pub run_phase: PerformanceRunPhase,
+    pub workload: PerformanceWorkload,
     pub batch_size: u32,
 }
 
@@ -185,15 +192,15 @@ impl PerformanceTraceContext {
         if self.batch_size == 0 {
             return Err("performance batch_size must be positive".into());
         }
-        match self.run_kind {
-            PerformanceRunKind::SingleDocument if self.batch_size != 1 => {
-                return Err("single_document performance run must have batch_size=1".into())
+        match self.workload {
+            PerformanceWorkload::SingleDocument if self.batch_size != 1 => {
+                return Err("single_document performance workload must have batch_size=1".into())
             }
-            PerformanceRunKind::Batch10 if self.batch_size != 10 => {
-                return Err("batch_10 performance run must have batch_size=10".into())
+            PerformanceWorkload::Batch10 if self.batch_size != 10 => {
+                return Err("batch_10 performance workload must have batch_size=10".into())
             }
-            PerformanceRunKind::Batch50 if self.batch_size != 50 => {
-                return Err("batch_50 performance run must have batch_size=50".into())
+            PerformanceWorkload::Batch50 if self.batch_size != 50 => {
+                return Err("batch_50 performance workload must have batch_size=50".into())
             }
             _ => {}
         }
@@ -291,7 +298,8 @@ impl PerformanceTrace {
             stages: self.stages.clone(),
             class: self.context.class,
             cache_state: self.context.cache_state,
-            run_kind: self.context.run_kind,
+            run_phase: self.context.run_phase,
+            workload: self.context.workload,
             batch_size: self.context.batch_size,
         }
     }
@@ -314,7 +322,8 @@ mod tests {
             app_version: "1.0.0".into(),
             class: PerformanceClass::TypicalDocx,
             cache_state: PerformanceCacheState::WarmCache,
-            run_kind: PerformanceRunKind::SingleDocument,
+            run_phase: PerformanceRunPhase::RepeatRun,
+            workload: PerformanceWorkload::SingleDocument,
             batch_size: 1,
             ocr_used: false,
             runtime_layout_used: false,
@@ -426,7 +435,7 @@ mod tests {
     #[test]
     fn batch_identity_must_match_run_kind() {
         let mut invalid = context();
-        invalid.run_kind = PerformanceRunKind::Batch10;
+        invalid.workload = PerformanceWorkload::Batch10;
         invalid.batch_size = 9;
         assert!(invalid.validate().is_err());
     }
@@ -541,8 +550,9 @@ mod tests {
                 "ocr_used",
                 "pdf_used",
                 "run_id",
-                "run_kind",
+                "run_phase",
                 "runtime_layout_used",
+                "workload",
             ]
             .into_iter()
             .map(str::to_string)

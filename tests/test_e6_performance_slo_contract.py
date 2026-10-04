@@ -70,16 +70,43 @@ class PerformanceSloContractTests(unittest.TestCase):
         reference_path: Path,
         reference: dict[str, object],
     ) -> dict[str, object]:
-        targets = gate.load_object(targets_path)
+        classes = [
+            *gate.CANONICAL_CORPUS_CLASSES,
+            *gate.CANONICAL_SPECIAL_CLASSES,
+        ]
         series = []
-        for metric in gate.CANONICAL_METRICS:
+        canonical_metrics = list(gate.CANONICAL_METRICS)
+        for index, metric in enumerate(canonical_metrics):
             series.append(
                 {
                     "id": f"series-{metric}",
                     "metric": metric,
-                    "class": "contract-fixture",
-                    "cache_state": "recorded",
-                    "run_kind": "contract-fixture",
+                    "class": classes[index],
+                    "cache_state": gate.CANONICAL_CACHE_STATES[
+                        index % len(gate.CANONICAL_CACHE_STATES)
+                    ],
+                    "run_kind": gate.CANONICAL_RUN_KINDS[
+                        index % len(gate.CANONICAL_RUN_KINDS)
+                    ],
+                    "warmup_runs": 1,
+                    "samples_ms": [1, 1, 1],
+                }
+            )
+        for index, class_name in enumerate(
+            classes[len(canonical_metrics):],
+            start=len(canonical_metrics),
+        ):
+            series.append(
+                {
+                    "id": f"coverage-{class_name}",
+                    "metric": "source_analysis",
+                    "class": class_name,
+                    "cache_state": gate.CANONICAL_CACHE_STATES[
+                        index % len(gate.CANONICAL_CACHE_STATES)
+                    ],
+                    "run_kind": gate.CANONICAL_RUN_KINDS[
+                        index % len(gate.CANONICAL_RUN_KINDS)
+                    ],
                     "warmup_runs": 1,
                     "samples_ms": [1, 1, 1],
                 }
@@ -100,12 +127,6 @@ class PerformanceSloContractTests(unittest.TestCase):
                 "sample_count_and_warmup_recorded": True,
                 "verification_enabled": True,
             },
-            "coverage": {
-                "measurement_splits": targets["required_measurement_splits"],
-                "corpus_classes": targets["required_corpus_classes"],
-                "separate_performance_classes": targets["separate_performance_classes"],
-                "typical_docx_complexity_dimensions": targets["typical_docx"]["complexity_dimensions"],
-            },
             "series": series,
             "resources": {
                 "cpu_percent_peak": 50,
@@ -123,6 +144,15 @@ class PerformanceSloContractTests(unittest.TestCase):
         path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
+        )
+
+    def test_target_contract_cannot_silently_drop_required_coverage(self) -> None:
+        data = gate.load_object(TARGETS)
+        data["required_corpus_classes"] = ["typical_docx"]
+        errors = gate.validate_targets(data)
+        self.assertTrue(
+            any("required_corpus_classes drifted" in error for error in errors),
+            errors,
         )
 
     def test_unbound_reference_machine_can_never_produce_pass(self) -> None:
@@ -202,19 +232,34 @@ class PerformanceSloContractTests(unittest.TestCase):
             reference_path = tmp_path / "reference.json"
             self._write_json(reference_path, reference)
             evidence = self._evidence(TARGETS, reference_path, reference)
-            evidence["coverage"]["measurement_splits"] = ["warm_cache"]  # type: ignore[index]
-            evidence["coverage"]["corpus_classes"] = ["typical_docx"]  # type: ignore[index]
+            for series in evidence["series"]:  # type: ignore[index]
+                series["class"] = "typical_docx"
+                series["cache_state"] = "warm_cache"
+                series["run_kind"] = "single_document"
             evidence_path = tmp_path / "evidence.json"
             self._write_json(evidence_path, evidence)
 
             verdict = gate.evaluate(TARGETS, reference_path, evidence_path)
             self.assertEqual(verdict["result"], "FAIL")
             self.assertTrue(
-                any("coverage.measurement_splits is incomplete" in error for error in verdict["errors"]),
+                any(
+                    "measured corpus/class coverage is incomplete" in error
+                    for error in verdict["errors"]
+                ),
                 verdict["errors"],
             )
             self.assertTrue(
-                any("coverage.corpus_classes is incomplete" in error for error in verdict["errors"]),
+                any(
+                    "measured cache-state coverage is incomplete" in error
+                    for error in verdict["errors"]
+                ),
+                verdict["errors"],
+            )
+            self.assertTrue(
+                any(
+                    "measured run-kind coverage is incomplete" in error
+                    for error in verdict["errors"]
+                ),
                 verdict["errors"],
             )
 

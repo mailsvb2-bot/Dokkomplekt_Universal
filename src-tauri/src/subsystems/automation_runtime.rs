@@ -286,11 +286,13 @@ fn perform_created_documents_intake(
     let privacy = load_privacy_preferences(app)?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let workspace = app_data.join("intake-work");
+    let intake_guard = crate::privacy_runtime::lock_intake_workspace()?;
     crate::privacy_runtime::ensure_intake_work_capacity(
         app,
         crate::privacy_runtime::NORMALIZATION_WORK_RESERVE_BYTES,
     )?;
     let source_snapshot = universal_intake::capture_stable_source(&source, &workspace)?;
+    drop(intake_guard);
     let source_size = source_snapshot.size_bytes();
     let source_modified_ms = source_snapshot.modified_unix_ms();
     let source_sha256 = source_snapshot.sha256().to_string();
@@ -421,6 +423,7 @@ fn perform_created_documents_intake(
     // Each dropped source is an independent case. Every accepted format is first
     // normalized from the immutable private snapshot, never from a live file that
     // Word, a scanner or a sync client may still be replacing underneath us.
+    let intake_guard = crate::privacy_runtime::lock_intake_workspace()?;
     crate::privacy_runtime::ensure_intake_work_capacity(
         app,
         crate::privacy_runtime::NORMALIZATION_WORK_RESERVE_BYTES,
@@ -429,6 +432,7 @@ fn perform_created_documents_intake(
     let normalized =
         universal_intake::normalize_path(source_snapshot.path(), normalization_session.root(), 0)?;
     drop(normalization_session);
+    drop(intake_guard);
     case_run.transition("recognizing")?;
     if let Some(lease) = central_queue_lease.as_mut() {
         lease.renew()?;

@@ -806,8 +806,12 @@ fn render_docx(
         .map_err(|_| "state lock failed")?
         .clone();
     let template_snapshot = template_snapshot::TemplateSnapshot::capture_generation(&app, &doc)?;
-    let prepared_template =
-        prepare_medical_template_for_render(&app, &doc, template_snapshot.path())?;
+    let prepared_template = prepare_medical_template_for_render(
+        &app,
+        &doc,
+        template_snapshot.path(),
+        template_snapshot.sha256(),
+    )?;
     let template_text = prepared_template.template_text.clone();
     let effective_document = &prepared_template.effective_document;
     // Both paths are anchored: an installed app must not depend on the process CWD.
@@ -1144,8 +1148,12 @@ fn render_docx_batch(
             let template_snapshot = template_snapshots.get(&document.id).ok_or_else(|| {
                 format!("Не найден snapshot шаблона «{}».", document.button_label)
             })?;
-            let prepared_template =
-                prepare_medical_template_for_render(&app, document, template_snapshot.path())?;
+            let prepared_template = prepare_medical_template_for_render(
+                &app,
+                document,
+                template_snapshot.path(),
+                template_snapshot.sha256(),
+            )?;
             let template_text = prepared_template.template_text.clone();
             let effective_document = &prepared_template.effective_document;
             let hydrated = hydrate_case_with_persistent_template_data(

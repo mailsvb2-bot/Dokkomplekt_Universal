@@ -3863,10 +3863,11 @@ mod tests {
             CorpusAcceptanceSource::ZeroTouchShadow,
             "2025-01-01T00:00:00Z",
         );
+        let current_created_at = chrono::Utc::now().to_rfc3339();
         let shadow_current = corpus_entry_for_policy(
             "shadow-current",
             CorpusAcceptanceSource::ZeroTouchShadow,
-            "2026-10-03T00:00:00Z",
+            &current_created_at,
         );
 
         repo.append_corpus_entry_with_shadow_policy(&specialist_old, policy)
@@ -3952,15 +3953,16 @@ mod tests {
     #[test]
     fn legacy_corpus_rows_are_backfilled_into_safe_retention_classes() {
         let path = temp_db("shadow-backfill");
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
         let shadow = corpus_entry_for_policy(
             "legacy-shadow-row",
             CorpusAcceptanceSource::ZeroTouchShadow,
-            "2026-03-01T00:00:00Z",
+            &fresh_created_at,
         );
         let specialist = corpus_entry_for_policy(
             "legacy-specialist-row",
             CorpusAcceptanceSource::SpecialistConfirmed,
-            "2026-03-02T00:00:00Z",
+            &fresh_created_at,
         );
 
         {
@@ -4098,10 +4100,11 @@ mod tests {
     #[test]
     fn corpus_retention_backfill_is_marked_and_not_rescanned_on_reopen() {
         let path = temp_db("shadow-backfill-marker");
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
         let shadow = corpus_entry_for_policy(
             "legacy-shadow-marker",
             CorpusAcceptanceSource::ZeroTouchShadow,
-            "2026-03-02T12:00:00Z",
+            &fresh_created_at,
         );
 
         {
@@ -4177,15 +4180,16 @@ mod tests {
         let path = temp_db("shadow-backfill-encrypted");
         let encoder_path = temp_db("shadow-backfill-encoder");
         let key = [31u8; 32];
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
         let shadow = corpus_entry_for_policy(
             "legacy-encrypted-shadow",
             CorpusAcceptanceSource::ZeroTouchShadow,
-            "2026-03-03T00:00:00Z",
+            &fresh_created_at,
         );
         let specialist = corpus_entry_for_policy(
             "legacy-encrypted-specialist",
             CorpusAcceptanceSource::SpecialistConfirmed,
-            "2026-03-04T00:00:00Z",
+            &fresh_created_at,
         );
 
         let encoder = LocalRepository::open_with_key(&encoder_path, key).unwrap();

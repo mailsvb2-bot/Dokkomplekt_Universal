@@ -569,6 +569,36 @@ fn rendered_document_semantic_error(
     ))
 }
 
+fn ensure_rendered_document_readable(
+    document: &DocumentTemplateSpec,
+    rendered_path: &Path,
+) -> Result<(), String> {
+    extract_docx_text(rendered_path).map_err(|error| {
+        format!(
+            "Не удалось проверить созданный документ «{}»: {error}",
+            document.button_label
+        )
+    })?;
+    Ok(())
+}
+
+fn ensure_rendered_document_semantically_complete(
+    document: &DocumentTemplateSpec,
+    template_text: &str,
+    semantic_case: &SemanticCase,
+    rendered_visible_text: &str,
+) -> Result<(), String> {
+    if let Some(error) = rendered_document_semantic_error(
+        document,
+        template_text,
+        semantic_case,
+        rendered_visible_text,
+    ) {
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn ensure_rendered_document_complete(
     document: &DocumentTemplateSpec,
     template_text: &str,
@@ -580,21 +610,13 @@ fn ensure_rendered_document_complete(
     // Reopen the actual artifact only to prove that a valid DOCX reached disk;
     // semantic checks use the exact in-memory visible text produced from the same
     // rendered OOXML, avoiding false negatives from a second lossy extraction pass.
-    extract_docx_text(rendered_path).map_err(|error| {
-        format!(
-            "Не удалось проверить созданный документ «{}»: {error}",
-            document.button_label
-        )
-    })?;
-    if let Some(error) = rendered_document_semantic_error(
+    ensure_rendered_document_readable(document, rendered_path)?;
+    ensure_rendered_document_semantically_complete(
         document,
         template_text,
         semantic_case,
         rendered_visible_text,
-    ) {
-        return Err(error);
-    }
-    Ok(())
+    )
 }
 
 fn verify_published_batch_files(

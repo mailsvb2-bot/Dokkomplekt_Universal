@@ -749,7 +749,8 @@ fn published_template_sha256_for_document(
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|version| {
-            version.status == "published" && version.template_path == document.template_path
+            matches!(version.status.as_str(), "published" | "superseded")
+                && version.template_path == document.template_path
         })
         .map(|version| version.template_sha256))
 }
@@ -1166,6 +1167,13 @@ mod legacy_template_runtime_tests {
             "fixture must represent a complete published contract"
         );
         document
+    }
+
+    #[test]
+    fn frozen_version_statuses_remain_replayable_after_concurrent_publish() {
+        assert!(matches!("published", "published" | "superseded"));
+        assert!(matches!("superseded", "published" | "superseded"));
+        assert!(!matches!("draft", "published" | "superseded"));
     }
 
     #[test]

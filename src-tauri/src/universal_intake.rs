@@ -38,8 +38,9 @@ use web::is_public_ip;
 #[cfg(test)]
 pub(crate) use workspace_session::cleanup_workspace;
 pub(crate) use workspace_session::{
-    create_owned_workspace_session, create_retained_workspace_session,
-    enforce_ephemeral_workspace_group_quota, enforce_ephemeral_workspace_quota,
+    create_completed_retained_workspace_file, create_owned_workspace_session,
+    create_retained_workspace_session, enforce_ephemeral_workspace_group_quota,
+    enforce_ephemeral_workspace_quota,
     enforce_retained_workspace_quota, owned_workspace_bytes, owned_workspace_group_bytes,
     refresh_retained_workspace_session, OwnedWorkspaceSession,
 };

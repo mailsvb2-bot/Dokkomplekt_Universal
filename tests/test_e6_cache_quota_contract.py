@@ -33,8 +33,24 @@ def test_e6_compiler_and_scanner_cache_quotas_are_bounded_and_ownership_safe() -
     assert legacy.count("ensure_template_compiler_cache_capacity(") >= 4
     assert "template_compiler_cache_roots" in legacy
     assert "enforce_ephemeral_workspace_group_quota" in legacy
-    assert "create_template_compiler_workspace(app, \"template-contract-migration\")" in legacy
-    assert "create_template_compiler_workspace(app, \"template-render-inference\")" in legacy
+    migration = legacy[
+        legacy.index("fn migrate_loaded_medical_template_contracts("):
+        legacy.index("struct PreparedMedicalRenderTemplate")
+    ]
+    assert "let mut workspace: Option<LegacyTemplateInferenceWorkspace> = None;" in migration
+    assert "if workspace.is_none()" in migration
+    assert "create_template_compiler_workspace(" in migration
+    assert '"template-contract-migration"' in migration
+    assert migration.index("if workspace.is_none()") < migration.index(
+        '"template-contract-migration"'
+    )
+
+    render_prepare = legacy[
+        legacy.index("fn prepare_medical_template_for_render("):
+        legacy.index("fn should_attempt_template_contract_compilation(")
+    ]
+    assert "create_template_compiler_workspace(" in render_prepare
+    assert '"template-render-inference"' in render_prepare
     assert '"template-inference-work"' in legacy
 
     assert "WORD_SCANNER_CACHE_QUOTA_BYTES: u64 = 256 * 1024 * 1024" in documents

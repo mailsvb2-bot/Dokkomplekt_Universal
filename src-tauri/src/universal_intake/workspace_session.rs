@@ -629,7 +629,7 @@ mod tests {
             1,
         )
         .unwrap_err();
-        assert!(error.contains("активными или ещё используемыми"));
+        assert!(error.contains("активными или ещё не просроченными"));
         assert!(retained.is_dir());
 
         std::fs::remove_file(retained.join(ACTIVE_SESSION_MARKER)).unwrap();

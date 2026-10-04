@@ -428,6 +428,7 @@ fn perform_created_documents_intake(
     let normalization_session = universal_intake::create_owned_workspace_session(&workspace)?;
     let normalized =
         universal_intake::normalize_path(source_snapshot.path(), normalization_session.root(), 0)?;
+    drop(normalization_session);
     case_run.transition("recognizing")?;
     if let Some(lease) = central_queue_lease.as_mut() {
         lease.renew()?;

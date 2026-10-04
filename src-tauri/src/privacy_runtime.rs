@@ -251,7 +251,10 @@ pub(crate) fn ensure_intake_work_capacity(
     app: &tauri::AppHandle,
     required_bytes: u64,
 ) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     let privacy = load_privacy_preferences(app)?;
     universal_intake::enforce_ephemeral_workspace_quota(
         &data_dir.join("intake-work"),
@@ -266,7 +269,10 @@ pub(crate) fn ensure_learning_input_capacity(
     app: &tauri::AppHandle,
     required_bytes: u64,
 ) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     let privacy = load_privacy_preferences(app)?;
     universal_intake::enforce_retained_workspace_quota(
         &data_dir.join("template-learning-inputs"),
@@ -280,7 +286,10 @@ pub(crate) fn ensure_learning_input_capacity(
 pub(crate) fn create_learning_work_session(
     app: &tauri::AppHandle,
 ) -> Result<universal_intake::OwnedWorkspaceSession, String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     let privacy = load_privacy_preferences(app)?;
     let workspace = data_dir.join("template-learning-work");
     universal_intake::enforce_ephemeral_workspace_quota(

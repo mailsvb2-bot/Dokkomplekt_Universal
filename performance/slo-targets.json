@@ -74,7 +74,7 @@
     "batch_50"
   ],
   "required_resource_measurements": [
-    "cpu",
+    "cpu_percent_peak",
     "peak_rss_bytes",
     "disk_write_bytes",
     "staging_peak_bytes",

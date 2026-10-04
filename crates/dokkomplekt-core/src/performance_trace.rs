@@ -155,6 +155,8 @@ pub struct PerformanceTrace {
     pub context: PerformanceTraceContext,
     pub stages: Vec<PerformanceStageMeasurement>,
     pub total_machine_ms: u64,
+    pub end_to_end_ms: u64,
+    pub human_wait_ms: u64,
     pub outcome: PerformanceOutcome,
 }
 
@@ -163,6 +165,8 @@ pub struct SlowRunReport {
     pub schema: String,
     pub run_id: String,
     pub total_machine_ms: u64,
+    pub end_to_end_ms: u64,
+    pub human_wait_ms: u64,
     pub bottleneck_stage: Option<PerformanceStage>,
     pub bottleneck_duration_ms: u64,
     pub stages: Vec<PerformanceStageMeasurement>,
@@ -221,6 +225,8 @@ impl PerformanceTrace {
     pub fn new(
         context: PerformanceTraceContext,
         stages: Vec<PerformanceStageMeasurement>,
+        end_to_end_ms: u64,
+        human_wait_ms: u64,
         outcome: PerformanceOutcome,
     ) -> Result<Self, String> {
         context.validate()?;
@@ -245,6 +251,16 @@ impl PerformanceTrace {
             total_machine_ms = total_machine_ms.saturating_add(measurement.duration_ms);
         }
 
+        if human_wait_ms > end_to_end_ms {
+            return Err("performance human_wait_ms cannot exceed end_to_end_ms".into());
+        }
+        if total_machine_ms > end_to_end_ms.saturating_sub(human_wait_ms) {
+            return Err(
+                "performance stage machine time cannot exceed end-to-end time minus human wait"
+                    .into(),
+            );
+        }
+
         let has_publish = seen.contains(&PerformanceStage::Publish);
         let has_recovery = seen.contains(&PerformanceStage::Recovery);
         match outcome {
@@ -267,6 +283,8 @@ impl PerformanceTrace {
             context,
             stages,
             total_machine_ms,
+            end_to_end_ms,
+            human_wait_ms,
             outcome,
         })
     }
@@ -281,6 +299,8 @@ impl PerformanceTrace {
         let rebuilt = Self::new(
             self.context.clone(),
             self.stages.clone(),
+            self.end_to_end_ms,
+            self.human_wait_ms,
             self.outcome,
         )?;
         if rebuilt.total_machine_ms != self.total_machine_ms {
@@ -298,6 +318,8 @@ impl PerformanceTrace {
             schema: "dokkomplekt.slow-run-report.v1".into(),
             run_id: self.context.run_id.clone(),
             total_machine_ms: self.total_machine_ms,
+            end_to_end_ms: self.end_to_end_ms,
+            human_wait_ms: self.human_wait_ms,
             bottleneck_stage: bottleneck.map(|measurement| measurement.stage),
             bottleneck_duration_ms: bottleneck
                 .map(|measurement| measurement.duration_ms)
@@ -315,7 +337,7 @@ impl PerformanceTrace {
         if threshold_ms == 0 {
             return Err("slow-run threshold must be positive".into());
         }
-        Ok((self.total_machine_ms > threshold_ms).then(|| self.slow_run_report()))
+        Ok((self.end_to_end_ms > threshold_ms).then(|| self.slow_run_report()))
     }
 }
 
@@ -372,6 +394,8 @@ mod tests {
                     duration_ms: 20,
                 },
             ],
+             1000,
+            0,
             PerformanceOutcome::Completed,
         )
         .unwrap();
@@ -405,6 +429,8 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
+             1000,
+            0,
             PerformanceOutcome::Attention,
         );
         assert!(duplicate.is_err());
@@ -421,6 +447,8 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
+             1000,
+            0,
             PerformanceOutcome::Attention,
         );
         assert!(reordered.is_err());
@@ -434,6 +462,8 @@ mod tests {
                 stage: PerformanceStage::Verify,
                 duration_ms: 1,
             }],
+             1000,
+            0,
             PerformanceOutcome::Completed,
         );
         assert!(trace.is_err());
@@ -461,6 +491,8 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
+             1000,
+            0,
             PerformanceOutcome::Completed,
         )
         .unwrap();
@@ -470,6 +502,43 @@ mod tests {
         trace.total_machine_ms = 3;
         trace.schema = "unknown".into();
         assert!(trace.validate().is_err());
+    }
+
+    #[test]
+    fn end_to_end_and_human_wait_are_independent_from_stage_machine_time() {
+        let trace = PerformanceTrace::new(
+            context(),
+            vec![
+                PerformanceStageMeasurement {
+                    stage: PerformanceStage::SourceOpen,
+                    duration_ms: 20,
+                },
+                PerformanceStageMeasurement {
+                    stage: PerformanceStage::Publish,
+                    duration_ms: 30,
+                },
+            ],
+            120,
+            40,
+            PerformanceOutcome::Completed,
+        )
+        .unwrap();
+        assert_eq!(trace.total_machine_ms, 50);
+        assert_eq!(trace.end_to_end_ms, 120);
+        assert_eq!(trace.human_wait_ms, 40);
+        assert!(trace.slow_run_report_if_over(100).unwrap().is_some());
+
+        let impossible = PerformanceTrace::new(
+            context(),
+            vec![PerformanceStageMeasurement {
+                stage: PerformanceStage::Publish,
+                duration_ms: 90,
+            }],
+            100,
+            20,
+            PerformanceOutcome::Completed,
+        );
+        assert!(impossible.is_err());
     }
 
     #[test]
@@ -486,6 +555,8 @@ mod tests {
                     duration_ms: 30,
                 },
             ],
+             1000,
+            0,
             PerformanceOutcome::Completed,
         )
         .unwrap();
@@ -514,6 +585,8 @@ mod tests {
                     stage: PerformanceStage::Publish,
                     duration_ms: 1,
                 }],
+                 1000,
+                0,
                 outcome,
             )
             .is_err());
@@ -534,6 +607,8 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
+             1000,
+            0,
             PerformanceOutcome::Completed,
         )
         .unwrap();
@@ -541,7 +616,15 @@ mod tests {
         let object = json.as_object().unwrap();
         assert_eq!(
             object.keys().cloned().collect::<BTreeSet<_>>(),
-            ["context", "outcome", "schema", "stages", "total_machine_ms"]
+            [
+                "context",
+                "end_to_end_ms",
+                "human_wait_ms",
+                "outcome",
+                "schema",
+                "stages",
+                "total_machine_ms",
+            ]
                 .into_iter()
                 .map(str::to_string)
                 .collect()

@@ -140,6 +140,10 @@ pub(crate) fn owned_performance_trace_bytes(
     app: &tauri::AppHandle,
 ) -> Result<u64, String> {
     let workspace = performance_trace_workspace(app)?;
+    let _guard = PERFORMANCE_TRACE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "performance trace lock failed".to_string())?;
     crate::universal_intake::owned_workspace_bytes(&workspace)
 }
 

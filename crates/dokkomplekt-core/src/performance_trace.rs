@@ -270,7 +270,9 @@ impl PerformanceTrace {
             PerformanceOutcome::Completed if has_recovery => {
                 return Err("completed performance trace cannot include recovery".into())
             }
-            PerformanceOutcome::Failed | PerformanceOutcome::Attention | PerformanceOutcome::Cancelled
+            PerformanceOutcome::Failed
+            | PerformanceOutcome::Attention
+            | PerformanceOutcome::Cancelled
                 if has_publish =>
             {
                 return Err("non-completed performance trace cannot claim publish".into())
@@ -333,7 +335,10 @@ impl PerformanceTrace {
         }
     }
 
-    pub fn slow_run_report_if_over(&self, threshold_ms: u64) -> Result<Option<SlowRunReport>, String> {
+    pub fn slow_run_report_if_over(
+        &self,
+        threshold_ms: u64,
+    ) -> Result<Option<SlowRunReport>, String> {
         if threshold_ms == 0 {
             return Err("slow-run threshold must be positive".into());
         }
@@ -394,7 +399,7 @@ mod tests {
                     duration_ms: 20,
                 },
             ],
-             1000,
+            1000,
             0,
             PerformanceOutcome::Completed,
         )
@@ -429,7 +434,7 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
-             1000,
+            1000,
             0,
             PerformanceOutcome::Attention,
         );
@@ -447,7 +452,7 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
-             1000,
+            1000,
             0,
             PerformanceOutcome::Attention,
         );
@@ -491,7 +496,7 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
-             1000,
+            1000,
             0,
             PerformanceOutcome::Completed,
         )
@@ -607,7 +612,7 @@ mod tests {
                     duration_ms: 2,
                 },
             ],
-             1000,
+            1000,
             0,
             PerformanceOutcome::Completed,
         )
@@ -625,9 +630,9 @@ mod tests {
                 "stages",
                 "total_machine_ms",
             ]
-                .into_iter()
-                .map(str::to_string)
-                .collect()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
         );
         let context = object["context"].as_object().unwrap();
         assert_eq!(

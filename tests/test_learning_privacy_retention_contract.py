@@ -22,7 +22,8 @@ def test_learning_imports_live_in_active_app_data_sessions() -> None:
     assert 'join("template-learning-inputs")' in document
     assert "create_retained_workspace_session(&root)?" in document
     assert "let target = session_root.join(safe_name);" in document
-    assert 'let work = session_root.join("normalized-work");' in document
+    assert "create_learning_work_session" in document
+    assert 'session_root.join("normalized-work")' not in document
     assert "refresh_retained_workspace_session(&learning_root, &path)?" in document
     assert document.count("lock_learning_workspace()?") >= 2
 
@@ -35,6 +36,38 @@ def test_zero_hour_active_lease_and_non_learning_isolation_have_rust_regressions
     assert "retained_learning_lease_refresh_ignores_paths_outside_workspace" in intake
     assert "symlink_metadata(&session_root)" in workspace_session
     assert "metadata_is_link_like(&metadata)" in workspace_session
+
+
+def test_e6_intake_and_learning_storage_are_quota_bounded_and_owned() -> None:
+    privacy = read("src-tauri/src/privacy_runtime.rs")
+    learning = read("src-tauri/src/subsystems/template_learning_commands.rs")
+    source = read("src-tauri/src/subsystems/source_intake_commands.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+    workspace_session = read("src-tauri/src/universal_intake/workspace_session.rs")
+
+    for marker in (
+        "INTAKE_WORK_QUOTA_BYTES",
+        "TEMPLATE_LEARNING_INPUTS_QUOTA_BYTES",
+        "TEMPLATE_LEARNING_WORK_QUOTA_BYTES",
+        "NORMALIZATION_WORK_RESERVE_BYTES",
+        "ensure_intake_work_capacity",
+        "ensure_learning_input_capacity",
+        "create_learning_work_session",
+    ):
+        assert marker in privacy, marker
+
+    assert "enforce_retained_workspace_quota" in privacy
+    assert "enforce_retained_workspace_quota" in workspace_session
+    assert "retained_quota_never_evicts_recent_unleased_session_under_pressure" in workspace_session
+    assert "ensure_learning_input_capacity(&app, required_bytes)?" in learning
+    assert "ensure_learning_input_capacity(&app, bytes.len() as u64)?" in learning
+    assert learning.count("create_learning_work_session") >= 3
+    assert "ensure_intake_work_capacity(" in source
+    assert source.count("NORMALIZATION_WORK_RESERVE_BYTES") >= 2
+    assert "ensure_intake_work_capacity(" in automation
+    assert "create_owned_workspace_session(&workspace)?" in automation
+    assert "normalization_session.root()" in automation
+    assert "drop(normalization_session);" in automation
 
 
 def test_startup_cleanup_failure_is_visible_not_silently_discarded() -> None:
@@ -100,6 +133,9 @@ def test_canon_24_4_exposes_technical_storage_size_and_manual_cleanup_covers_tem
     assert '"Входы обучения шаблонов"' in privacy
     assert '"template-learning-work"' in privacy
     assert '"Рабочие данные обучения"' in privacy
+    assert "Some(INTAKE_WORK_QUOTA_BYTES)" in privacy
+    assert "Some(TEMPLATE_LEARNING_INPUTS_QUOTA_BYTES)" in privacy
+    assert "Some(TEMPLATE_LEARNING_WORK_QUOTA_BYTES)" in privacy
     assert 'key: "other-app-data".into()' in privacy
     assert "retention_managed: false" in privacy
     assert "fn get_technical_storage_status(" in management

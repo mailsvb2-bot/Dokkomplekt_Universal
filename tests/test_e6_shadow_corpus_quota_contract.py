@@ -58,11 +58,14 @@ def test_e6_zero_touch_shadow_corpus_is_bounded_without_deleting_confirmed_corpu
     assert "storage_migrations" in backfill
     assert "CORPUS_RETENTION_MIGRATION_KEY" in backfill
     assert "already_completed" in backfill
+    assert "has_unclassified_rows" in backfill
+    assert "WHERE retention_class = ''" in backfill
+    assert "if already_completed && !has_unclassified_rows" in backfill
     assert "TransactionBehavior::Immediate" in backfill
     assert "ShadowCorpusPolicy::production()" in backfill
     assert "enforce_zero_touch_shadow_policy_in_transaction" in backfill
     assert backfill.index("enforce_zero_touch_shadow_policy_in_transaction") < backfill.index(
-        'INSERT INTO storage_migrations'
+        'INSERT OR IGNORE INTO storage_migrations'
     )
     assert "CORPUS_CLASS_LEGACY_UNVERIFIED" in backfill
     assert ".decode_sensitive(&stored)" in backfill
@@ -74,6 +77,7 @@ def test_e6_zero_touch_shadow_corpus_is_bounded_without_deleting_confirmed_corpu
         "legacy_corpus_rows_are_backfilled_into_safe_retention_classes",
         "corpus_retention_migration_applies_production_shadow_policy_before_marking_complete",
         "corpus_retention_backfill_is_marked_and_not_rescanned_on_reopen",
+        "corpus_retention_migration_rechecks_rows_added_by_older_app_after_marker",
         "encrypted_legacy_corpus_rows_are_backfilled_without_losing_acceptance_source",
         "corrupt_legacy_corpus_row_is_preserved_as_unverified_instead_of_blocking_open",
     ]:

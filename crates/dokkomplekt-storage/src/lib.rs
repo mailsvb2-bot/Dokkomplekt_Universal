@@ -507,7 +507,22 @@ impl LocalRepository {
             )
             .optional()?
             .is_some();
-        if already_completed {
+        // A completed marker is sufficient only while every row carries migration metadata.
+        // An older app version can still insert rows using the legacy column list after a
+        // rollback; those rows receive the schema defaults and must be backfilled when the
+        // user upgrades again. The retention_class lookup is index-backed and avoids the
+        // old full-table rescan on normal repository opens.
+        let has_unclassified_rows = transaction
+            .query_row(
+                "SELECT 1 FROM corpus_entries
+                 WHERE retention_class = ''
+                 LIMIT 1",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if already_completed && !has_unclassified_rows {
             transaction.commit()?;
             return Ok(());
         }
@@ -552,7 +567,7 @@ impl LocalRepository {
             None,
         )?;
         transaction.execute(
-            "INSERT INTO storage_migrations(migration_key) VALUES (?1)",
+            "INSERT OR IGNORE INTO storage_migrations(migration_key) VALUES (?1)",
             params![CORPUS_RETENTION_MIGRATION_KEY],
         )?;
         transaction.commit()?;
@@ -4262,6 +4277,78 @@ mod tests {
         assert!(classes.iter().any(|(id, class)| {
             id == "legacy-encrypted-specialist" && class == CORPUS_CLASS_SPECIALIST_CONFIRMED
         }));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn corpus_retention_migration_rechecks_rows_added_by_older_app_after_marker() {
+        let path = temp_db("shadow-backfill-post-rollback");
+        let fresh_created_at = chrono::Utc::now().to_rfc3339();
+        let shadow = corpus_entry_for_policy(
+            "legacy-shadow-after-rollback",
+            CorpusAcceptanceSource::ZeroTouchShadow,
+            &fresh_created_at,
+        );
+
+        {
+            let repo = LocalRepository::open(&path).unwrap();
+            assert_eq!(
+                repo.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM storage_migrations WHERE migration_key=?1",
+                        params![CORPUS_RETENTION_MIGRATION_KEY],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+        }
+
+        // Simulate an older binary after rollback: it knows only the legacy insert column
+        // list, so SQLite fills the newly added retention metadata with schema defaults.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO corpus_entries(
+                    entry_id,case_id,source_sha256,domain_json,json,created_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    shadow.entry_id.as_str(),
+                    shadow.case_id.as_str(),
+                    shadow.source_sha256.as_str(),
+                    serde_json::to_string(&shadow.domain).unwrap(),
+                    serde_json::to_string(&shadow).unwrap(),
+                    shadow.created_at.as_str(),
+                ],
+            )
+            .unwrap();
+            let (class, bytes): (String, i64) = conn
+                .query_row(
+                    "SELECT retention_class, payload_bytes
+                     FROM corpus_entries
+                     WHERE entry_id=?1",
+                    params![shadow.entry_id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert!(class.is_empty());
+            assert_eq!(bytes, 0);
+        }
+
+        let repo = LocalRepository::open(&path).unwrap();
+        let (class, bytes): (String, i64) = repo
+            .conn
+            .query_row(
+                "SELECT retention_class, payload_bytes
+                 FROM corpus_entries
+                 WHERE entry_id=?1",
+                params![shadow.entry_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(class, CORPUS_CLASS_ZERO_TOUCH_SHADOW);
+        assert!(bytes > 0);
 
         let _ = std::fs::remove_file(path);
     }

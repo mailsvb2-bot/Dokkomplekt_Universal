@@ -53,12 +53,19 @@ def test_e6_intake_and_learning_storage_are_quota_bounded_and_owned() -> None:
         "ensure_intake_work_capacity",
         "ensure_learning_input_capacity",
         "create_learning_work_session",
+        "capture_learning_source_snapshot",
     ):
         assert marker in privacy, marker
 
     assert "enforce_retained_workspace_quota" in privacy
     assert "enforce_retained_workspace_quota" in workspace_session
     assert "retained_quota_never_evicts_recent_unleased_session_under_pressure" in workspace_session
+    assert "capture_learning_source_snapshot(&app, &canonical)?" in learning
+    picker = learning.split("struct ImportLearningExampleFileRequest", 1)[0]
+    assert "file_content_signature(&canonical)" not in picker
+    assert "validate_safe_template_file(snapshot.path())" in picker
+    assert "normalize_path(snapshot.path(), work_session.root(), 0)" in picker
+    assert "content_sha256: snapshot.sha256().to_string()" in picker
     assert "ensure_learning_input_capacity(&app, required_bytes)?" in learning
     assert "ensure_learning_input_capacity(&app, bytes.len() as u64)?" in learning
     assert learning.count("create_learning_work_session") >= 3

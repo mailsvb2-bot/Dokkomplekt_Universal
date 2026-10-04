@@ -229,6 +229,7 @@ fn owned_session_size(root: &Path) -> Result<u64, String> {
     Ok(total)
 }
 
+#[cfg(test)]
 pub(crate) fn cleanup_workspace(workspace: &Path, max_age: Duration) -> Result<usize, String> {
     if !validate_existing_workspace_root(workspace)? {
         return Ok(0);

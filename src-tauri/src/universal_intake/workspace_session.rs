@@ -1,6 +1,7 @@
 use super::metadata_is_link_like;
 use fs2::FileExt as _;
 use std::fs::File;
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -412,6 +413,51 @@ pub(crate) fn create_owned_workspace_session(
 
 pub(crate) fn create_retained_workspace_session(workspace: &Path) -> Result<PathBuf, String> {
     create_sensitive_session(workspace)
+}
+
+pub(crate) fn create_completed_retained_workspace_file(
+    workspace: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let file_component = Path::new(file_name);
+    if file_component.components().count() != 1
+        || !matches!(file_component.components().next(), Some(Component::Normal(_)))
+    {
+        return Err("Имя retained-файла должно быть одним безопасным компонентом пути.".into());
+    }
+    let root = create_sensitive_session(workspace)?;
+    let result = (|| -> Result<PathBuf, String> {
+        if !session_has_verified_ownership(&root)? {
+            return Err("Retained-сессия не содержит ownership proof.".into());
+        }
+        let destination = root.join(file_component);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+            .map_err(|error| format!("Не удалось создать retained-файл: {error}"))?;
+        restrict_file_permissions(&destination)?;
+        file.write_all(bytes)
+            .map_err(|error| format!("Не удалось записать retained-файл: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Не удалось синхронизировать retained-файл: {error}"))?;
+        drop(file);
+
+        let active = root.join(ACTIVE_SESSION_MARKER);
+        let metadata = std::fs::symlink_metadata(&active)
+            .map_err(|error| format!("Не удалось проверить active marker retained-сессии: {error}"))?;
+        if metadata_is_link_like(&metadata) || !metadata.is_file() {
+            return Err("Active marker retained-сессии имеет небезопасный тип.".into());
+        }
+        std::fs::remove_file(&active)
+            .map_err(|error| format!("Не удалось завершить retained-сессию: {error}"))?;
+        Ok(destination)
+    })();
+    if result.is_err() {
+        let _ = remove_sensitive_session(&root);
+    }
+    result
 }
 
 pub(crate) fn refresh_retained_workspace_session(

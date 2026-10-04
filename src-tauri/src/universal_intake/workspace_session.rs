@@ -102,6 +102,62 @@ pub(crate) fn enforce_ephemeral_workspace_group_quota(
     ))
 }
 
+pub(crate) fn enforce_retained_workspace_quota(
+    workspace: &Path,
+    retention: Duration,
+    max_bytes: u64,
+    required_bytes: u64,
+) -> Result<usize, String> {
+    if max_bytes == 0 || required_bytes > max_bytes {
+        return Err(format!(
+            "Требуемый резерв retained workspace ({required_bytes} байт) превышает квоту {max_bytes} байт."
+        ));
+    }
+
+    let now = SystemTime::now();
+    let mut sessions = scan_owned_sessions(workspace)?;
+    let mut removed = 0_usize;
+    let mut retained = Vec::with_capacity(sessions.len());
+
+    for session in sessions.drain(..) {
+        let expired = now
+            .duration_since(session.modified)
+            .ok()
+            .is_some_and(|age| age >= retention);
+        let active = session.live || active_session_is_recent(&session.path, now)?;
+        if !active && expired {
+            remove_sensitive_session(&session.path)?;
+            removed += 1;
+        } else {
+            retained.push(session);
+        }
+    }
+
+    let mut total = retained
+        .iter()
+        .fold(0_u64, |sum, session| sum.saturating_add(session.bytes));
+    if total.saturating_add(required_bytes) <= max_bytes {
+        return Ok(removed);
+    }
+
+    retained.sort_by_key(|session| session.modified);
+    for session in retained {
+        if session.live || active_session_is_recent(&session.path, now)? {
+            continue;
+        }
+        remove_sensitive_session(&session.path)?;
+        total = total.saturating_sub(session.bytes);
+        removed += 1;
+        if total.saturating_add(required_bytes) <= max_bytes {
+            return Ok(removed);
+        }
+    }
+
+    Err(format!(
+        "Retained workspace занят активными или ещё используемыми сессиями: требуется {required_bytes} байт при квоте {max_bytes} байт и защищённом объёме {total} байт."
+    ))
+}
+
 fn scan_owned_session_group(workspaces: &[PathBuf]) -> Result<Vec<OwnedSessionUsage>, String> {
     let mut unique = std::collections::BTreeSet::new();
     let mut sessions = Vec::new();
@@ -562,6 +618,39 @@ mod tests {
         lease.unlock().unwrap();
         drop(lease);
         remove_sensitive_session(&live).unwrap();
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn retained_quota_never_evicts_recent_unleased_session_under_pressure() {
+        let workspace =
+            std::env::temp_dir().join(format!("dkk-retained-quota-recent-{}", Uuid::new_v4()));
+        let retained = create_sensitive_session(&workspace).unwrap();
+        std::fs::write(retained.join("retained.bin"), vec![b'r'; 128]).unwrap();
+        let retained_bytes = owned_session_size(&retained).unwrap();
+
+        let error = enforce_retained_workspace_quota(
+            &workspace,
+            Duration::from_secs(24 * 60 * 60),
+            retained_bytes,
+            1,
+        )
+        .unwrap_err();
+        assert!(error.contains("активными или ещё используемыми"));
+        assert!(retained.is_dir());
+
+        std::fs::remove_file(retained.join(ACTIVE_SESSION_MARKER)).unwrap();
+        assert_eq!(
+            enforce_retained_workspace_quota(
+                &workspace,
+                Duration::from_secs(24 * 60 * 60),
+                retained_bytes,
+                1,
+            )
+            .unwrap(),
+            1
+        );
+        assert!(!retained.exists());
         let _ = std::fs::remove_dir_all(workspace);
     }
 

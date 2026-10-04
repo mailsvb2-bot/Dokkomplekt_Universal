@@ -65,6 +65,10 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "total_machine_ms does not match stage durations" in core
     assert "PerformanceRunPhase" in core
     assert "PerformanceWorkload" in core
+    assert "end_to_end_ms" in core
+    assert "human_wait_ms" in core
+    assert "performance human_wait_ms cannot exceed end_to_end_ms" in core
+    assert "stage machine time cannot exceed end-to-end time minus human wait" in core
     assert "slow_run_report_if_over" in core
     assert "bottleneck_stage" in core
 

@@ -7,6 +7,14 @@ use tauri::Manager as _;
 
 const PRIVACY_PREFERENCES_STATE_KEY: &str = "privacy_preferences_v1";
 static LEARNING_WORKSPACE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static INTAKE_WORKSPACE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub(crate) fn lock_intake_workspace() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    INTAKE_WORKSPACE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "intake workspace lock failed".to_string())
+}
 
 pub(crate) fn lock_learning_workspace() -> Result<std::sync::MutexGuard<'static, ()>, String> {
     LEARNING_WORKSPACE_LOCK

@@ -136,9 +136,7 @@ pub(crate) fn recent_performance_traces(
     Ok(traces)
 }
 
-pub(crate) fn owned_performance_trace_bytes(
-    app: &tauri::AppHandle,
-) -> Result<u64, String> {
+pub(crate) fn owned_performance_trace_bytes(app: &tauri::AppHandle) -> Result<u64, String> {
     let workspace = performance_trace_workspace(app)?;
     let _guard = PERFORMANCE_TRACE_LOCK
         .get_or_init(|| Mutex::new(()))

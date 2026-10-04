@@ -166,9 +166,9 @@ fn valid_opaque_identifier(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty()
         && trimmed.len() <= 128
-        && trimmed.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        })
+        && trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 impl PerformanceTraceContext {
@@ -179,8 +179,8 @@ impl PerformanceTraceContext {
                     .into(),
             );
         }
-        if self.app_version.trim().is_empty() || self.app_version.len() > 64 {
-            return Err("performance app_version must be a short non-empty value".into());
+        if !valid_opaque_identifier(&self.app_version) || self.app_version.len() > 64 {
+            return Err("performance app_version must be a short ASCII version token".into());
         }
         if self.batch_size == 0 {
             return Err("performance batch_size must be positive".into());
@@ -240,8 +240,10 @@ impl PerformanceTrace {
             PerformanceOutcome::Completed if has_recovery => {
                 return Err("completed performance trace cannot include recovery".into())
             }
-            PerformanceOutcome::Failed if has_publish && has_recovery => {
-                return Err("failed trace cannot claim publish and recovery simultaneously".into())
+            PerformanceOutcome::Failed | PerformanceOutcome::Attention | PerformanceOutcome::Cancelled
+                if has_publish =>
+            {
+                return Err("non-completed performance trace cannot claim publish".into())
             }
             _ => {}
         }
@@ -274,6 +276,13 @@ impl PerformanceTrace {
             run_kind: self.context.run_kind,
             batch_size: self.context.batch_size,
         }
+    }
+
+    pub fn slow_run_report_if_over(&self, threshold_ms: u64) -> Result<Option<SlowRunReport>, String> {
+        if threshold_ms == 0 {
+            return Err("slow-run threshold must be positive".into());
+        }
+        Ok((self.total_machine_ms > threshold_ms).then(|| self.slow_run_report()))
     }
 }
 
@@ -402,6 +411,54 @@ mod tests {
         invalid.run_kind = PerformanceRunKind::Batch10;
         invalid.batch_size = 9;
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn slow_run_report_requires_explicit_positive_threshold() {
+        let trace = PerformanceTrace::new(
+            context(),
+            vec![
+                PerformanceStageMeasurement {
+                    stage: PerformanceStage::SourceOpen,
+                    duration_ms: 20,
+                },
+                PerformanceStageMeasurement {
+                    stage: PerformanceStage::Publish,
+                    duration_ms: 30,
+                },
+            ],
+            PerformanceOutcome::Completed,
+        )
+        .unwrap();
+        assert!(trace.slow_run_report_if_over(100).unwrap().is_none());
+        assert_eq!(
+            trace
+                .slow_run_report_if_over(40)
+                .unwrap()
+                .unwrap()
+                .bottleneck_stage,
+            Some(PerformanceStage::Publish)
+        );
+        assert!(trace.slow_run_report_if_over(0).is_err());
+    }
+
+    #[test]
+    fn failed_or_attention_trace_cannot_claim_publish() {
+        for outcome in [
+            PerformanceOutcome::Failed,
+            PerformanceOutcome::Attention,
+            PerformanceOutcome::Cancelled,
+        ] {
+            assert!(PerformanceTrace::new(
+                context(),
+                vec![PerformanceStageMeasurement {
+                    stage: PerformanceStage::Publish,
+                    duration_ms: 1,
+                }],
+                outcome,
+            )
+            .is_err());
+        }
     }
 
     #[test]

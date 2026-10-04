@@ -62,9 +62,15 @@ def test_e6_intake_and_learning_storage_are_quota_bounded_and_owned() -> None:
     assert "ensure_learning_input_capacity(&app, required_bytes)?" in learning
     assert "ensure_learning_input_capacity(&app, bytes.len() as u64)?" in learning
     assert learning.count("create_learning_work_session") >= 3
+    assert "static INTAKE_WORKSPACE_LOCK" in privacy
+    assert "lock_intake_workspace" in privacy
     assert "ensure_intake_work_capacity(" in source
     assert source.count("NORMALIZATION_WORK_RESERVE_BYTES") >= 2
+    assert source.count("lock_intake_workspace()?") >= 2
+    assert source.count("drop(intake_guard);") >= 2
     assert "ensure_intake_work_capacity(" in automation
+    assert automation.count("lock_intake_workspace()?") >= 2
+    assert automation.count("drop(intake_guard);") >= 2
     assert "create_owned_workspace_session(&workspace)?" in automation
     assert "normalization_session.root()" in automation
     assert "drop(normalization_session);" in automation

@@ -48,7 +48,32 @@ async fn pick_learning_files(
         return Err("Для обучения выберите ровно один пустой DOCX/DOCM-шаблон.".into());
     }
 
+    let required_bytes = selected_paths.iter().try_fold(0_u64, |total, selected_path| {
+        let canonical = selected_path.canonicalize().map_err(|error| {
+            format!(
+                "Не удалось открыть выбранный файл обучения «{}»: {error}",
+                selected_path.display()
+            )
+        })?;
+        let metadata = std::fs::metadata(&canonical).map_err(|error| {
+            format!(
+                "Не удалось прочитать выбранный файл обучения «{}»: {error}",
+                canonical.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "Выбранный путь не является файлом: {}",
+                canonical.display()
+            ));
+        }
+        total
+            .checked_add(metadata.len())
+            .ok_or_else(|| "Суммарный размер файлов обучения слишком велик.".to_string())
+    })?;
+
     let _learning_guard = lock_learning_workspace()?;
+    crate::privacy_runtime::ensure_learning_input_capacity(&app, required_bytes)?;
     let root = app
         .path()
         .app_data_dir()
@@ -104,8 +129,8 @@ async fn pick_learning_files(
                     canonical.display()
                 ));
             }
-            let work = session_root.join(format!("medical-diary-normalized-{}", Uuid::new_v4()));
-            match universal_intake::normalize_path(&canonical, &work, 0) {
+            let work_session = crate::privacy_runtime::create_learning_work_session(&app)?;
+            match universal_intake::normalize_path(&canonical, work_session.root(), 0) {
                 Ok(normalized) => {
                     let text = normalized.text.trim().to_string();
                     if text.is_empty() {
@@ -178,6 +203,7 @@ fn import_learning_example_file(
 ) -> Result<ImportLearningExampleFileResponse, String> {
     let bytes = universal_intake::decode_uploaded_payload(&req.file_name, &req.bytes_base64)?;
     let _learning_guard = lock_learning_workspace()?;
+    crate::privacy_runtime::ensure_learning_input_capacity(&app, bytes.len() as u64)?;
     let root = app
         .path()
         .app_data_dir()
@@ -196,8 +222,8 @@ fn import_learning_example_file(
     let target = session_root.join(safe_name);
     std::fs::write(&target, &bytes)
         .map_err(|error| format!("Не удалось сохранить учебный пример: {error}"))?;
-    let work = session_root.join("normalized-work");
-    let normalized = match universal_intake::normalize_path(&target, &work, 0) {
+    let work_session = crate::privacy_runtime::create_learning_work_session(&app)?;
+    let normalized = match universal_intake::normalize_path(&target, work_session.root(), 0) {
         Ok(value) => value,
         Err(error) => {
             let _ = std::fs::remove_dir_all(&session_root);
@@ -329,12 +355,8 @@ fn read_learning_text(app: &tauri::AppHandle, value: &str) -> Result<String, Str
     if matches!(extension.as_str(), "docx" | "docm") {
         return extract_docx_text(&path).map_err(|error| error.to_string());
     }
-    let workspace = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("template-learning-work");
-    universal_intake::normalize_path(&path, &workspace, 0).map(|source| source.text)
+    let work_session = crate::privacy_runtime::create_learning_work_session(app)?;
+    universal_intake::normalize_path(&path, work_session.root(), 0).map(|source| source.text)
 }
 
 #[tauri::command]

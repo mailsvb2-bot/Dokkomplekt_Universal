@@ -743,20 +743,31 @@ fn replayable_template_version_status(status: &str) -> bool {
     matches!(status, "published" | "superseded")
 }
 
+fn matching_replayable_template_version_sha(
+    versions: &[TemplateVersionRecord],
+    document: &DocumentTemplateSpec,
+) -> Option<String> {
+    versions
+        .iter()
+        .find(|version| {
+            replayable_template_version_status(&version.status)
+                && version.template_path == document.template_path
+        })
+        .map(|version| version.template_sha256.clone())
+}
+
 fn published_template_sha256_for_document(
     state_db_path: &Path,
     document: &DocumentTemplateSpec,
 ) -> Result<Option<String>, String> {
     let repo = repository_for(state_db_path)?;
-    Ok(repo
+    let versions = repo
         .list_template_versions(&document.id)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|version| {
-            replayable_template_version_status(&version.status)
-                && version.template_path == document.template_path
-        })
-        .map(|version| version.template_sha256))
+        .map_err(|error| error.to_string())?;
+    Ok(matching_replayable_template_version_sha(
+        &versions,
+        document,
+    ))
 }
 
 fn published_medical_contract_can_replay(
@@ -1171,6 +1182,56 @@ mod legacy_template_runtime_tests {
             "fixture must represent a complete published contract"
         );
         document
+    }
+
+    fn template_version(
+        status: &str,
+        template_path: &str,
+        template_sha256: &str,
+        version_number: u32,
+    ) -> TemplateVersionRecord {
+        TemplateVersionRecord {
+            version_id: format!("version-{version_number}"),
+            document_id: "discharge".into(),
+            version_number,
+            template_path: template_path.into(),
+            template_sha256: template_sha256.into(),
+            note: "test".into(),
+            status: status.into(),
+            learning_validation_id: None,
+            created_at: "2026-10-04T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn frozen_document_uses_its_exact_historical_version_after_concurrent_publish() {
+        let mut document = complete_discharge_document();
+        document.template_path = "archive/version-1.docx".into();
+        let versions = vec![
+            template_version("published", "archive/version-2.docx", "sha-v2", 2),
+            template_version("superseded", "archive/version-1.docx", "sha-v1", 1),
+        ];
+        assert_eq!(
+            matching_replayable_template_version_sha(&versions, &document).as_deref(),
+            Some("sha-v1")
+        );
+
+        document.template_path = "archive/unregistered.docx".into();
+        assert_eq!(
+            matching_replayable_template_version_sha(&versions, &document),
+            None
+        );
+
+        let draft = vec![template_version(
+            "draft",
+            "archive/unregistered.docx",
+            "sha-draft",
+            3,
+        )];
+        assert_eq!(
+            matching_replayable_template_version_sha(&draft, &document),
+            None
+        );
     }
 
     #[test]

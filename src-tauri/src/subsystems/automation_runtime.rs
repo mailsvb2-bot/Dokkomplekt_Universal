@@ -1351,6 +1351,7 @@ fn perform_created_documents_intake(
                     let recovery_message = recover_unverified_batch_publication(
                         app,
                         &permit,
+                        u32::try_from(names.len()).unwrap_or(u32::MAX),
                         &patient_dir,
                         None,
                         error,

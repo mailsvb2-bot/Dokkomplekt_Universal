@@ -190,7 +190,9 @@ pub(crate) struct StagedOutputReadback {
     output_sha256: String,
 }
 
-pub(crate) fn readback_staged_output(staged_output: &Path) -> Result<StagedOutputReadback, String> {
+pub(crate) fn readback_staged_output(
+    staged_output: &Path,
+) -> Result<StagedOutputReadback, String> {
     Ok(StagedOutputReadback {
         staged_output: staged_output.to_path_buf(),
         output_sha256: output_digest(staged_output)?,
@@ -1556,7 +1558,11 @@ mod tests {
         let readback = readback_staged_output(&root).unwrap();
         assert_eq!(readback.staged_output, root);
         let expected = readback.output_sha256.clone();
-        std::fs::write(readback.staged_output.join("Документ.docx"), b"changed later").unwrap();
+        std::fs::write(
+            readback.staged_output.join("Документ.docx"),
+            b"changed later",
+        )
+        .unwrap();
         assert_ne!(expected, output_digest(&readback.staged_output).unwrap());
         let _ = std::fs::remove_dir_all(&readback.staged_output);
     }

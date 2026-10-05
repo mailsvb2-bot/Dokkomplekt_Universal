@@ -980,6 +980,7 @@ fn render_docx(
             return Err(recover_unverified_batch_publication(
                 &app,
                 &permit,
+                1,
                 &output_path,
                 None,
                 error,
@@ -1510,6 +1511,7 @@ fn render_docx_batch(
             return Err(recover_unverified_batch_publication(
                 &app,
                 &permit,
+                u32::try_from(documents.len()).unwrap_or(u32::MAX),
                 &output_folder,
                 backup_folder.as_deref(),
                 error,
@@ -1538,6 +1540,7 @@ fn render_docx_batch(
             return Err(recover_unverified_batch_publication(
                 &app,
                 &permit,
+                u32::try_from(documents.len()).unwrap_or(u32::MAX),
                 &output_folder,
                 backup_folder.as_deref(),
                 error,

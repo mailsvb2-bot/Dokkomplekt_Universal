@@ -244,6 +244,7 @@ fn render_mail_merge(
             return Err(recover_unverified_batch_publication(
                 &app,
                 &permit,
+                u32::try_from(files.len()).unwrap_or(u32::MAX),
                 &published,
                 None,
                 error,
@@ -262,6 +263,7 @@ fn render_mail_merge(
             return Err(recover_unverified_batch_publication(
                 &app,
                 &permit,
+                u32::try_from(files.len()).unwrap_or(u32::MAX),
                 &published,
                 None,
                 error,

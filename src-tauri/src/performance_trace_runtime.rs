@@ -1,6 +1,7 @@
 use dokkomplekt_core::{
     PerformanceCacheState, PerformanceClass, PerformanceOutcome, PerformanceRunPhase,
-    PerformanceStageMeasurement, PerformanceTrace, PerformanceTraceContext, PerformanceWorkload,
+    PerformanceStage, PerformanceStageMeasurement, PerformanceTrace, PerformanceTraceContext,
+    PerformanceWorkload,
 };
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -24,6 +25,15 @@ fn performance_trace_workspace(app: &tauri::AppHandle) -> Result<PathBuf, String
 
 pub(crate) fn elapsed_milliseconds(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn performance_workload(batch_size: u32) -> PerformanceWorkload {
+    match batch_size {
+        1 => PerformanceWorkload::SingleDocument,
+        10 => PerformanceWorkload::Batch10,
+        50 => PerformanceWorkload::Batch50,
+        _ => PerformanceWorkload::OtherBatch,
+    }
 }
 
 fn persist_manual_document_trace(
@@ -76,13 +86,45 @@ pub(crate) fn persist_manual_batch_trace(
     stages: Vec<PerformanceStageMeasurement>,
     end_to_end_ms: u64,
 ) -> Result<PathBuf, String> {
-    let workload = match batch_size {
-        1 => PerformanceWorkload::SingleDocument,
-        10 => PerformanceWorkload::Batch10,
-        50 => PerformanceWorkload::Batch50,
-        _ => PerformanceWorkload::OtherBatch,
-    };
-    persist_manual_document_trace(app, workload, batch_size, stages, end_to_end_ms)
+    persist_manual_document_trace(
+        app,
+        performance_workload(batch_size),
+        batch_size,
+        stages,
+        end_to_end_ms,
+    )
+}
+
+pub(crate) fn persist_failed_recovery_trace(
+    app: &tauri::AppHandle,
+    batch_size: u32,
+    recovery_ms: u64,
+) -> Result<PathBuf, String> {
+    // This trace is intentionally recovery-local. A failed run must never claim
+    // the canonical Publish stage, and no error text, paths, source data, or
+    // document values are accepted by this interface.
+    let trace = PerformanceTrace::new(
+        PerformanceTraceContext {
+            run_id: uuid::Uuid::new_v4().simple().to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            class: PerformanceClass::Unclassified,
+            cache_state: PerformanceCacheState::Unclassified,
+            run_phase: PerformanceRunPhase::Unclassified,
+            workload: performance_workload(batch_size),
+            batch_size,
+            ocr_used: false,
+            runtime_layout_used: false,
+            pdf_used: false,
+        },
+        vec![PerformanceStageMeasurement {
+            stage: PerformanceStage::Recovery,
+            duration_ms: recovery_ms,
+        }],
+        recovery_ms,
+        0,
+        PerformanceOutcome::Failed,
+    )?;
+    persist_performance_trace(app, &trace)
 }
 
 pub(crate) fn persist_performance_trace(

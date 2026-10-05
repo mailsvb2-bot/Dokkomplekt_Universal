@@ -599,6 +599,24 @@ mod tests {
     }
 
     #[test]
+    fn failed_recovery_trace_is_valid_without_claiming_publish() {
+        let trace = PerformanceTrace::new(
+            context(),
+            vec![PerformanceStageMeasurement {
+                stage: PerformanceStage::Recovery,
+                duration_ms: 25,
+            }],
+            25,
+            0,
+            PerformanceOutcome::Failed,
+        )
+        .unwrap();
+        assert_eq!(trace.outcome, PerformanceOutcome::Failed);
+        assert_eq!(trace.stages.len(), 1);
+        assert_eq!(trace.stages[0].stage, PerformanceStage::Recovery);
+    }
+
+    #[test]
     fn serialized_trace_has_no_free_form_document_fields() {
         let trace = PerformanceTrace::new(
             context(),

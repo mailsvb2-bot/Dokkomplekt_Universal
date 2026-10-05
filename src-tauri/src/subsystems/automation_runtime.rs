@@ -1353,7 +1353,7 @@ fn perform_created_documents_intake(
                 processing_fingerprint: processing_fingerprint.clone(),
             };
             let publish_started = std::time::Instant::now();
-            if let Err(error) = generation_publication::prepare_publication(
+            if let Err(error) = generation_publication::prepare_publication_from_readback(
                 app,
                 &permit,
                 &staged_readback,

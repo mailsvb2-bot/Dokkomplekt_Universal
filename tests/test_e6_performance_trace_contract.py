@@ -186,3 +186,53 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "u32::try_from(files.len()).unwrap_or(u32::MAX)" in mail_merge
     assert automation.count("recover_unverified_batch_publication(") == 1
     assert "u32::try_from(names.len()).unwrap_or(u32::MAX)" in automation
+
+
+    assert "persist_automatic_trace" in runtime
+    automatic_success = automation[
+        automation.index("fn perform_created_documents_intake"):
+        automation.index('include!("automation_management.rs")')
+    ]
+    for stage in (
+        "PerformanceStage::SourceOpen",
+        "PerformanceStage::ReferenceClone",
+        "PerformanceStage::Replay",
+        "PerformanceStage::Verify",
+        "PerformanceStage::Publish",
+    ):
+        assert stage in automatic_success
+    assert "persist_automatic_trace" in automatic_success
+    assert "performance_trace_write_failures" in automatic_success
+    assert "performance_ocr_used" in automatic_success
+    assert "performance_pdf_used" in automatic_success
+    assert "req.resume_from_case_id.is_some() || reused_documents > 0" in automatic_success
+    assert automatic_success.index("PerformanceStage::SourceOpen") < automatic_success.index(
+        "PerformanceStage::ReferenceClone"
+    )
+    assert automatic_success.index("PerformanceStage::ReferenceClone") < automatic_success.index(
+        "PerformanceStage::Replay"
+    )
+    assert automatic_success.index("PerformanceStage::Replay") < automatic_success.index(
+        "PerformanceStage::Verify"
+    )
+    assert automatic_success.index("PerformanceStage::Verify") < automatic_success.index(
+        "PerformanceStage::Publish"
+    )
+
+    automatic_trace = runtime[
+        runtime.index("pub(crate) fn persist_automatic_trace"):
+        runtime.index("pub(crate) fn persist_failed_recovery_trace")
+    ]
+    assert "PerformanceOutcome::Completed" in automatic_trace
+    assert "PerformanceRunPhase::RepeatRun" in automatic_trace
+    assert "PerformanceRunPhase::FirstRun" in automatic_trace
+    assert "runtime_layout_used: false" in automatic_trace
+    for forbidden in (
+        "source_text",
+        "source_sha256",
+        "patient",
+        "diagnosis",
+        "output_folder",
+        "path:",
+    ):
+        assert forbidden not in automatic_trace

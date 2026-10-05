@@ -152,3 +152,31 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert manual_batch.index("PerformanceStage::Verify") < manual_batch.index(
         "PerformanceStage::Publish"
     )
+
+
+    assert "persist_failed_recovery_trace" in runtime
+    failed_recovery = runtime[
+        runtime.index("pub(crate) fn persist_failed_recovery_trace"):
+        runtime.index("pub(crate) fn persist_performance_trace")
+    ]
+    assert "PerformanceStage::Recovery" in failed_recovery
+    assert "PerformanceOutcome::Failed" in failed_recovery
+    for forbidden in (
+        "verification_error",
+        "output_folder",
+        "backup_folder",
+        "source_text",
+        "patient",
+        "diagnosis",
+        "path:",
+    ):
+        assert forbidden not in failed_recovery
+
+    recovery_owner = publication[
+        publication.index("fn recover_unverified_batch_publication"):
+        publication.index("#[cfg(test)]", publication.index("fn recover_unverified_batch_publication"))
+    ]
+    assert "batch_size: u32" in recovery_owner
+    assert "persist_failed_recovery_trace" in recovery_owner
+    assert "performance_trace_write_failures" in recovery_owner
+    assert documents.count("recover_unverified_batch_publication(") == 3

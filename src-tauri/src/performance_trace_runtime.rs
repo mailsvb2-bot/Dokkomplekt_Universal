@@ -46,7 +46,7 @@ pub(crate) fn automatic_source_uses_pdf(
         item.source_reference.as_deref().is_some_and(|reference| {
             reference.split(';').any(|segment| {
                 segment
-                    .rsplit(|character: char| matches!(character, '/' | '\\' | ':'))
+                    .rsplit(['/', '\\', ':'])
                     .next()
                     .is_some_and(|name| name.to_ascii_lowercase().ends_with(".pdf"))
             })

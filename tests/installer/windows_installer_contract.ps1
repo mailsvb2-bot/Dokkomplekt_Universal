@@ -2527,35 +2527,34 @@ $fpr09MapButton = Invoke-UiActionWithObservedTransition `
     if ($null -eq $currentAppWindow) { return $null }
     Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
   }
-$currentAppWindow = Find-LiveAppWindow
-if ($null -eq $currentAppWindow) { throw 'FPR-09 installed window disappeared before map confirmation.' }
-Activate-LiveAppWindow -Window $currentAppWindow
-if ($fpr09MapButton.Current.IsOffscreen -and $fpr09MapButton.Current.IsScrollItemPatternAvailable) {
-  $scroll = $fpr09MapButton.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
-  $scroll.ScrollIntoView()
-  Start-Sleep -Milliseconds 100
-}
-$fpr09MapButton.SetFocus()
-Start-Sleep -Milliseconds 100
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-
-Wait-UiElement -Description 'FPR-09 learned map applied in primary setup' -TimeoutSeconds 90 -Probe {
-  $currentAppWindow = Find-LiveAppWindow
-  if ($null -eq $currentAppWindow) { return $null }
-  $all = $currentAppWindow.FindAll(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.Condition]::TrueCondition
-  )
-  foreach ($node in $all) {
-    try {
-      $name = [string]$node.Current.Name
-      if ($name.StartsWith('Шаблон обучен на 3 парах и проверен на 1 независимой контрольной паре:')) {
-        return $node
-      }
-    } catch {}
+$null = Invoke-UiActionWithObservedTransition `
+  -Description 'FPR-09 apply confirmed learned map' `
+  -TransitionDescription 'FPR-09 learned map applied in primary setup' `
+  -TransitionSeconds 10 `
+  -InFlightTransitionSeconds 90 `
+  -PhysicalRetryTransitionSeconds 90 `
+  -ActionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    Find-ReadyButtonByNames -Root $currentAppWindow -Names @('Применить подтверждённую карту')
+  } `
+  -TransitionProbe {
+    $currentAppWindow = Find-LiveAppWindow
+    if ($null -eq $currentAppWindow) { return $null }
+    $all = $currentAppWindow.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    foreach ($node in $all) {
+      try {
+        $name = [string]$node.Current.Name
+        if ($name.StartsWith('Шаблон обучен на 3 парах и проверен на 1 независимой контрольной паре:')) {
+          return $node
+        }
+      } catch {}
+    }
+    return $null
   }
-  return $null
-} | Out-Null
 
 try {
   $null = Invoke-UiActionWithObservedTransition `

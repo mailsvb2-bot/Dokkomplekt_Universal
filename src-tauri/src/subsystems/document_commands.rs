@@ -943,11 +943,6 @@ fn render_docx(
     });
 
     let publish_started = std::time::Instant::now();
-    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
-        stage: dokkomplekt_core::PerformanceStage::Verify,
-        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(verify_started),
-    });
-    let publish_started = std::time::Instant::now();
     if let Err(error) = generation_publication::prepare_publication(
         &app,
         &permit,
@@ -1411,6 +1406,11 @@ fn render_docx_batch(
             return Err(error);
         }
     }
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::Verify,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(verify_started),
+    });
+    let publish_started = std::time::Instant::now();
     if let Err(error) = generation_publication::prepare_publication(
         &app,
         &permit,

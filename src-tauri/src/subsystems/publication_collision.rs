@@ -224,11 +224,13 @@ fn rollback_unverified_publication(
 fn recover_unverified_batch_publication(
     app: &tauri::AppHandle,
     permit: &GenerationPermit,
+    batch_size: u32,
     output_folder: &Path,
     backup_folder: Option<&Path>,
     verification_error: String,
     retain_publication_guard: bool,
 ) -> String {
+    let recovery_started = std::time::Instant::now();
     // Files can be restored for the user after a failed read-back, but generated
     // artifacts have already crossed the accounting/counter boundary. Never
     // refund usage or counter reservations after this point: the quarantined
@@ -292,6 +294,17 @@ fn recover_unverified_batch_publication(
             ))
             .unwrap_or_default()
     };
+    let recovery_ms = crate::performance_trace_runtime::elapsed_milliseconds(recovery_started);
+    if crate::performance_trace_runtime::persist_failed_recovery_trace(
+        app,
+        batch_size,
+        recovery_ms,
+    )
+    .is_err()
+    {
+        increment_metric(app, "performance_trace_write_failures", 1);
+    }
+
     format!(
         "{verification_error} Публикация не признана успешной. {rollback_note} {accounting_note}{receipt_note}"
     )

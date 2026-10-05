@@ -190,9 +190,7 @@ pub(crate) struct StagedOutputReadback {
     output_sha256: String,
 }
 
-pub(crate) fn readback_staged_output(
-    staged_output: &Path,
-) -> Result<StagedOutputReadback, String> {
+pub(crate) fn readback_staged_output(staged_output: &Path) -> Result<StagedOutputReadback, String> {
     Ok(StagedOutputReadback {
         staged_output: staged_output.to_path_buf(),
         output_sha256: output_digest(staged_output)?,

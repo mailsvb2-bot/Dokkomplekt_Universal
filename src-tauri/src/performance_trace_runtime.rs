@@ -26,8 +26,10 @@ pub(crate) fn elapsed_milliseconds(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn persist_manual_single_document_trace(
+fn persist_manual_document_trace(
     app: &tauri::AppHandle,
+    workload: PerformanceWorkload,
+    batch_size: u32,
     stages: Vec<PerformanceStageMeasurement>,
     end_to_end_ms: u64,
 ) -> Result<PathBuf, String> {
@@ -38,9 +40,9 @@ pub(crate) fn persist_manual_single_document_trace(
             class: PerformanceClass::Unclassified,
             cache_state: PerformanceCacheState::Unclassified,
             run_phase: PerformanceRunPhase::Unclassified,
-            workload: PerformanceWorkload::SingleDocument,
-            batch_size: 1,
-            // These features are not invoked inside the manual render command.
+            workload,
+            batch_size,
+            // These features are not invoked inside the manual render commands.
             // Upstream source-analysis choices are outside this command's click→ready interval.
             ocr_used: false,
             runtime_layout_used: false,
@@ -52,6 +54,35 @@ pub(crate) fn persist_manual_single_document_trace(
         PerformanceOutcome::Completed,
     )?;
     persist_performance_trace(app, &trace)
+}
+
+pub(crate) fn persist_manual_single_document_trace(
+    app: &tauri::AppHandle,
+    stages: Vec<PerformanceStageMeasurement>,
+    end_to_end_ms: u64,
+) -> Result<PathBuf, String> {
+    persist_manual_document_trace(
+        app,
+        PerformanceWorkload::SingleDocument,
+        1,
+        stages,
+        end_to_end_ms,
+    )
+}
+
+pub(crate) fn persist_manual_batch_trace(
+    app: &tauri::AppHandle,
+    batch_size: u32,
+    stages: Vec<PerformanceStageMeasurement>,
+    end_to_end_ms: u64,
+) -> Result<PathBuf, String> {
+    let workload = match batch_size {
+        1 => PerformanceWorkload::SingleDocument,
+        10 => PerformanceWorkload::Batch10,
+        50 => PerformanceWorkload::Batch50,
+        _ => PerformanceWorkload::OtherBatch,
+    };
+    persist_manual_document_trace(app, workload, batch_size, stages, end_to_end_ms)
 }
 
 pub(crate) fn persist_performance_trace(

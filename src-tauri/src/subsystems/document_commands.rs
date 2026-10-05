@@ -1072,6 +1072,8 @@ fn render_docx_batch(
     app: tauri::AppHandle,
 ) -> Result<RenderDocxBatchResponse, String> {
     require_strict_document_publication(req.strict)?;
+    let trace_started = std::time::Instant::now();
+    let mut trace_stages = Vec::with_capacity(4);
     let mut requested_ids = req
         .document_ids
         .into_iter()
@@ -1134,6 +1136,7 @@ fn render_docx_batch(
         ));
     }
 
+    let reference_clone_started = std::time::Instant::now();
     let template_snapshots = documents
         .iter()
         .map(|document| {
@@ -1141,6 +1144,12 @@ fn render_docx_batch(
                 .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::ReferenceClone,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            reference_clone_started,
+        ),
+    });
     let output_root =
         resolve_user_visible_absolute_path(&req.output_root, "Папка готовых документов")?;
     // Revalidate the previously confirmed destination immediately before generation.
@@ -1209,6 +1218,7 @@ fn render_docx_batch(
     let mut ancillary_warnings = Vec::new();
     let mut staged_source_copy: Option<PathBuf> = None;
     let mut frozen_render_inputs = Vec::new();
+    let replay_started = std::time::Instant::now();
     let rendered = (|| -> Result<Vec<PathBuf>, String> {
         let mut paths = Vec::new();
         let mut trust_document_evidence = Vec::new();
@@ -1337,7 +1347,13 @@ fn render_docx_batch(
     })();
 
     let staged_paths = match rendered {
-        Ok(paths) => paths,
+        Ok(paths) => {
+            trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+                stage: dokkomplekt_core::PerformanceStage::Replay,
+                duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(replay_started),
+            });
+            paths
+        }
         Err(error) => {
             let _ = std::fs::remove_dir_all(&stage);
             rollback_counter_reservations(&app, &counter_reservations);
@@ -1345,6 +1361,7 @@ fn render_docx_batch(
             return Err(error);
         }
     };
+    let verify_started = std::time::Instant::now();
     if let Err(error) = template_snapshot::ensure_all_current(&template_snapshots) {
         let _ = std::fs::remove_dir_all(&stage);
         rollback_counter_reservations(&app, &counter_reservations);
@@ -1389,6 +1406,11 @@ fn render_docx_batch(
             return Err(error);
         }
     }
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::Verify,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(verify_started),
+    });
+    let publish_started = std::time::Instant::now();
     if let Err(error) = generation_publication::prepare_publication(
         &app,
         &permit,
@@ -1537,6 +1559,22 @@ fn render_docx_batch(
     warnings.extend(generation_publication::finalize_published_generation(
         &app, &permit, false,
     ));
+    trace_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::Publish,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(publish_started),
+    });
+    let end_to_end_ms = crate::performance_trace_runtime::elapsed_milliseconds(trace_started);
+    let batch_size = u32::try_from(documents.len()).unwrap_or(u32::MAX);
+    if crate::performance_trace_runtime::persist_manual_batch_trace(
+        &app,
+        batch_size,
+        trace_stages,
+        end_to_end_ms,
+    )
+    .is_err()
+    {
+        increment_metric(&app, "performance_trace_write_failures", 1);
+    }
     let created_documents = documents
         .iter()
         .zip(created_files.iter())

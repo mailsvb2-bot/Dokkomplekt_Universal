@@ -123,3 +123,32 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert manual_single.index("PerformanceStage::Verify") < manual_single.index(
         "PerformanceStage::Publish"
     )
+
+
+    assert "persist_manual_batch_trace" in runtime
+    assert "PerformanceWorkload::Batch10" in runtime
+    assert "PerformanceWorkload::Batch50" in runtime
+    assert "PerformanceWorkload::OtherBatch" in runtime
+
+    manual_batch = documents[
+        documents.index("fn render_docx_batch("):
+        documents.index("struct ScannerRequest")
+    ]
+    for stage in (
+        "PerformanceStage::ReferenceClone",
+        "PerformanceStage::Replay",
+        "PerformanceStage::Verify",
+        "PerformanceStage::Publish",
+    ):
+        assert stage in manual_batch
+    assert "persist_manual_batch_trace" in manual_batch
+    assert "performance_trace_write_failures" in manual_batch
+    assert manual_batch.index("PerformanceStage::ReferenceClone") < manual_batch.index(
+        "PerformanceStage::Replay"
+    )
+    assert manual_batch.index("PerformanceStage::Replay") < manual_batch.index(
+        "PerformanceStage::Verify"
+    )
+    assert manual_batch.index("PerformanceStage::Verify") < manual_batch.index(
+        "PerformanceStage::Publish"
+    )

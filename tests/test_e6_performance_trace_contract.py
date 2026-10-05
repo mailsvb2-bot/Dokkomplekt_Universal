@@ -206,8 +206,13 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "performance_ocr_used" in automatic_success
     assert "performance_pdf_used" in automatic_success
     assert "normalized_source_uses_pdf" in automatic_success
-    assert "source_reference" in automatic_success
-    assert "ends_with(\".pdf\")" in automatic_success
+    pdf_detector = automation[
+        automation.index("fn normalized_source_uses_pdf"):
+        automation.index("fn perform_created_documents_intake")
+    ]
+    assert "source_reference" in pdf_detector
+    assert "ends_with(\".pdf\")" in pdf_detector
+    assert "processed_files" in pdf_detector
     assert "req.resume_from_case_id.is_some() || reused_documents > 0" in automatic_success
     assert automatic_success.index("PerformanceStage::SourceOpen") < automatic_success.index(
         "PerformanceStage::ReferenceClone"

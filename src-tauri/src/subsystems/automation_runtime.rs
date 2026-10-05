@@ -276,6 +276,32 @@ fn zero_touch_template_admission_blockers(
     Ok(blockers)
 }
 
+fn normalized_source_uses_pdf(normalized: &universal_intake::NormalizedSource) -> bool {
+    if normalized.source_kind.to_ascii_lowercase().contains("pdf")
+        || normalized.processed_files.iter().any(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        })
+    {
+        return true;
+    }
+
+    // EML/MSG normalization keeps the top-level source_kind="email" and only
+    // retains the top-level message in processed_files. Nested attachment identity
+    // survives in layout evidence, including recursively nested email attachments.
+    normalized.layout_items.iter().any(|item| {
+        item.source_reference.as_deref().is_some_and(|reference| {
+            reference.split(';').any(|segment| {
+                segment
+                    .rsplit(|character: char| matches!(character, '/' | '\\' | ':'))
+                    .next()
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with(".pdf"))
+            })
+        })
+    })
+}
+
 fn perform_created_documents_intake(
     state: &AppState,
     app: &tauri::AppHandle,
@@ -449,12 +475,7 @@ fn perform_created_documents_intake(
         .warnings
         .iter()
         .any(|warning| warning.contains("OCR"));
-    let performance_pdf_used = normalized.source_kind.contains("pdf")
-        || normalized.processed_files.iter().any(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
-        });
+    let performance_pdf_used = normalized_source_uses_pdf(&normalized);
     drop(normalization_session);
     drop(intake_guard);
     case_run.transition("recognizing")?;

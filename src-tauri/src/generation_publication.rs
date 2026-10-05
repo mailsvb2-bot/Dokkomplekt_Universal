@@ -184,6 +184,19 @@ pub(crate) struct PublicationPlanBinding {
     pub processing_fingerprint: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct StagedOutputReadback {
+    staged_output: PathBuf,
+    output_sha256: String,
+}
+
+pub(crate) fn readback_staged_output(staged_output: &Path) -> Result<StagedOutputReadback, String> {
+    Ok(StagedOutputReadback {
+        staged_output: staged_output.to_path_buf(),
+        output_sha256: output_digest(staged_output)?,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CompletionOutputProof {
     ordinal: u32,
@@ -691,7 +704,7 @@ fn supported_receipt(receipt: &PublicationReceipt) -> bool {
 pub(crate) fn prepare_publication(
     app: &tauri::AppHandle,
     permit: &crate::GenerationPermit,
-    staged_output: &Path,
+    staged_readback: &StagedOutputReadback,
     counter_reservations: &[CounterValue],
     plan_binding: Option<&PublicationPlanBinding>,
 ) -> Result<(), String> {
@@ -702,11 +715,12 @@ pub(crate) fn prepare_publication(
         .map_err(|error| error.to_string())?;
     let state_path = crate::default_state_db_path(app)?;
     let repo = crate::repository_for(&state_path)?;
+    let staged_output = staged_readback.staged_output.as_path();
     let binding = plan_binding.cloned();
     let receipt = PublicationReceipt {
         schema: RECEIPT_SCHEMA,
         reservation_id: permit.reservation.reservation_id.clone(),
-        output_sha256: output_digest(staged_output)?,
+        output_sha256: staged_readback.output_sha256.clone(),
         phase: Some(PublicationPhase::Prepared),
         prepared_unix: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
         published_unix: None,
@@ -1532,6 +1546,19 @@ mod tests {
             .expect_err("malformed publication receipt must stop automatic issuance");
         assert!(error.contains("повреждён"), "{error}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_output_readback_is_bound_to_exact_prepublication_bytes() {
+        let root = temp_root("staged-readback");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Документ.docx"), b"exact staged bytes").unwrap();
+        let readback = readback_staged_output(&root).unwrap();
+        assert_eq!(readback.staged_output, root);
+        let expected = readback.output_sha256.clone();
+        std::fs::write(readback.staged_output.join("Документ.docx"), b"changed later").unwrap();
+        assert_ne!(expected, output_digest(&readback.staged_output).unwrap());
+        let _ = std::fs::remove_dir_all(&readback.staged_output);
     }
 
     #[test]

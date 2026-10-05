@@ -27,6 +27,33 @@ pub(crate) fn elapsed_milliseconds(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+pub(crate) fn automatic_source_uses_pdf(
+    normalized: &crate::universal_intake::NormalizedSource,
+) -> bool {
+    if normalized.source_kind.to_ascii_lowercase().contains("pdf")
+        || normalized.processed_files.iter().any(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        })
+    {
+        return true;
+    }
+
+    // EML/MSG keep source_kind="email" and only retain the top-level message
+    // in processed_files. Nested attachment identity survives in layout evidence.
+    normalized.layout_items.iter().any(|item| {
+        item.source_reference.as_deref().is_some_and(|reference| {
+            reference.split(';').any(|segment| {
+                segment
+                    .rsplit(|character: char| matches!(character, '/' | '\\' | ':'))
+                    .next()
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with(".pdf"))
+            })
+        })
+    })
+}
+
 fn performance_workload(batch_size: u32) -> PerformanceWorkload {
     match batch_size {
         1 => PerformanceWorkload::SingleDocument,

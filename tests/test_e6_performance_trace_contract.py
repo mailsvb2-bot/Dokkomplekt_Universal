@@ -14,6 +14,8 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     workspace = read("src-tauri/src/universal_intake/workspace_session.rs")
     documents = read("src-tauri/src/subsystems/document_commands.rs")
     publication = read("src-tauri/src/subsystems/publication_collision.rs")
+    mail_merge = read("src-tauri/src/subsystems/automation_mail_merge.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
 
     for stage in (
         "source_open",
@@ -180,3 +182,7 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "persist_failed_recovery_trace" in recovery_owner
     assert "performance_trace_write_failures" in recovery_owner
     assert documents.count("recover_unverified_batch_publication(") == 3
+    assert mail_merge.count("recover_unverified_batch_publication(") == 2
+    assert "u32::try_from(files.len()).unwrap_or(u32::MAX)" in mail_merge
+    assert automation.count("recover_unverified_batch_publication(") == 1
+    assert "u32::try_from(names.len()).unwrap_or(u32::MAX)" in automation

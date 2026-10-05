@@ -706,6 +706,23 @@ fn supported_receipt(receipt: &PublicationReceipt) -> bool {
 pub(crate) fn prepare_publication(
     app: &tauri::AppHandle,
     permit: &crate::GenerationPermit,
+    staged_output: &Path,
+    counter_reservations: &[CounterValue],
+    plan_binding: Option<&PublicationPlanBinding>,
+) -> Result<(), String> {
+    let staged_readback = readback_staged_output(staged_output)?;
+    prepare_publication_from_readback(
+        app,
+        permit,
+        &staged_readback,
+        counter_reservations,
+        plan_binding,
+    )
+}
+
+pub(crate) fn prepare_publication_from_readback(
+    app: &tauri::AppHandle,
+    permit: &crate::GenerationPermit,
     staged_readback: &StagedOutputReadback,
     counter_reservations: &[CounterValue],
     plan_binding: Option<&PublicationPlanBinding>,

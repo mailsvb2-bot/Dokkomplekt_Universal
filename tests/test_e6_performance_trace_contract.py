@@ -205,10 +205,10 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "performance_trace_write_failures" in automatic_success
     assert "performance_ocr_used" in automatic_success
     assert "performance_pdf_used" in automatic_success
-    assert "normalized_source_uses_pdf" in automatic_success
-    pdf_detector = automation[
-        automation.index("fn normalized_source_uses_pdf"):
-        automation.index("fn perform_created_documents_intake")
+    assert "automatic_source_uses_pdf" in automatic_success
+    pdf_detector = runtime[
+        runtime.index("pub(crate) fn automatic_source_uses_pdf"):
+        runtime.index("fn performance_workload")
     ]
     assert "source_reference" in pdf_detector
     assert "ends_with(\".pdf\")" in pdf_detector

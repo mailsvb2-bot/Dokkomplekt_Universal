@@ -1116,7 +1116,13 @@ fn perform_created_documents_intake(
             let mut rerendered_documents = 0_u64;
             let mut counter_reservations = Vec::new();
             let replay_started = std::time::Instant::now();
-            let render_result = (|| -> Result<(Vec<String>, u64, generation_publication::StagedOutputReadback, u64), String> {
+            type ReplayReadbackResult = (
+                Vec<String>,
+                u64,
+                generation_publication::StagedOutputReadback,
+                u64,
+            );
+            let render_result = (|| -> Result<ReplayReadbackResult, String> {
                 let mut names = Vec::new();
                 let mut trust_document_evidence = Vec::new();
                 for out in &outputs {
@@ -1259,10 +1265,7 @@ fn perform_created_documents_intake(
                     ));
                     names.push(out.file_name.clone());
                 }
-                // The dropped primary is a user document and is always part of
-                // the atomically published patient set. Privacy retention controls
-                // what happens to the original top-level source after publication,
-                // not whether the patient folder loses its primary document.
+                // The frozen primary always remains part of the atomically published patient set.
                 std::fs::copy(source_snapshot.path(), stage.join(&source_target_name))
                     .map_err(|e| format!("Не удалось скопировать snapshot исходника в комплект: {e}"))?;
                 if privacy.write_trust_report {
@@ -1286,10 +1289,16 @@ fn perform_created_documents_intake(
                         );
                     }
                 }
-                let replay_ms = crate::performance_trace_runtime::elapsed_milliseconds(replay_started);
+                let replay_ms =
+                    crate::performance_trace_runtime::elapsed_milliseconds(replay_started);
                 let readback_started = std::time::Instant::now();
                 let staged_readback = generation_publication::readback_staged_output(&stage)?;
-                Ok((names, replay_ms, staged_readback, crate::performance_trace_runtime::elapsed_milliseconds(readback_started)))
+                Ok((
+                    names,
+                    replay_ms,
+                    staged_readback,
+                    crate::performance_trace_runtime::elapsed_milliseconds(readback_started),
+                ))
             })();
 
             let (names, replay_ms, staged_readback, readback_ms) = match render_result {
@@ -1302,8 +1311,14 @@ fn perform_created_documents_intake(
                 }
             };
             performance_stages.extend([
-                dokkomplekt_core::PerformanceStageMeasurement { stage: dokkomplekt_core::PerformanceStage::Replay, duration_ms: replay_ms },
-                dokkomplekt_core::PerformanceStageMeasurement { stage: dokkomplekt_core::PerformanceStage::PhysicalReadback, duration_ms: readback_ms },
+                dokkomplekt_core::PerformanceStageMeasurement {
+                    stage: dokkomplekt_core::PerformanceStage::Replay,
+                    duration_ms: replay_ms,
+                },
+                dokkomplekt_core::PerformanceStageMeasurement {
+                    stage: dokkomplekt_core::PerformanceStage::PhysicalReadback,
+                    duration_ms: readback_ms,
+                },
             ]);
             let verify_started = std::time::Instant::now();
             if let Err(error) = ensure_generation_inputs_current(

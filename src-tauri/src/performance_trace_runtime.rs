@@ -77,6 +77,7 @@ pub(crate) fn persist_manual_batch_trace(
     end_to_end_ms: u64,
 ) -> Result<PathBuf, String> {
     let workload = match batch_size {
+        1 => PerformanceWorkload::SingleDocument,
         10 => PerformanceWorkload::Batch10,
         50 => PerformanceWorkload::Batch50,
         _ => PerformanceWorkload::OtherBatch,

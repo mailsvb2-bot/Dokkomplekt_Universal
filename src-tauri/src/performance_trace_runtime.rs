@@ -27,6 +27,33 @@ pub(crate) fn elapsed_milliseconds(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+pub(crate) fn automatic_source_uses_pdf(
+    normalized: &crate::universal_intake::NormalizedSource,
+) -> bool {
+    if normalized.source_kind.to_ascii_lowercase().contains("pdf")
+        || normalized.processed_files.iter().any(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        })
+    {
+        return true;
+    }
+
+    // EML/MSG keep source_kind="email" and only retain the top-level message
+    // in processed_files. Nested attachment identity survives in layout evidence.
+    normalized.layout_items.iter().any(|item| {
+        item.source_reference.as_deref().is_some_and(|reference| {
+            reference.split(';').any(|segment| {
+                segment
+                    .rsplit(['/', '\\', ':'])
+                    .next()
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with(".pdf"))
+            })
+        })
+    })
+}
+
 fn performance_workload(batch_size: u32) -> PerformanceWorkload {
     match batch_size {
         1 => PerformanceWorkload::SingleDocument,
@@ -93,6 +120,42 @@ pub(crate) fn persist_manual_batch_trace(
         stages,
         end_to_end_ms,
     )
+}
+
+pub(crate) fn persist_automatic_trace(
+    app: &tauri::AppHandle,
+    batch_size: u32,
+    stages: Vec<PerformanceStageMeasurement>,
+    end_to_end_ms: u64,
+    repeat_run: bool,
+    ocr_used: bool,
+    pdf_used: bool,
+) -> Result<PathBuf, String> {
+    let trace = PerformanceTrace::new(
+        PerformanceTraceContext {
+            run_id: uuid::Uuid::new_v4().simple().to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            class: PerformanceClass::Unclassified,
+            cache_state: PerformanceCacheState::Unclassified,
+            run_phase: if repeat_run {
+                PerformanceRunPhase::RepeatRun
+            } else {
+                PerformanceRunPhase::FirstRun
+            },
+            workload: performance_workload(batch_size),
+            batch_size,
+            ocr_used,
+            // Automatic template replay uses the existing user template layout.
+            // Runtime-layout synthesis is a different path and is not invoked here.
+            runtime_layout_used: false,
+            pdf_used,
+        },
+        stages,
+        end_to_end_ms,
+        0,
+        PerformanceOutcome::Completed,
+    )?;
+    persist_performance_trace(app, &trace)
 }
 
 pub(crate) fn persist_failed_recovery_trace(

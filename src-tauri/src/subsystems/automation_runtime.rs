@@ -282,6 +282,8 @@ fn perform_created_documents_intake(
     req: CreatedDocumentsIntakeRequest,
 ) -> Result<CreatedDocumentsIntakeResponse, String> {
     let intake_started = std::time::Instant::now();
+    let mut performance_stages = Vec::<dokkomplekt_core::PerformanceStageMeasurement>::new();
+    let source_open_started = std::time::Instant::now();
     let source = resolve_user_path(app, &req.source_path)?;
     let privacy = load_privacy_preferences(app)?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
@@ -296,8 +298,13 @@ fn perform_created_documents_intake(
     let source_size = source_snapshot.size_bytes();
     let source_modified_ms = source_snapshot.modified_unix_ms();
     let source_sha256 = source_snapshot.sha256().to_string();
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::SourceOpen,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(source_open_started),
+    });
     let processed_markers = workspace_hygiene::processed_marker_candidates(&source);
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
+    let reference_clone_started = std::time::Instant::now();
     let template_snapshots = pack
         .documents
         .iter()
@@ -306,6 +313,10 @@ fn perform_created_documents_intake(
                 .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::ReferenceClone,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(reference_clone_started),
+    });
     let processing_fingerprint =
         automation_plan_fingerprint(app, &pack, &template_snapshots, &req)?;
     let processing_job_sha256 = processing_job_key(&source_sha256, &processing_fingerprint);
@@ -431,6 +442,15 @@ fn perform_created_documents_intake(
     let normalization_session = universal_intake::create_owned_workspace_session(&workspace)?;
     let normalized =
         universal_intake::normalize_path(source_snapshot.path(), normalization_session.root(), 0)?;
+    let performance_ocr_used = matches!(
+        normalized.source_kind.as_str(),
+        "scanned_image" | "scanned_pdf_ocr" | "mixed_pdf_page_ocr"
+    ) || normalized
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("OCR"));
+    let performance_pdf_used =
+        crate::performance_trace_runtime::automatic_source_uses_pdf(&normalized);
     drop(normalization_session);
     drop(intake_guard);
     case_run.transition("recognizing")?;
@@ -1095,6 +1115,7 @@ fn perform_created_documents_intake(
             let mut reused_documents = 0_u64;
             let mut rerendered_documents = 0_u64;
             let mut counter_reservations = Vec::new();
+            let replay_started = std::time::Instant::now();
             let render_result = (|| -> Result<Vec<String>, String> {
                 let mut names = Vec::new();
                 let mut trust_document_evidence = Vec::new();
@@ -1269,7 +1290,15 @@ fn perform_created_documents_intake(
             })();
 
             let names = match render_result {
-                Ok(names) => names,
+                Ok(names) => {
+                    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+                        stage: dokkomplekt_core::PerformanceStage::Replay,
+                        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+                            replay_started,
+                        ),
+                    });
+                    names
+                }
                 Err(error) => {
                     let _ = std::fs::remove_dir_all(&stage);
                     rollback_counter_reservations(app, &counter_reservations);
@@ -1277,6 +1306,7 @@ fn perform_created_documents_intake(
                     return Err(error);
                 }
             };
+            let verify_started = std::time::Instant::now();
             if let Err(error) = ensure_generation_inputs_current(
                 &source,
                 &source_sha256,
@@ -1295,6 +1325,10 @@ fn perform_created_documents_intake(
                 );
                 return Err(error);
             }
+            performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+                stage: dokkomplekt_core::PerformanceStage::Verify,
+                duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(verify_started),
+            });
             case_run.transition("publishing")?;
             if let Some(lease) = central_queue_lease.as_mut() {
                 lease.renew()?;
@@ -1304,6 +1338,7 @@ fn perform_created_documents_intake(
                 source_sha256: source_sha256.clone(),
                 processing_fingerprint: processing_fingerprint.clone(),
             };
+            let publish_started = std::time::Instant::now();
             if let Err(error) = generation_publication::prepare_publication(
                 app,
                 &permit,
@@ -1453,6 +1488,10 @@ fn perform_created_documents_intake(
             publication_warnings.extend(generation_publication::finalize_published_generation(
                 app, &permit, true,
             ));
+            performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+                stage: dokkomplekt_core::PerformanceStage::Publish,
+                duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(publish_started),
+            });
             let audit_details = serde_json::json!({
                 "output_folder": patient_dir.display().to_string(),
                 "documents": &names,
@@ -1788,10 +1827,22 @@ fn perform_created_documents_intake(
                     None
                 }
             };
-            let elapsed_milliseconds = intake_started
-                .elapsed()
-                .as_millis()
-                .min(u64::MAX as u128) as u64;
+            let elapsed_milliseconds =
+                crate::performance_trace_runtime::elapsed_milliseconds(intake_started);
+            let automatic_batch_size = u32::try_from(names.len()).unwrap_or(u32::MAX);
+            if crate::performance_trace_runtime::persist_automatic_trace(
+                app,
+                automatic_batch_size,
+                performance_stages,
+                elapsed_milliseconds,
+                req.resume_from_case_id.is_some() || reused_documents > 0,
+                performance_ocr_used,
+                performance_pdf_used,
+            )
+            .is_err()
+            {
+                increment_metric(app, "performance_trace_write_failures", 1);
+            }
             increment_metric(app, "processing_milliseconds", elapsed_milliseconds);
             let _ = append_audit_event(
                 app,

@@ -3,6 +3,7 @@
 mod central_queue;
 mod component_manager;
 mod generation_publication;
+mod performance_trace_runtime;
 mod privacy_runtime;
 mod reference_data_update;
 mod resume_engine;
@@ -2480,6 +2481,8 @@ fn main() {
             delete_organization_knowledge,
             apply_organization_knowledge,
             get_quality_telemetry,
+            get_performance_traces,
+            get_slow_run_reports,
             get_process_blueprints,
             select_process_blueprint,
             import_template_file,

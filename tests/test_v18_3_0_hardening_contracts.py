@@ -233,11 +233,13 @@ class V1830HardeningContracts(unittest.TestCase):
         self.assertIsNotNone(api_block)
         frontend = set(re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", api_block.group(1)))
         self.assertEqual(backend, frontend)
-        self.assertEqual(len(backend), 133)
+        self.assertEqual(len(backend), 135)
         self.assertTrue({
             "get_output_preferences",
             "save_output_preferences",
             "get_background_watcher_state",
+            "get_performance_traces",
+            "get_slow_run_reports",
         }.issubset(backend))
 
     def test_python_contract_runner_is_process_isolated_and_bounded(self) -> None:

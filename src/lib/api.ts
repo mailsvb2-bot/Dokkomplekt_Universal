@@ -930,6 +930,8 @@ export const rustCommandNames = [
   'delete_organization_knowledge',
   'apply_organization_knowledge',
   'get_quality_telemetry',
+  'get_performance_traces',
+  'get_slow_run_reports',
   'get_process_blueprints',
   'select_process_blueprint',
   'import_template_file',
@@ -938,6 +940,17 @@ export const rustCommandNames = [
   'import_template_transfer'
 ] as const;
 
+
+export type PerformanceTraceQuery = { limit?: number };
+export type SlowRunReportQuery = { threshold_ms: number; limit?: number };
+
+export async function getPerformanceTraces(req: PerformanceTraceQuery = {}): Promise<unknown[]> {
+  return callRust('get_performance_traces', { req });
+}
+
+export async function getSlowRunReports(req: SlowRunReportQuery): Promise<unknown[]> {
+  return callRust('get_slow_run_reports', { req });
+}
 
 export async function importBusinessRegistry(records: BusinessRegistryRecord[], replace = false): Promise<BusinessRegistryImportResult> {
   return callRust('import_business_registry', { req: { records, replace } });

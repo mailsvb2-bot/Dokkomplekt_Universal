@@ -75,7 +75,12 @@ class TemplateDuplicatePublicationContractTests(unittest.TestCase):
         self.assertIn("effective_document", single)
         self.assertIn("&effective_document.category", single)
         self.assertIn("&effective_document.role_id", single)
-        self.assertIn("ensure_rendered_document_complete(", single)
+        self.assertIn("ensure_rendered_document_readable(", single)
+        self.assertIn("ensure_rendered_document_semantically_complete(", single)
+        self.assertLess(
+            single.index("ensure_rendered_document_readable("),
+            single.index("ensure_rendered_document_semantically_complete("),
+        )
         self.assertIn("effective_document,", single)
         self.assertNotIn("for (field_id, value) in &hydrated.case.values", batch)
         self.assertNotIn("report_case.values", batch)

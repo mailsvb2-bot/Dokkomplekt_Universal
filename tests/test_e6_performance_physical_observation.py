@@ -160,6 +160,62 @@ def test_binds_installed_physical_startup_measurement(tmp_path: Path) -> None:
     )
 
 
+def test_non_bound_physical_series_can_supply_corpus_coverage(
+    tmp_path: Path,
+) -> None:
+    reference_path = reference(tmp_path)
+    plan_path = startup_plan(tmp_path)
+    plan = gate.load_object(plan_path)
+    plan["series_id"] = "coverage-hr-kit-startup"
+    plan["class"] = "hr_kit"
+    plan["cache_state"] = "warm_cache"
+    plan["run_kind"] = "repeat_run"
+    write_json(plan_path, plan)
+
+    observation = physical.build_observation(
+        TARGETS,
+        reference_path,
+        plan_path,
+        startup_measurement(tmp_path),
+    )
+    assert observation["series_id"] == "coverage-hr-kit-startup"
+    assert observation["class"] == "hr_kit"
+
+    observation_path = write_json(
+        tmp_path / "observations" / "coverage-startup.json",
+        observation,
+    )
+    evidence = assemble.build_evidence(
+        TARGETS,
+        reference_path,
+        tmp_path / "observations",
+        protocol(tmp_path),
+        resources(tmp_path, reference_path),
+    )
+    assert evidence["series"][0]["id"] == "coverage-hr-kit-startup"
+    assert evidence["source_observations"][0]["observation_sha256"] == sha256(
+        observation_path
+    )
+
+
+def test_bound_physical_series_still_requires_canonical_slo_conditions(
+    tmp_path: Path,
+) -> None:
+    reference_path = reference(tmp_path)
+    plan_path = startup_plan(tmp_path)
+    plan = gate.load_object(plan_path)
+    plan["cache_state"] = "warm_cache"
+    write_json(plan_path, plan)
+
+    with pytest.raises(ValueError, match="requires cache_state=cold_cache"):
+        physical.build_observation(
+            TARGETS,
+            reference_path,
+            plan_path,
+            startup_measurement(tmp_path),
+        )
+
+
 def test_rejects_non_installed_measurement(tmp_path: Path) -> None:
     reference_path = reference(tmp_path)
     with pytest.raises(ValueError, match="installed build"):

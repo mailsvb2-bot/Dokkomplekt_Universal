@@ -14,6 +14,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from scripts import performance_physical_observation as physical_obs
 from scripts import performance_slo_gate as gate
 from scripts import performance_trace_observation as trace_obs
 
@@ -21,7 +22,7 @@ PROTOCOL_SCHEMA = "dokkomplekt.performance-protocol.v1"
 RESOURCE_SCHEMA = "dokkomplekt.performance-resource-snapshot.v1"
 EVIDENCE_CLAIM = "assembled_observations_not_slo_verdict"
 
-OBSERVATION_KEYS = {
+TRACE_OBSERVATION_KEYS = {
     "schema", "claim", "targets_sha256", "reference_policy_sha256",
     "measurement_plan_sha256", "trace_sha256", "reference_id", "corpus_id",
     "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
@@ -30,6 +31,14 @@ OBSERVATION_KEYS = {
     "trace_feature_flags",
 }
 TRACE_FEATURE_KEYS = {"ocr_used", "runtime_layout_used", "pdf_used"}
+PHYSICAL_OBSERVATION_KEYS = {
+    "schema", "claim", "targets_sha256", "reference_policy_sha256",
+    "measurement_plan_sha256", "measurement_sha256", "reference_id", "corpus_id",
+    "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
+    "complexity", "warmup", "sample_ms", "sample_derivation", "measurement_id",
+    "measurement_app_version", "measurement_kind", "measurement_instrument",
+    "installed_build",
+}
 PROTOCOL_KEYS = {"schema", "flags"}
 RESOURCE_KEYS = {
     "schema", "targets_sha256", "reference_policy_sha256", "reference_id",
@@ -121,7 +130,7 @@ def _validate_resources(
     return normalized
 
 
-def _validate_observation(
+def _validate_trace_observation(
     path: Path,
     *,
     targets_sha256: str,
@@ -129,7 +138,7 @@ def _validate_observation(
     reference: dict[str, Any],
 ) -> dict[str, Any]:
     value = _load(path)
-    if set(value) != OBSERVATION_KEYS:
+    if set(value) != TRACE_OBSERVATION_KEYS:
         raise ValueError(f"{path}: observation keys must be closed")
     if value.get("schema") != trace_obs.OBSERVATION_SCHEMA:
         raise ValueError(f"{path}: unsupported observation schema")
@@ -221,6 +230,130 @@ def _validate_observation(
     return value
 
 
+def _validate_physical_observation(
+    path: Path,
+    *,
+    targets_sha256: str,
+    reference_sha256: str,
+    reference: dict[str, Any],
+) -> dict[str, Any]:
+    value = _load(path)
+    if set(value) != PHYSICAL_OBSERVATION_KEYS:
+        raise ValueError(f"{path}: physical observation keys must be closed")
+    if value.get("schema") != physical_obs.OBSERVATION_SCHEMA:
+        raise ValueError(f"{path}: unsupported physical observation schema")
+    if value.get("claim") != physical_obs.OBSERVATION_CLAIM:
+        raise ValueError(f"{path}: physical observation claim is not single-sample-only")
+    if value.get("targets_sha256") != targets_sha256:
+        raise ValueError(f"{path}: target hash mismatch")
+    if value.get("reference_policy_sha256") != reference_sha256:
+        raise ValueError(f"{path}: reference hash mismatch")
+    if value.get("reference_id") != reference.get("reference_id"):
+        raise ValueError(f"{path}: reference_id mismatch")
+    if value.get("corpus_id") != reference.get("corpus_id"):
+        raise ValueError(f"{path}: corpus_id mismatch")
+
+    metric = value.get("metric")
+    measurement_kind = physical_obs.PHYSICAL_METRICS.get(metric)
+    if measurement_kind is None:
+        raise ValueError(f"{path}: metric is not produced by the physical/UI observation layer")
+    series_id = value.get("series_id")
+    bindings = reference.get("metric_bindings")
+    if not isinstance(bindings, dict) or bindings.get(metric) != series_id:
+        raise ValueError(f"{path}: series_id is not reference-bound for metric")
+    if value.get("measurement_kind") != measurement_kind:
+        raise ValueError(f"{path}: physical measurement kind does not match metric")
+    if value.get("sample_derivation") != "direct_physical_measurement:" + measurement_kind:
+        raise ValueError(f"{path}: physical sample derivation does not match metric")
+
+    class_name = value.get("class")
+    allowed_classes = set(gate.CANONICAL_CORPUS_CLASSES) | set(gate.CANONICAL_SPECIAL_CLASSES)
+    if class_name not in allowed_classes:
+        raise ValueError(f"{path}: non-canonical performance class")
+    if value.get("cache_state") not in gate.CANONICAL_CACHE_STATES:
+        raise ValueError(f"{path}: non-canonical cache_state")
+    if value.get("run_kind") not in gate.CANONICAL_RUN_KINDS:
+        raise ValueError(f"{path}: non-canonical run_kind")
+    conditions = value.get("conditions")
+    if not isinstance(conditions, dict):
+        raise ValueError(f"{path}: conditions must be an object")
+    complexity = value.get("complexity")
+    if complexity is not None and not isinstance(complexity, dict):
+        raise ValueError(f"{path}: complexity must be an object or null")
+    if not isinstance(value.get("warmup"), bool):
+        raise ValueError(f"{path}: warmup must be boolean")
+    _nonnegative_number(value.get("sample_ms"), f"{path}: sample_ms")
+
+    for key in ("measurement_plan_sha256", "measurement_sha256"):
+        if not _is_sha256(value.get(key)):
+            raise ValueError(f"{path}: {key} must be lowercase SHA-256")
+    measurement_id = value.get("measurement_id")
+    if (
+        not isinstance(measurement_id, str)
+        or not measurement_id
+        or len(measurement_id) > 128
+        or not all(
+            character.isascii() and (character.isalnum() or character in "-_.")
+            for character in measurement_id
+        )
+    ):
+        raise ValueError(f"{path}: measurement_id must be an opaque ASCII identifier")
+    environment = reference.get("environment")
+    if (
+        not isinstance(environment, dict)
+        or value.get("measurement_app_version") != environment.get("app_version")
+    ):
+        raise ValueError(f"{path}: measurement app version differs from bound reference")
+    if value.get("measurement_instrument") not in physical_obs.ALLOWED_INSTRUMENTS:
+        raise ValueError(f"{path}: physical measurement instrument is not approved")
+    if value.get("installed_build") is not True:
+        raise ValueError(f"{path}: physical observation requires an installed build")
+
+    requirements = gate.SLO_SERIES_REQUIREMENTS[metric]
+    if requirements.get("class") is not None and class_name != requirements["class"]:
+        raise ValueError(f"{path}: observation class violates metric binding")
+    if (
+        requirements.get("cache_state") is not None
+        and value.get("cache_state") != requirements["cache_state"]
+    ):
+        raise ValueError(f"{path}: observation cache_state violates metric binding")
+    if (
+        requirements.get("run_kind") is not None
+        and value.get("run_kind") != requirements["run_kind"]
+    ):
+        raise ValueError(f"{path}: observation run_kind violates metric binding")
+    for flag, expected in requirements.get("condition_flags", {}).items():
+        if conditions.get(flag) is not expected:
+            raise ValueError(f"{path}: conditions.{flag} violates metric binding")
+    return value
+
+
+def _validate_observation(
+    path: Path,
+    *,
+    targets_sha256: str,
+    reference_sha256: str,
+    reference: dict[str, Any],
+) -> dict[str, Any]:
+    value = _load(path)
+    schema = value.get("schema")
+    if schema == trace_obs.OBSERVATION_SCHEMA:
+        return _validate_trace_observation(
+            path,
+            targets_sha256=targets_sha256,
+            reference_sha256=reference_sha256,
+            reference=reference,
+        )
+    if schema == physical_obs.OBSERVATION_SCHEMA:
+        return _validate_physical_observation(
+            path,
+            targets_sha256=targets_sha256,
+            reference_sha256=reference_sha256,
+            reference=reference,
+        )
+    raise ValueError(f"{path}: unsupported observation schema: {schema!r}")
+
+
 def _series_signature(observation: dict[str, Any]) -> tuple[Any, ...]:
     return (
         observation["metric"],
@@ -268,6 +401,8 @@ def build_evidence(
     groups: dict[str, dict[str, Any]] = {}
     used_trace_hashes: set[str] = set()
     used_run_ids: set[str] = set()
+    used_measurement_hashes: set[str] = set()
+    used_measurement_ids: set[str] = set()
     manifest: list[dict[str, str]] = []
     for path in paths:
         observation = _validate_observation(
@@ -276,14 +411,40 @@ def build_evidence(
             reference_sha256=reference_sha256,
             reference=reference,
         )
-        trace_hash = observation["trace_sha256"]
-        run_id = observation["trace_run_id"]
-        if trace_hash in used_trace_hashes:
-            raise ValueError(f"trace_sha256 reused by multiple observations: {trace_hash}")
-        if run_id in used_run_ids:
-            raise ValueError(f"trace_run_id reused by multiple observations: {run_id}")
-        used_trace_hashes.add(trace_hash)
-        used_run_ids.add(run_id)
+        if observation["schema"] == trace_obs.OBSERVATION_SCHEMA:
+            trace_hash = observation["trace_sha256"]
+            run_id = observation["trace_run_id"]
+            if trace_hash in used_trace_hashes:
+                raise ValueError(f"trace_sha256 reused by multiple observations: {trace_hash}")
+            if run_id in used_run_ids:
+                raise ValueError(f"trace_run_id reused by multiple observations: {run_id}")
+            used_trace_hashes.add(trace_hash)
+            used_run_ids.add(run_id)
+            manifest_entry = {
+                "observation_sha256": _sha256(path),
+                "trace_run_id": run_id,
+                "trace_sha256": trace_hash,
+                "measurement_plan_sha256": observation["measurement_plan_sha256"],
+            }
+        else:
+            measurement_hash = observation["measurement_sha256"]
+            measurement_id = observation["measurement_id"]
+            if measurement_hash in used_measurement_hashes:
+                raise ValueError(
+                    f"measurement_sha256 reused by multiple observations: {measurement_hash}"
+                )
+            if measurement_id in used_measurement_ids:
+                raise ValueError(
+                    f"measurement_id reused by multiple observations: {measurement_id}"
+                )
+            used_measurement_hashes.add(measurement_hash)
+            used_measurement_ids.add(measurement_id)
+            manifest_entry = {
+                "observation_sha256": _sha256(path),
+                "measurement_id": measurement_id,
+                "measurement_sha256": measurement_hash,
+                "measurement_plan_sha256": observation["measurement_plan_sha256"],
+            }
 
         series_id = observation["series_id"]
         signature = _series_signature(observation)
@@ -309,14 +470,7 @@ def build_evidence(
         else:
             group["samples_ms"].append(float(observation["sample_ms"]))
 
-        manifest.append(
-            {
-                "observation_sha256": _sha256(path),
-                "trace_run_id": run_id,
-                "trace_sha256": trace_hash,
-                "measurement_plan_sha256": observation["measurement_plan_sha256"],
-            }
-        )
+        manifest.append(manifest_entry)
 
     series: list[dict[str, Any]] = []
     for series_id in sorted(groups):

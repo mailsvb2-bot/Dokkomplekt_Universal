@@ -51,7 +51,7 @@ def test_prepublish_failures_still_refund_and_cleanup() -> None:
     assert 'rollback_counter_reservations' in pre_single
 
     automation = read('src-tauri/src/subsystems/automation_runtime.rs')
-    before_publish = tail_between(automation, 'let names = match render_result', 'let patient_dir = match publish_stage_to_unique_directory')
+    before_publish = tail_between(automation, 'let (names, replay_ms, staged_readback, readback_ms) = match render_result', 'let patient_dir = match publish_stage_to_unique_directory')
     assert 'rollback_generation_access' in before_publish
     assert 'rollback_counter_reservations' in before_publish
 

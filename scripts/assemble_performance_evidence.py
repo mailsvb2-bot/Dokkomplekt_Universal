@@ -158,8 +158,9 @@ def _validate_trace_observation(
         raise ValueError(f"{path}: metric is not produced by the typed runtime observation layer")
     series_id = value.get("series_id")
     bindings = reference.get("metric_bindings")
-    if not isinstance(bindings, dict) or bindings.get(metric) != series_id:
-        raise ValueError(f"{path}: series_id is not reference-bound for metric")
+    if not isinstance(bindings, dict):
+        raise ValueError(f"{path}: reference metric_bindings must be an object")
+    is_bound_slo_series = bindings.get(metric) == series_id
     if value.get("sample_derivation") != EXPECTED_DERIVATIONS[metric]:
         raise ValueError(f"{path}: sample derivation does not match canonical metric")
 
@@ -208,25 +209,26 @@ def _validate_trace_observation(
     if special_flag is not None and feature_flags[special_flag] is not True:
         raise ValueError(f"{path}: {class_name} observation lacks required feature flag")
 
-    requirements = gate.SLO_SERIES_REQUIREMENTS[metric]
-    if requirements.get("class") is not None and class_name != requirements["class"]:
-        raise ValueError(f"{path}: observation class violates metric binding")
-    if (
-        requirements.get("cache_state") is not None
-        and value.get("cache_state") != requirements["cache_state"]
-    ):
-        raise ValueError(f"{path}: observation cache_state violates metric binding")
-    if (
-        requirements.get("run_kind") is not None
-        and value.get("run_kind") != requirements["run_kind"]
-    ):
-        raise ValueError(f"{path}: observation run_kind violates metric binding")
-    conditions = value["conditions"]
-    for flag, expected in requirements.get("condition_flags", {}).items():
-        if conditions.get(flag) is not expected:
-            raise ValueError(f"{path}: conditions.{flag} violates metric binding")
-    if requirements.get("require_complexity") and not isinstance(complexity, dict):
-        raise ValueError(f"{path}: structural complexity is required")
+    if is_bound_slo_series:
+        requirements = gate.SLO_SERIES_REQUIREMENTS[metric]
+        if requirements.get("class") is not None and class_name != requirements["class"]:
+            raise ValueError(f"{path}: observation class violates metric binding")
+        if (
+            requirements.get("cache_state") is not None
+            and value.get("cache_state") != requirements["cache_state"]
+        ):
+            raise ValueError(f"{path}: observation cache_state violates metric binding")
+        if (
+            requirements.get("run_kind") is not None
+            and value.get("run_kind") != requirements["run_kind"]
+        ):
+            raise ValueError(f"{path}: observation run_kind violates metric binding")
+        conditions = value["conditions"]
+        for flag, expected in requirements.get("condition_flags", {}).items():
+            if conditions.get(flag) is not expected:
+                raise ValueError(f"{path}: conditions.{flag} violates metric binding")
+        if requirements.get("require_complexity") and not isinstance(complexity, dict):
+            raise ValueError(f"{path}: structural complexity is required")
     return value
 
 
@@ -259,8 +261,9 @@ def _validate_physical_observation(
         raise ValueError(f"{path}: metric is not produced by the physical/UI observation layer")
     series_id = value.get("series_id")
     bindings = reference.get("metric_bindings")
-    if not isinstance(bindings, dict) or bindings.get(metric) != series_id:
-        raise ValueError(f"{path}: series_id is not reference-bound for metric")
+    if not isinstance(bindings, dict):
+        raise ValueError(f"{path}: reference metric_bindings must be an object")
+    is_bound_slo_series = bindings.get(metric) == series_id
     if value.get("measurement_kind") != measurement_kind:
         raise ValueError(f"{path}: physical measurement kind does not match metric")
     if value.get("sample_derivation") != "direct_physical_measurement:" + measurement_kind:

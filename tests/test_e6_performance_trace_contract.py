@@ -40,6 +40,7 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     for required in (
         "run_id",
         "app_version",
+        "source_sha256",
         "class",
         "cache_state",
         "run_phase",
@@ -66,6 +67,9 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     ):
         assert forbidden not in context_fields
 
+    assert "performance source_sha256 must be a lowercase SHA-256 hex digest" in core
+    assert "source_sha256: Some(source_sha256.to_string())" in runtime
+    assert "&source_sha256" in automation
     assert "valid_opaque_identifier" in core
     assert "performance stages must follow canonical order" in core
     assert "duplicate performance stage" in core

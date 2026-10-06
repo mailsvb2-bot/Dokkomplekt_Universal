@@ -304,7 +304,6 @@ fn perform_created_documents_intake(
     });
     let processed_markers = workspace_hygiene::processed_marker_candidates(&source);
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let reference_clone_started = std::time::Instant::now();
     let template_snapshots = pack
         .documents
         .iter()
@@ -313,10 +312,6 @@ fn perform_created_documents_intake(
                 .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
-        stage: dokkomplekt_core::PerformanceStage::ReferenceClone,
-        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(reference_clone_started),
-    });
     let processing_fingerprint =
         automation_plan_fingerprint(app, &pack, &template_snapshots, &req)?;
     let processing_job_sha256 = processing_job_key(&source_sha256, &processing_fingerprint);
@@ -431,6 +426,7 @@ fn perform_created_documents_intake(
         lease.renew()?;
     }
 
+    let source_parse_started = std::time::Instant::now();
     // Each dropped source is an independent case. Every accepted format is first
     // normalized from the immutable private snapshot, never from a live file that
     // Word, a scanner or a sync client may still be replacing underneath us.
@@ -460,6 +456,13 @@ fn perform_created_documents_intake(
     let source_text = normalized.text;
     let source_kind = normalized.source_kind;
     let layout_items = normalized.layout_items;
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::SourceParse,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            source_parse_started,
+        ),
+    });
+    let candidate_index_started = std::time::Instant::now();
     let (mut case, mut source_report) = parse_source_text(&source_text, req.default_year);
     source_report.warnings.extend(normalized.warnings);
 
@@ -574,6 +577,13 @@ fn perform_created_documents_intake(
     universal_intake::apply_layout_to_case(&source_kind, &layout_items, &mut case);
     let _ = apply_learned_scanner_rules(app, &source_text, &mut case)?;
     universal_intake::attach_layout_evidence(&layout_items, &mut case);
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::CandidateIndex,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            candidate_index_started,
+        ),
+    });
+    let source_resolve_started = std::time::Instant::now();
     let model_domain = case
         .active_domains
         .first()
@@ -712,7 +722,14 @@ fn perform_created_documents_intake(
         }
     }
     universal_intake::attach_layout_evidence(&layout_items, &mut case);
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::SourceResolve,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            source_resolve_started,
+        ),
+    });
 
+    let prompt_plan_started = std::time::Instant::now();
     case_run.transition("checking")?;
     if let Some(lease) = central_queue_lease.as_mut() {
         lease.renew()?;
@@ -952,6 +969,12 @@ fn perform_created_documents_intake(
         &planning_case.case,
         required_for_automation.iter().map(String::as_str),
     );
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::PromptPlan,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            prompt_plan_started,
+        ),
+    });
     if !quality.ready {
         let missing = quality
             .blockers
@@ -1006,6 +1029,7 @@ fn perform_created_documents_intake(
         });
     }
 
+    let preflight_started = std::time::Instant::now();
     let batch = plan_created_documents_batch(
         &planning_case.case,
         &configured,
@@ -1064,6 +1088,12 @@ fn perform_created_documents_intake(
             source_target_name,
             outputs,
         } => {
+            performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+                stage: dokkomplekt_core::PerformanceStage::Preflight,
+                duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            preflight_started,
+        ),
+            });
             case_run.transition("ready")?;
             let output_labels = outputs
                 .iter()

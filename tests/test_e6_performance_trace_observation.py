@@ -40,6 +40,9 @@ class PerformanceTraceObservationTests(unittest.TestCase):
                 metric: f"series-{metric}"
                 for metric in gate.CANONICAL_METRICS
             },
+            "coverage_sources": {
+                "table_heavy": ["a" * 64],
+            },
             "resource_budgets": {
                 "cpu_percent_peak": 95,
                 "peak_rss_bytes": 2_000_000_000,
@@ -65,6 +68,7 @@ class PerformanceTraceObservationTests(unittest.TestCase):
         ocr: bool = False,
         runtime_layout: bool = False,
         pdf: bool = False,
+        expected_source_sha256: str | None = None,
     ) -> dict[str, object]:
         if conditions is None:
             conditions = {"questions_present": False}
@@ -81,6 +85,7 @@ class PerformanceTraceObservationTests(unittest.TestCase):
             "complexity": complexity,
             "warmup": False,
             "expected_app_version": "18.4.7",
+            "expected_source_sha256": expected_source_sha256,
             "expected_workload": workload,
             "expected_ocr_used": ocr,
             "expected_runtime_layout_used": runtime_layout,
@@ -99,6 +104,7 @@ class PerformanceTraceObservationTests(unittest.TestCase):
         ocr: bool = False,
         runtime_layout: bool = False,
         pdf: bool = False,
+        source_sha256: str | None = None,
     ) -> dict[str, object]:
         if stages is None:
             stages = [
@@ -113,6 +119,7 @@ class PerformanceTraceObservationTests(unittest.TestCase):
             "context": {
                 "run_id": "abc123",
                 "app_version": "18.4.7",
+                "source_sha256": source_sha256,
                 "class": "unclassified",
                 "cache_state": "unclassified",
                 "run_phase": run_phase,
@@ -220,14 +227,52 @@ class PerformanceTraceObservationTests(unittest.TestCase):
                 self._build(Path(raw), plan, trace)
 
     def test_non_bound_series_can_supply_corpus_coverage(self) -> None:
-        plan = self._plan(class_name="table_heavy")
+        plan = self._plan(
+            class_name="table_heavy",
+            expected_source_sha256="a" * 64,
+        )
         plan["series_id"] = "coverage-table-heavy-button"
         with tempfile.TemporaryDirectory() as raw:
-            result = self._build(Path(raw), plan, self._trace())
+            result = self._build(
+                Path(raw),
+                plan,
+                self._trace(source_sha256="a" * 64),
+            )
 
         self.assertEqual(result["series_id"], "coverage-table-heavy-button")
         self.assertEqual(result["class"], "table_heavy")
         self.assertEqual(result["metric"], "button_to_ready")
+
+    def test_coverage_series_rejects_relabelled_source(self) -> None:
+        plan = self._plan(
+            class_name="table_heavy",
+            expected_source_sha256="a" * 64,
+        )
+        plan["series_id"] = "coverage-table-heavy-button"
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(
+                ValueError, "trace source_sha256 does not match"
+            ):
+                self._build(
+                    Path(raw),
+                    plan,
+                    self._trace(source_sha256="b" * 64),
+                )
+
+        bad_plan = self._plan(
+            class_name="table_heavy",
+            expected_source_sha256="b" * 64,
+        )
+        bad_plan["series_id"] = "coverage-table-heavy-button"
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(
+                ValueError, "not predeclared for this coverage class"
+            ):
+                self._build(
+                    Path(raw),
+                    bad_plan,
+                    self._trace(source_sha256="b" * 64),
+                )
 
     def test_bound_series_conditions_and_reference_app_version_cannot_drift(self) -> None:
         plan = self._plan(class_name="table_heavy")

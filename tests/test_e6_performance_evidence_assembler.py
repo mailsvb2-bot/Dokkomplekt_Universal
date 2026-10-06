@@ -104,6 +104,10 @@ def observation(
     sample_ms: int = 100,
     derivation: str = "end_to_end_ms_minus_human_wait_ms",
     conditions: dict[str, object] | None = None,
+    series_id: str = "series-button_to_ready",
+    class_name: str = "typical_docx",
+    cache_state: str = "warm_cache",
+    run_kind: str = "single_document",
 ) -> Path:
     if conditions is None:
         conditions = {"questions_present": False}
@@ -118,11 +122,11 @@ def observation(
             "trace_sha256": trace_hash,
             "reference_id": "reference-machine-01",
             "corpus_id": "performance-corpus-01",
-            "series_id": "series-button_to_ready",
+            "series_id": series_id,
             "metric": "button_to_ready",
-            "class": "typical_docx",
-            "cache_state": "warm_cache",
-            "run_kind": "single_document",
+            "class": class_name,
+            "cache_state": cache_state,
+            "run_kind": run_kind,
             "conditions": conditions,
             "complexity": None,
             "warmup": warmup,
@@ -190,6 +194,36 @@ def test_assembles_typed_observations_and_excludes_warmup(tmp_path: Path) -> Non
     assert len(result["source_observations"]) == 2
     assert result["targets_sha256"] == sha256(TARGETS)
     assert result["reference_policy_sha256"] == sha256(reference_path)
+
+
+def test_assembler_accepts_non_bound_series_for_required_coverage(
+    tmp_path: Path,
+) -> None:
+    reference_path = reference(tmp_path)
+    observation(
+        tmp_path,
+        reference_path,
+        "coverage",
+        run_id="run-coverage",
+        trace_hash="c" * 64,
+        series_id="coverage-table-heavy-button",
+        class_name="table_heavy",
+    )
+    result = assemble.build_evidence(
+        TARGETS,
+        reference_path,
+        tmp_path / "observations",
+        protocol(tmp_path),
+        resources(tmp_path, reference_path),
+    )
+
+    assert result["series"][0]["id"] == "coverage-table-heavy-button"
+    assert result["series"][0]["class"] == "table_heavy"
+
+    evidence_path = write_json(tmp_path / "coverage-evidence.json", result)
+    verdict = gate.evaluate(TARGETS, reference_path, evidence_path)
+    assert verdict["result"] == "FAIL"
+    assert any("bound series is missing" in error for error in verdict["errors"])
 
 
 def test_rejects_metric_derivation_tampering(tmp_path: Path) -> None:

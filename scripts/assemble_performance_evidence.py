@@ -261,9 +261,8 @@ def _validate_physical_observation(
         raise ValueError(f"{path}: metric is not produced by the physical/UI observation layer")
     series_id = value.get("series_id")
     bindings = reference.get("metric_bindings")
-    if not isinstance(bindings, dict):
-        raise ValueError(f"{path}: reference metric_bindings must be an object")
-    is_bound_slo_series = bindings.get(metric) == series_id
+    if not isinstance(bindings, dict) or bindings.get(metric) != series_id:
+        raise ValueError(f"{path}: series_id is not reference-bound for metric")
     if value.get("measurement_kind") != measurement_kind:
         raise ValueError(f"{path}: physical measurement kind does not match metric")
     if value.get("sample_derivation") != "direct_physical_measurement:" + measurement_kind:

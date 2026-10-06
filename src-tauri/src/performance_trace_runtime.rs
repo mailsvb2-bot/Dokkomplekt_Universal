@@ -74,6 +74,7 @@ fn persist_manual_document_trace(
         PerformanceTraceContext {
             run_id: uuid::Uuid::new_v4().simple().to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
+            source_sha256: None,
             class: PerformanceClass::Unclassified,
             cache_state: PerformanceCacheState::Unclassified,
             run_phase: PerformanceRunPhase::Unclassified,
@@ -128,6 +129,7 @@ pub(crate) fn persist_automatic_trace(
     stages: Vec<PerformanceStageMeasurement>,
     end_to_end_ms: u64,
     repeat_run: bool,
+    source_sha256: &str,
     ocr_used: bool,
     pdf_used: bool,
 ) -> Result<PathBuf, String> {

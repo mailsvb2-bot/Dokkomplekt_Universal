@@ -273,8 +273,9 @@ def _validate_plan(
         )
     series_id = _nonempty_string(plan.get("series_id"), "plan.series_id")
     bindings = reference.get("metric_bindings")
-    if not isinstance(bindings, dict) or bindings.get(metric) != series_id:
-        raise ValueError("plan.series_id is not the reference-bound series for this metric")
+    if not isinstance(bindings, dict):
+        raise ValueError("reference metric_bindings must be an object")
+    is_bound_slo_series = bindings.get(metric) == series_id
 
     class_name = plan.get("class")
     allowed_classes = set(gate.CANONICAL_CORPUS_CLASSES) | set(gate.CANONICAL_SPECIAL_CLASSES)
@@ -310,21 +311,26 @@ def _validate_plan(
         if not isinstance(plan.get(key), bool):
             raise ValueError(f"plan.{key} must be boolean")
 
-    requirements = gate.SLO_SERIES_REQUIREMENTS[metric]
-    required_class = requirements.get("class")
-    if required_class is not None and class_name != required_class:
-        raise ValueError(f"{metric} requires class={required_class}")
-    required_cache = requirements.get("cache_state")
-    if required_cache is not None and plan.get("cache_state") != required_cache:
-        raise ValueError(f"{metric} requires cache_state={required_cache}")
-    required_run = requirements.get("run_kind")
-    if required_run is not None and plan.get("run_kind") != required_run:
-        raise ValueError(f"{metric} requires run_kind={required_run}")
-    for flag, expected in requirements.get("condition_flags", {}).items():
-        if conditions.get(flag) is not expected:
-            raise ValueError(f"{metric} requires conditions.{flag}={expected!r}")
-    if requirements.get("require_complexity") and not isinstance(complexity, dict):
-        raise ValueError(f"{metric} requires structural complexity metadata")
+    # Only the reference-bound series may claim this metric's SLO. Additional
+    # predeclared series are allowed solely to provide the Canon's required
+    # corpus/cache/run-kind coverage; the evaluator never uses them for the
+    # bound metric verdict.
+    if is_bound_slo_series:
+        requirements = gate.SLO_SERIES_REQUIREMENTS[metric]
+        required_class = requirements.get("class")
+        if required_class is not None and class_name != required_class:
+            raise ValueError(f"{metric} requires class={required_class}")
+        required_cache = requirements.get("cache_state")
+        if required_cache is not None and plan.get("cache_state") != required_cache:
+            raise ValueError(f"{metric} requires cache_state={required_cache}")
+        required_run = requirements.get("run_kind")
+        if required_run is not None and plan.get("run_kind") != required_run:
+            raise ValueError(f"{metric} requires run_kind={required_run}")
+        for flag, expected in requirements.get("condition_flags", {}).items():
+            if conditions.get(flag) is not expected:
+                raise ValueError(f"{metric} requires conditions.{flag}={expected!r}")
+        if requirements.get("require_complexity") and not isinstance(complexity, dict):
+            raise ValueError(f"{metric} requires structural complexity metadata")
 
     if class_name == "large_docx":
         if not isinstance(complexity, dict):

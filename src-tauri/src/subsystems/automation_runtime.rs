@@ -77,61 +77,7 @@ fn finalize_processed_source(
 }
 
 
-fn automation_plan_fingerprint(
-    app: &tauri::AppHandle,
-    pack: &DocumentPack,
-    template_snapshots: &BTreeMap<String, template_snapshot::TemplateSnapshot>,
-    req: &CreatedDocumentsIntakeRequest,
-) -> Result<String, String> {
-    let mut documents = pack.documents.clone();
-    documents.sort_by(|left, right| left.id.cmp(&right.id));
-    let mut templates = Vec::with_capacity(documents.len());
-    for document in documents {
-        let snapshot = template_snapshots.get(&document.id).ok_or_else(|| {
-            format!("Не найден snapshot шаблона «{}».", document.button_label)
-        })?;
-        templates.push(serde_json::json!({
-            "document": document,
-            "template_sha256": snapshot.sha256(),
-        }));
-    }
-    let model_config = load_semantic_model_config(app)?;
-    let semantic_runtime_files = ["llama_cpp", "semantic_model"]
-        .into_iter()
-        .filter_map(|tool| {
-            let path = universal_intake::resolve_tool(tool);
-            path.is_file().then(|| {
-                file_content_signature(&path)
-                    .map(|(_, _, sha256)| serde_json::json!({"tool": tool, "sha256": sha256}))
-                    .unwrap_or_else(|_| serde_json::json!({"tool": tool, "sha256": "unreadable"}))
-            })
-        })
-        .collect::<Vec<_>>();
-    let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
-    let calendar_path = reference_data_update::cached_package_path(&app_data_dir);
-    let calendar_fingerprint = if calendar_path.is_file() {
-        file_content_signature(&calendar_path)
-            .map(|(_, _, sha256)| sha256)
-            .unwrap_or_else(|_| "cached-calendar-unreadable".into())
-    } else {
-        format!("bundled-calendar:{}", env!("CARGO_PKG_VERSION"))
-    };
-    let payload = serde_json::json!({
-        "schema": 3,
-        "template_admission_contract": "validated-automatic-v1",
-        "engine_version": env!("CARGO_PKG_VERSION"),
-        "templates": templates,
-        "folder_parts": req.folder_parts.clone(),
-        "default_year": req.default_year,
-        "sick_leave_enabled": req.sick_leave_enabled,
-        "semantic_model": model_config,
-        "semantic_runtime_files": semantic_runtime_files,
-        "calendar": calendar_fingerprint,
-    });
-    let bytes = serde_json::to_vec(&payload).map_err(|error| error.to_string())?;
-    Ok(hex::encode(Sha256::digest(bytes)))
-}
-
+include!("automation_performance_fingerprint.rs");
 fn processing_job_key(source_sha256: &str, processing_fingerprint: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"dokkomplekt-processing-job-v2\0");
@@ -304,7 +250,6 @@ fn perform_created_documents_intake(
     });
     let processed_markers = workspace_hygiene::processed_marker_candidates(&source);
     let pack = state.pack.lock().map_err(|_| "state lock failed")?.clone();
-    let reference_clone_started = std::time::Instant::now();
     let template_snapshots = pack
         .documents
         .iter()
@@ -313,10 +258,6 @@ fn perform_created_documents_intake(
                 .map(|snapshot| (document.id.clone(), snapshot))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
-        stage: dokkomplekt_core::PerformanceStage::ReferenceClone,
-        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(reference_clone_started),
-    });
     let processing_fingerprint =
         automation_plan_fingerprint(app, &pack, &template_snapshots, &req)?;
     let processing_job_sha256 = processing_job_key(&source_sha256, &processing_fingerprint);
@@ -431,6 +372,7 @@ fn perform_created_documents_intake(
         lease.renew()?;
     }
 
+    let source_parse_started = std::time::Instant::now();
     // Each dropped source is an independent case. Every accepted format is first
     // normalized from the immutable private snapshot, never from a live file that
     // Word, a scanner or a sync client may still be replacing underneath us.
@@ -460,6 +402,13 @@ fn perform_created_documents_intake(
     let source_text = normalized.text;
     let source_kind = normalized.source_kind;
     let layout_items = normalized.layout_items;
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::SourceParse,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            source_parse_started,
+        ),
+    });
+    let candidate_index_started = std::time::Instant::now();
     let (mut case, mut source_report) = parse_source_text(&source_text, req.default_year);
     source_report.warnings.extend(normalized.warnings);
 
@@ -574,6 +523,13 @@ fn perform_created_documents_intake(
     universal_intake::apply_layout_to_case(&source_kind, &layout_items, &mut case);
     let _ = apply_learned_scanner_rules(app, &source_text, &mut case)?;
     universal_intake::attach_layout_evidence(&layout_items, &mut case);
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::CandidateIndex,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            candidate_index_started,
+        ),
+    });
+    let source_resolve_started = std::time::Instant::now();
     let model_domain = case
         .active_domains
         .first()
@@ -712,7 +668,14 @@ fn perform_created_documents_intake(
         }
     }
     universal_intake::attach_layout_evidence(&layout_items, &mut case);
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::SourceResolve,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            source_resolve_started,
+        ),
+    });
 
+    let prompt_plan_started = std::time::Instant::now();
     case_run.transition("checking")?;
     if let Some(lease) = central_queue_lease.as_mut() {
         lease.renew()?;
@@ -952,6 +915,12 @@ fn perform_created_documents_intake(
         &planning_case.case,
         required_for_automation.iter().map(String::as_str),
     );
+    performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+        stage: dokkomplekt_core::PerformanceStage::PromptPlan,
+        duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            prompt_plan_started,
+        ),
+    });
     if !quality.ready {
         let missing = quality
             .blockers
@@ -1006,6 +975,7 @@ fn perform_created_documents_intake(
         });
     }
 
+    let preflight_started = std::time::Instant::now();
     let batch = plan_created_documents_batch(
         &planning_case.case,
         &configured,
@@ -1064,6 +1034,12 @@ fn perform_created_documents_intake(
             source_target_name,
             outputs,
         } => {
+            performance_stages.push(dokkomplekt_core::PerformanceStageMeasurement {
+                stage: dokkomplekt_core::PerformanceStage::Preflight,
+                duration_ms: crate::performance_trace_runtime::elapsed_milliseconds(
+            preflight_started,
+        ),
+            });
             case_run.transition("ready")?;
             let output_labels = outputs
                 .iter()

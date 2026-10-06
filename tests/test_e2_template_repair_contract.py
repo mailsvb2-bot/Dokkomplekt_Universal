@@ -58,7 +58,9 @@ def test_legacy_template_migration_preserves_non_learning_version_contract() -> 
 
 def test_zero_touch_requires_validated_automatic_template_proof() -> None:
     learning = read("src-tauri/src/subsystems/template_learning_commands.rs")
-    automation = read("src-tauri/src/subsystems/automation_runtime.rs")
+    automation = read("src-tauri/src/subsystems/automation_runtime.rs") + read(
+        "src-tauri/src/subsystems/automation_performance_fingerprint.rs"
+    )
 
     assert '"validation_level": "validated_automatic"' in learning
     assert "fn learning_validation_allows_zero_touch(" in automation

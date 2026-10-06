@@ -195,12 +195,17 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     ]
     for stage in (
         "PerformanceStage::SourceOpen",
-        "PerformanceStage::ReferenceClone",
+        "PerformanceStage::SourceParse",
+        "PerformanceStage::CandidateIndex",
+        "PerformanceStage::SourceResolve",
+        "PerformanceStage::PromptPlan",
+        "PerformanceStage::Preflight",
         "PerformanceStage::Replay",
         "PerformanceStage::Verify",
         "PerformanceStage::Publish",
     ):
         assert stage in automatic_success
+    assert "PerformanceStage::ReferenceClone" not in automatic_success
     assert "persist_automatic_trace" in automatic_success
     assert "performance_trace_write_failures" in automatic_success
     assert "performance_ocr_used" in automatic_success
@@ -215,9 +220,21 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "processed_files" in pdf_detector
     assert "req.resume_from_case_id.is_some() || reused_documents > 0" in automatic_success
     assert automatic_success.index("PerformanceStage::SourceOpen") < automatic_success.index(
-        "PerformanceStage::ReferenceClone"
+        "PerformanceStage::SourceParse"
     )
-    assert automatic_success.index("PerformanceStage::ReferenceClone") < automatic_success.index(
+    assert automatic_success.index("PerformanceStage::SourceParse") < automatic_success.index(
+        "PerformanceStage::CandidateIndex"
+    )
+    assert automatic_success.index("PerformanceStage::CandidateIndex") < automatic_success.index(
+        "PerformanceStage::SourceResolve"
+    )
+    assert automatic_success.index("PerformanceStage::SourceResolve") < automatic_success.index(
+        "PerformanceStage::PromptPlan"
+    )
+    assert automatic_success.index("PerformanceStage::PromptPlan") < automatic_success.index(
+        "PerformanceStage::Preflight"
+    )
+    assert automatic_success.index("PerformanceStage::Preflight") < automatic_success.index(
         "PerformanceStage::Replay"
     )
     assert automatic_success.index("PerformanceStage::Replay") < automatic_success.index(

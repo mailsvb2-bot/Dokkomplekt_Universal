@@ -219,11 +219,20 @@ class PerformanceTraceObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "trace pdf_used does not match"):
                 self._build(Path(raw), plan, trace)
 
-    def test_bound_series_and_reference_app_version_cannot_drift(self) -> None:
-        plan = self._plan()
-        plan["series_id"] = "some-other-series"
+    def test_non_bound_series_can_supply_corpus_coverage(self) -> None:
+        plan = self._plan(class_name="table_heavy")
+        plan["series_id"] = "coverage-table-heavy-button"
         with tempfile.TemporaryDirectory() as raw:
-            with self.assertRaisesRegex(ValueError, "not the reference-bound series"):
+            result = self._build(Path(raw), plan, self._trace())
+
+        self.assertEqual(result["series_id"], "coverage-table-heavy-button")
+        self.assertEqual(result["class"], "table_heavy")
+        self.assertEqual(result["metric"], "button_to_ready")
+
+    def test_bound_series_conditions_and_reference_app_version_cannot_drift(self) -> None:
+        plan = self._plan(class_name="table_heavy")
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(ValueError, "requires class=typical_docx"):
                 self._build(Path(raw), plan, self._trace())
 
         plan = self._plan()

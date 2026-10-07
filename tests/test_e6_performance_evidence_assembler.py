@@ -201,6 +201,30 @@ def test_assembles_typed_observations_and_excludes_warmup(tmp_path: Path) -> Non
     assert result["reference_policy_sha256"] == sha256(reference_path)
 
 
+def test_assembler_rejects_storage_class_trace_observation(tmp_path: Path) -> None:
+    reference_path = reference(tmp_path)
+    observation(
+        tmp_path,
+        reference_path,
+        "storage-coverage",
+        run_id="run-storage",
+        trace_hash="d" * 64,
+        series_id="coverage-slow-storage-button",
+        class_name="slow_storage",
+        trace_source_sha256="a" * 64,
+    )
+    with pytest.raises(
+        ValueError, match="trace observations cannot prove slow/network storage coverage"
+    ):
+        assemble.build_evidence(
+            TARGETS,
+            reference_path,
+            tmp_path / "observations",
+            protocol(tmp_path),
+            resources(tmp_path, reference_path),
+        )
+
+
 def test_assembler_accepts_non_bound_series_for_required_coverage(
     tmp_path: Path,
 ) -> None:

@@ -154,6 +154,24 @@ class PerformanceTraceObservationTests(unittest.TestCase):
         self._write(trace_path, trace)
         return obs.build_observation(TARGETS, reference_path, plan_path, trace_path)
 
+    def test_storage_classes_require_dedicated_evidence(self) -> None:
+        for class_name in ("slow_storage", "network_storage"):
+            with self.subTest(class_name=class_name):
+                with tempfile.TemporaryDirectory() as raw:
+                    with self.assertRaisesRegex(
+                        ValueError, "requires dedicated storage-condition evidence"
+                    ):
+                        plan = self._plan(
+                            class_name=class_name,
+                            expected_source_sha256="a" * 64,
+                        )
+                        plan["series_id"] = f"coverage-{class_name}-button"
+                        self._build(
+                            Path(raw),
+                            plan,
+                            self._trace(source_sha256="a" * 64),
+                        )
+
     def test_cache_state_must_match_predeclared_plan(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             with self.assertRaisesRegex(

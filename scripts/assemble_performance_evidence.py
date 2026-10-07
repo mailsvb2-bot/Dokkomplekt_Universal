@@ -165,6 +165,10 @@ def _validate_trace_observation(
         raise ValueError(f"{path}: sample derivation does not match canonical metric")
 
     class_name = value.get("class")
+    if class_name in {"slow_storage", "network_storage"}:
+        raise ValueError(
+            f"{path}: trace observations cannot prove slow/network storage coverage"
+        )
     allowed_classes = set(gate.CANONICAL_CORPUS_CLASSES) | set(gate.CANONICAL_SPECIAL_CLASSES)
     if class_name not in allowed_classes:
         raise ValueError(f"{path}: non-canonical performance class")

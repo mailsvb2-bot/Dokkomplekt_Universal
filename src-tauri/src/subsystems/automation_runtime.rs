@@ -1826,7 +1826,6 @@ fn perform_created_documents_intake(
                 performance_stages,
                 elapsed_milliseconds,
                 crate::performance_trace_runtime::AutomaticPerformanceTraceContext {
-                    repeat_run: req.resume_from_case_id.is_some() || reused_documents > 0,
                     source_sha256: &source_sha256,
                     ocr_used: performance_ocr_used,
                     pdf_used: performance_pdf_used,

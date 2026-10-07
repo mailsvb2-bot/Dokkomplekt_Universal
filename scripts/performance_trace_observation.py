@@ -342,6 +342,11 @@ def _validate_plan(
     # corpus/cache/run-kind coverage; the evaluator never uses them for the
     # bound metric verdict.
     if not is_bound_slo_series:
+        if class_name in {"slow_storage", "network_storage"}:
+            raise ValueError(
+                f"{class_name} coverage requires dedicated storage-condition evidence; "
+                "runtime trace plans cannot prove storage topology"
+            )
         if expected_source_sha256 is None:
             raise ValueError("coverage series requires expected_source_sha256")
         coverage_sources = reference.get("coverage_sources")

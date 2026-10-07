@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts import performance_slo_gate as gate
+from scripts import performance_storage_probe as storage_probe
 
 PLAN_SCHEMA = "dokkomplekt.performance-storage-measurement-plan.v1"
 MEASUREMENT_SCHEMA = "dokkomplekt.performance-storage-measurement.v1"
@@ -57,8 +58,6 @@ MEASUREMENT_KEYS = {
     "instrument",
     "installed_build",
     "source_sha256",
-    "storage_class",
-    "verification_method",
 }
 
 
@@ -190,13 +189,6 @@ def _validate_measurement(measurement: dict[str, Any], plan: dict[str, Any]) -> 
             raise ValueError(f"measurement {key} does not match the predeclared plan")
     if measurement.get("source_sha256") != plan.get("expected_source_sha256"):
         raise ValueError("measurement source_sha256 does not match the predeclared plan")
-    if measurement.get("storage_class") != plan.get("class"):
-        raise ValueError("measurement storage_class does not match the predeclared plan")
-    expected_method = SUPPORTED_CLASSES[plan["class"]]
-    if measurement.get("verification_method") != expected_method:
-        raise ValueError(
-            f"{plan['class']} requires verification_method={expected_method}"
-        )
     if measurement.get("instrument") not in ALLOWED_INSTRUMENTS:
         raise ValueError("measurement instrument is not an approved hardware timing source")
     if measurement.get("installed_build") is not True:
@@ -210,6 +202,7 @@ def build_observation(
     reference_path: Path,
     plan_path: Path,
     measurement_path: Path,
+    probe_path: Path,
 ) -> dict[str, Any]:
     targets = gate.load_object(targets_path)
     target_errors = gate.validate_targets(targets)
@@ -223,6 +216,14 @@ def build_observation(
     _validate_plan(plan, targets, reference)
     measurement = _load(measurement_path)
     measurement_id = _validate_measurement(measurement, plan)
+    probe = _load(probe_path)
+    storage_probe.validate_probe(probe)
+    if probe.get("storage_class") != plan.get("class"):
+        raise ValueError("probe storage_class does not match the predeclared plan")
+    if probe.get("source_sha256") != plan.get("expected_source_sha256"):
+        raise ValueError("probe source_sha256 does not match the predeclared plan")
+    if measurement.get("source_sha256") != probe.get("source_sha256"):
+        raise ValueError("measurement source_sha256 does not match probe source_sha256")
 
     return {
         "schema": OBSERVATION_SCHEMA,
@@ -249,8 +250,10 @@ def build_observation(
         "measurement_instrument": measurement["instrument"],
         "installed_build": True,
         "source_sha256": measurement["source_sha256"],
-        "storage_class": measurement["storage_class"],
-        "verification_method": measurement["verification_method"],
+        "storage_class": probe["storage_class"],
+        "probe_sha256": _sha256(probe_path),
+        "probe_producer": probe["producer"],
+        "probe_verification": probe["verification"],
     }
 
 
@@ -262,11 +265,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reference", required=True, type=Path)
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--measurement", required=True, type=Path)
+    parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         observation = build_observation(
-            args.targets, args.reference, args.plan, args.measurement
+            args.targets, args.reference, args.plan, args.measurement, args.probe
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"STORAGE PERFORMANCE OBSERVATION FAILED: {exc}")

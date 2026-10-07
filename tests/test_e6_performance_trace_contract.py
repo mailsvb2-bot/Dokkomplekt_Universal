@@ -68,8 +68,8 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
         assert forbidden not in context_fields
 
     assert "performance source_sha256 must be a lowercase SHA-256 hex digest" in core
-    assert "source_sha256: Some(source_sha256.to_string())" in runtime
-    assert "&source_sha256" in automation
+    assert "source_sha256: Some(context.source_sha256.to_string())" in runtime
+    assert "source_sha256: &source_sha256" in automation
     assert "valid_opaque_identifier" in core
     assert "performance stages must follow canonical order" in core
     assert "duplicate performance stage" in core
@@ -256,9 +256,9 @@ def test_e6_performance_trace_is_closed_privacy_safe_and_bounded() -> None:
     assert "PerformanceRunPhase::RepeatRun" in automatic_trace
     assert "PerformanceRunPhase::FirstRun" in automatic_trace
     assert "runtime_layout_used: false" in automatic_trace
+    assert "source_sha256" in automatic_trace
     for forbidden in (
         "source_text",
-        "source_sha256",
         "patient",
         "diagnosis",
         "output_folder",

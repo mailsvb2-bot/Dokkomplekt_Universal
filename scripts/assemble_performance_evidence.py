@@ -38,7 +38,8 @@ STORAGE_OBSERVATION_KEYS = {
     "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
     "complexity", "warmup", "sample_ms", "sample_derivation", "measurement_id",
     "measurement_app_version", "measurement_kind", "measurement_instrument",
-    "installed_build", "source_sha256", "storage_class", "verification_method",
+    "installed_build", "source_sha256", "storage_class", "probe_sha256",
+    "probe_producer", "probe_verification",
 }
 PHYSICAL_OBSERVATION_KEYS = {
     "schema", "claim", "targets_sha256", "reference_policy_sha256",
@@ -403,8 +404,24 @@ def _validate_storage_observation(
         raise ValueError(f"{path}: unsupported storage coverage class")
     if value.get("storage_class") != class_name:
         raise ValueError(f"{path}: storage_class does not match observation class")
-    if value.get("verification_method") != storage_obs.SUPPORTED_CLASSES[class_name]:
-        raise ValueError(f"{path}: storage verification method does not prove the class")
+    if not _is_sha256(value.get("probe_sha256")):
+        raise ValueError(f"{path}: probe_sha256 must be lowercase SHA-256")
+    if value.get("probe_producer") != storage_obs.storage_probe.PRODUCER:
+        raise ValueError(f"{path}: storage probe producer is not canonical")
+    probe_verification = value.get("probe_verification")
+    if not isinstance(probe_verification, dict):
+        raise ValueError(f"{path}: storage probe verification must be an object")
+    if class_name == "network_storage":
+        if probe_verification != {"path_kind": "unc", "windows_drive_type": "remote"}:
+            raise ValueError(f"{path}: network storage probe is not UNC/remote verified")
+    else:
+        if set(probe_verification) != {"mode", "configured_bytes_per_sec"}:
+            raise ValueError(f"{path}: slow storage probe verification keys are invalid")
+        if probe_verification.get("mode") != "controlled_read_throttle":
+            raise ValueError(f"{path}: slow storage probe did not use controlled throttle")
+        cap = probe_verification.get("configured_bytes_per_sec")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+            raise ValueError(f"{path}: slow storage probe throttle cap is invalid")
     if value.get("cache_state") not in gate.CANONICAL_CACHE_STATES:
         raise ValueError(f"{path}: non-canonical cache_state")
     if value.get("run_kind") not in gate.CANONICAL_RUN_KINDS:
@@ -583,6 +600,9 @@ def build_evidence(
                 "measurement_sha256": measurement_hash,
                 "measurement_plan_sha256": observation["measurement_plan_sha256"],
             }
+            if observation["schema"] == storage_obs.OBSERVATION_SCHEMA:
+                manifest_entry["probe_sha256"] = observation["probe_sha256"]
+                manifest_entry["source_sha256"] = observation["source_sha256"]
 
         series_id = observation["series_id"]
         signature = _series_signature(observation)

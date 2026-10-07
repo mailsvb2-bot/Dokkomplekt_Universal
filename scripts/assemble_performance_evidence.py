@@ -16,6 +16,7 @@ from typing import Any
 
 from scripts import performance_physical_observation as physical_obs
 from scripts import performance_slo_gate as gate
+from scripts import performance_storage_observation as storage_obs
 from scripts import performance_trace_observation as trace_obs
 
 PROTOCOL_SCHEMA = "dokkomplekt.performance-protocol.v1"
@@ -31,6 +32,15 @@ TRACE_OBSERVATION_KEYS = {
     "trace_feature_flags",
 }
 TRACE_FEATURE_KEYS = {"ocr_used", "runtime_layout_used", "pdf_used"}
+STORAGE_OBSERVATION_KEYS = {
+    "schema", "claim", "targets_sha256", "reference_policy_sha256",
+    "measurement_plan_sha256", "measurement_sha256", "reference_id", "corpus_id",
+    "series_id", "metric", "class", "cache_state", "run_kind", "conditions",
+    "complexity", "warmup", "sample_ms", "sample_derivation", "measurement_id",
+    "measurement_app_version", "measurement_kind", "measurement_instrument",
+    "installed_build", "source_sha256", "storage_class", "probe_sha256",
+    "probe_producer", "probe_verification",
+}
 PHYSICAL_OBSERVATION_KEYS = {
     "schema", "claim", "targets_sha256", "reference_policy_sha256",
     "measurement_plan_sha256", "measurement_sha256", "reference_id", "corpus_id",
@@ -357,6 +367,113 @@ def _validate_physical_observation(
     return value
 
 
+def _validate_storage_observation(
+    path: Path,
+    *,
+    targets_sha256: str,
+    reference_sha256: str,
+    reference: dict[str, Any],
+) -> dict[str, Any]:
+    value = _load(path)
+    if set(value) != STORAGE_OBSERVATION_KEYS:
+        raise ValueError(f"{path}: storage observation keys must be closed")
+    if value.get("schema") != storage_obs.OBSERVATION_SCHEMA:
+        raise ValueError(f"{path}: unsupported storage observation schema")
+    if value.get("claim") != storage_obs.OBSERVATION_CLAIM:
+        raise ValueError(f"{path}: storage observation claim is not coverage-only")
+    if value.get("targets_sha256") != targets_sha256:
+        raise ValueError(f"{path}: target hash mismatch")
+    if value.get("reference_policy_sha256") != reference_sha256:
+        raise ValueError(f"{path}: reference hash mismatch")
+    if value.get("reference_id") != reference.get("reference_id"):
+        raise ValueError(f"{path}: reference_id mismatch")
+    if value.get("corpus_id") != reference.get("corpus_id"):
+        raise ValueError(f"{path}: corpus_id mismatch")
+    if value.get("metric") != "button_to_ready":
+        raise ValueError(f"{path}: storage coverage metric must be button_to_ready")
+
+    series_id = value.get("series_id")
+    bindings = reference.get("metric_bindings")
+    if not isinstance(bindings, dict):
+        raise ValueError(f"{path}: reference metric_bindings must be an object")
+    if bindings.get("button_to_ready") == series_id:
+        raise ValueError(f"{path}: storage coverage series must remain non-bound")
+
+    class_name = value.get("class")
+    if class_name not in storage_obs.SUPPORTED_CLASSES:
+        raise ValueError(f"{path}: unsupported storage coverage class")
+    if value.get("storage_class") != class_name:
+        raise ValueError(f"{path}: storage_class does not match observation class")
+    if not _is_sha256(value.get("probe_sha256")):
+        raise ValueError(f"{path}: probe_sha256 must be lowercase SHA-256")
+    if value.get("probe_producer") != storage_obs.storage_probe.PRODUCER:
+        raise ValueError(f"{path}: storage probe producer is not canonical")
+    probe_verification = value.get("probe_verification")
+    if not isinstance(probe_verification, dict):
+        raise ValueError(f"{path}: storage probe verification must be an object")
+    if class_name == "network_storage":
+        if probe_verification != {"path_kind": "unc", "windows_drive_type": "remote"}:
+            raise ValueError(f"{path}: network storage probe is not UNC/remote verified")
+    else:
+        if set(probe_verification) != {"mode", "configured_bytes_per_sec"}:
+            raise ValueError(f"{path}: slow storage probe verification keys are invalid")
+        if probe_verification.get("mode") != "controlled_read_throttle":
+            raise ValueError(f"{path}: slow storage probe did not use controlled throttle")
+        cap = probe_verification.get("configured_bytes_per_sec")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+            raise ValueError(f"{path}: slow storage probe throttle cap is invalid")
+    if value.get("cache_state") not in gate.CANONICAL_CACHE_STATES:
+        raise ValueError(f"{path}: non-canonical cache_state")
+    if value.get("run_kind") not in gate.CANONICAL_RUN_KINDS:
+        raise ValueError(f"{path}: non-canonical run_kind")
+    if not isinstance(value.get("conditions"), dict):
+        raise ValueError(f"{path}: conditions must be an object")
+    if value.get("complexity") is not None:
+        raise ValueError(f"{path}: storage coverage complexity must be null")
+    if not isinstance(value.get("warmup"), bool):
+        raise ValueError(f"{path}: warmup must be boolean")
+    _nonnegative_number(value.get("sample_ms"), f"{path}: sample_ms")
+    if value.get("sample_derivation") != "direct_storage_condition_measurement":
+        raise ValueError(f"{path}: storage sample derivation is not direct")
+
+    for key in ("measurement_plan_sha256", "measurement_sha256", "source_sha256"):
+        if not _is_sha256(value.get(key)):
+            raise ValueError(f"{path}: {key} must be lowercase SHA-256")
+    coverage_sources = reference.get("coverage_sources")
+    allowed_sources = (
+        coverage_sources.get(class_name)
+        if isinstance(coverage_sources, dict)
+        else None
+    )
+    if not isinstance(allowed_sources, list) or value["source_sha256"] not in allowed_sources:
+        raise ValueError(f"{path}: storage source is not predeclared for this class")
+
+    measurement_id = value.get("measurement_id")
+    if (
+        not isinstance(measurement_id, str)
+        or not measurement_id
+        or len(measurement_id) > 128
+        or not all(
+            character.isascii() and (character.isalnum() or character in "-_.")
+            for character in measurement_id
+        )
+    ):
+        raise ValueError(f"{path}: measurement_id must be an opaque ASCII identifier")
+    environment = reference.get("environment")
+    if (
+        not isinstance(environment, dict)
+        or value.get("measurement_app_version") != environment.get("app_version")
+    ):
+        raise ValueError(f"{path}: measurement app version differs from bound reference")
+    if value.get("measurement_kind") != storage_obs.MEASUREMENT_KIND:
+        raise ValueError(f"{path}: storage measurement kind is invalid")
+    if value.get("measurement_instrument") not in storage_obs.ALLOWED_INSTRUMENTS:
+        raise ValueError(f"{path}: storage measurement instrument is not approved")
+    if value.get("installed_build") is not True:
+        raise ValueError(f"{path}: storage observation requires an installed build")
+    return value
+
+
 def _validate_observation(
     path: Path,
     *,
@@ -375,6 +492,13 @@ def _validate_observation(
         )
     if schema == physical_obs.OBSERVATION_SCHEMA:
         return _validate_physical_observation(
+            path,
+            targets_sha256=targets_sha256,
+            reference_sha256=reference_sha256,
+            reference=reference,
+        )
+    if schema == storage_obs.OBSERVATION_SCHEMA:
+        return _validate_storage_observation(
             path,
             targets_sha256=targets_sha256,
             reference_sha256=reference_sha256,
@@ -476,6 +600,9 @@ def build_evidence(
                 "measurement_sha256": measurement_hash,
                 "measurement_plan_sha256": observation["measurement_plan_sha256"],
             }
+            if observation["schema"] == storage_obs.OBSERVATION_SCHEMA:
+                manifest_entry["probe_sha256"] = observation["probe_sha256"]
+                manifest_entry["source_sha256"] = observation["source_sha256"]
 
         series_id = observation["series_id"]
         signature = _series_signature(observation)

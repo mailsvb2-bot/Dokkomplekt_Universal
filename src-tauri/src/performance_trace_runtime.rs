@@ -312,7 +312,6 @@ pub(crate) fn cleanup_performance_traces(app: &tauri::AppHandle) -> Result<usize
     )
 }
 
-
 #[cfg(test)]
 mod performance_e6_provenance_tests {
     use super::*;

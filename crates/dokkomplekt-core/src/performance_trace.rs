@@ -206,7 +206,9 @@ impl PerformanceTraceContext {
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
             {
-                return Err("performance source_sha256 must be a lowercase SHA-256 hex digest".into());
+                return Err(
+                    "performance source_sha256 must be a lowercase SHA-256 hex digest".into(),
+                );
             }
         }
         if self.batch_size == 0 {

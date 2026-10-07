@@ -161,12 +161,14 @@ class PerformanceTraceObservationTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, "requires dedicated storage-condition evidence"
                     ):
+                        plan = self._plan(
+                            class_name=class_name,
+                            expected_source_sha256="a" * 64,
+                        )
+                        plan["series_id"] = f"coverage-{class_name}-button"
                         self._build(
                             Path(raw),
-                            self._plan(
-                                class_name=class_name,
-                                expected_source_sha256="a" * 64,
-                            ),
+                            plan,
                             self._trace(source_sha256="a" * 64),
                         )
 

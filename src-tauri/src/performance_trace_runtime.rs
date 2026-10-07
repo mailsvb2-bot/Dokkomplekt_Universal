@@ -54,6 +54,20 @@ pub(crate) fn automatic_source_uses_pdf(
     })
 }
 
+fn automatic_runtime_cache_state() -> PerformanceCacheState {
+    // Ordinary production journeys do not prove benchmark cache preparation.
+    // Cold/warm cache labels require a dedicated benchmark harness that owns
+    // reset/priming and can bind that lifecycle to the resulting trace.
+    PerformanceCacheState::Unclassified
+}
+
+fn automatic_runtime_run_phase() -> PerformanceRunPhase {
+    // Resume/reissue/reused-document semantics are business workflow state,
+    // not Canon E6 benchmark first/repeat phases. Keep this fail-closed until
+    // a benchmark harness proves the actual measurement phase.
+    PerformanceRunPhase::Unclassified
+}
+
 fn performance_workload(batch_size: u32) -> PerformanceWorkload {
     match batch_size {
         1 => PerformanceWorkload::SingleDocument,
@@ -124,7 +138,6 @@ pub(crate) fn persist_manual_batch_trace(
 }
 
 pub(crate) struct AutomaticPerformanceTraceContext<'a> {
-    pub repeat_run: bool,
     pub source_sha256: &'a str,
     pub ocr_used: bool,
     pub pdf_used: bool,
@@ -143,12 +156,8 @@ pub(crate) fn persist_automatic_trace(
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             source_sha256: Some(context.source_sha256.to_string()),
             class: PerformanceClass::Unclassified,
-            cache_state: PerformanceCacheState::Unclassified,
-            run_phase: if context.repeat_run {
-                PerformanceRunPhase::RepeatRun
-            } else {
-                PerformanceRunPhase::FirstRun
-            },
+            cache_state: automatic_runtime_cache_state(),
+            run_phase: automatic_runtime_run_phase(),
             workload: performance_workload(batch_size),
             batch_size,
             ocr_used: context.ocr_used,
@@ -301,4 +310,22 @@ pub(crate) fn cleanup_performance_traces(app: &tauri::AppHandle) -> Result<usize
         PERFORMANCE_TRACE_QUOTA_BYTES,
         0,
     )
+}
+
+
+#[cfg(test)]
+mod performance_e6_provenance_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_automatic_runtime_does_not_claim_benchmark_cache_or_phase() {
+        assert_eq!(
+            automatic_runtime_cache_state(),
+            PerformanceCacheState::Unclassified
+        );
+        assert_eq!(
+            automatic_runtime_run_phase(),
+            PerformanceRunPhase::Unclassified
+        );
+    }
 }
